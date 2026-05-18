@@ -228,6 +228,54 @@ public class McpServerTests : IDisposable
         Assert.Contains("2024-11-05", McpServer.SupportedProtocolVersions);
     }
 
+    [Fact]
+    public void CancelRequest_ForActiveRequest_ReturnsRequestCancelledError()
+    {
+        // Issue #1418: MCP `$/cancelRequest` must target the matching JSON-RPC id and
+        // cancel the per-request token before the tool does DB work.
+        // Issue #1418: MCP `$/cancelRequest` は対応する JSON-RPC id の per-request token を
+        // cancel し、ツールが DB 作業に入る前に中断できる必要がある。
+        _server.RequestRegisteredForTests = id =>
+        {
+            var cancel = JsonNode.Parse("""{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":1418}}""")!;
+            Assert.Null(_server.HandleMessage(cancel));
+        };
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1418,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var error = response["error"]!;
+        Assert.Equal(McpErrorEnvelope.CodeRequestCancelled, error["code"]!.GetValue<int>());
+        Assert.Equal("request_cancelled", error["data"]!["category"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void NotificationsCancelled_ForActiveRequestId_ReturnsRequestCancelledError()
+    {
+        _server.RequestRegisteredForTests = id =>
+        {
+            var cancel = JsonNode.Parse("""{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1418}}""")!;
+            Assert.Null(_server.HandleMessage(cancel));
+        };
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1418,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var error = response["error"]!;
+        Assert.Equal(McpErrorEnvelope.CodeRequestCancelled, error["code"]!.GetValue<int>());
+        Assert.Equal("request_cancelled", error["data"]!["category"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void CancelRequest_UnknownOrMalformedId_IsNotificationOnly()
+    {
+        var unknown = JsonNode.Parse("""{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":"missing"}}""")!;
+        var missing = JsonNode.Parse("""{"jsonrpc":"2.0","method":"$/cancelRequest","params":{}}""")!;
+
+        Assert.Null(_server.HandleMessage(unknown));
+        Assert.Null(_server.HandleMessage(missing));
+    }
+
     [Theory]
     [InlineData("search")]
     [InlineData("definition")]
@@ -1089,6 +1137,27 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_StdioCancellationNotification_CancelsActiveRequest()
+    {
+        using var cancelWritten = new ManualResetEventSlim(false);
+        var transport = new ShutdownProbeTransport(
+            name: "stdio",
+            onWrite: frame =>
+            {
+                if (frame is null)
+                    cancelWritten.Set();
+            },
+            """{"jsonrpc":"2.0","id":1418,"method":"tools/call","params":{"name":"status","arguments":{}}}""",
+            """{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1418}}""");
+        using var server = new McpServer(_dbPath, "test");
+        server.RequestRegisteredForTests = _ => Assert.True(cancelWritten.Wait(TimeSpan.FromSeconds(5)));
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        Assert.Contains(transport.WrittenFrames, frame => frame?.Contains("\"request_cancelled\"", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
     public void MaxConcurrency_DefaultExposesIssueBound()
     {
         Assert.Equal(McpServer.DefaultMaxConcurrency, _server.MaxConcurrency);
@@ -1128,19 +1197,29 @@ public class McpServerTests : IDisposable
     private sealed class ShutdownProbeTransport : IMcpTransport
     {
         private readonly Queue<string?> _frames;
+        private readonly string _name;
+        private readonly Action<string?>? _onWrite;
 
         public ShutdownProbeTransport(params string?[] frames)
+            : this("shutdown-probe", null, frames)
         {
+        }
+
+        public ShutdownProbeTransport(string name, Action<string?>? onWrite, params string?[] frames)
+        {
+            _name = name;
+            _onWrite = onWrite;
             _frames = new Queue<string?>(frames);
             // Append EOS so the loop terminates if shutdown never fires for some reason.
             // shutdown が来なかった場合のフェイルセーフとして末尾に EOS を積む。
             _frames.Enqueue(null);
         }
 
-        public string Name => "shutdown-probe";
+        public string Name => _name;
         public string Endpoint => "in-memory";
         public int WriteCount { get; private set; }
         public string? LastWritten { get; private set; }
+        public List<string?> WrittenFrames { get; } = [];
 
         public Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
         {
@@ -1152,6 +1231,8 @@ public class McpServerTests : IDisposable
         {
             WriteCount++;
             LastWritten = frame;
+            WrittenFrames.Add(frame);
+            _onWrite?.Invoke(frame);
             return Task.CompletedTask;
         }
 

@@ -4305,12 +4305,20 @@ public static class QueryCommandRunner
         if (options.ParseError == null && dbPathError == null)
             return false;
 
-        if (options.ParseError != null)
-            Console.Error.WriteLine(options.ParseError);
-        if (dbPathError != null)
-            Console.Error.WriteLine(dbPathError);
-        Console.Error.WriteLine("Hint: fix the invalid or missing option value, then rerun with the command shape below.");
-        Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+        var primaryError = options.ParseError ?? dbPathError!;
+        CommandErrorWriter.Write(
+            StripErrorPrefix(primaryError),
+            primaryError == dbPathError && options.ParseError == null
+                ? "create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command."
+                : "fix the invalid or missing option value, then rerun with the command shape below.",
+            GetUsageLineOrThrow(commandName),
+            ExtractErrorCode(primaryError));
+        if (options.ParseError != null && dbPathError != null)
+            CommandErrorWriter.Write(
+                StripErrorPrefix(dbPathError),
+                "create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.",
+                GetUsageLineOrThrow(commandName),
+                ExtractErrorCode(dbPathError));
         return true;
     }
 
@@ -4325,7 +4333,7 @@ public static class QueryCommandRunner
         if (File.Exists(LongPath.EnsureWindowsPrefix(options.DbPath)))
             return null;
 
-        return $"Error [{CommandErrorCodes.DbNotFound}]: --db '{options.DbPath}' does not point to an existing database file. Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.";
+        return $"Error [{CommandErrorCodes.DbNotFound}]: --db '{options.DbPath}' does not point to an existing database file.";
     }
 
     private static readonly HashSet<string> KnownSymbolKindFilters = new(StringComparer.Ordinal)
@@ -4371,9 +4379,10 @@ public static class QueryCommandRunner
             && !acceptedKinds.Contains(options.Kind)
             && !alternateAcceptedKinds.Any(kinds => kinds.Contains(options.Kind)))
         {
-            Console.Error.WriteLine($"Error: invalid --kind value `{options.Kind}`.");
-            Console.Error.WriteLine($"Hint: use one of: {string.Join(", ", acceptedKinds)}.");
-            Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+            CommandErrorWriter.Write(
+                $"invalid --kind value `{options.Kind}`.",
+                $"use one of: {string.Join(", ", acceptedKinds)}.",
+                GetUsageLineOrThrow(commandName));
             return true;
         }
 
@@ -4423,24 +4432,25 @@ public static class QueryCommandRunner
 
             if (normalizedArg == "--group-by-name")
             {
-                Console.Error.WriteLine("Error: --group-by-name is only supported by 'hotspots'.");
-                Console.Error.WriteLine("Hint: remove `--group-by-name` here, or rerun with `cdidx hotspots --group-by-name ...`.");
-                Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+                CommandErrorWriter.Write(
+                    "--group-by-name is only supported by 'hotspots'.",
+                    "remove `--group-by-name` here, or rerun with `cdidx hotspots --group-by-name ...`.",
+                    GetUsageLineOrThrow(commandName));
                 return true;
             }
 
             if (normalizedArg == "--group-by")
             {
-                Console.Error.WriteLine("Error: --group-by is only supported by 'hotspots'.");
-                Console.Error.WriteLine("Hint: remove `--group-by` here, or rerun with `cdidx hotspots --group-by <symbol|file|statement> ...`.");
-                Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+                CommandErrorWriter.Write(
+                    "--group-by is only supported by 'hotspots'.",
+                    "remove `--group-by` here, or rerun with `cdidx hotspots --group-by <symbol|file|statement> ...`.",
+                    GetUsageLineOrThrow(commandName));
                 return true;
             }
 
             if (normalizedArg == arg && ValueTakingOptions.Contains(normalizedArg) && i + 1 < cmdArgs.Length)
                 i++;
 
-            Console.Error.WriteLine($"Error: {arg} is not supported for {commandName}.");
             // Suggest the closest accepted flag for this command when the user mistypes
             // a flag name (e.g. `--paht` → `--path`). Built on the same suggester used for
             // subcommand typos so the recovery experience is consistent (#1582).
@@ -4459,10 +4469,13 @@ public static class QueryCommandRunner
             if (eq > 0)
                 nameForSuggestion = nameForSuggestion[..eq];
             var suggestion = ConsoleUi.FindClosestMatch(nameForSuggestion, supported.Where(o => o != "--"));
-            if (suggestion != null)
-                Console.Error.WriteLine($"Did you mean: {suggestion}?");
-            Console.Error.WriteLine($"Hint: remove `{arg}` and rerun, or use only the options shown in `{commandName} --help`.");
-            Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+            var hint = suggestion == null
+                ? $"remove `{arg}` and rerun, or use only the options shown in `{commandName} --help`."
+                : $"Did you mean: {suggestion}? Remove `{arg}` and rerun, or use `{suggestion}` if that is what you meant.";
+            CommandErrorWriter.Write(
+                $"{arg} is not supported for {commandName}.",
+                hint,
+                GetUsageLineOrThrow(commandName));
             return true;
         }
 
@@ -4474,9 +4487,10 @@ public static class QueryCommandRunner
         if (options.ExtraNames.Count == 0)
             return false;
 
-        Console.Error.WriteLine($"Error: unexpected extra positional {ConsoleUi.Counted(options.ExtraNames.Count, "argument")} for {commandName}: {string.Join(", ", options.ExtraNames.Select(name => $"`{name}`"))}.");
-        Console.Error.WriteLine("Hint: quote multi-word queries as a single argument, or remove the extra positional values.");
-        Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+        CommandErrorWriter.Write(
+            $"unexpected extra positional {ConsoleUi.Counted(options.ExtraNames.Count, "argument")} for {commandName}: {string.Join(", ", options.ExtraNames.Select(name => $"`{name}`"))}.",
+            "quote multi-word queries as a single argument, or remove the extra positional values.",
+            GetUsageLineOrThrow(commandName));
         return true;
     }
 
@@ -4489,9 +4503,10 @@ public static class QueryCommandRunner
         if (unexpected.Count == 0)
             return false;
 
-        Console.Error.WriteLine($"Error: {commandName} does not accept positional arguments: {string.Join(", ", unexpected)}.");
-        Console.Error.WriteLine("Hint: remove the extra positional arguments and use the documented flags only.");
-        Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+        CommandErrorWriter.Write(
+            $"{commandName} does not accept positional arguments: {string.Join(", ", unexpected)}.",
+            "remove the extra positional arguments and use the documented flags only.",
+            GetUsageLineOrThrow(commandName));
         return true;
     }
 
@@ -4534,11 +4549,7 @@ public static class QueryCommandRunner
     }
 
     private static void WriteUsageError(string message, string usage, string hint)
-    {
-        Console.Error.WriteLine($"Error: {message}");
-        Console.Error.WriteLine($"Hint: {hint}");
-        Console.Error.WriteLine($"Usage: {usage}");
-    }
+        => CommandErrorWriter.Write(message, hint, usage);
 
     // Reject queries that were supplied but resolve to empty / whitespace-only text so the user gets
     // a distinct error instead of the generic "<cmd> requires a query argument" message that fires
@@ -4560,9 +4571,29 @@ public static class QueryCommandRunner
     }
 
     private static void WriteValidationError(string message, string hint)
+        => CommandErrorWriter.Write(message, hint);
+
+    private static string StripErrorPrefix(string message)
     {
-        Console.Error.WriteLine($"Error: {message}");
-        Console.Error.WriteLine($"Hint: {hint}");
+        const string prefix = "Error: ";
+        if (message.StartsWith(prefix, StringComparison.Ordinal))
+            return message[prefix.Length..];
+
+        var codedPrefixEnd = message.IndexOf("]: ", StringComparison.Ordinal);
+        if (message.StartsWith("Error [", StringComparison.Ordinal) && codedPrefixEnd >= 0)
+            return message[(codedPrefixEnd + 3)..];
+
+        return message;
+    }
+
+    private static string? ExtractErrorCode(string message)
+    {
+        const string prefix = "Error [";
+        if (!message.StartsWith(prefix, StringComparison.Ordinal))
+            return null;
+
+        var end = message.IndexOf("]: ", StringComparison.Ordinal);
+        return end > prefix.Length ? message[prefix.Length..end] : null;
     }
 
     private static void WriteRepoMapSection(string title, IEnumerable<string> rows)
@@ -4830,13 +4861,13 @@ public static class QueryCommandRunner
         => !signal.ExactIndexAvailable
            && !signal.HasMissingIndex
            && !signal.HasMissingTable
-           && signal.DegradedReason?.Contains("sql_graph_contract_ready=false", StringComparison.OrdinalIgnoreCase) == true;
+           && signal.DegradedReason?.Contains(DegradationReasonCodes.SqlGraphContractNotReady, StringComparison.OrdinalIgnoreCase) == true;
 
     private static bool IsCSharpCanonicalNameSignal(ExactQuerySignal signal)
         => !signal.ExactIndexAvailable
            && !signal.HasMissingIndex
            && !signal.HasMissingTable
-           && signal.DegradedReason?.Contains("csharp_symbol_name_ready=false", StringComparison.OrdinalIgnoreCase) == true;
+           && signal.DegradedReason?.Contains(DegradationReasonCodes.CSharpSymbolNameNotReady, StringComparison.OrdinalIgnoreCase) == true;
 
     private static int WriteStatusReadinessExplanation(string fieldName)
     {
@@ -4899,10 +4930,10 @@ public static class QueryCommandRunner
             "hotspot_family_ready" => status.HotspotFamilyDegradedReason ?? fallback,
             "fold_ready" => BuildFoldNotReadyExplanation(status.FoldReadyReason),
             "index_newer_than_reader" => status.IndexNewerThanReaderReason ?? fallback,
-            "graph_table_available" => "reference / caller / callee / unused counts are degraded to 0 because the symbol_references table is missing.",
-            "issues_table_available" => "validate output is degraded to empty because the file_issues table is missing.",
-            "csharp_symbol_name_ready" => "C# exact-name for operators / conversion operators / indexers is degraded.",
-            "csharp_metadata_target_ready" => "C# deps / impact metadata-attribute edges fall back to the signature / name-suffix heuristic.",
+            "graph_table_available" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.GraphTableMissing).HumanText,
+            "issues_table_available" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.IssuesTableMissing).HumanText,
+            "csharp_symbol_name_ready" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.CSharpSymbolNameNotReady).HumanText,
+            "csharp_metadata_target_ready" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.CSharpMetadataTargetNotReady).HumanText,
             _ => fallback,
         };
 
@@ -5000,13 +5031,7 @@ public static class QueryCommandRunner
            && status.CSharpMetadataTargetReady;
 
     private static string BuildFoldNotReadyExplanation(string? foldReadyReason)
-        => foldReadyReason switch
-        {
-            "missing_fold_backfill" => "--exact falls back to ASCII COLLATE NOCASE because legacy rows without `name_folded` remain.",
-            "stale_fold_key_version" => "--exact falls back to ASCII COLLATE NOCASE because unchanged rows still carry an older fold-key version.",
-            "stale_fold_key_fingerprint" => "--exact falls back to ASCII COLLATE NOCASE because unchanged rows still carry folded keys generated under an older runtime fingerprint.",
-            _ => "--exact falls back to ASCII COLLATE NOCASE because some folded-name rows were not restamped under the current runtime."
-        };
+        => DegradationReasonCodes.BuildFoldNotReadyExplanation(foldReadyReason);
 
     private static string BuildFoldNotReadyWarning(string? foldReadyReason, string backfillCommand, string rebuildCommand)
         => $"{BuildFoldNotReadyExplanation(foldReadyReason)} Run `{backfillCommand}` to restamp folded-name columns in place, or `{rebuildCommand}` for a full rebuild.";
