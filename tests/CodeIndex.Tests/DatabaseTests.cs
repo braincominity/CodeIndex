@@ -405,6 +405,33 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InsertChunks_MultiRowValuesPopulatesFtsForEveryRow()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/multi.py", Lang = "python", Size = 300, Lines = 300,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        var chunks = Enumerable.Range(0, 4)
+            .Select(i => new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = i,
+                StartLine = i + 1,
+                EndLine = i + 1,
+                Content = $"def multirow_token_{i}(): pass",
+            })
+            .ToList();
+
+        _writer.InsertChunks(chunks);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'multirow_token_3'";
+        Assert.Equal(1L, (long)cmd.ExecuteScalar()!);
+    }
+
+    [Fact]
     public void InsertSymbols_InsertsCorrectly()
     {
         var fileId = _writer.UpsertFile(new FileRecord
@@ -422,6 +449,32 @@ public class DatabaseTests : IDisposable
 
         var (_, _, symbolCount, _) = _writer.GetCounts();
         Assert.Equal(2, symbolCount);
+    }
+
+    [Fact]
+    public void InsertSymbols_ChunksLargeInputUnderSqlVariableLimit()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/symbols.py", Lang = "python", Size = 1000, Lines = 1000,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var symbols = Enumerable.Range(0, 120)
+            .Select(i => new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = $"fn_{i}",
+                Line = i + 1,
+                StartLine = i + 1,
+                EndLine = i + 1,
+            })
+            .ToList();
+
+        _writer.InsertSymbols(symbols);
+
+        var (_, _, symbolCount, _) = _writer.GetCounts();
+        Assert.Equal(120, symbolCount);
     }
 
     [Fact]
@@ -459,6 +512,37 @@ public class DatabaseTests : IDisposable
 
         var (_, _, _, referenceCount) = _writer.GetCounts();
         Assert.Equal(1, referenceCount);
+    }
+
+    [Fact]
+    public void InsertReferences_ChunksLargeInputAndDeduplicatesReferenceLines()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/refs.py", Lang = "python", Size = 1000, Lines = 1000,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var references = Enumerable.Range(0, 120)
+            .Select(i => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = $"callee_{i}",
+                ReferenceKind = "call",
+                Line = i % 10 + 1,
+                Column = 4,
+                Context = $"callee_{i}()",
+                ContainerKind = "function",
+                ContainerName = "caller",
+            })
+            .ToList();
+
+        _writer.InsertReferences(references);
+
+        var (_, _, _, referenceCount) = _writer.GetCounts();
+        Assert.Equal(120, referenceCount);
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM reference_lines";
+        Assert.Equal(10L, (long)cmd.ExecuteScalar()!);
     }
 
     [Fact]
