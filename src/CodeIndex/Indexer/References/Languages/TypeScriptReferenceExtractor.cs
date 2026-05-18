@@ -15,7 +15,7 @@ internal static class TypeScriptReferenceExtractor
         IReadOnlyList<LineRange> ScopedShadowRanges);
 
     private static readonly string[] DeclarationKeywords = ["const", "let", "var"];
-    private static readonly string[] TypeOperatorKeywords = ["as", "satisfies", "instanceof"];
+    private static readonly string[] TypeOperatorKeywords = ["satisfies", "instanceof"];
     private static readonly Regex NamespaceImportExportRegex = new(
         @"^\s*(?:import|export)\s+(?:type\s+)?\*\s*as\s*(?<alias>[A-Za-z_$][\w$]*)\s+from\s*[""'](?<module>[^""']+)[""']",
         RegexOptions.Compiled);
@@ -180,6 +180,8 @@ internal static class TypeScriptReferenceExtractor
             resolveContainerForColumn);
         if (!IsImportExportAliasLine(preparedLines, lineIndex, preparedLine))
         {
+            EmitConstAssertionReferences(preparedLine, rawLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+            EmitAsTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
             TypedLanguageReferenceExtractor.EmitKeywordFollowingTypeReferences(
                 preparedLine,
                 TypeOperatorKeywords,
@@ -210,6 +212,279 @@ internal static class TypeScriptReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn);
+    }
+
+    private static void EmitAsTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (var asIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "as"))
+        {
+            var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, asIndex + "as".Length);
+            if (typeStart >= preparedLine.Length || TryConsumeKeywordAt(preparedLine, "const", typeStart))
+                continue;
+
+            var typeEnd = TypedLanguageReferenceExtractor.FindKeywordFollowingTypeExpressionEnd(preparedLine, typeStart, "typescript");
+            if (typeEnd <= typeStart)
+                continue;
+
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                preparedLine.Substring(typeStart, typeEnd - typeStart),
+                typeStart,
+                "typescript",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn(typeStart));
+        }
+    }
+
+    private static void EmitConstAssertionReferences(
+        string preparedLine,
+        string rawLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (var asIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "as"))
+        {
+            var constIndex = SkipWhitespace(preparedLine, asIndex + "as".Length);
+            if (!TryConsumeKeywordAt(preparedLine, "const", constIndex))
+                continue;
+
+            var rawAsIndex = rawLine.IndexOf(" as const", Math.Min(asIndex, rawLine.Length), StringComparison.Ordinal);
+            if (rawAsIndex < 0)
+                rawAsIndex = asIndex;
+            else
+                rawAsIndex++;
+            var rawConstIndex = SkipWhitespace(rawLine, rawAsIndex + "as".Length);
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                "const",
+                rawConstIndex,
+                "const_assertion",
+                context,
+                lineNumber,
+                resolveContainerForColumn(asIndex));
+
+            EmitConstAssertionLiteralTypeReferences(
+                preparedLine,
+                rawLine,
+                rawAsIndex,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
+        }
+    }
+
+    private static void EmitConstAssertionLiteralTypeReferences(
+        string preparedLine,
+        string rawLine,
+        int asIndex,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var literalOpen = FindConstAssertionLiteralOpen(rawLine, asIndex);
+        if (literalOpen < 0)
+            return;
+
+        var literalClose = asIndex;
+
+        for (var index = literalOpen + 1; index < literalClose; index++)
+        {
+            if (rawLine[index] is '"' or '\'' or '`')
+            {
+                var literalStart = index;
+                index = SkipQuotedLiteral(rawLine, index);
+                if (index <= literalStart + 1)
+                    continue;
+
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    rawLine.Substring(literalStart, index - literalStart + 1),
+                    literalStart,
+                    "type_reference",
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(literalStart));
+                continue;
+            }
+
+            if (IsNumberLiteralStart(preparedLine, index))
+            {
+                var literalStart = index;
+                index = SkipNumberLiteral(preparedLine, index);
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    preparedLine.Substring(literalStart, index - literalStart),
+                    literalStart,
+                    "type_reference",
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(literalStart));
+                index--;
+                continue;
+            }
+
+            if (!TryReadLiteralKeyword(preparedLine, index, literalClose, out var keyword))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                keyword,
+                index,
+                "type_reference",
+                context,
+                lineNumber,
+                resolveContainerForColumn(index));
+            index += keyword.Length - 1;
+        }
+    }
+
+    private static int FindConstAssertionLiteralOpen(string preparedLine, int asIndex)
+    {
+        for (var index = asIndex - 1; index >= 0; index--)
+        {
+            if (char.IsWhiteSpace(preparedLine[index]))
+                continue;
+
+            if (preparedLine[index] is ']' or '}')
+            {
+                var openChar = preparedLine[index] == ']' ? '[' : '{';
+                return FindMatchingOpenChar(preparedLine, index, openChar, preparedLine[index]);
+            }
+
+            return -1;
+        }
+
+        return -1;
+    }
+
+    private static int FindMatchingOpenChar(string text, int closeIndex, char openChar, char closeChar)
+    {
+        var depth = 0;
+        for (var index = closeIndex; index >= 0; index--)
+        {
+            if (text[index] == closeChar)
+            {
+                depth++;
+                continue;
+            }
+
+            if (text[index] != openChar)
+                continue;
+
+            depth--;
+            if (depth == 0)
+                return index;
+        }
+
+        return -1;
+    }
+
+    private static int SkipQuotedLiteral(string text, int quoteIndex)
+    {
+        var quote = text[quoteIndex];
+        for (var index = quoteIndex + 1; index < text.Length; index++)
+        {
+            if (text[index] == '\\')
+            {
+                index++;
+                continue;
+            }
+
+            if (text[index] == quote)
+                return index;
+        }
+
+        return text.Length - 1;
+    }
+
+    private static bool IsNumberLiteralStart(string text, int index)
+    {
+        if (index >= text.Length || !char.IsDigit(text[index]))
+            return false;
+
+        return index == 0 || !IsTypeScriptIdentifierPart(text[index - 1]);
+    }
+
+    private static int SkipNumberLiteral(string text, int index)
+    {
+        while (index < text.Length && (char.IsLetterOrDigit(text[index]) || text[index] is '.' or '_' or '+' or '-'))
+            index++;
+
+        return index;
+    }
+
+    private static bool TryReadLiteralKeyword(string text, int index, int endExclusive, out string keyword)
+    {
+        foreach (var candidate in new[] { "true", "false", "null", "undefined" })
+        {
+            if (index + candidate.Length > endExclusive
+                || string.CompareOrdinal(text, index, candidate, 0, candidate.Length) != 0)
+            {
+                continue;
+            }
+
+            var beforeOk = index == 0 || !IsTypeScriptIdentifierPart(text[index - 1]);
+            var after = index + candidate.Length;
+            var afterOk = after >= text.Length || !IsTypeScriptIdentifierPart(text[after]);
+            if (!beforeOk || !afterOk)
+                continue;
+
+            keyword = candidate;
+            return true;
+        }
+
+        keyword = string.Empty;
+        return false;
+    }
+
+    private static bool TryConsumeKeywordAt(string text, string keyword, int index)
+    {
+        if (index < 0 || index + keyword.Length > text.Length)
+            return false;
+
+        if (string.CompareOrdinal(text, index, keyword, 0, keyword.Length) != 0)
+            return false;
+
+        var beforeOk = index == 0 || !IsTypeScriptIdentifierPart(text[index - 1]);
+        var after = index + keyword.Length;
+        var afterOk = after >= text.Length || !IsTypeScriptIdentifierPart(text[after]);
+        return beforeOk && afterOk;
+    }
+
+    private static int SkipWhitespace(string text, int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+
+        return index;
     }
 
     private static void EmitNamespaceAliasQualifiedReferences(
