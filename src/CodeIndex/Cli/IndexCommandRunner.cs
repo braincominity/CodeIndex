@@ -3391,7 +3391,7 @@ public static class IndexCommandRunner
 
                 pendingSymbols.AddRange(SymbolExtractor.Extract(0, record.Lang, content, record.Path));
             }
-            catch
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
                 // The real indexing pass reports file failures; this pre-pass only supplies
                 // workspace symbols for cross-file static interface member matching.

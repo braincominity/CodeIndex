@@ -84,7 +84,7 @@ internal static class IndexWatchRunner
                     if (filter.ShouldSkip)
                         return;
                 }
-                catch (Exception)
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or NotSupportedException)
                 {
                     // Filter failures must not silently drop the event; defer to the sub-update
                     // pass to log a per-file warning if the path is genuinely broken.

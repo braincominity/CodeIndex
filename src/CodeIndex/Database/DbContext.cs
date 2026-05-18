@@ -316,7 +316,7 @@ public class DbContext : IDisposable
             var uri = new Uri(trimmed);
             return uri.IsFile ? uri.LocalPath : null;
         }
-        catch
+        catch (UriFormatException)
         {
             return null;
         }

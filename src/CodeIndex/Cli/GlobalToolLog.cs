@@ -127,7 +127,7 @@ internal static class GlobalToolLog
             foreach (var file in oldLogs)
                 file.Delete();
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Best-effort only / ベストエフォートのみ
         }
