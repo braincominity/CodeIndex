@@ -737,7 +737,14 @@ internal static class TypeScriptReferenceExtractor
 
     private static bool IsNumberLiteralStart(string text, int index)
     {
-        if (index >= text.Length || !char.IsDigit(text[index]))
+        if (index >= text.Length)
+            return false;
+
+        var startsWithDigit = char.IsDigit(text[index]);
+        var startsWithNegativeSign = text[index] == '-'
+                                     && index + 1 < text.Length
+                                     && char.IsDigit(text[index + 1]);
+        if (!startsWithDigit && !startsWithNegativeSign)
             return false;
 
         return index == 0 || !IsTypeScriptIdentifierPart(text[index - 1]);
@@ -745,7 +752,34 @@ internal static class TypeScriptReferenceExtractor
 
     private static int SkipNumberLiteral(string text, int index)
     {
-        while (index < text.Length && (char.IsLetterOrDigit(text[index]) || text[index] is '.' or '_' or '+' or '-'))
+        if (index < text.Length && text[index] == '-')
+            index++;
+
+        while (index < text.Length && (char.IsDigit(text[index]) || text[index] == '_'))
+            index++;
+
+        if (index < text.Length && text[index] == '.')
+        {
+            index++;
+            while (index < text.Length && (char.IsDigit(text[index]) || text[index] == '_'))
+                index++;
+        }
+
+        if (index < text.Length && text[index] is 'e' or 'E')
+        {
+            var exponentIndex = index + 1;
+            if (exponentIndex < text.Length && text[exponentIndex] is '+' or '-')
+                exponentIndex++;
+
+            var digitStart = exponentIndex;
+            while (exponentIndex < text.Length && (char.IsDigit(text[exponentIndex]) || text[exponentIndex] == '_'))
+                exponentIndex++;
+
+            if (exponentIndex > digitStart)
+                index = exponentIndex;
+        }
+
+        if (index < text.Length && text[index] == 'n')
             index++;
 
         return index;

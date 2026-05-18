@@ -29933,13 +29933,14 @@ public class ReferenceExtractorTests
             ] as const;
             const urlTuple = ["https://example.test/a", "after-url"] as const;
             const expressions = [1 + 2, flag ? "yes" : "no", { "quotedKey": "quotedValue" }] as const;
+            const compactExpressions = [1+2, 1-2, -1] as const;
             const cast = value as RuntimeConfig;
             """;
 
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
         var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
 
-        Assert.Equal(8, references.Count(r => r.SymbolName == "const" && r.ReferenceKind == "const_assertion"));
+        Assert.Equal(9, references.Count(r => r.SymbolName == "const" && r.ReferenceKind == "const_assertion"));
         Assert.Contains(references, r => r.SymbolName == "\"alpha\"" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "\"beta\"" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "\"strict\"" && r.ReferenceKind == "type_reference");
@@ -29954,12 +29955,13 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "\"https://example.test/a\"" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "\"after-url\"" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "\"quotedValue\"" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "-1" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "3" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "true" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "RuntimeConfig" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "3" && r.ReferenceKind == "type_reference" && r.Column == 43);
         Assert.Contains(references, r => r.SymbolName == "true" && r.ReferenceKind == "type_reference" && r.Column == 55);
-        Assert.DoesNotContain(references, r => r.SymbolName is "99" or "100" or "1" or "2");
+        Assert.DoesNotContain(references, r => r.SymbolName is "99" or "100" or "1" or "2" or "1+2" or "1-2");
         Assert.DoesNotContain(references, r => r.SymbolName is "\"yes\"" or "\"no\"" or "\"quotedKey\"");
         Assert.DoesNotContain(references, r => r.SymbolName == "const" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "RuntimeConfig" && r.ReferenceKind == "const_assertion");
