@@ -10279,6 +10279,35 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchReferences_StampsMutualRecursionAcrossFiles()
+    {
+        InsertIndexedFile("src/mutual_recursion_a.cs", "csharp",
+            """
+            public static class MutualRecursionA
+            {
+                public static void CrossCycleA() { CrossCycleB(); }
+            }
+            """);
+        InsertIndexedFile("src/mutual_recursion_b.cs", "csharp",
+            """
+            public static class MutualRecursionB
+            {
+                public static void CrossCycleB() { CrossCycleA(); }
+            }
+            """);
+
+        var aToB = Assert.Single(_reader.SearchReferences(
+            "CrossCycleB", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["mutual_recursion_a"]));
+        var bToA = Assert.Single(_reader.SearchReferences(
+            "CrossCycleA", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["mutual_recursion_b"]));
+
+        Assert.True(aToB.IsMutualRecursion);
+        Assert.True(bToA.IsMutualRecursion);
+        Assert.False(aToB.IsSelfReference);
+        Assert.False(bToA.IsSelfReference);
+    }
+
+    [Fact]
     public void GetTransitiveCallers_MetadataCycleDoesNotParticipateInBfs()
     {
         // Issue #1864: metadata-only edges are compile-time dependency edges, not runtime

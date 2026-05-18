@@ -820,6 +820,34 @@ public class DbWriter
 
             transaction.Commit();
         }
+
+        RefreshMutualRecursionFlags();
+    }
+
+    private void RefreshMutualRecursionFlags()
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            UPDATE symbol_references AS r
+            SET is_mutual_recursion = CASE
+                WHEN r.is_self_reference = 0
+                 AND r.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
+                 AND r.container_name IS NOT NULL
+                 AND r.container_name <> ''
+                 AND r.symbol_name IS NOT NULL
+                 AND r.symbol_name <> ''
+                 AND EXISTS (
+                    SELECT 1
+                    FROM symbol_references AS reverse
+                    WHERE reverse.is_self_reference = 0
+                      AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
+                      AND reverse.container_name = r.symbol_name COLLATE NOCASE
+                      AND reverse.symbol_name = r.container_name COLLATE NOCASE
+                 )
+                THEN 1
+                ELSE 0
+            END";
+        cmd.ExecuteNonQuery();
     }
 
     public int RebuildTypeScriptAugmentationReferences(string? projectRoot = null)
