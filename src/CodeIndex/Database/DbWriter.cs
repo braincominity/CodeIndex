@@ -793,7 +793,7 @@ public class DbWriter
         }
     }
 
-    public int RebuildTypeScriptAugmentationReferences()
+    public int RebuildTypeScriptAugmentationReferences(string? projectRoot = null)
     {
         using var transaction = BeginTransaction();
 
@@ -807,31 +807,17 @@ public class DbWriter
         using (var cmd = _conn.CreateCommand())
         {
             cmd.CommandText = @"
-                WITH module_files AS (
-                    SELECT DISTINCT f.id
-                    FROM files f
-                    JOIN symbols ms ON ms.file_id = f.id
-                    WHERE f.lang = 'typescript'
-                      AND (
-                        ms.visibility = 'export'
-                        OR ms.signature GLOB 'export *'
-                        OR ms.signature GLOB 'import *'
-                      )
-                )
                 SELECT s.file_id,
+                       f.path,
                        s.name,
                        s.line,
                        s.start_column,
                        s.signature,
                        s.kind,
-                       CASE
-                         WHEN mf.id IS NULL THEN 'global:' || COALESCE(s.container_name, '')
-                         WHEN s.container_name = 'global' OR s.signature GLOB 'declare global *' THEN 'global:'
-                         ELSE 'module:' || f.path || ':' || COALESCE(s.container_name, '')
-                       END AS scope_key
+                       s.container_name,
+                       s.visibility
                 FROM symbols s
                 JOIN files f ON f.id = s.file_id
-                LEFT JOIN module_files mf ON mf.id = f.id
                 WHERE f.lang = 'typescript'
                   AND s.name IS NOT NULL
                   AND s.name <> ''
@@ -845,20 +831,23 @@ public class DbWriter
                 ORDER BY s.name, s.file_id, s.line";
 
             using var reader = cmd.ExecuteReader();
-            var declarations = new List<(long FileId, string Name, int Line, int Column, string Signature, string Kind, string ScopeKey)>();
+            var declarations = new List<(long FileId, string Path, string Name, int Line, int Column, string Signature, string Kind, string ContainerName, string? Visibility)>();
             while (reader.Read())
             {
                 declarations.Add((
                     reader.GetInt64(0),
                     reader.GetString(1),
-                    reader.IsDBNull(2) ? 1 : Math.Max(1, reader.GetInt32(2)),
-                    reader.IsDBNull(3) ? 1 : Math.Max(1, reader.GetInt32(3) + 1),
-                    reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? 1 : Math.Max(1, reader.GetInt32(3)),
+                    reader.IsDBNull(4) ? 1 : Math.Max(1, reader.GetInt32(4) + 1),
                     reader.IsDBNull(5) ? string.Empty : reader.GetString(5),
-                    reader.GetString(6)));
+                    reader.IsDBNull(6) ? string.Empty : reader.GetString(6),
+                    reader.IsDBNull(7) ? string.Empty : reader.GetString(7),
+                    reader.IsDBNull(8) ? null : reader.GetString(8)));
             }
 
-            foreach (var group in declarations.GroupBy(static d => (d.Name, d.ScopeKey)))
+            var moduleFileIds = FindTypeScriptModuleFileIds(projectRoot, declarations);
+            foreach (var group in declarations.GroupBy(d => (d.Name, ScopeKey: BuildTypeScriptScopeKey(d.FileId, d.Path, d.Signature, d.ContainerName, moduleFileIds))))
             {
                 if (group.Count() < 2)
                     continue;
@@ -883,6 +872,67 @@ public class DbWriter
         InsertReferences(references);
         transaction.Commit();
         return references.Count;
+    }
+
+    private static HashSet<long> FindTypeScriptModuleFileIds(
+        string? projectRoot,
+        IReadOnlyList<(long FileId, string Path, string Name, int Line, int Column, string Signature, string Kind, string ContainerName, string? Visibility)> declarations)
+    {
+        var moduleFileIds = new HashSet<long>();
+        foreach (var declaration in declarations)
+        {
+            if (declaration.Visibility == "export"
+                || declaration.Signature.StartsWith("export ", StringComparison.Ordinal)
+                || declaration.Signature.StartsWith("import ", StringComparison.Ordinal))
+            {
+                moduleFileIds.Add(declaration.FileId);
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(projectRoot))
+            return moduleFileIds;
+
+        foreach (var file in declarations.GroupBy(static d => (d.FileId, d.Path)))
+        {
+            if (moduleFileIds.Contains(file.Key.FileId))
+                continue;
+
+            var absolutePath = Path.Combine(projectRoot, file.Key.Path.Replace('/', Path.DirectorySeparatorChar));
+            if (TypeScriptFileHasModuleSyntax(absolutePath))
+                moduleFileIds.Add(file.Key.FileId);
+        }
+
+        return moduleFileIds;
+    }
+
+    private static string BuildTypeScriptScopeKey(long fileId, string path, string signature, string containerName, HashSet<long> moduleFileIds)
+    {
+        if (!moduleFileIds.Contains(fileId))
+            return "global:" + containerName;
+        if (containerName == "global" || signature.StartsWith("declare global ", StringComparison.Ordinal))
+            return "global:";
+        return "module:" + path + ":" + containerName;
+    }
+
+    private static bool TypeScriptFileHasModuleSyntax(string absolutePath)
+    {
+        try
+        {
+            foreach (var line in File.ReadLines(absolutePath))
+            {
+                var trimmed = line.TrimStart();
+                if (trimmed.StartsWith("import ", StringComparison.Ordinal)
+                    || trimmed.StartsWith("export ", StringComparison.Ordinal)
+                    || trimmed.StartsWith("export{", StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+
+        return false;
     }
 
     /// <summary>

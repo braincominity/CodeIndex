@@ -316,6 +316,11 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void RebuildTypeScriptAugmentationReferences_LinksMergedInterfacesAndTypeAliases()
     {
+        var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_ts_aug_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+        File.WriteAllText(Path.Combine(projectRoot, "src/module-c.ts"), "export {}\ninterface Ambient {}\n");
+        File.WriteAllText(Path.Combine(projectRoot, "src/module-d.ts"), "import \"./setup\";\ninterface Ambient {}\n");
+
         var firstFileId = _writer.UpsertFile(new FileRecord
         {
             Path = "src/a.ts", Lang = "typescript", Size = 80, Lines = 4,
@@ -341,6 +346,21 @@ public class DatabaseTests : IDisposable
             Path = "src/module-b.ts", Lang = "typescript", Size = 80, Lines = 4,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
+        var moduleMarkerFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/module-c.ts", Lang = "typescript", Size = 80, Lines = 2,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var sideEffectImportFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/module-d.ts", Lang = "typescript", Size = 80, Lines = 2,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var ambientGlobalFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/ambient-global.ts", Lang = "typescript", Size = 80, Lines = 1,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
 
         _writer.InsertSymbols([
             new SymbolRecord { FileId = firstFileId, Kind = "interface", Name = "Widget", Line = 1, StartLine = 1, StartColumn = 7, EndLine = 3, Signature = "interface Widget { a: number }" },
@@ -350,9 +370,12 @@ public class DatabaseTests : IDisposable
             new SymbolRecord { FileId = thirdFileId, Kind = "interface", Name = "LocalOnly", Line = 1, StartLine = 1, StartColumn = 11, EndLine = 1, Signature = "interface LocalOnly {}" },
             new SymbolRecord { FileId = moduleOneFileId, Kind = "interface", Name = "Props", Line = 2, StartLine = 2, StartColumn = 17, EndLine = 2, Signature = "export interface Props { a: number }", Visibility = "export" },
             new SymbolRecord { FileId = moduleTwoFileId, Kind = "interface", Name = "Props", Line = 2, StartLine = 2, StartColumn = 17, EndLine = 2, Signature = "export interface Props { b: string }", Visibility = "export" },
+            new SymbolRecord { FileId = moduleMarkerFileId, Kind = "interface", Name = "Ambient", Line = 2, StartLine = 2, StartColumn = 11, EndLine = 2, Signature = "interface Ambient {}" },
+            new SymbolRecord { FileId = sideEffectImportFileId, Kind = "interface", Name = "Ambient", Line = 2, StartLine = 2, StartColumn = 11, EndLine = 2, Signature = "interface Ambient {}" },
+            new SymbolRecord { FileId = ambientGlobalFileId, Kind = "interface", Name = "Ambient", Line = 1, StartLine = 1, StartColumn = 11, EndLine = 1, Signature = "interface Ambient {}" },
         ]);
 
-        var inserted = _writer.RebuildTypeScriptAugmentationReferences();
+        var inserted = _writer.RebuildTypeScriptAugmentationReferences(projectRoot);
 
         Assert.Equal(4, inserted);
         using var cmd = _db.Connection.CreateCommand();
