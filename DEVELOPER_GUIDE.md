@@ -62,6 +62,18 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
 
 Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
 
+### CLI recoverable error format
+
+Recoverable command errors in human output use the canonical line shape below. Include only non-null lines, but every error must include a recovery hint:
+
+```text
+Error: <message>
+Hint: <actionable recovery path>
+Usage: <command shape>
+```
+
+When an error code is available, the first line is `Error [<code>]: <message>`. Use `CommandErrorWriter` for new CLI parse, validation, and filesystem preflight errors so `ProgramRunner`, `IndexCommandRunner`, and query runners keep the same format. JSON error payloads continue to use `CommandErrorJsonResult`.
+
 ### C# / .NET integration
 
 `SolutionProjectResolver` parses the plain-text `.sln` `Project(...) = "...", "...csproj"` entries and resolves C# / F# / VB project files. When exactly one `.sln` exists at the workspace root, `--project <name|path>` uses it automatically; otherwise callers can pass `--solution <path>`.
