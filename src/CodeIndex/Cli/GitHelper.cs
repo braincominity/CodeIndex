@@ -5,6 +5,14 @@ using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
+public enum GitRepositoryType
+{
+    None,
+    Normal,
+    Worktree,
+    Bare,
+}
+
 /// <summary>
 /// Git integration helpers.
 /// Git連携ヘルパー。
@@ -40,7 +48,12 @@ public static class GitHelper
         if (Directory.Exists(ioDotGit)) return dotGit;
 
         // Worktree: .git is a file containing "gitdir: <path>" / worktree: .gitがファイルで "gitdir: <path>" を含む
-        if (!File.Exists(ioDotGit)) return null;
+        if (!File.Exists(ioDotGit))
+        {
+            return TryGetRepositoryType(projectRoot) == GitRepositoryType.Bare
+                ? Path.GetFullPath(projectRoot)
+                : null;
+        }
 
         var gitFileContent = File.ReadAllText(ioDotGit).Trim();
         if (!gitFileContent.StartsWith("gitdir:")) return null;
@@ -60,6 +73,25 @@ public static class GitHelper
 
         // Fallback: use worktreeGitDir itself (e.g. submodules) / フォールバック: worktreeGitDir自体を使用
         return worktreeGitDir;
+    }
+
+    /// <summary>
+    /// Try to classify the repository shape for <paramref name="projectRoot"/>.
+    /// projectRoot の git リポジトリ形状を best-effort で判定する。
+    /// </summary>
+    public static GitRepositoryType TryGetRepositoryType(string projectRoot)
+    {
+        var dotGit = Path.Combine(projectRoot, ".git");
+        var ioDotGit = LongPath.EnsureWindowsPrefix(dotGit);
+        if (Directory.Exists(ioDotGit))
+            return GitRepositoryType.Normal;
+        if (File.Exists(ioDotGit))
+            return GitRepositoryType.Worktree;
+
+        var isBare = TryRunGit(projectRoot, "rev-parse", "--is-bare-repository")?.Trim();
+        return string.Equals(isBare, "true", StringComparison.OrdinalIgnoreCase)
+            ? GitRepositoryType.Bare
+            : GitRepositoryType.None;
     }
 
     /// <summary>
@@ -381,13 +413,18 @@ public static class GitHelper
     internal static string? TryGetRepositoryRoot(string projectPath, IReadOnlyDictionary<string, string?>? gitEnvironmentOverrides)
     {
         var cdup = TryRunGit(projectPath, gitEnvironmentOverrides, "rev-parse", "--show-cdup");
-        if (cdup == null)
-            return null;
+        if (cdup != null)
+        {
+            var value = cdup.Trim();
+            return string.IsNullOrEmpty(value)
+                ? Path.GetFullPath(projectPath)
+                : Path.GetFullPath(Path.Combine(projectPath, value));
+        }
 
-        var value = cdup.Trim();
-        return string.IsNullOrEmpty(value)
+        var isBare = TryRunGit(projectPath, gitEnvironmentOverrides, "rev-parse", "--is-bare-repository")?.Trim();
+        return string.Equals(isBare, "true", StringComparison.OrdinalIgnoreCase)
             ? Path.GetFullPath(projectPath)
-            : Path.GetFullPath(Path.Combine(projectPath, value));
+            : null;
     }
 
     private static string? TryRunGit(string projectRoot, params string[] args)

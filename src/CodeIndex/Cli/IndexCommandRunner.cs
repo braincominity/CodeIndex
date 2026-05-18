@@ -2964,6 +2964,7 @@ public static class IndexCommandRunner
             // full scan が「直近 full scan からブランチが動いた」をきちんと検知できる。
             // 非 git workspace で null になった場合はキーごとクリアされる。Issue #1508。
             writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, currentHeadCommit);
+            writer.SetMeta(DbContext.IndexedHeadCommitBranchMetaKey, GitHelper.TryGetHeadBranch(projectRoot));
             // #1509: also stamp the always-updated "last indexed HEAD" triple (SHA + branch +
             // timestamp). Unlike #1508's IndexedHeadCommitMetaKey which only fires here on
             // full scans, this triple is also stamped at the end of incremental update runs
