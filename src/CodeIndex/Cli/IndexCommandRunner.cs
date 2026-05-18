@@ -898,7 +898,7 @@ public static class IndexCommandRunner
         {
             return Environment.CurrentDirectory;
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return null;
         }

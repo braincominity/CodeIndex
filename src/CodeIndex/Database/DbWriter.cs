@@ -2729,11 +2729,11 @@ public class DbWriter
                 ownTransaction = false;
             }
         }
-        catch
+        catch (Exception)
         {
             if (ownTransaction)
             {
-                try { Execute("ROLLBACK"); } catch { /* best effort */ }
+                try { Execute("ROLLBACK"); } catch (SqliteException) { /* best effort */ }
             }
             throw;
         }

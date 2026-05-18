@@ -210,7 +210,7 @@ internal static class GlobalToolLog
                     if (_originalError != null)
                         Console.SetError(_originalError);
                 }
-                catch
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException)
                 {
                     // Best-effort only / ベストエフォートのみ
                 }
