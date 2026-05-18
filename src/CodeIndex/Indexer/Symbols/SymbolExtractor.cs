@@ -106,7 +106,7 @@ public static partial class SymbolExtractor
         @"@(?<name>[A-Z]\w*(?:\.[A-Z]\w*)?)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex SwiftAccessorDeclarationRegex = new(
-        @"^\s*(?:(?:mutating|nonmutating)\s+)?(?<name>get|set|willSet|didSet)\b(?:\s*\([^)]*\))?(?:\s+(?:async|throws|rethrows))*\s*(?:\{|$)",
+        @"^\s*" + SwiftAttributePattern + @"(?:(?:mutating|nonmutating)\s+)?(?:@(?=willSet\b|didSet\b))?(?<name>get|set|willSet|didSet)\b(?:\s*\([^)]*\))?(?:\s+(?:async|throws|rethrows))*\s*(?:\{|$)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly HashSet<string> SwiftNonWrapperPropertyAttributes = new(StringComparer.Ordinal)
     {
