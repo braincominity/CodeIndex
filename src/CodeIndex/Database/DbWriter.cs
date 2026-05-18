@@ -793,6 +793,75 @@ public class DbWriter
         }
     }
 
+    public int RebuildTypeScriptAugmentationReferences()
+    {
+        using var transaction = BeginTransaction();
+
+        using (var deleteCmd = _conn.CreateCommand())
+        {
+            deleteCmd.CommandText = "DELETE FROM symbol_references WHERE reference_kind = 'augmentation'";
+            deleteCmd.ExecuteNonQuery();
+        }
+
+        var references = new List<ReferenceRecord>();
+        using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = @"
+                SELECT s.file_id, s.name, s.line, s.start_column, s.signature, s.kind
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE f.lang = 'typescript'
+                  AND s.name IS NOT NULL
+                  AND s.name <> ''
+                  AND (
+                    s.kind = 'interface'
+                    OR (s.kind = 'import' AND s.signature GLOB 'type *')
+                    OR (s.kind = 'import' AND s.signature GLOB 'export type *')
+                    OR (s.kind = 'import' AND s.signature GLOB 'declare type *')
+                    OR (s.kind = 'import' AND s.signature GLOB 'export declare type *')
+                  )
+                ORDER BY s.name, s.file_id, s.line";
+
+            using var reader = cmd.ExecuteReader();
+            var declarations = new List<(long FileId, string Name, int Line, int Column, string Signature, string Kind)>();
+            while (reader.Read())
+            {
+                declarations.Add((
+                    reader.GetInt64(0),
+                    reader.GetString(1),
+                    reader.IsDBNull(2) ? 1 : Math.Max(1, reader.GetInt32(2)),
+                    reader.IsDBNull(3) ? 1 : Math.Max(1, reader.GetInt32(3) + 1),
+                    reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
+                    reader.IsDBNull(5) ? string.Empty : reader.GetString(5)));
+            }
+
+            foreach (var group in declarations.GroupBy(static d => d.Name, StringComparer.Ordinal))
+            {
+                if (group.Count() < 2)
+                    continue;
+
+                foreach (var declaration in group)
+                {
+                    references.Add(new ReferenceRecord
+                    {
+                        FileId = declaration.FileId,
+                        SymbolName = declaration.Name,
+                        ReferenceKind = "augmentation",
+                        Line = declaration.Line,
+                        Column = declaration.Column,
+                        Context = declaration.Signature,
+                        ContainerKind = declaration.Kind == "interface" ? "interface" : "type",
+                        ContainerName = declaration.Name,
+                    });
+                }
+            }
+        }
+
+        InsertReferences(references);
+        transaction.Commit();
+        return references.Count;
+    }
+
     /// <summary>
     /// Insert file validation issues.
     /// ファイル検証問題を挿入する。

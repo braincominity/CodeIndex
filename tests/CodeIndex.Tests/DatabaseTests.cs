@@ -313,6 +313,56 @@ public class DatabaseTests : IDisposable
         Assert.Equal(1, referenceCount);
     }
 
+    [Fact]
+    public void RebuildTypeScriptAugmentationReferences_LinksMergedInterfacesAndTypeAliases()
+    {
+        var firstFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/a.ts", Lang = "typescript", Size = 80, Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var secondFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/b.ts", Lang = "typescript", Size = 80, Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var thirdFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/c.ts", Lang = "typescript", Size = 80, Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = firstFileId, Kind = "interface", Name = "Widget", Line = 1, StartLine = 1, StartColumn = 7, EndLine = 3, Signature = "interface Widget { a: number }" },
+            new SymbolRecord { FileId = secondFileId, Kind = "interface", Name = "Widget", Line = 1, StartLine = 1, StartColumn = 17, EndLine = 3, Signature = "declare global { interface Widget { b: string } }" },
+            new SymbolRecord { FileId = firstFileId, Kind = "import", Name = "Options", Line = 4, StartLine = 4, StartColumn = 5, EndLine = 4, Signature = "type Options = { a: number }" },
+            new SymbolRecord { FileId = secondFileId, Kind = "import", Name = "Options", Line = 4, StartLine = 4, StartColumn = 12, EndLine = 4, Signature = "export type Options = { b: string }" },
+            new SymbolRecord { FileId = thirdFileId, Kind = "interface", Name = "LocalOnly", Line = 1, StartLine = 1, StartColumn = 11, EndLine = 1, Signature = "interface LocalOnly {}" },
+        ]);
+
+        var inserted = _writer.RebuildTypeScriptAugmentationReferences();
+
+        Assert.Equal(4, inserted);
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT symbol_name, container_kind, COUNT(*)
+            FROM symbol_references
+            WHERE reference_kind = 'augmentation'
+            GROUP BY symbol_name, container_kind
+            ORDER BY symbol_name, container_kind";
+
+        using var reader = cmd.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.Equal("Options", reader.GetString(0));
+        Assert.Equal("type", reader.GetString(1));
+        Assert.Equal(2, reader.GetInt32(2));
+        Assert.True(reader.Read());
+        Assert.Equal("Widget", reader.GetString(0));
+        Assert.Equal("interface", reader.GetString(1));
+        Assert.Equal(2, reader.GetInt32(2));
+        Assert.False(reader.Read());
+    }
+
     private static HashSet<string> ReadIndexNames(SqliteConnection connection, string tableName)
     {
         using var cmd = connection.CreateCommand();
