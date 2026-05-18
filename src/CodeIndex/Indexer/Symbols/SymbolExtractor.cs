@@ -96,7 +96,25 @@ public static partial class SymbolExtractor
     // Allow those prefixes so annotated declarations still index by their actual names.
     // Swift の宣言では、宣言キーワードと同じ行に属性が付くことが多い。
     // その前置きを許容し、注釈付き宣言でも実際の名前でインデックスできるようにする。
-    private const string SwiftAttributePattern = @"(?:@\w+(?:\([^)]*\))?\s+)*";
+    private const string SwiftAttributeNamePattern = @"\w+(?:\.\w+)*";
+    private const string SwiftAttributePattern = @"(?:@" + SwiftAttributeNamePattern + @"(?:\([^)]*\))?\s+)*";
+    private static readonly Regex SwiftPropertyDeclarationRegex = new(
+        @"^\s*(?<attributes>(?:@" + SwiftAttributeNamePattern + @"(?:\([^)]*\))?\s+)*)?(?:(?:public|private|internal|open|fileprivate|package)(?:\s*\(\s*set\s*\))?\s+)?(?:(?:lazy|weak|unowned|final|static|class|nonisolated)\s+)*(?:let|var)\s+(?<name>`[^`]+`|\w+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex SwiftPropertyWrapperAttributeRegex = new(
+        @"@(?<name>[A-Z]\w*(?:\.[A-Z]\w*)?)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex SwiftAccessorDeclarationRegex = new(
+        @"^\s*(?:(?:mutating|nonmutating)\s+)?(?<name>get|set|willSet|didSet)\b(?:\s*\([^)]*\))?(?:\s+(?:async|throws|rethrows))*\s*(?:\{|$)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly HashSet<string> SwiftNonWrapperPropertyAttributes = new(StringComparer.Ordinal)
+    {
+        "IBOutlet",
+        "IBOutletCollection",
+        "IBInspectable",
+        "NSManaged",
+        "GKInspectable",
+    };
     // C++ return-type atoms need to accept both ordinary word tokens and `decltype(...)`.
     // The decltype branch allows nested parentheses so modern forms such as
     // `decltype(auto)`, `decltype((value))`, and `decltype(foo<T>(x))` stay searchable.
@@ -2196,6 +2214,9 @@ public static partial class SymbolExtractor
                 continue;
 
             var line = lines[i];
+            if (lang == "csharp" && line.TrimStart().StartsWith("//", StringComparison.Ordinal))
+                continue;
+
             if (lang == "go"
                 && TryHandleGoBlockLine(fileId, line, i, symbols, ref goImportBlock))
             {
@@ -3840,6 +3861,8 @@ public static partial class SymbolExtractor
             ExtractPhpDocblockTypeAliasSymbols(fileId, lines, symbols);
         if (lang == "php")
             ExtractPhpDocblockImportTypeSymbols(fileId, lines, symbols);
+        if (lang == "swift")
+            ExtractSwiftPropertySupplementalSymbols(fileId, lines, structuralLines, symbols);
         if (lang == "sql")
         {
             var sqlSyntheticSymbolLines = MaskSqlSyntheticSymbolLines(lines);
@@ -4208,6 +4231,193 @@ public static partial class SymbolExtractor
            && name.StartsWith("use", StringComparison.Ordinal)
            && IsJavaScriptTypeScriptIdentifierStart(name[3])
            && char.IsUpper(name[3]);
+
+    private static void ExtractSwiftPropertySupplementalSymbols(
+        long fileId,
+        string[] lines,
+        string[] structuralLines,
+        List<SymbolRecord> symbols)
+    {
+        var existing = new HashSet<string>(
+            symbols.Select(symbol => $"{symbol.Kind}:{symbol.Name}:{symbol.Line}"),
+            StringComparer.Ordinal);
+
+        foreach (var property in symbols
+                     .Where(symbol => symbol.Kind == "property"
+                                      && symbol.Line >= 1
+                                      && symbol.Line <= lines.Length)
+                     .ToArray())
+        {
+            var lineIndex = property.Line - 1;
+            var propertyLine = lines[lineIndex];
+            var declarationMatch = SwiftPropertyDeclarationRegex.Match(propertyLine);
+            if (!declarationMatch.Success)
+                continue;
+
+            var attributes = declarationMatch.Groups["attributes"].Value;
+            if (HasSwiftPropertyWrapperAttribute(attributes))
+            {
+                property.SubKind = CombineSubKinds(property.SubKind, "swift_wrapped_property");
+                AddSwiftProjectedValueSymbol(fileId, lines, symbols, existing, property, propertyLine);
+            }
+
+            var openBraceLine = lineIndex;
+            var openBraceColumn = structuralLines[lineIndex].IndexOf('{', declarationMatch.Index + declarationMatch.Length);
+            if (openBraceColumn < 0)
+                continue;
+
+            var closeBraceLine = FindBraceRangeEndLine(structuralLines, openBraceLine, openBraceColumn);
+            if (closeBraceLine < openBraceLine)
+                continue;
+
+            var sawAccessor = false;
+            for (var accessorLine = openBraceLine; accessorLine <= closeBraceLine; accessorLine++)
+            {
+                foreach (Match accessorMatch in SwiftAccessorDeclarationRegex.Matches(structuralLines[accessorLine]))
+                {
+                    if (!IsSwiftTopLevelAccessor(structuralLines, openBraceLine, openBraceColumn, accessorLine, accessorMatch.Index))
+                        continue;
+
+                    var accessorName = accessorMatch.Groups["name"].Value;
+                    var symbolName = $"{property.Name}.{accessorName}";
+                    var key = $"accessor:{symbolName}:{accessorLine + 1}";
+                    if (!existing.Add(key))
+                        continue;
+
+                    sawAccessor = true;
+                    symbols.Add(new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "accessor",
+                        Name = symbolName,
+                        Line = accessorLine + 1,
+                        StartLine = accessorLine + 1,
+                        StartColumn = accessorMatch.Index,
+                        EndLine = accessorLine + 1,
+                        Signature = lines[accessorLine].Trim(),
+                        ContainerKind = "property",
+                        ContainerName = property.Name,
+                        ContainerQualifiedName = property.ContainerQualifiedName,
+                    });
+                }
+            }
+
+            if (sawAccessor)
+            {
+                property.SubKind = CombineSubKinds(property.SubKind, "swift_computed_property");
+                property.EndLine = Math.Max(property.EndLine, closeBraceLine + 1);
+                property.BodyStartLine = openBraceLine + 1;
+                property.BodyEndLine = closeBraceLine + 1;
+            }
+        }
+    }
+
+    private static void AddSwiftProjectedValueSymbol(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        HashSet<string> existing,
+        SymbolRecord property,
+        string propertyLine)
+    {
+        var projectedName = "$" + property.Name.Trim('`');
+        var key = $"property:{projectedName}:{property.Line}";
+        if (!existing.Add(key))
+            return;
+
+        symbols.Add(new SymbolRecord
+        {
+            FileId = fileId,
+            Kind = "property",
+            SubKind = "swift_projected_value",
+            Name = projectedName,
+            Line = property.Line,
+            StartLine = property.StartLine,
+            StartColumn = property.StartColumn,
+            EndLine = property.EndLine,
+            BodyStartLine = property.BodyStartLine,
+            BodyEndLine = property.BodyEndLine,
+            Signature = propertyLine.Trim(),
+            ContainerKind = property.ContainerKind,
+            ContainerName = property.ContainerName,
+            ContainerQualifiedName = property.ContainerQualifiedName,
+            Visibility = property.Visibility,
+            ReturnType = property.ReturnType,
+        });
+    }
+
+    private static bool HasSwiftPropertyWrapperAttribute(string attributes)
+    {
+        foreach (Match match in SwiftPropertyWrapperAttributeRegex.Matches(attributes))
+        {
+            var name = match.Groups["name"].Value;
+            var shortNameStart = name.LastIndexOf('.') + 1;
+            var shortName = shortNameStart > 0 ? name[shortNameStart..] : name;
+            if (!SwiftNonWrapperPropertyAttributes.Contains(shortName))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static int FindBraceRangeEndLine(string[] structuralLines, int openBraceLine, int openBraceColumn)
+    {
+        var depth = 0;
+        for (var lineIndex = openBraceLine; lineIndex < structuralLines.Length; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var column = lineIndex == openBraceLine ? openBraceColumn : 0;
+            for (; column < line.Length; column++)
+            {
+                if (line[column] == '{')
+                {
+                    depth++;
+                }
+                else if (line[column] == '}')
+                {
+                    depth--;
+                    if (depth == 0)
+                        return lineIndex;
+                }
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool IsSwiftTopLevelAccessor(
+        string[] structuralLines,
+        int openBraceLine,
+        int openBraceColumn,
+        int accessorLine,
+        int accessorColumn)
+    {
+        var depth = 0;
+        for (var lineIndex = openBraceLine; lineIndex <= accessorLine; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var startColumn = lineIndex == openBraceLine ? openBraceColumn : 0;
+            var endColumn = lineIndex == accessorLine ? accessorColumn : line.Length;
+            for (var column = startColumn; column < endColumn; column++)
+            {
+                if (line[column] == '{')
+                    depth++;
+                else if (line[column] == '}')
+                    depth--;
+            }
+        }
+
+        return depth == 1;
+    }
+
+    private static string CombineSubKinds(string? current, string addition)
+    {
+        if (string.IsNullOrWhiteSpace(current))
+            return addition;
+        return current.Split('|', StringSplitOptions.RemoveEmptyEntries).Contains(addition, StringComparer.Ordinal)
+            ? current
+            : current + "|" + addition;
+    }
 
     private static void ExtractCppFriendDeclarationSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
     {
@@ -7663,7 +7873,11 @@ public static partial class SymbolExtractor
             {
                 parameterOpenIndex = FindRecordPrimaryComponentListStart(declaration, 0);
                 if (parameterOpenIndex < 0)
+                {
+                    if (FindRecordDeclarationTerminatorIndex(declaration, 0) >= 0)
+                        return declaration;
                     continue;
+                }
             }
 
             if (parameterCloseIndex < 0)
