@@ -1,5 +1,6 @@
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -99,6 +100,24 @@ public partial class DbReader
         }
 
         return results;
+    }
+
+    public int CountFindCandidateFiles(string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
+    {
+        if (pathPatterns == null || pathPatterns.Count == 0)
+            return 0;
+
+        using var fileCmd = _conn.CreateCommand();
+        var sql = "SELECT COUNT(*) FROM files f WHERE 1=1";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        fileCmd.CommandText = sql;
+        if (lang != null)
+            fileCmd.Parameters.AddWithValue("@lang", lang);
+        AddPathFilterParameters(fileCmd, pathPatterns, excludePathPatterns);
+
+        return Convert.ToInt32(fileCmd.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
     public QueryCountResult CountFindInFiles(string query, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)

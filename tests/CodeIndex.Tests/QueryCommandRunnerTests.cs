@@ -27880,7 +27880,7 @@ jobs:
     }
 
     [Fact]
-    public void RunFind_ZeroResultHintDoesNotSuggestRemovingRequiredPath()
+    public void RunFind_ZeroResultHintDistinguishesPathMatchesFromQueryMiss_Issue1406()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_zero_hint");
         try
@@ -27899,8 +27899,38 @@ jobs:
 
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
             Assert.Contains("No matches found.", stderr);
-            Assert.Contains("broadening --path or adding another --path value", normalizedStderr);
+            Assert.Contains("--path matched 1 file, but the query did not match their contents", stderr);
+            Assert.Contains("try a broader query or check the query syntax", normalizedStderr);
+            Assert.DoesNotContain("broadening --path or adding another --path value", normalizedStderr);
             Assert.DoesNotContain("try removing --lang, --path", normalizedStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_ZeroResultHintStillSuggestsBroadeningUnmatchedPath_Issue1406()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_zero_path_hint");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "README.md",
+                "markdown",
+                "hello world\n");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["hello", "--db", dbPath, "--path", "src/**/*.cs"],
+                _jsonOptions));
+            var normalizedStderr = stderr.ToLowerInvariant();
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("broadening --path or adding another --path value", normalizedStderr);
+            Assert.DoesNotContain("query did not match", normalizedStderr);
         }
         finally
         {
