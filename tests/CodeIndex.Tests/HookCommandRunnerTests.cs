@@ -20,7 +20,7 @@ public class HookCommandRunnerTests
         {
             TestProjectHelper.InitializeGitRepo(projectRoot);
 
-            var installExit = HookCommandRunner.Run(["install", "--project", projectRoot], _jsonOptions);
+            var installExit = RunHooksAndCaptureStreams(["install", "--project", projectRoot]).ExitCode;
             var hooksDir = Path.Combine(projectRoot, ".git", "hooks");
             var hookPath = Path.Combine(hooksDir, "pre-commit");
 
@@ -30,10 +30,10 @@ public class HookCommandRunnerTests
             Assert.Contains("BEGIN CDIDX MANAGED PRE-COMMIT", hook);
             Assert.Contains("cdidx index . --quiet", hook);
 
-            var statusExit = HookCommandRunner.Run(["status", "--project", projectRoot], _jsonOptions);
+            var statusExit = RunHooksAndCaptureStreams(["status", "--project", projectRoot]).ExitCode;
             Assert.Equal(CommandExitCodes.Success, statusExit);
 
-            var uninstallExit = HookCommandRunner.Run(["uninstall", "--project", projectRoot], _jsonOptions);
+            var uninstallExit = RunHooksAndCaptureStreams(["uninstall", "--project", projectRoot]).ExitCode;
             Assert.Equal(CommandExitCodes.Success, uninstallExit);
             Assert.False(File.Exists(hookPath));
         }
@@ -78,7 +78,7 @@ public class HookCommandRunnerTests
             var chainedHookPath = Path.Combine(hooksDir, "pre-commit.cdidx-chain");
             File.WriteAllText(hookPath, "#!/bin/sh\necho existing\n");
 
-            var exitCode = HookCommandRunner.Run(["install", "--project", projectRoot], _jsonOptions);
+            var exitCode = RunHooksAndCaptureStreams(["install", "--project", projectRoot]).ExitCode;
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.True(File.Exists(hookPath));
