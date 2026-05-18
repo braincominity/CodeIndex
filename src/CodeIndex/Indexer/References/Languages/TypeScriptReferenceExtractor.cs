@@ -282,6 +282,7 @@ internal static class TypeScriptReferenceExtractor
             EmitConstAssertionLiteralTypeReferences(
                 preparedLine,
                 rawLine,
+                asIndex,
                 rawAsIndex,
                 references,
                 seen,
@@ -295,6 +296,7 @@ internal static class TypeScriptReferenceExtractor
     private static void EmitConstAssertionLiteralTypeReferences(
         string preparedLine,
         string rawLine,
+        int preparedAsIndex,
         int asIndex,
         List<ReferenceRecord> references,
         HashSet<string> seen,
@@ -303,7 +305,7 @@ internal static class TypeScriptReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        var literalOpen = FindConstAssertionLiteralOpen(rawLine, asIndex);
+        var literalOpen = FindConstAssertionLiteralOpen(preparedLine, preparedAsIndex);
         if (literalOpen < 0)
             return;
 

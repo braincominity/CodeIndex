@@ -29919,16 +29919,19 @@ public class ReferenceExtractorTests
         const string content = """
             const tuple = ["alpha", "beta"] as const;
             const config = { mode: "strict", retries: 3, enabled: true } as const;
+            const escaped = { pattern: "{", closing: "]", mode: "strict" } as const;
             const cast = value as RuntimeConfig;
             """;
 
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
         var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
 
-        Assert.Equal(2, references.Count(r => r.SymbolName == "const" && r.ReferenceKind == "const_assertion"));
+        Assert.Equal(3, references.Count(r => r.SymbolName == "const" && r.ReferenceKind == "const_assertion"));
         Assert.Contains(references, r => r.SymbolName == "\"alpha\"" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "\"beta\"" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "\"strict\"" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "\"{\"" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "\"]\"" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "3" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "true" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "RuntimeConfig" && r.ReferenceKind == "type_reference");
