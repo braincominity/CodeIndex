@@ -2390,6 +2390,55 @@ jobs:
         Assert.Contains("Hint: pass a path to a CodeIndex SQLite database", stderr);
     }
 
+    [Fact]
+    public void WithDb_InvalidSqliteFileSurfacesSqliteCategory_Issue2072()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2072_invalid_sqlite");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "not-a-codeindex.db");
+            File.WriteAllText(dbPath, "this is not a sqlite database");
+            var dbUri = new Uri(dbPath).AbsoluteUri + "?mode=ro&immutable=1;Pooling=False";
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbUri],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains($"Error [{CommandErrorCodes.DbError}]: SQLite database error", stderr);
+            Assert.Contains("Hint: check `--db`, verify the index was written by a compatible cdidx version", stderr);
+            Assert.DoesNotContain("database error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void WithDb_SqliteCantOpenSurfacesAccessOpenCategory_Issue2072()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2072_cantopen");
+        try
+        {
+            var missingParent = Path.Combine(projectRoot, "missing-parent");
+            var dbUri = new Uri(Path.Combine(missingParent, "codeindex.db")).AbsoluteUri + "?mode=ro";
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbUri],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains($"Error [{CommandErrorCodes.DbError}]: database access/open denied:", stderr);
+            Assert.Contains("verify parent directory permissions", stderr);
+            Assert.DoesNotContain("SQLite database error", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("search-extra", "unexpected extra positional 1 argument for search")]
     [InlineData("excerpt-extra", "unexpected extra positional 1 argument for excerpt")]
