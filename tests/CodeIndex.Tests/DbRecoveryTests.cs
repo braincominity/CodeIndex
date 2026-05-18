@@ -63,8 +63,8 @@ public class DbRecoveryTests : IDisposable
     [Fact]
     public void QueryOnMissingDb_ReturnsProperExitCode()
     {
-        // Query commands against non-existent DB should return DatabaseError (3)
-        // 存在しないDBへのクエリはDatabaseError (3) を返すべき
+        // Explicit missing --db values are rejected as usage errors before opening a reader.
+        // 明示された存在しない --db は reader を開く前に usage error として拒否する。
         var nonExistentDb = Path.Combine(Path.GetTempPath(), $"nonexistent_{Guid.NewGuid():N}.db");
         lock (TestConsoleLock.Gate)
         {
@@ -74,8 +74,8 @@ public class DbRecoveryTests : IDisposable
             {
                 Console.SetError(errWriter);
                 var exitCode = QueryCommandRunner.RunStatus(["--db", nonExistentDb], new System.Text.Json.JsonSerializerOptions());
-                Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-                Assert.Contains("database not found", errWriter.ToString().ToLowerInvariant());
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Contains("does not point to an existing database file", errWriter.ToString());
             }
             finally
             {

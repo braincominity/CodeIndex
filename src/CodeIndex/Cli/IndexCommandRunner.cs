@@ -993,6 +993,10 @@ public static class IndexCommandRunner
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var sqlGraphContractMatchesCurrent = priorSqlGraphContractVersion == currentSqlGraphContractVersion;
+        var unresolvedMergeExitCode = RejectUnresolvedMergeState(projectRoot, options.Json, jsonOptions);
+        if (unresolvedMergeExitCode != null)
+            return unresolvedMergeExitCode.Value;
+
         var targetPaths = new HashSet<string>(StringComparer.Ordinal);
         var relevantIgnoreFileChanged = false;
 
@@ -2182,6 +2186,25 @@ public static class IndexCommandRunner
         return buffer.ToString();
     }
 
+    private static int? RejectUnresolvedMergeState(string projectRoot, bool json, JsonSerializerOptions jsonOptions)
+    {
+        var status = GitHelper.TryGetWorktreeStatus(projectRoot);
+        if (status == null || status.UnresolvedMergeFiles.Count == 0)
+            return null;
+
+        var paths = string.Join(", ", status.UnresolvedMergeFiles.Take(5));
+        if (status.UnresolvedMergeFiles.Count > 5)
+            paths += $", ... {status.UnresolvedMergeFiles.Count - 5:N0} more";
+
+        return WriteCommandError(
+            json,
+            jsonOptions,
+            $"unresolved merge conflicts detected; refusing to index conflicted files ({paths})",
+            CommandExitCodes.UsageError,
+            "Resolve the conflicts and run `git merge --continue`, or abort the merge with `git merge --abort`, then rerun `cdidx index`.",
+            CommandErrorCodes.UsageError);
+    }
+
     private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null, string? errorCode = null)
     {
         if (json)
@@ -2286,6 +2309,10 @@ public static class IndexCommandRunner
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         _ = priorMetadataTargetCsharp; // full-scan resolver runs unconditionally on success / 成功時に常に再解決するため不要
+        var unresolvedMergeExitCode = RejectUnresolvedMergeState(projectRoot, options.Json, jsonOptions);
+        if (unresolvedMergeExitCode != null)
+            return unresolvedMergeExitCode.Value;
+
         var normalizedProjectRoot = Path.GetFullPath(projectRoot);
         var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
             ? null

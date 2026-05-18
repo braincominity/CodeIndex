@@ -2013,15 +2013,32 @@ jobs:
         Assert.Equal(0, options.ContextAfter);
         Assert.Equal(SearchSnippetFormatter.DefaultSnippetLines, options.SnippetLines);
         Assert.NotNull(options.ParseError);
-        Assert.Contains("Error: --limit requires a positive integer", options.ParseError);
-        Assert.Contains("Hint: retry with `--limit 1` or another positive integer.", options.ParseError);
-        Assert.Contains("Error: --start requires a positive integer", options.ParseError);
-        Assert.Contains("Error: --end requires a positive integer", options.ParseError);
-        Assert.Contains("Error: --before requires a non-negative integer", options.ParseError);
-        Assert.Contains("Hint: retry with `--before 0` or another non-negative integer.", options.ParseError);
-        Assert.Contains("Error: --after requires a non-negative integer", options.ParseError);
-        Assert.Contains("Error: --snippet-lines requires a positive integer", options.ParseError);
+        Assert.Contains("Error: --limit requires an integer between 1 and 10000", options.ParseError);
+        Assert.Contains("Hint: retry with `--limit 1` or another value up to 10000.", options.ParseError);
+        Assert.Contains("Error: --start requires an integer between 1 and 10000000", options.ParseError);
+        Assert.Contains("Error: --end requires an integer between 1 and 10000000", options.ParseError);
+        Assert.Contains("Error: --before requires an integer between 0 and 1000", options.ParseError);
+        Assert.Contains("Hint: retry with `--before 0` or another value up to 1000.", options.ParseError);
+        Assert.Contains("Error: --after requires an integer between 0 and 1000", options.ParseError);
+        Assert.Contains("Error: --snippet-lines requires an integer between 1 and 20", options.ParseError);
         Assert.Equal(string.Empty, stderr);
+    }
+
+    [Theory]
+    [InlineData("--limit", "not-a-number", "between 1 and 10000")]
+    [InlineData("--snippet-lines", "0", "between 1 and 20")]
+    [InlineData("--max-line-width", "-1", "between 0 and 4096")]
+    public void ParseArgs_InvalidNumericOptionsIncludeBoundsContext_Issue2071(string flag, string value, string expectedRange)
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["needle", flag, value],
+            jsonDefault: false,
+            allowNamedQuery: true);
+
+        Assert.NotNull(options.ParseError);
+        Assert.Contains(flag, options.ParseError!);
+        Assert.Contains(expectedRange, options.ParseError!);
+        Assert.Contains($"got '{value}'", options.ParseError!);
     }
 
     // Regression lock for #1503: numeric CLI flags must reject values above the documented
@@ -2171,6 +2188,56 @@ jobs:
         Assert.Contains("Hint: fix the invalid or missing option value", stderr);
         Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
         Assert.DoesNotContain("Unhandled exception", stderr);
+    }
+
+    [Fact]
+    public void RunSearch_ExplicitMissingDbReturnsUsageErrorBeforeOpeningReader_Issue2073()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2073_missing_db");
+        try
+        {
+            var missingDb = Path.Combine(projectRoot, "missing-dir", "codeindex.db");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["QueryCommandRunner", "--db", missingDb],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("Error [E001_DB_NOT_FOUND]: --db", stderr);
+            Assert.Contains("does not point to an existing database file", stderr);
+            Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+            Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("search")}", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("--path")]
+    [InlineData("--exclude-path")]
+    public void RunSearch_InvalidPathGlobReturnsUsageErrorBeforeQuery_Issue2073(string optionName)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2073_invalid_glob");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["QueryCommandRunner", "--db", dbPath, optionName, "[*-z]"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains($"Error: {optionName} '[*-z]' is not a valid glob", stderr);
+            Assert.Contains("character classes are not supported", stderr);
+            Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+            Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("search")}", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     // Issue #1507: missing-value errors for CLI flags must append a per-flag `Hint:` line that
@@ -2868,14 +2935,14 @@ jobs:
     }
 
     [Theory]
-    [InlineData("search-limit", "search", "--limit requires a positive integer")]
-    [InlineData("search-top", "search", "--limit requires a positive integer")]
-    [InlineData("search-snippet-lines", "search", "--snippet-lines requires a positive integer")]
-    [InlineData("impact-depth", "impact", "--depth requires a non-negative integer")]
-    [InlineData("excerpt-start", "excerpt", "--start requires a positive integer")]
-    [InlineData("excerpt-end", "excerpt", "--end requires a positive integer")]
-    [InlineData("excerpt-before", "excerpt", "--before requires a non-negative integer")]
-    [InlineData("excerpt-after", "excerpt", "--after requires a non-negative integer")]
+    [InlineData("search-limit", "search", "--limit requires an integer between 1 and 10000")]
+    [InlineData("search-top", "search", "--limit requires an integer between 1 and 10000")]
+    [InlineData("search-snippet-lines", "search", "--snippet-lines requires an integer between 1 and 20")]
+    [InlineData("impact-depth", "impact", "--depth requires an integer between 0 and 64")]
+    [InlineData("excerpt-start", "excerpt", "--start requires an integer between 1 and 10000000")]
+    [InlineData("excerpt-end", "excerpt", "--end requires an integer between 1 and 10000000")]
+    [InlineData("excerpt-before", "excerpt", "--before requires an integer between 0 and 1000")]
+    [InlineData("excerpt-after", "excerpt", "--after requires an integer between 0 and 1000")]
     public void QueryEntrypoints_InvalidNumericOptionsReturnUsageError(string scenario, string command, string expectedErrorFragment)
     {
         var (exitCode, _, stderr) = CaptureConsole(() => RunCommandWithInvalidNumeric(scenario));
@@ -2902,22 +2969,22 @@ jobs:
     // 実在の index 済み DB と実在ファイルを用意することで、ParseArgs が「不正値を既定値に差し替えて続行」へ
     // 退行した場合に本当に stdout へ結果が漏れる経路を作り、stdout 空のアサーションが偶然通ってしまう逃げ道を塞ぐ。
     [Theory]
-    [InlineData("symbols", "0", "--limit", "--limit requires a positive integer")]
-    [InlineData("symbols", "-5", "--limit", "--limit requires a positive integer")]
-    [InlineData("symbols", "0", "--top", "--limit requires a positive integer")]
-    [InlineData("symbols", "-5", "--top", "--limit requires a positive integer")]
-    [InlineData("search", "0", "--limit", "--limit requires a positive integer")]
-    [InlineData("search", "-5", "--limit", "--limit requires a positive integer")]
-    [InlineData("search", "0", "--top", "--limit requires a positive integer")]
-    [InlineData("search", "-5", "--top", "--limit requires a positive integer")]
-    [InlineData("search", "0", "--snippet-lines", "--snippet-lines requires a positive integer")]
-    [InlineData("impact", "-1", "--max-hops", "--max-hops requires a non-negative integer")]
-    [InlineData("impact", "-1", "--depth", "--depth requires a non-negative integer")]
-    [InlineData("excerpt", "0", "--start", "--start requires a positive integer")]
-    [InlineData("excerpt", "-5", "--start", "--start requires a positive integer")]
-    [InlineData("excerpt", "0", "--end", "--end requires a positive integer")]
-    [InlineData("excerpt", "-1", "--before", "--before requires a non-negative integer")]
-    [InlineData("excerpt", "-1", "--after", "--after requires a non-negative integer")]
+    [InlineData("symbols", "0", "--limit", "--limit requires an integer between 1 and 10000")]
+    [InlineData("symbols", "-5", "--limit", "--limit requires an integer between 1 and 10000")]
+    [InlineData("symbols", "0", "--top", "--limit requires an integer between 1 and 10000")]
+    [InlineData("symbols", "-5", "--top", "--limit requires an integer between 1 and 10000")]
+    [InlineData("search", "0", "--limit", "--limit requires an integer between 1 and 10000")]
+    [InlineData("search", "-5", "--limit", "--limit requires an integer between 1 and 10000")]
+    [InlineData("search", "0", "--top", "--limit requires an integer between 1 and 10000")]
+    [InlineData("search", "-5", "--top", "--limit requires an integer between 1 and 10000")]
+    [InlineData("search", "0", "--snippet-lines", "--snippet-lines requires an integer between 1 and 20")]
+    [InlineData("impact", "-1", "--max-hops", "--max-hops requires an integer between 0 and 64")]
+    [InlineData("impact", "-1", "--depth", "--depth requires an integer between 0 and 64")]
+    [InlineData("excerpt", "0", "--start", "--start requires an integer between 1 and 10000000")]
+    [InlineData("excerpt", "-5", "--start", "--start requires an integer between 1 and 10000000")]
+    [InlineData("excerpt", "0", "--end", "--end requires an integer between 1 and 10000000")]
+    [InlineData("excerpt", "-1", "--before", "--before requires an integer between 0 and 1000")]
+    [InlineData("excerpt", "-1", "--after", "--after requires an integer between 0 and 1000")]
     public void QueryEntrypoints_OutOfRangeNumericOptionsFailClosed_Issue161(string command, string value, string option, string expectedErrorFragment)
     {
         var projectRoot = TestProjectHelper.CreateTempProject(
@@ -3237,7 +3304,7 @@ jobs:
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--focus-column requires a positive integer", stderr);
+            Assert.Contains("--focus-column requires an integer between 1 and 100000", stderr);
         }
         finally
         {
@@ -3260,7 +3327,7 @@ jobs:
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--max-line-width requires a non-negative integer", stderr);
+            Assert.Contains("--max-line-width requires an integer between 0 and 4096", stderr);
         }
         finally
         {
@@ -27540,7 +27607,7 @@ jobs:
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains("--before requires a non-negative integer", stderr);
+        Assert.Contains("--before requires an integer between 0 and 1000", stderr);
     }
 
     [Fact]
@@ -27551,7 +27618,7 @@ jobs:
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains("--limit requires a positive integer", stderr);
+        Assert.Contains("--limit requires an integer between 1 and 10000", stderr);
     }
 
     [Theory]
@@ -30051,11 +30118,12 @@ jobs:
             ["--db", missingDbPath],
             _jsonOptions));
 
-        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-        Assert.Contains("Error [E001_DB_NOT_FOUND]: database not found at", stderr);
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Error [E001_DB_NOT_FOUND]: --db", stderr);
         // Verify full (absolute) path is shown, not just the basename / フルパス表示を検証
         Assert.Contains(Path.GetFullPath(missingDbPath), stderr);
-        Assert.Contains("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.", stderr);
+        Assert.Contains("does not point to an existing database file", stderr);
+        Assert.Contains("Hint: fix the invalid or missing option value", stderr);
     }
 
     [Fact]
