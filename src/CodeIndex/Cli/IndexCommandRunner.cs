@@ -1579,6 +1579,7 @@ public static class IndexCommandRunner
                     record.Path,
                     record.Modified,
                     record.Checksum,
+                    language: record.Lang,
                     allowReuse: record.Lang is not ("javascript" or "typescript")
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                         && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
@@ -2536,6 +2537,7 @@ public static class IndexCommandRunner
         var redirectedIndexingMessagePrinted = false;
         var indexProgressVisible = false;
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
+        var skippedSymbolExtractorLanguages = new HashSet<string>(StringComparer.Ordinal);
         var lastJsonProgressAt = Stopwatch.GetTimestamp();
         string? currentJsonIndexFile = null;
         CancellationTokenSource? jsonHeartbeatCts = null;
@@ -2779,6 +2781,7 @@ public static class IndexCommandRunner
                             record.Path,
                             record.Modified,
                             record.Checksum,
+                            language: record.Lang,
                             allowReuse: record.Lang is not ("javascript" or "typescript")
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                                 && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
@@ -2790,6 +2793,8 @@ public static class IndexCommandRunner
                         writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
                         skipped++;
                         processed++;
+                        if (!string.IsNullOrWhiteSpace(record.Lang))
+                            skippedSymbolExtractorLanguages.Add(record.Lang);
                         if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang) && record.Lang != null)
                             reusedHotspotFamilyLanguages.Add(record.Lang);
                         if (options.Verbose && !options.Json && !options.Quiet)
@@ -2948,8 +2953,9 @@ public static class IndexCommandRunner
             // guarantee 100% backfill on a legacy DB).
             // fold は実検証が通ったときだけ stamp。legacy DB で skip された行は NULL のため、
             // 黙って stamp すると reader が fold 経路で legacy 行を見逃す。codex #86 レビュー。
-            var backfillReady = writer.AllFoldedColumnsBackfilled(
-                requireCurrentSymbolExtractorVersions: skipped != 0);
+            var backfillReady = skipped == 0
+                ? writer.AllFoldedColumnsBackfilled()
+                : writer.AllFoldedColumnsBackfilled(skippedSymbolExtractorLanguages);
             var foldedKeysCurrent = skipped == 0 || writer.AllFoldedColumnValuesMatchCurrentFold();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
@@ -2957,7 +2963,7 @@ public static class IndexCommandRunner
             var foldFingerprintMatchesCurrent = priorFoldFingerprint == currentFoldFingerprint;
             var canRestampExistingFoldTrust = foldVersionMatchesCurrent
                 && foldFingerprintMatchesCurrent
-                && priorSymbolExtractorVersionsMatchCurrent;
+                && writer.SymbolExtractorVersionsMatchCurrent(skippedSymbolExtractorLanguages);
             // A normal `index .` run still skips unchanged files. If the prior fold metadata
             // is stale, those skipped rows keep the old physical folded keys, so stamping the
             // NEW metadata for the whole DB would silently misadvertise trust. Only stamp when
@@ -3404,11 +3410,284 @@ public static class IndexCommandRunner
             symbols.Any(IsCSharpStaticInterfaceContractSymbol) || hadPendingContracts);
     }
 
-    private static bool MayContainCSharpStaticInterfaceContract(string content)
-        => ContainsCSharpWord(content, "interface")
-           && ContainsCSharpWord(content, "static")
-           && (ContainsCSharpWord(content, "abstract")
-               || ContainsCSharpWord(content, "virtual"));
+    internal static bool MayContainCSharpStaticInterfaceContract(string content)
+    {
+        var masked = MaskCSharpCommentsAndStrings(content);
+        var index = 0;
+        while ((index = IndexOfCSharpWord(masked, "interface", index)) >= 0)
+        {
+            var bodyStart = masked.IndexOf('{', index + "interface".Length);
+            if (bodyStart < 0)
+                return false;
+
+            if (CSharpInterfaceBodyMayContainStaticContract(masked, bodyStart))
+                return true;
+
+            index = bodyStart + 1;
+        }
+
+        return false;
+    }
+
+    private static bool CSharpInterfaceBodyMayContainStaticContract(string masked, int bodyStart)
+    {
+        var depth = 1;
+        var memberStart = bodyStart + 1;
+        for (var index = bodyStart + 1; index < masked.Length; index++)
+        {
+            var ch = masked[index];
+            if (ch == '{')
+            {
+                if (depth == 1 && CSharpMemberHeaderHasStaticContract(masked, memberStart, index))
+                    return true;
+
+                depth++;
+            }
+            else if (ch == '}')
+            {
+                depth--;
+                if (depth == 0)
+                    return false;
+
+                if (depth == 1)
+                    memberStart = index + 1;
+            }
+            else if (ch == ';' && depth == 1)
+            {
+                if (CSharpMemberHeaderHasStaticContract(masked, memberStart, index))
+                    return true;
+
+                memberStart = index + 1;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool CSharpMemberHeaderHasStaticContract(string masked, int start, int endExclusive)
+    {
+        if (start < 0 || endExclusive <= start || endExclusive > masked.Length)
+            return false;
+
+        var header = masked[start..endExclusive];
+        return ContainsCSharpWord(header, "static")
+               && (ContainsCSharpWord(header, "abstract")
+                   || ContainsCSharpWord(header, "virtual"));
+    }
+
+    private static int IndexOfCSharpWord(string text, string word, int startIndex)
+    {
+        var index = Math.Max(0, startIndex);
+        while (index < text.Length)
+        {
+            index = text.IndexOf(word, index, StringComparison.Ordinal);
+            if (index < 0)
+                return -1;
+
+            var before = index == 0 ? '\0' : text[index - 1];
+            var afterIndex = index + word.Length;
+            var after = afterIndex >= text.Length ? '\0' : text[afterIndex];
+            if (!IsCSharpIdentifierPart(before) && !IsCSharpIdentifierPart(after))
+                return index;
+
+            index += word.Length;
+        }
+
+        return -1;
+    }
+
+    private static string MaskCSharpCommentsAndStrings(string content)
+    {
+        var chars = content.ToCharArray();
+        var inLineComment = false;
+        var inBlockComment = false;
+        var inString = false;
+        var inChar = false;
+        var inVerbatimString = false;
+        var inRawString = false;
+        var rawQuoteCount = 0;
+
+        for (var index = 0; index < chars.Length; index++)
+        {
+            var ch = chars[index];
+            var next = index + 1 < chars.Length ? chars[index + 1] : '\0';
+
+            if (inLineComment)
+            {
+                if (ch is '\r' or '\n')
+                {
+                    inLineComment = false;
+                }
+                else
+                {
+                    chars[index] = ' ';
+                }
+
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    chars[index] = ' ';
+                    chars[index + 1] = ' ';
+                    index++;
+                    inBlockComment = false;
+                }
+                else if (ch is not ('\r' or '\n'))
+                {
+                    chars[index] = ' ';
+                }
+
+                continue;
+            }
+
+            if (inRawString)
+            {
+                if (ch == '"' && HasConsecutiveQuotes(chars, index, rawQuoteCount))
+                {
+                    for (var quote = 0; quote < rawQuoteCount && index + quote < chars.Length; quote++)
+                        chars[index + quote] = ' ';
+                    index += rawQuoteCount - 1;
+                    inRawString = false;
+                }
+                else if (ch is not ('\r' or '\n'))
+                {
+                    chars[index] = ' ';
+                }
+
+                continue;
+            }
+
+            if (inVerbatimString)
+            {
+                if (ch == '"' && next == '"')
+                {
+                    chars[index] = ' ';
+                    chars[index + 1] = ' ';
+                    index++;
+                }
+                else if (ch == '"')
+                {
+                    chars[index] = ' ';
+                    inVerbatimString = false;
+                }
+                else if (ch is not ('\r' or '\n'))
+                {
+                    chars[index] = ' ';
+                }
+
+                continue;
+            }
+
+            if (inString)
+            {
+                if (ch == '\\' && next != '\0')
+                {
+                    chars[index] = ' ';
+                    chars[index + 1] = ' ';
+                    index++;
+                }
+                else if (ch == '"')
+                {
+                    chars[index] = ' ';
+                    inString = false;
+                }
+                else if (ch is not ('\r' or '\n'))
+                {
+                    chars[index] = ' ';
+                }
+
+                continue;
+            }
+
+            if (inChar)
+            {
+                if (ch == '\\' && next != '\0')
+                {
+                    chars[index] = ' ';
+                    chars[index + 1] = ' ';
+                    index++;
+                }
+                else if (ch == '\'')
+                {
+                    chars[index] = ' ';
+                    inChar = false;
+                }
+                else if (ch is not ('\r' or '\n'))
+                {
+                    chars[index] = ' ';
+                }
+
+                continue;
+            }
+
+            if (ch == '/' && next == '/')
+            {
+                chars[index] = ' ';
+                chars[index + 1] = ' ';
+                index++;
+                inLineComment = true;
+            }
+            else if (ch == '/' && next == '*')
+            {
+                chars[index] = ' ';
+                chars[index + 1] = ' ';
+                index++;
+                inBlockComment = true;
+            }
+            else if (ch == '@' && next == '"')
+            {
+                chars[index] = ' ';
+                chars[index + 1] = ' ';
+                index++;
+                inVerbatimString = true;
+            }
+            else if (ch == '"' && HasConsecutiveQuotes(chars, index, 3))
+            {
+                rawQuoteCount = CountConsecutiveQuotes(chars, index);
+                for (var quote = 0; quote < rawQuoteCount && index + quote < chars.Length; quote++)
+                    chars[index + quote] = ' ';
+                index += rawQuoteCount - 1;
+                inRawString = true;
+            }
+            else if (ch == '"')
+            {
+                chars[index] = ' ';
+                inString = true;
+            }
+            else if (ch == '\'')
+            {
+                chars[index] = ' ';
+                inChar = true;
+            }
+        }
+
+        return new string(chars);
+    }
+
+    private static bool HasConsecutiveQuotes(char[] chars, int index, int count)
+    {
+        if (index + count > chars.Length)
+            return false;
+
+        for (var offset = 0; offset < count; offset++)
+        {
+            if (chars[index + offset] != '"')
+                return false;
+        }
+
+        return true;
+    }
+
+    private static int CountConsecutiveQuotes(char[] chars, int index)
+    {
+        var count = 0;
+        while (index + count < chars.Length && chars[index + count] == '"')
+            count++;
+        return count;
+    }
 
     private static bool IsCSharpStaticInterfaceContractSymbol(SymbolRecord symbol)
         => symbol.Kind is "function" or "property"
