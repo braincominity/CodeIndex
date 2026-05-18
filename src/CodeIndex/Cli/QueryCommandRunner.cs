@@ -3272,6 +3272,7 @@ public static class QueryCommandRunner
         int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
         bool contextAfterExplicit = false;
         var pathPatterns = new List<string>();
+        var userPathPatterns = new List<string>();
         var projectFilters = new List<string>();
         string? solutionFilter = null;
         var excludePaths = new List<string>();
@@ -3602,7 +3603,10 @@ public static class QueryCommandRunner
                     break;
                 case "--path":
                     if (TryReadStringOptionValue(args, ref i, "--path", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var pathPattern, out var pathError))
+                    {
                         pathPatterns.Add(pathPattern!); // Repeatable; multiple values OR together / 繰り返し可、複数値は OR で結合
+                        userPathPatterns.Add(pathPattern!);
+                    }
                     else
                         AddParseError(pathError!);
                     break;
@@ -3794,7 +3798,7 @@ public static class QueryCommandRunner
             }
         }
 
-        ValidateQueryPathOptionValues(pathPatterns, excludePaths, AddParseError);
+        ValidateQueryPathOptionValues(userPathPatterns, excludePaths, AddParseError);
 
         return new QueryCommandOptions
         {

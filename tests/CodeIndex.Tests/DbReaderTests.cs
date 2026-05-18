@@ -49,7 +49,9 @@ public class DbReaderTests : IDisposable
     [InlineData("src/*.py", "src/%.py")]
     [InlineData("foo?bar", "foo_bar")]
     [InlineData(@"literal\*.py", "%literal*.py%")]
+    [InlineData(@"literal\?.py", "%literal?.py%")]
     [InlineData(@"literal\[name\].py", "%literal[name].py%")]
+    [InlineData(@"src\Foo.cs", @"%src\\Foo.cs%")]
     public void BuildPathLikePattern_TreatsGlobTokensAsWildcards(string input, string expected)
     {
         Assert.Equal(expected, DbReader.BuildPathLikePattern(input));

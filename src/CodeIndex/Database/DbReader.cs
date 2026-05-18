@@ -971,7 +971,15 @@ public partial class DbReader
         {
             if (escaped)
             {
-                AppendLikeLiteral(builder, ch);
+                if (IsEscapablePathGlobCharacter(ch))
+                {
+                    AppendLikeLiteral(builder, ch);
+                }
+                else
+                {
+                    builder.Append("\\\\");
+                    AppendLikeLiteral(builder, ch);
+                }
                 escaped = false;
                 continue;
             }
@@ -1025,6 +1033,9 @@ public partial class DbReader
                 break;
         }
     }
+
+    private static bool IsEscapablePathGlobCharacter(char ch)
+        => ch is '*' or '?' or '[' or ']' or '\\' or '%' or '_';
 
     internal static bool IsSqlLanguage(string? lang)
         => string.Equals(NormalizeQueryLanguage(lang), "sql", StringComparison.OrdinalIgnoreCase);
