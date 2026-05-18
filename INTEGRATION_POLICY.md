@@ -69,6 +69,36 @@ separate package with its own explicit interface and versioning contract.
 Until then, treat embedding the `cdidx` assembly outside the extractor plugin
 contract as unsupported.
 
+## CLI JSON and MCP Response Compatibility
+
+The CLI `--json` surface and MCP tool responses are both stable integration
+surfaces, but they are not byte-for-byte identical envelopes. CLI JSON is shaped
+for command-line automation and preserves command-specific naming and output
+wrappers. MCP responses are shaped for JSON-RPC tool calls and use camelCase
+field names with MCP-specific tool metadata.
+
+Integrations should parse the surface they call directly instead of assuming a
+CLI payload can be substituted for an MCP payload without adaptation. Additive
+fields may appear on either surface in minor releases; consumers should ignore
+unknown fields and prefer documented fields over positional assumptions.
+
+| Query surface | CLI `--json` shape | MCP response shape | Compatibility notes |
+|---|---|---|---|
+| `search` | One JSON object per result, with CLI query metadata such as `api_version`, `query`, path, line range, snippet, highlights, and truncation details. | Tool result content contains equivalent search-result objects using MCP serialization and tool-call framing. | Result semantics are shared, but the outer envelope and field casing follow the called surface. |
+| `references` | Reference rows expose the raw indexed reference kind for each matching site and CLI-oriented row fields. | The `references` tool returns reference rows through MCP framing and may include graph-support metadata when a language filter is provided. | `references` is the raw-reference enumeration path. Use it for metadata kinds such as `attribute` / `annotation` rather than expecting `callers` to surface those rows. |
+| `callers` | Grouped caller rows expose `referenceKind` as the preferred summary label, plus `referenceKinds` and `hasMixedReferenceKinds` when serialized from grouped result DTOs. Human output prints the grouped kind label instead of the JSON fields. | Grouped rows expose `referenceKind`, sorted `referenceKinds`, and `hasMixedReferenceKinds` in camelCase. | The scalar `referenceKind` is retained for backward compatibility. Consumers that need all underlying kinds should read `referenceKinds`; `hasMixedReferenceKinds` is `true` when one grouped row represents multiple distinct kinds, such as `call` + `subscribe`. |
+| `callees` | Grouped callee rows expose the same mixed-kind DTO fields as `callers`; callee rows generally stay split per kind after duplicate physical-site collapse. | Grouped rows expose the same `referenceKind`, `referenceKinds`, and `hasMixedReferenceKinds` contract as MCP `callers`. | Treat `referenceKinds` as the authoritative set even when it has a single element, so clients use one parsing path for callers and callees. |
+
+Version markers for these fields:
+
+- `api_version` is the CLI JSON payload contract marker and currently remains
+  `"1"` for the command surfaces that expose it.
+- `referenceKind` is the backward-compatible grouped-row summary field.
+- `referenceKinds` and `hasMixedReferenceKinds` are stable grouped-row fields
+  on `callers`, `callees`, and bundled `analyze_symbol` caller/callee rows.
+- New fields documented in the changelog are additive unless a release note
+  explicitly marks a breaking change.
+
 ## Boundary
 
 The integration is allowed when it helps users operate official CodeIndex

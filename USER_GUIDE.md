@@ -1249,6 +1249,8 @@ AI agents that query the database directly via SQL need the `sqlite3` CLI.
 
 Human-facing output formats file sizes with binary units (`KiB`, `MiB`, `GiB`, ...), so large repositories and `map` / `files` listings are easier to scan. Use `--bytes` on `files` or `map` when you need raw byte counts in the text output for shell pipelines. JSON output (`--json`) always keeps size fields as raw integer bytes for machine consumers.
 
+CLI JSON (`--json`) and MCP tool responses are both stable integration surfaces, but they are not identical wire envelopes. CLI commands keep CLI-oriented metadata such as `api_version` and command result fields, while MCP tools return JSON-RPC tool results with camelCase field names and may include MCP-specific metadata. Graph tools that group reference rows (`callers`, `callees`, and bundled `analyze_symbol` caller/callee rows) expose the backward-compatible scalar `referenceKind` plus sorted `referenceKinds` and `hasMixedReferenceKinds`; consumers that need every underlying kind should read the array and ignore unknown future fields. See [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#cli-json-and-mcp-response-compatibility) for the CLI/MCP compatibility table.
+
 ## AI Integration
 
 cdidx helps AI tools by replacing repeated repo-wide scans with a reusable local index.
@@ -2929,6 +2931,8 @@ AIエージェントがDBを直接SQL検索する場合、`sqlite3` CLIが必要
 ## 出力形式
 
 人間向けの出力では、ファイルサイズを2進単位（`KiB`、`MiB`、`GiB` など）で表示します。大きなリポジトリや `map` / `files` の一覧を読み取りやすくするためです。テキスト出力をシェルパイプラインで扱うなど、生のバイト数が必要な場合は `files` または `map` に `--bytes` を指定してください。JSON 出力（`--json`）では、機械処理向けに size フィールドを常に raw integer bytes のまま返します。
+
+CLI JSON（`--json`）と MCP tool response はどちらも安定した integration surface ですが、wire envelope は同一ではありません。CLI command は `api_version` や command result field など CLI 向けのメタデータを保持し、MCP tool は JSON-RPC tool result と camelCase field name、および MCP 固有のメタデータを返す場合があります。参照行をグループ化する graph tool（`callers`、`callees`、および bundled `analyze_symbol` の caller/callee 行）は、後方互換の scalar `referenceKind` に加えて、ソート済みの `referenceKinds` と `hasMixedReferenceKinds` を返します。すべての underlying kind が必要な consumer は配列を読み、将来追加される未知の field は無視してください。CLI/MCP compatibility table は [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#cli-json-and-mcp-response-compatibility) を参照してください。
 
 遅い検索を調べる場合は、read 系コマンドに `--profile` を追加してください。通常結果の後に `profile.phases`（`name`、`elapsed_ms`、`rows_scanned`）、`profile.query_plan`（`EXPLAIN QUERY PLAN` 行）、`profile.queries`（SQL text）を含む JSON オブジェクトを 1 行追加します。`--slow-query-ms <n>` を併用すると、閾値以上の profiled SQL を persistent tool log に記録します。
 
