@@ -5089,7 +5089,7 @@ public static class QueryCommandRunner
     // compile-time な `type_reference` エッジを含む。C++ の `friend` 宣言も extractor が出す
     // dependency edge として受け付け、graph query にも参加させる。
     private static readonly string[] AllValidReferenceKinds =
-        ["annotation", "attribute", "call", "consumes_hook", "friend", "import", "instantiate", "razor_event_binding", "subscribe", "type_reference", "unsubscribe"];
+        ["annotation", "attribute", "augmentation", "call", "consumes_hook", "friend", "import", "instantiate", "razor_event_binding", "subscribe", "type_reference", "unsubscribe"];
     // Reference kinds that `callers` / `callees` can legitimately return. Metadata kinds
     // (`attribute` / `annotation`) and type-position edges (`type_reference`) are structurally
     // not call-graph edges, so those queries are rejected at the CLI / MCP boundary. C++ `friend`
@@ -5098,7 +5098,7 @@ public static class QueryCommandRunner
     // や型位置エッジ (`type_reference`) は構造的に call-graph エッジではないため、CLI / MCP 境界で弾く。
     // C++ の `friend` は graph に出す coupling edge。
     private static readonly string[] CallGraphOnlyReferenceKinds =
-        ["call", "consumes_hook", "friend", "instantiate", "razor_event_binding", "subscribe", "unsubscribe"];
+        ["augmentation", "call", "consumes_hook", "friend", "instantiate", "razor_event_binding", "subscribe", "unsubscribe"];
 
     private static void WriteKindHint(string? kind, DbReader reader)
     {
