@@ -55,6 +55,7 @@ public class FileIndexer
         IgnoredByRules,
         ExcludedByDefaultDirectory,
         ExcludedByDefaultFile,
+        OutsideProjectRoot,
         IgnoreRulesUnavailable,
     }
 
@@ -66,7 +67,8 @@ public class FileIndexer
         public bool ShouldDeleteExisting => FilterKind is
             PathFilterKind.IgnoredByRules or
             PathFilterKind.ExcludedByDefaultDirectory or
-            PathFilterKind.ExcludedByDefaultFile;
+            PathFilterKind.ExcludedByDefaultFile or
+            PathFilterKind.OutsideProjectRoot;
     }
 
     private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp", "msbuild"];
@@ -1386,16 +1388,60 @@ public class FileIndexer
 
     private static bool PathsEqual(string left, string right)
         => CodeIndex.Cli.PathCasing.PathsEqual(
-            Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-            Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            NormalizePathForComparison(left),
+            NormalizePathForComparison(right));
 
     private static bool IsPathEqualOrParent(string candidateParent, string candidateChild)
     {
-        var normalizedParent = Path.GetFullPath(candidateParent)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var normalizedChild = Path.GetFullPath(candidateChild)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalizedParent = NormalizePathForComparison(candidateParent);
+        var normalizedChild = NormalizePathForComparison(candidateChild);
         return CodeIndex.Cli.PathCasing.IsPathEqualOrParent(normalizedParent, normalizedChild);
+    }
+
+    private static string NormalizePathForComparison(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(fullPath);
+        if (string.IsNullOrEmpty(root))
+            return Path.TrimEndingDirectorySeparator(fullPath);
+
+        var remaining = Path.GetRelativePath(root, fullPath);
+        if (remaining == "." || remaining.Length == 0)
+            return Path.TrimEndingDirectorySeparator(fullPath);
+
+        var current = root;
+        foreach (var segment in remaining.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        {
+            if (segment.Length == 0 || segment == ".")
+                continue;
+
+            current = Path.Combine(current, segment);
+            current = ResolvePathComparisonSegment(current);
+        }
+
+        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(current));
+    }
+
+    private static string ResolvePathComparisonSegment(string fullPath)
+    {
+        try
+        {
+            var attributes = File.GetAttributes(fullPath);
+            FileSystemInfo info = (attributes & FileAttributes.Directory) != 0
+                ? new DirectoryInfo(fullPath)
+                : new FileInfo(fullPath);
+            var target = info?.ResolveLinkTarget(returnFinalTarget: true);
+            if (target?.FullName is { Length: > 0 } resolvedPath)
+                return resolvedPath;
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+
+        return fullPath;
     }
 
     /// <summary>
@@ -1409,6 +1455,9 @@ public class FileIndexer
     {
         var errors = new List<ScanError>();
         var fullPath = Path.GetFullPath(absolutePath);
+        if (!IsPathEqualOrParent(_projectRoot, fullPath))
+            return new PathFilterResult(PathFilterKind.OutsideProjectRoot, errors);
+
         var relativePath = NormalizeIgnorePath(Path.GetRelativePath(_projectRoot, fullPath));
         if (relativePath.StartsWith("../", StringComparison.Ordinal))
             return new PathFilterResult(PathFilterKind.None, errors);

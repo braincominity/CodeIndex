@@ -348,6 +348,11 @@ public class GitHubIssueReporterTests : IDisposable
             {
                 Content = MakeJsonContent("""{ "total_count": 0, "items": [] }"""),
             });
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("[]"),
+            });
         handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
             new HttpResponseMessage(HttpStatusCode.UnprocessableEntity)
             {
@@ -362,7 +367,10 @@ public class GitHubIssueReporterTests : IDisposable
 
             Assert.Null(result.IssueUrl);
             Assert.Equal("""422: { "message": "validation failed" }""", result.Error);
-            Assert.Equal(2, handler.RequestCount);
+            Assert.Equal(3, handler.RequestCount);
+            Assert.Equal(HttpMethod.Get, handler.Requests[0].Method);
+            Assert.Equal(HttpMethod.Get, handler.Requests[1].Method);
+            Assert.Equal(HttpMethod.Post, handler.Requests[2].Method);
         }
         finally
         {
