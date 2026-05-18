@@ -184,13 +184,48 @@ public class ProgramCliTests
         Assert.Equal(record.Hash, doc.RootElement.GetProperty("id").GetString());
         Assert.Equal("submitted_pending_triage", doc.RootElement.GetProperty("status").GetString());
         Assert.Equal("JSON export needed", doc.RootElement.GetProperty("description").GetString());
+        Assert.Equal(0, doc.RootElement.GetProperty("submit_attempt_count").GetInt32());
+        Assert.False(doc.RootElement.TryGetProperty("last_submit_attempt", out _));
+        Assert.False(doc.RootElement.TryGetProperty("last_submit_error", out _));
+    }
+
+    [Fact]
+    public void Suggestions_ListJsonIncludesSubmitDiagnostics()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var attemptedAt = new DateTime(2026, 5, 17, 4, 3, 2, DateTimeKind.Utc);
+        fixture.Add(
+            "output_format",
+            "python",
+            "JSON export failed",
+            submitted: false,
+            lastSubmitAttempt: attemptedAt,
+            submitAttemptCount: 2,
+            lastSubmitError: "API 422: validation failed");
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["suggestions", "list", "--db", fixture.DbPath, "--json"]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var doc = JsonDocument.Parse(stdout);
+        Assert.Equal(2, doc.RootElement.GetProperty("submit_attempt_count").GetInt32());
+        Assert.Equal(attemptedAt, doc.RootElement.GetProperty("last_submit_attempt").GetDateTime());
+        Assert.Equal("API 422: validation failed", doc.RootElement.GetProperty("last_submit_error").GetString());
     }
 
     [Fact]
     public void Suggestions_ExportMarkdownIncludesFilteredSuggestions()
     {
         using var fixture = SuggestionFixture.Create();
-        fixture.Add("output_format", "csharp", "Share triage notes", submitted: false);
+        var attemptedAt = new DateTime(2026, 5, 17, 4, 3, 2, DateTimeKind.Utc);
+        fixture.Add(
+            "output_format",
+            "csharp",
+            "Share triage notes",
+            submitted: false,
+            lastSubmitAttempt: attemptedAt,
+            submitAttemptCount: 1,
+            lastSubmitError: "HttpRequestException: network unavailable");
         fixture.Add("language_support", "ruby", "Add parser support", submitted: false);
 
         var (exitCode, stdout, stderr) = RunCliInSubprocess(["suggestions", "export", "--db", fixture.DbPath, "--language", "csharp", "--format", "markdown"]);
@@ -199,6 +234,9 @@ public class ProgramCliTests
         Assert.Equal(string.Empty, stderr);
         Assert.Contains("# cdidx Suggestions", stdout);
         Assert.Contains("Share triage notes", stdout);
+        Assert.Contains("- last_submit_attempt: `2026-05-17T04:03:02.0000000Z`", stdout);
+        Assert.Contains("- submit_attempt_count: `1`", stdout);
+        Assert.Contains("- last_submit_error: `HttpRequestException: network unavailable`", stdout);
         Assert.DoesNotContain("Add parser support", stdout);
     }
 
@@ -284,7 +322,14 @@ public class ProgramCliTests
             return new SuggestionFixture(root);
         }
 
-        public SuggestionRecord Add(string category, string? language, string description, bool submitted)
+        public SuggestionRecord Add(
+            string category,
+            string? language,
+            string description,
+            bool submitted,
+            DateTime? lastSubmitAttempt = null,
+            int submitAttemptCount = 0,
+            string? lastSubmitError = null)
         {
             var record = new SuggestionRecord
             {
@@ -296,6 +341,9 @@ public class ProgramCliTests
                 CreatedAt = new DateTime(2026, 5, 16, 12, _records.Count, 0, DateTimeKind.Utc),
                 SubmittedToGitHub = submitted,
                 GitHubIssueUrl = submitted ? "https://github.com/Widthdom/CodeIndex/issues/99" : null,
+                LastSubmitAttempt = lastSubmitAttempt,
+                SubmitAttemptCount = submitAttemptCount,
+                LastSubmitError = lastSubmitError,
             };
             _records.Add(record);
             Write();
