@@ -85,9 +85,19 @@ internal static class GitHubIssueReporter
     /// </summary>
     public static async Task<string?> TryCreateIssueAsync(SuggestionRecord record, string version)
     {
+        var result = await TryCreateIssueDetailedAsync(record, version);
+        return result.IssueUrl;
+    }
+
+    /// <summary>
+    /// Try to create a GitHub Issue and return diagnostic state for persistence.
+    /// GitHub Issue 作成を試み、永続化用の診断状態を返す。
+    /// </summary>
+    public static async Task<SuggestionStore.SubmitAttemptResult> TryCreateIssueDetailedAsync(SuggestionRecord record, string version)
+    {
         var token = ResolveToken();
         if (token == null)
-            return null;
+            return SuggestionStore.SubmitAttemptResult.Skipped();
 
         try
         {
@@ -102,7 +112,7 @@ internal static class GitHubIssueReporter
             // 当該提案ハッシュを含む既存 Issue を探す。
             var existingUrl = await FindExistingIssueByHashAsync(record.Hash, token);
             if (existingUrl != null)
-                return existingUrl;
+                return SuggestionStore.SubmitAttemptResult.Success(existingUrl);
 
             return await CreateIssueAsync(record, version, token);
         }
@@ -111,7 +121,7 @@ internal static class GitHubIssueReporter
             // Best-effort: log to stderr but do not propagate.
             // ベストエフォート: stderr にログ出力するが伝播しない。
             Console.Error.WriteLine(BuildSubmissionFailureMessage(ex.Message));
-            return null;
+            return SuggestionStore.SubmitAttemptResult.Failure($"{ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -233,7 +243,7 @@ internal static class GitHubIssueReporter
     /// Create the GitHub Issue via the REST API.
     /// REST API 経由で GitHub Issue を作成する。
     /// </summary>
-    private static async Task<string?> CreateIssueAsync(SuggestionRecord record, string version, string token)
+    private static async Task<SuggestionStore.SubmitAttemptResult> CreateIssueAsync(SuggestionRecord record, string version, string token)
     {
         var url = $"{ApiBase}/repos/{RepoOwner}/{RepoName}/issues";
 
@@ -310,13 +320,16 @@ internal static class GitHubIssueReporter
         {
             var errorBody = await response.Content.ReadAsStringAsync();
             Console.Error.WriteLine(BuildApiFailureMessage((int)response.StatusCode, errorBody));
-            return null;
+            return SuggestionStore.SubmitAttemptResult.Failure(BuildApiErrorDetail((int)response.StatusCode, errorBody));
         }
 
         // Parse response to extract the issue URL / レスポンスを解析して Issue URL を抽出
         var responseJson = await response.Content.ReadAsStringAsync();
         var responseNode = JsonNode.Parse(responseJson);
-        return responseNode?["html_url"]?.GetValue<string>();
+        var issueUrl = responseNode?["html_url"]?.GetValue<string>();
+        return issueUrl != null
+            ? SuggestionStore.SubmitAttemptResult.Success(issueUrl)
+            : SuggestionStore.SubmitAttemptResult.Failure("InvalidResponse: missing html_url");
     }
 
     /// <summary>
@@ -349,4 +362,12 @@ internal static class GitHubIssueReporter
 
     internal static string BuildApiFailureMessage(int statusCode, string errorBody) =>
         $"[cdidx] GitHub API responded {statusCode}: {errorBody}. GitHub submission was skipped; the suggestion stays local. Check `CDIDX_GITHUB_TOKEN`, repository permissions, or network access, then retry `suggest_improvement`.";
+
+    internal static string BuildApiErrorDetail(int statusCode, string errorBody)
+    {
+        var normalized = errorBody.Replace("\r", " ").Replace("\n", " ").Trim();
+        if (normalized.Length > 500)
+            normalized = normalized[..500] + "...";
+        return $"{statusCode}: {normalized}";
+    }
 }

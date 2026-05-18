@@ -252,7 +252,10 @@ internal static class SuggestionsCommandRunner
         FormatTitle(record.Description, 120),
         IsSubmitted(record),
         record.UpstreamUrl,
-        record.UpstreamIssueNumber);
+        record.UpstreamIssueNumber,
+        record.LastSubmitAttempt,
+        record.SubmitAttemptCount,
+        record.LastSubmitError);
 
     private static SuggestionDetailJsonResult ToDetail(SuggestionRecord record) => new(
         JsonOutputContract.ApiVersion,
@@ -276,7 +279,10 @@ internal static class SuggestionsCommandRunner
         record.LastSyncedAt,
         record.ResolvedAt,
         record.Supersedes,
-        record.SupersededBy);
+        record.SupersededBy,
+        record.LastSubmitAttempt,
+        record.SubmitAttemptCount,
+        record.LastSubmitError);
 
     private static string FormatMarkdown(List<SuggestionRecord> records)
     {
@@ -307,6 +313,12 @@ internal static class SuggestionsCommandRunner
                 sb.AppendLine($"- upstream_url: {record.UpstreamUrl}");
             if (record.UpstreamIssueNumber != null)
                 sb.AppendLine($"- upstream_issue_number: `{record.UpstreamIssueNumber}`");
+            if (record.LastSubmitAttempt != null)
+                sb.AppendLine($"- last_submit_attempt: `{record.LastSubmitAttempt:O}`");
+            if (record.SubmitAttemptCount > 0)
+                sb.AppendLine($"- submit_attempt_count: `{record.SubmitAttemptCount}`");
+            if (!string.IsNullOrWhiteSpace(record.LastSubmitError))
+                sb.AppendLine($"- last_submit_error: `{record.LastSubmitError}`");
             sb.AppendLine();
             sb.AppendLine(record.Description);
             if (!string.IsNullOrWhiteSpace(record.Context))
@@ -499,7 +511,10 @@ internal sealed record SuggestionListItemJsonResult(
     [property: JsonPropertyName("title")] string Title,
     [property: JsonPropertyName("submitted_to_github")] bool SubmittedToGitHub,
     [property: JsonPropertyName("upstream_url")] string? UpstreamUrl,
-    [property: JsonPropertyName("upstream_issue_number")] int? UpstreamIssueNumber);
+    [property: JsonPropertyName("upstream_issue_number")] int? UpstreamIssueNumber,
+    [property: JsonPropertyName("last_submit_attempt")] DateTime? LastSubmitAttempt,
+    [property: JsonPropertyName("submit_attempt_count")] int SubmitAttemptCount,
+    [property: JsonPropertyName("last_submit_error")] string? LastSubmitError);
 
 internal sealed record SuggestionDetailJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
@@ -523,7 +538,10 @@ internal sealed record SuggestionDetailJsonResult(
     [property: JsonPropertyName("last_synced_at")] DateTime? LastSyncedAt,
     [property: JsonPropertyName("resolved_at")] DateTime? ResolvedAt,
     [property: JsonPropertyName("supersedes")] string? Supersedes,
-    [property: JsonPropertyName("superseded_by")] string? SupersededBy);
+    [property: JsonPropertyName("superseded_by")] string? SupersededBy,
+    [property: JsonPropertyName("last_submit_attempt")] DateTime? LastSubmitAttempt,
+    [property: JsonPropertyName("submit_attempt_count")] int SubmitAttemptCount,
+    [property: JsonPropertyName("last_submit_error")] string? LastSubmitError);
 
 internal sealed record SuggestionExportJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,

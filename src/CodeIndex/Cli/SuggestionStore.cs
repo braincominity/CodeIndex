@@ -112,6 +112,19 @@ public class SuggestionStore
     public record AddAndSubmitResult(bool IsNew, bool AlreadySubmitted, SuggestionStatus Status, string? UpstreamUrl);
 
     /// <summary>
+    /// Result of a GitHub submission attempt.
+    /// GitHub 送信試行の結果。
+    /// </summary>
+    public record SubmitAttemptResult(string? IssueUrl, string? Error)
+    {
+        public static SubmitAttemptResult Success(string issueUrl) => new(issueUrl, null);
+
+        public static SubmitAttemptResult Failure(string error) => new(null, error);
+
+        public static SubmitAttemptResult Skipped() => new(null, null);
+    }
+
+    /// <summary>
     /// Atomically add a suggestion and attempt GitHub submission, all under one lock.
     /// This prevents concurrent callers from both observing SubmittedToGitHub=false
     /// and creating duplicate GitHub issues.
@@ -126,7 +139,7 @@ public class SuggestionStore
     /// GitHub 送信用のオプションコールバック。送信が必要な場合（新規レコードまたは
     /// 未送信の重複）にのみロック内で呼ばれる。成功時は Issue URL を返す。
     /// </param>
-    public AddAndSubmitResult TryAddAndSubmit(SuggestionRecord record, Func<SuggestionRecord, string?>? submitToGitHub)
+    public AddAndSubmitResult TryAddAndSubmit(SuggestionRecord record, Func<SuggestionRecord, SubmitAttemptResult>? submitToGitHub)
     {
         return WithFileLock(() =>
         {
@@ -148,19 +161,23 @@ public class SuggestionStore
             string? issueUrl = null;
             if (!alreadySubmitted && submitToGitHub != null)
             {
+                var attemptedAt = DateTime.UtcNow;
                 try
                 {
-                    issueUrl = submitToGitHub(found!);
+                    var submitResult = submitToGitHub(found!);
+                    StampSubmitAttempt(found!, attemptedAt, submitResult.Error);
+                    issueUrl = submitResult.IssueUrl;
                     if (issueUrl != null)
-                    {
-                        MarkSubmitted(found!, issueUrl, DateTime.UtcNow);
-                        SaveUnlocked(existing);
-                    }
+                        MarkSubmitted(found!, issueUrl, attemptedAt);
+
+                    SaveUnlocked(existing);
                 }
-                catch
+                catch (Exception ex)
                 {
                     // Best-effort — GitHub submission failure does not fail the local operation.
                     // ベストエフォート — GitHub 送信失敗はローカル操作を失敗させない。
+                    StampSubmitAttempt(found!, attemptedAt, $"{ex.GetType().Name}: {ex.Message}");
+                    SaveUnlocked(existing);
                 }
             }
 
@@ -456,8 +473,16 @@ public class SuggestionStore
         record.UpstreamUrl = issueUrl;
         record.UpstreamIssueNumber = TryParseIssueNumber(issueUrl);
         record.LastSyncedAt = timestamp;
+        record.LastSubmitError = null;
         record.SubmittedToGitHub = null;
         record.GitHubIssueUrl = null;
+    }
+
+    private static void StampSubmitAttempt(SuggestionRecord record, DateTime timestamp, string? error)
+    {
+        record.LastSubmitAttempt = timestamp;
+        record.SubmitAttemptCount++;
+        record.LastSubmitError = string.IsNullOrWhiteSpace(error) ? null : error;
     }
 
     private static void NormalizeLegacyFields(SuggestionRecord record)

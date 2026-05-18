@@ -2509,11 +2509,11 @@ public partial class McpServer
 
         // Build GitHub submission callback (null if no token configured).
         // GitHub 送信コールバックを構築（トークン未設定なら null）。
-        Func<SuggestionRecord, string?>? githubCallback = null;
+        Func<SuggestionRecord, SuggestionStore.SubmitAttemptResult>? githubCallback = null;
         if (GitHubIssueReporter.ResolveToken() != null)
         {
             var version = _version;
-            githubCallback = r => GitHubIssueReporter.TryCreateIssueAsync(r, version).GetAwaiter().GetResult();
+            githubCallback = r => GitHubIssueReporter.TryCreateIssueDetailedAsync(r, version).GetAwaiter().GetResult();
         }
 
         var result = store.TryAddAndSubmit(record, githubCallback);

@@ -643,7 +643,7 @@ The `suggest_improvement` MCP tool allows AI agents to report gaps or errors.
 
 ### Local lifecycle fields
 
-Local suggestion records use the `status` lifecycle field instead of a binary submitted flag. New records start as `draft`; successful GitHub submission moves them to `submitted_pending_triage` and stamps `upstream_url`, `upstream_issue_number`, and `last_synced_at` when known. The remaining additive states are reserved for follow-up sync/listing flows: `open_in_upstream`, `resolved_in_upstream`, `wont_fix`, `duplicate`, and `superseded`. Older records containing `submitted_to_github` / `github_issue_url` are normalized on read to the new lifecycle fields.
+Local suggestion records use the `status` lifecycle field instead of a binary submitted flag. New records start as `draft`; successful GitHub submission moves them to `submitted_pending_triage` and stamps `upstream_url`, `upstream_issue_number`, and `last_synced_at` when known. Every GitHub submission attempt also stamps `last_submit_attempt`, increments `submit_attempt_count`, and records `last_submit_error` on failure; success clears the last error. The remaining additive states are reserved for follow-up sync/listing flows: `open_in_upstream`, `resolved_in_upstream`, `wont_fix`, `duplicate`, and `superseded`. Older records containing `submitted_to_github` / `github_issue_url` are normalized on read to the new lifecycle fields.
 
 ### GitHub retry idempotency
 

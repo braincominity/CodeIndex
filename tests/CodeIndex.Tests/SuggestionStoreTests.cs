@@ -180,8 +180,79 @@ public class SuggestionStoreTests : IDisposable
         Assert.Equal("codex", r.McpClientName);
         Assert.Equal("5", r.McpClientVersion);
         Assert.Equal("MCP regression triage", r.ToolInvocationContext);
+        Assert.Null(r.LastSubmitError);
+        Assert.Null(r.LastSubmitAttempt);
+        Assert.Equal(0, r.SubmitAttemptCount);
         Assert.Null(r.SubmittedToGitHub);
         Assert.Null(r.GitHubIssueUrl);
+    }
+
+    [Fact]
+    public void TryAddAndSubmit_Success_StampsAttemptStateAndClearsError()
+    {
+        var record = MakeRecord("other", null, "Submission succeeds");
+
+        var result = _store.TryAddAndSubmit(record,
+            _ => SuggestionStore.SubmitAttemptResult.Success("https://github.com/widthdom/CodeIndex/issues/123"));
+
+        var stored = Assert.Single(_store.LoadAll());
+        Assert.True(result.IsNew);
+        Assert.Equal("https://github.com/widthdom/CodeIndex/issues/123", result.UpstreamUrl);
+        Assert.Equal(SuggestionStatus.SubmittedPendingTriage, stored.Status);
+        Assert.Equal(123, stored.UpstreamIssueNumber);
+        Assert.Equal(1, stored.SubmitAttemptCount);
+        Assert.NotNull(stored.LastSubmitAttempt);
+        Assert.Null(stored.LastSubmitError);
+    }
+
+    [Fact]
+    public void TryAddAndSubmit_Failure_StampsErrorWithoutSubmitting()
+    {
+        var record = MakeRecord("other", null, "Submission fails");
+
+        var result = _store.TryAddAndSubmit(record,
+            _ => SuggestionStore.SubmitAttemptResult.Failure("422: validation failed"));
+
+        var stored = Assert.Single(_store.LoadAll());
+        Assert.True(result.IsNew);
+        Assert.Null(result.UpstreamUrl);
+        Assert.Equal(SuggestionStatus.Draft, stored.Status);
+        Assert.Equal(1, stored.SubmitAttemptCount);
+        Assert.NotNull(stored.LastSubmitAttempt);
+        Assert.Equal("422: validation failed", stored.LastSubmitError);
+    }
+
+    [Fact]
+    public void TryAddAndSubmit_Exception_StampsExceptionTypeAndMessage()
+    {
+        var record = MakeRecord("other", null, "Submission throws");
+
+        var result = _store.TryAddAndSubmit(record,
+            _ => throw new InvalidOperationException("network unavailable"));
+
+        var stored = Assert.Single(_store.LoadAll());
+        Assert.True(result.IsNew);
+        Assert.Null(result.UpstreamUrl);
+        Assert.Equal(SuggestionStatus.Draft, stored.Status);
+        Assert.Equal(1, stored.SubmitAttemptCount);
+        Assert.NotNull(stored.LastSubmitAttempt);
+        Assert.Equal("InvalidOperationException: network unavailable", stored.LastSubmitError);
+    }
+
+    [Fact]
+    public void TryAddAndSubmit_DuplicateUnsubmitted_RetriesAndIncrementsAttemptCount()
+    {
+        var record = MakeRecord("other", null, "Retry duplicate");
+        _store.TryAddAndSubmit(record,
+            _ => SuggestionStore.SubmitAttemptResult.Failure("500: unavailable"));
+
+        var duplicate = MakeRecord("other", null, "Retry duplicate");
+        _store.TryAddAndSubmit(duplicate,
+            _ => SuggestionStore.SubmitAttemptResult.Failure("422: validation failed"));
+
+        var stored = Assert.Single(_store.LoadAll());
+        Assert.Equal(2, stored.SubmitAttemptCount);
+        Assert.Equal("422: validation failed", stored.LastSubmitError);
     }
 
     [Fact]
