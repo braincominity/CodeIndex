@@ -256,73 +256,38 @@ public class DbWriter
             return null;
 
         var cmd = RentCommand(
-            "SELECT id, modified, checksum FROM files WHERE path = @path",
-            static c => c.Parameters.Add("@path", SqliteType.Text));
-        long? unchangedId = null;
-        long? touchId = null;
-        DateTime touchModified = default;
+            @"UPDATE files
+              SET modified = CASE
+                  WHEN modified <> @modified
+                       AND @checksum IS NOT NULL
+                       AND checksum = @checksum
+                  THEN @modified
+                  ELSE modified
+              END
+              WHERE path = @path
+                AND (
+                    modified = @modified
+                    OR (@checksum IS NOT NULL AND checksum = @checksum)
+                )
+              RETURNING id",
+            static c =>
+            {
+                c.Parameters.Add("@path", SqliteType.Text);
+                c.Parameters.Add("@modified", SqliteType.Text);
+                c.Parameters.Add("@checksum", SqliteType.Text);
+            });
         try
         {
             cmd.Parameters["@path"].Value = relativePath;
-
-            using var reader = cmd.ExecuteTrackedReader();
-            if (reader.TrackedRead())
-            {
-                var id = reader.GetInt64(0);
-                var existingModified = reader.GetDateTime(1);
-
-                // Fast path: timestamp unchanged / 高速パス: タイムスタンプ一致
-                if (existingModified == modified)
-                {
-                    unchangedId = id;
-                }
-                // Slow path: timestamp changed but content may be the same (e.g. git checkout)
-                // 低速パス: タイムスタンプは変わったが内容は同じ可能性（例: git checkout）
-                else if (checksum != null && !reader.IsDBNull(2))
-                {
-                    var existingChecksum = reader.GetString(2);
-                    if (existingChecksum == checksum)
-                    {
-                        // Defer the UPDATE until after the reader is closed so a cached
-                        // SELECT command can be reused without colliding with an open
-                        // result set on the same connection.
-                        // SELECT 用キャッシュ command の result set を閉じてから UPDATE を発行する。
-                        touchId = id;
-                        touchModified = modified;
-                    }
-                }
-            }
+            cmd.Parameters["@modified"].Value = modified;
+            cmd.Parameters["@checksum"].Value = checksum is null ? DBNull.Value : checksum;
+            var raw = cmd.ExecuteScalar();
+            return raw is long id ? id : null;
         }
         finally
         {
             ReleaseCommand(cmd);
         }
-
-        if (touchId is long id2)
-        {
-            // Update timestamp so next run takes the fast path
-            // 次回実行で高速パスを通るようタイムスタンプを更新
-            var updateCmd = RentCommand(
-                "UPDATE files SET modified = @modified WHERE id = @id",
-                static c =>
-                {
-                    c.Parameters.Add("@modified", SqliteType.Text);
-                    c.Parameters.Add("@id", SqliteType.Integer);
-                });
-            try
-            {
-                updateCmd.Parameters["@modified"].Value = touchModified;
-                updateCmd.Parameters["@id"].Value = id2;
-                updateCmd.ExecuteNonQuery();
-            }
-            finally
-            {
-                ReleaseCommand(updateCmd);
-            }
-            return id2;
-        }
-
-        return unchangedId;
     }
 
     /// <summary>
@@ -1296,7 +1261,7 @@ public class DbWriter
             if (stampCurrentSymbolExtractorVersions)
                 StampSymbolExtractorVersions();
 
-            if (!AllFoldedColumnsBackfilled())
+            if (!AllFoldedColumnsBackfilled(requireCurrentFoldKeys: true))
             {
                 if (ownTransaction)
                 {
@@ -2455,7 +2420,9 @@ public class DbWriter
     /// full scan 成功時でも、incremental で skip された legacy 行が NULL のまま残っていれば
     /// fold-ready にしてはならない。stamp 前にこの実検証を通す。
     /// </summary>
-    public bool AllFoldedColumnsBackfilled(bool requireCurrentSymbolExtractorVersions = false)
+    public bool AllFoldedColumnsBackfilled(
+        bool requireCurrentSymbolExtractorVersions = false,
+        bool requireCurrentFoldKeys = false)
     {
         if (requireCurrentSymbolExtractorVersions && !SymbolExtractorVersionsMatchCurrent())
             return false;
@@ -2468,7 +2435,55 @@ public class DbWriter
               + (SELECT COUNT(*) FROM symbol_references WHERE container_name IS NOT NULL AND container_name_folded IS NULL)";
         var raw = cmd.ExecuteScalar();
         long missing = raw is long l ? l : (raw is int i ? i : 0);
-        return missing == 0;
+        if (missing != 0)
+            return false;
+
+        return !requireCurrentFoldKeys || AllFoldedColumnValuesMatchCurrentFold();
+    }
+
+    public bool AllFoldedColumnValuesMatchCurrentFold()
+    {
+        using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT name, name_folded FROM symbols WHERE name IS NOT NULL";
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var expected = NameFold.Fold(reader.GetString(0));
+                var actual = reader.IsDBNull(1) ? null : reader.GetString(1);
+                if (!string.Equals(actual, expected, StringComparison.Ordinal))
+                    return false;
+            }
+        }
+
+        using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = @"
+                SELECT symbol_name, symbol_name_folded, container_name, container_name_folded
+                FROM symbol_references
+                WHERE symbol_name IS NOT NULL OR container_name IS NOT NULL";
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                if (!reader.IsDBNull(0))
+                {
+                    var expected = NameFold.Fold(reader.GetString(0));
+                    var actual = reader.IsDBNull(1) ? null : reader.GetString(1);
+                    if (!string.Equals(actual, expected, StringComparison.Ordinal))
+                        return false;
+                }
+
+                if (!reader.IsDBNull(2))
+                {
+                    var expected = NameFold.Fold(reader.GetString(2));
+                    var actual = reader.IsDBNull(3) ? null : reader.GetString(3);
+                    if (!string.Equals(actual, expected, StringComparison.Ordinal))
+                        return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     public bool SymbolExtractorVersionsMatchCurrent()

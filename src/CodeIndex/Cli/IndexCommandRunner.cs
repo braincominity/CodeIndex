@@ -993,6 +993,10 @@ public static class IndexCommandRunner
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var sqlGraphContractMatchesCurrent = priorSqlGraphContractVersion == currentSqlGraphContractVersion;
+        var unresolvedMergeExitCode = RejectUnresolvedMergeState(projectRoot, options.Json, jsonOptions);
+        if (unresolvedMergeExitCode != null)
+            return unresolvedMergeExitCode.Value;
+
         var targetPaths = new HashSet<string>(StringComparer.Ordinal);
         var relevantIgnoreFileChanged = false;
 
@@ -2182,6 +2186,25 @@ public static class IndexCommandRunner
         return buffer.ToString();
     }
 
+    private static int? RejectUnresolvedMergeState(string projectRoot, bool json, JsonSerializerOptions jsonOptions)
+    {
+        var status = GitHelper.TryGetWorktreeStatus(projectRoot);
+        if (status == null || status.UnresolvedMergeFiles.Count == 0)
+            return null;
+
+        var paths = string.Join(", ", status.UnresolvedMergeFiles.Take(5));
+        if (status.UnresolvedMergeFiles.Count > 5)
+            paths += $", ... {status.UnresolvedMergeFiles.Count - 5:N0} more";
+
+        return WriteCommandError(
+            json,
+            jsonOptions,
+            $"unresolved merge conflicts detected; refusing to index conflicted files ({paths})",
+            CommandExitCodes.UsageError,
+            "Resolve the conflicts and run `git merge --continue`, or abort the merge with `git merge --abort`, then rerun `cdidx index`.",
+            CommandErrorCodes.UsageError);
+    }
+
     private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null, string? errorCode = null)
     {
         if (json)
@@ -2286,6 +2309,10 @@ public static class IndexCommandRunner
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         _ = priorMetadataTargetCsharp; // full-scan resolver runs unconditionally on success / 成功時に常に再解決するため不要
+        var unresolvedMergeExitCode = RejectUnresolvedMergeState(projectRoot, options.Json, jsonOptions);
+        if (unresolvedMergeExitCode != null)
+            return unresolvedMergeExitCode.Value;
+
         var normalizedProjectRoot = Path.GetFullPath(projectRoot);
         var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
             ? null
@@ -2917,7 +2944,9 @@ public static class IndexCommandRunner
             // guarantee 100% backfill on a legacy DB).
             // fold は実検証が通ったときだけ stamp。legacy DB で skip された行は NULL のため、
             // 黙って stamp すると reader が fold 経路で legacy 行を見逃す。codex #86 レビュー。
-            var backfillReady = writer.AllFoldedColumnsBackfilled(requireCurrentSymbolExtractorVersions: skipped != 0);
+            var backfillReady = writer.AllFoldedColumnsBackfilled(
+                requireCurrentSymbolExtractorVersions: skipped != 0);
+            var foldedKeysCurrent = skipped == 0 || writer.AllFoldedColumnValuesMatchCurrentFold();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
             var foldVersionMatchesCurrent = priorFoldVersion == currentFoldVersion;
@@ -2935,7 +2964,7 @@ public static class IndexCommandRunner
             // skipped 行は旧 key のまま残る。全件再生成済み（skipped==0）か、事前 metadata が
             // current と一致しているときだけ FoldReady を stamp する。途中中断で
             // user_version だけ落ちた current DB もここで回復させる。
-            if (backfillReady && (skipped == 0 || canRestampExistingFoldTrust))
+            if (backfillReady && foldedKeysCurrent && (skipped == 0 || canRestampExistingFoldTrust))
             {
                 // MarkFoldReady re-verifies inside BEGIN IMMEDIATE; if a concurrent writer slipped
                 // in a NULL-folded row between the upfront check and this stamp, the stamp is

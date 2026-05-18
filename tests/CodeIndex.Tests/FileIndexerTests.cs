@@ -3476,6 +3476,60 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ValidateContent_ConflictMarkers_EmitsConflictMarkerIssue()
+    {
+        var content = """
+        class Example
+        {
+        <<<<<<< HEAD
+            void MainVersion() {}
+        =======
+            void BranchVersion() {}
+        >>>>>>> feature
+        }
+        """;
+        var raw = System.Text.Encoding.UTF8.GetBytes(content);
+
+        var issues = FileIndexer.ValidateContent("Example.cs", raw, content);
+
+        var conflictMarkers = Assert.Single(issues, i => i.Kind == "conflict_markers");
+        Assert.Equal(3, conflictMarkers.Line);
+        Assert.Contains("Git conflict markers", conflictMarkers.Message);
+    }
+
+    [Fact]
+    public void Extractors_ConflictMarkers_ReturnEmptySymbolsAndReferences()
+    {
+        var content = """
+        class Example
+        {
+        <<<<<<< HEAD
+            void MainVersion() {}
+        =======
+            void BranchVersion() {}
+        >>>>>>> feature
+        }
+        """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content, "Example.cs");
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols, "Example.cs");
+
+        Assert.Empty(symbols);
+        Assert.Empty(references);
+    }
+
+    [Fact]
+    public void ValidateContent_SetextHeadingSeparator_DoesNotEmitConflictMarkerIssue()
+    {
+        var content = "Title\n=======\n";
+        var raw = System.Text.Encoding.UTF8.GetBytes(content);
+
+        var issues = FileIndexer.ValidateContent("README.md", raw, content);
+
+        Assert.DoesNotContain(issues, i => i.Kind == "conflict_markers");
+    }
+
+    [Fact]
     public void ValidateContent_OversizeLine_EmitsLineTooLongIssue()
     {
         // A single physical line longer than ChunkSplitter.MaxLineLength (e.g.
