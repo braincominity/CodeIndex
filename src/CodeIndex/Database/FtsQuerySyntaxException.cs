@@ -6,4 +6,9 @@ internal sealed class FtsQuerySyntaxException : Exception
         : base(message, innerException)
     {
     }
+
+    public FtsQuerySyntaxException(string message)
+        : base(message)
+    {
+    }
 }

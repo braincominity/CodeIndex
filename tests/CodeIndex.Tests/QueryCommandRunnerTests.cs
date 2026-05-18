@@ -966,6 +966,56 @@ jobs:
     }
 
     [Fact]
+    public void RunSearch_RawFtsTooLongQueryReturnsUsageError()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_too_long");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
+            var query = new string('a', DbReader.MaxRawFtsQueryLength + 1);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [query, "--db", dbPath, "--fts"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("raw FTS5 query is too long", stderr);
+            Assert.Contains("literal-safe search", stderr);
+            Assert.DoesNotContain("database error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RawFtsTooManyNearOperatorsReturnsUsageError()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_too_many_near");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
+            var query = string.Join(" OR ", Enumerable.Repeat("NEAR(spawn app, 5)", DbReader.MaxRawFtsNearOperators + 1));
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [query, "--db", dbPath, "--fts", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("raw FTS5 query is too complex", stderr);
+            Assert.Contains("NEAR operators", stderr);
+            Assert.DoesNotContain("database error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_TrailingWildcardActsAsPrefixShorthand()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_prefix_shorthand");

@@ -8,6 +8,11 @@ namespace CodeIndex.Database;
 /// </summary>
 public partial class DbReader
 {
+    internal const int MaxRawFtsQueryLength = 2000;
+    internal const int MaxRawFtsBooleanOperators = 64;
+    internal const int MaxRawFtsNearOperators = 16;
+    internal const int MaxRawFtsParenthesisDepth = 16;
+
     /// <summary>
     /// Sanitize user input for FTS5 MATCH by quoting each token as a phrase.
     /// FTS5 MATCH用にユーザー入力をサニタイズ（各トークンをフレーズとして引用）。
@@ -99,7 +104,7 @@ public partial class DbReader
         }
         else
         {
-            var sanitizedQuery = rawQuery ? query : SanitizeFtsQuery(normalizedQuery, prefix);
+            var sanitizedQuery = rawQuery ? ValidateRawFtsQuery(query) : SanitizeFtsQuery(normalizedQuery, prefix);
             sql = $@"
                 SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
                        rank,
@@ -180,7 +185,7 @@ public partial class DbReader
         }
         else
         {
-            var sanitizedQuery = rawQuery ? query : SanitizeFtsQuery(normalizedQuery, prefix);
+            var sanitizedQuery = rawQuery ? ValidateRawFtsQuery(query) : SanitizeFtsQuery(normalizedQuery, prefix);
             sql = $@"
                 SELECT f.path, c.start_line, c.end_line,
                        rank
@@ -258,6 +263,81 @@ public partial class DbReader
         string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase)
             ? CSharpVerbatimNameNormalizer.Normalize(query)
             : query;
+
+    internal static string ValidateRawFtsQuery(string query)
+    {
+        if (query.Length > MaxRawFtsQueryLength)
+            throw new FtsQuerySyntaxException($"raw FTS5 query is too long ({query.Length} characters); maximum is {MaxRawFtsQueryLength}. Split the query or drop `--fts` for literal-safe search.");
+
+        var booleanOperators = 0;
+        var nearOperators = 0;
+        var depth = 0;
+        var maxDepth = 0;
+        var inQuote = false;
+
+        for (var i = 0; i < query.Length; i++)
+        {
+            var ch = query[i];
+            if (ch == '"')
+            {
+                if (inQuote && i + 1 < query.Length && query[i + 1] == '"')
+                {
+                    i++;
+                    continue;
+                }
+                inQuote = !inQuote;
+                continue;
+            }
+
+            if (inQuote)
+                continue;
+
+            if (ch == '(')
+            {
+                depth++;
+                maxDepth = Math.Max(maxDepth, depth);
+                continue;
+            }
+            if (ch == ')' && depth > 0)
+            {
+                depth--;
+                continue;
+            }
+
+            if (!IsFtsIdentifierStart(ch))
+                continue;
+
+            var start = i;
+            i++;
+            while (i < query.Length && IsFtsIdentifierPart(query[i]))
+                i++;
+            var length = i - start;
+            i--;
+
+            if (TokenEquals(query, start, length, "AND") || TokenEquals(query, start, length, "OR") || TokenEquals(query, start, length, "NOT"))
+                booleanOperators++;
+            else if (TokenEquals(query, start, length, "NEAR"))
+                nearOperators++;
+        }
+
+        if (booleanOperators > MaxRawFtsBooleanOperators)
+            throw new FtsQuerySyntaxException($"raw FTS5 query is too complex ({booleanOperators} boolean operators); maximum is {MaxRawFtsBooleanOperators}. Split the query or drop `--fts` for literal-safe search.");
+        if (nearOperators > MaxRawFtsNearOperators)
+            throw new FtsQuerySyntaxException($"raw FTS5 query is too complex ({nearOperators} NEAR operators); maximum is {MaxRawFtsNearOperators}. Split the query or drop `--fts` for literal-safe search.");
+        if (maxDepth > MaxRawFtsParenthesisDepth)
+            throw new FtsQuerySyntaxException($"raw FTS5 query is too deeply nested (parenthesis depth {maxDepth}); maximum is {MaxRawFtsParenthesisDepth}. Split the query or drop `--fts` for literal-safe search.");
+
+        return query;
+    }
+
+    private static bool TokenEquals(string query, int start, int length, string value)
+        => length == value.Length && string.Compare(query, start, value, 0, value.Length, StringComparison.OrdinalIgnoreCase) == 0;
+
+    private static bool IsFtsIdentifierStart(char ch)
+        => char.IsLetter(ch) || ch == '_';
+
+    private static bool IsFtsIdentifierPart(char ch)
+        => char.IsLetterOrDigit(ch) || ch == '_';
 
     private static bool IsFtsQuerySyntaxError(SqliteException ex)
     {
