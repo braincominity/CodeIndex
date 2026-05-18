@@ -3814,6 +3814,9 @@ public static partial class ReferenceExtractor
             for (var ci = 0; ci < line.Length; ci++)
             {
                 var c = line[ci];
+                if (c == '/' && ci + 1 < line.Length && line[ci + 1] == '/')
+                    break;
+
                 if (char.IsWhiteSpace(c))
                     continue;
 
@@ -3998,6 +4001,9 @@ public static partial class ReferenceExtractor
             while (ci < line.Length)
             {
                 var c = line[ci];
+                if (c == '/' && ci + 1 < line.Length && line[ci + 1] == '/' && parenDepth == 0)
+                    break;
+
                 if (c == '(')
                 {
                     parenDepth++;
