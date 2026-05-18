@@ -1772,6 +1772,9 @@ public static partial class SymbolExtractor
     private static CSharpPropertyMatchCandidate BuildCSharpPropertyMatchLine(string[] lines, string[] csharpMatchLines, int startLineIndex)
     {
         var matchLine = csharpMatchLines[startLineIndex];
+        if (IsCSharpNonMemberHeaderLine(matchLine))
+            return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
+
         var isPropertyHeaderPrefix = CSharpPropertyHeaderPrefixRegex.IsMatch(matchLine);
         var isMethodHeaderPrefix = CSharpMethodHeaderPrefixRegex.IsMatch(matchLine);
         if (string.IsNullOrWhiteSpace(matchLine)
@@ -1895,6 +1898,16 @@ public static partial class SymbolExtractor
         }
 
         return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
+    }
+
+    private static bool IsCSharpNonMemberHeaderLine(string line)
+    {
+        var trimmed = line.TrimStart();
+        return trimmed.StartsWith("namespace ", StringComparison.Ordinal)
+            || trimmed.StartsWith("using ", StringComparison.Ordinal)
+            || trimmed.StartsWith("global using ", StringComparison.Ordinal)
+            || trimmed.StartsWith("extern alias ", StringComparison.Ordinal)
+            || trimmed.StartsWith("//", StringComparison.Ordinal);
     }
 
     private static CSharpPropertyMatchCandidate ContinueConfirmedCSharpPropertyMatch(
@@ -2634,21 +2647,21 @@ public static partial class SymbolExtractor
         out int lastLineIndex,
         out int? lastLineExclusiveEndColumn)
     {
-        var lexState = new CSharpLexState();
         var parenDepth = 0;
         var bracketDepth = 0;
 
         var limit = Math.Min(lines.Length, startLineIndex + CSharpTypeHeaderLookaheadLineLimit);
         for (int i = startLineIndex; i < limit; i++)
         {
-            var lexedLine = LexCSharpLine(lines[i], lexState);
-            lexState = lexedLine.EndState;
-            var sanitizedLine = lexedLine.SanitizedLine;
+            var sanitizedLine = lines[i];
             var fromColumn = i == startLineIndex ? startColumn : 0;
 
             for (int column = fromColumn; column < sanitizedLine.Length; column++)
             {
                 var ch = sanitizedLine[column];
+                if (ch == '/' && column + 1 < sanitizedLine.Length && sanitizedLine[column + 1] == '/')
+                    break;
+
                 switch (ch)
                 {
                     case '(':
