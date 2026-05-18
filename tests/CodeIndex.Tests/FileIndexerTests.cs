@@ -1010,6 +1010,38 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void EvaluatePathFilter_RejectsFileReachedThroughDirectorySymlinkOutsideProject()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var outsideDir = Path.Combine(Path.GetTempPath(), $"codeindex_outside_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(outsideDir);
+            File.WriteAllText(Path.Combine(outsideDir, "outside.cs"), "class Outside { }\n");
+
+            var linkDir = Path.Combine(tempDir, "linked");
+            Directory.CreateSymbolicLink(linkDir, outsideDir);
+            var linkedFile = Path.Combine(linkDir, "outside.cs");
+
+            var filter = new FileIndexer(tempDir).EvaluatePathFilter(linkedFile);
+
+            Assert.Equal(FileIndexer.PathFilterKind.OutsideProjectRoot, filter.FilterKind);
+            Assert.True(filter.ShouldDeleteExisting);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+            if (Directory.Exists(outsideDir))
+                Directory.Delete(outsideDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_SkipsDirectorySymlinkPointingAtAncestor()
     {
         if (OperatingSystem.IsWindows())
