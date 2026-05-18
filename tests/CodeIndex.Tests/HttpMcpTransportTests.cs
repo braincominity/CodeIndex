@@ -242,6 +242,7 @@ public class HttpMcpTransportTests : IDisposable
 
     private sealed class McpHttpHarness : IAsyncDisposable
     {
+        private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
         private readonly McpServer _server;
         private readonly HttpMcpTransport _transport;
         private readonly CancellationTokenSource _cts;
@@ -269,12 +270,17 @@ public class HttpMcpTransportTests : IDisposable
             // background task may not have entered GetContextAsync yet by the time the test posts.
             // listener が GetContextAsync に入る前に POST が来ないよう、ごく短い待機を挟む。
             await Task.Yield();
+            if (loopTask.IsCompleted)
+                await loopTask.ConfigureAwait(false);
             return new McpHttpHarness(server, transport, cts, loopTask, listen.Prefix);
         }
 
         public async Task<HttpResponseMessage> PostJsonAsync(string body)
         {
-            using var client = new HttpClient();
+            if (_loopTask.IsCompleted)
+                await _loopTask.ConfigureAwait(false);
+
+            using var client = new HttpClient { Timeout = RequestTimeout };
             var content = new StringContent(body, Encoding.UTF8, "application/json");
             return await client.PostAsync(Endpoint, content);
         }
