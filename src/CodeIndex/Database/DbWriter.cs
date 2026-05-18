@@ -250,9 +250,11 @@ public class DbWriter
     /// 変更なしなら既存ファイルIDを返し、インデックスが必要ならnullを返す。
     /// タイムスタンプが異なってもチェックサムが一致すればDB側を更新しIDを返す。
     /// </summary>
-    public long? GetUnchangedFileId(string relativePath, DateTime modified, string? checksum = null, bool allowReuse = true)
+    public long? GetUnchangedFileId(string relativePath, DateTime modified, string? checksum = null, bool allowReuse = true, string? language = null)
     {
         if (!allowReuse)
+            return null;
+        if (!SymbolExtractorVersionMatchesCurrent(language))
             return null;
 
         var cmd = RentCommand(
@@ -2540,17 +2542,50 @@ public class DbWriter
         return true;
     }
 
+    public bool AllFoldedColumnsBackfilled(IReadOnlyCollection<string> requireCurrentSymbolExtractorLanguages)
+    {
+        if (requireCurrentSymbolExtractorLanguages.Count > 0
+            && !SymbolExtractorVersionsMatchCurrent(requireCurrentSymbolExtractorLanguages))
+        {
+            return false;
+        }
+
+        return AllFoldedColumnsBackfilled();
+    }
+
     public bool SymbolExtractorVersionsMatchCurrent()
     {
         foreach (var lang in GetIndexedLanguages())
         {
-            var stored = GetMetaString(DbContext.GetSymbolExtractorVersionMetaKey(lang));
-            var current = SymbolExtractor.GetContractVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture);
-            if (stored != current)
+            if (!SymbolExtractorVersionMatchesCurrent(lang))
                 return false;
         }
 
         return true;
+    }
+
+    public bool SymbolExtractorVersionsMatchCurrent(IEnumerable<string> languages)
+    {
+        foreach (var lang in languages)
+        {
+            if (!SymbolExtractorVersionMatchesCurrent(lang))
+                return false;
+        }
+
+        return true;
+    }
+
+    private bool SymbolExtractorVersionMatchesCurrent(string? lang)
+    {
+        if (string.IsNullOrWhiteSpace(lang))
+            return true;
+
+        var stored = GetMetaString(DbContext.GetSymbolExtractorVersionMetaKey(lang));
+        if (stored == null)
+            return true;
+
+        var current = SymbolExtractor.GetContractVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return stored == current;
     }
 
     /// <summary>
