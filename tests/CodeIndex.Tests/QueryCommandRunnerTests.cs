@@ -1016,6 +1016,30 @@ jobs:
     }
 
     [Fact]
+    public void RunSearch_RawFtsLowercaseOperatorWordsAreTerms()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_lowercase_terms");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "and or not near");
+            var query = string.Join(" ", Enumerable.Repeat("and", DbReader.MaxRawFtsBooleanOperators + 1));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [query, "--db", dbPath, "--fts", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.DoesNotContain("too complex", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_TrailingWildcardActsAsPrefixShorthand()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_prefix_shorthand");

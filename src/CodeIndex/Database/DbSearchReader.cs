@@ -331,7 +331,7 @@ public partial class DbReader
     }
 
     private static bool TokenEquals(string query, int start, int length, string value)
-        => length == value.Length && string.Compare(query, start, value, 0, value.Length, StringComparison.OrdinalIgnoreCase) == 0;
+        => length == value.Length && string.Compare(query, start, value, 0, value.Length, StringComparison.Ordinal) == 0;
 
     private static bool IsFtsIdentifierStart(char ch)
         => char.IsLetter(ch) || ch == '_';
