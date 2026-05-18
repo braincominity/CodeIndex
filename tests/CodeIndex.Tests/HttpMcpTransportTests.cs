@@ -77,7 +77,14 @@ public class HttpMcpTransportTests : IDisposable
     public async Task HttpTransport_RequestLogger_RecordsMethodStatusDurationAndAuthOutcome()
     {
         var records = new List<HttpMcpTransport.HttpRequestLogRecord>();
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: "token", requestLogger: records.Add);
+        await using var harness = await McpHttpHarness.StartAsync(
+            _dbPath,
+            bearerToken: "token",
+            requestLogger: record =>
+            {
+                lock (records)
+                    records.Add(record);
+            });
 
         using var client = new HttpClient();
         using (var missingAuth = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
@@ -104,23 +111,24 @@ public class HttpMcpTransportTests : IDisposable
             Assert.Equal(HttpStatusCode.OK, okResponse.StatusCode);
         }
 
-        Assert.Equal(3, records.Count);
-        Assert.Equal("missing", records[0].AuthOutcome);
-        Assert.Equal((int)HttpStatusCode.Unauthorized, records[0].StatusCode);
-        Assert.Equal("POST", records[0].Method);
-        Assert.Equal("/", records[0].Path);
-        Assert.Null(records[0].RequestId);
-        Assert.True(records[0].DurationMs >= 0);
-        Assert.False(string.IsNullOrWhiteSpace(records[0].CorrelationId));
-        Assert.False(string.IsNullOrWhiteSpace(records[0].RemotePeer));
+        var loggedRecords = await WaitForRequestLogRecordsAsync(records, 3);
 
-        Assert.Equal("missing", records[1].AuthOutcome);
-        Assert.Equal("GET", records[1].Method);
-        Assert.Equal((int)HttpStatusCode.Unauthorized, records[1].StatusCode);
+        Assert.Equal("missing", loggedRecords[0].AuthOutcome);
+        Assert.Equal((int)HttpStatusCode.Unauthorized, loggedRecords[0].StatusCode);
+        Assert.Equal("POST", loggedRecords[0].Method);
+        Assert.Equal("/", loggedRecords[0].Path);
+        Assert.Null(loggedRecords[0].RequestId);
+        Assert.True(loggedRecords[0].DurationMs >= 0);
+        Assert.False(string.IsNullOrWhiteSpace(loggedRecords[0].CorrelationId));
+        Assert.False(string.IsNullOrWhiteSpace(loggedRecords[0].RemotePeer));
 
-        Assert.Equal("ok", records[2].AuthOutcome);
-        Assert.Equal("7", records[2].RequestId);
-        Assert.Equal((int)HttpStatusCode.OK, records[2].StatusCode);
+        Assert.Equal("missing", loggedRecords[1].AuthOutcome);
+        Assert.Equal("GET", loggedRecords[1].Method);
+        Assert.Equal((int)HttpStatusCode.Unauthorized, loggedRecords[1].StatusCode);
+
+        Assert.Equal("ok", loggedRecords[2].AuthOutcome);
+        Assert.Equal("7", loggedRecords[2].RequestId);
+        Assert.Equal((int)HttpStatusCode.OK, loggedRecords[2].StatusCode);
     }
 
     [Fact]
@@ -346,6 +354,28 @@ public class HttpMcpTransportTests : IDisposable
         _db.Dispose();
         try { File.Delete(_dbPath); } catch { /* best-effort cleanup */ }
         GC.SuppressFinalize(this);
+    }
+
+    private static async Task<List<HttpMcpTransport.HttpRequestLogRecord>> WaitForRequestLogRecordsAsync(
+        List<HttpMcpTransport.HttpRequestLogRecord> records,
+        int expectedCount)
+    {
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            lock (records)
+            {
+                if (records.Count >= expectedCount)
+                    return records.ToList();
+            }
+
+            await Task.Delay(10);
+        }
+
+        lock (records)
+        {
+            Assert.Equal(expectedCount, records.Count);
+            return records.ToList();
+        }
     }
 
     private sealed class McpHttpHarness : IAsyncDisposable
