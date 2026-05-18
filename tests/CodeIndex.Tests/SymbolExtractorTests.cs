@@ -6647,6 +6647,45 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ClassifiesAttributedTestMethods()
+    {
+        var content = """
+            namespace Demo.Tests;
+
+            public class CalculatorTests
+            {
+                [Fact]
+                public void AddsValues() { }
+
+                [Theory(DisplayName = "adds many")]
+                [InlineData(1, 2, 3)]
+                public void AddsManyValues(int left, int right, int expected) { }
+
+                [TestMethod]
+                public void MultipliesValues() { }
+
+                [Test]
+                public void DividesValues() { }
+
+                [NUnit.Framework.TestCase(1)]
+                public void AcceptsQualifiedNUnitAttributes(int value) { }
+
+                [Obsolete]
+                public void HelperMethod() { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "AddsValues");
+        Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "AddsManyValues");
+        Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "MultipliesValues");
+        Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "DividesValues");
+        Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "AcceptsQualifiedNUnitAttributes");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "HelperMethod");
+    }
+
+    [Fact]
     public void Extract_CSharp_NormalizesUnicodeEscapedIdentifierNames()
     {
         const string content = "namespace Demo.\\u004eames;\n\n"
@@ -8558,7 +8597,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "C");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "D");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "E");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "F");
+        Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "F");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Conditional");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Description");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Trait");
@@ -12108,6 +12147,66 @@ public class SymbolExtractorTests
 
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "ON");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "users_name_idx");
+    }
+
+    [Fact]
+    public void Extract_SQL_MySqlDefinerCreatesDefinerSymbols()
+    {
+        const string content = """
+            CREATE DEFINER='admin'@'%' PROCEDURE schema.proc()
+            BEGIN
+              SELECT 1;
+            END;
+            CREATE DEFINER=`app_user`@`localhost` VIEW `schema`.`v_orders` AS SELECT 1;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.Contains(symbols, s => s.Kind == "definer" && s.Name == "admin@%");
+        Assert.Contains(symbols, s => s.Kind == "definer" && s.Name == "app_user@localhost");
+    }
+
+    [Fact]
+    public void Extract_SQL_PostgresReturnsTableAndOutParametersCreateFieldSymbols()
+    {
+        const string content = """
+            CREATE FUNCTION public.search_orders()
+            RETURNS TABLE(id bigint, customer_name text, total numeric(12, 2))
+            AS $$
+            BEGIN
+              RETURN QUERY SELECT id, customer_name, total FROM orders;
+            END;
+            $$ LANGUAGE plpgsql;
+
+            CREATE FUNCTION public.load_order(OUT order_id int, OUT order_name text) RETURNS RECORD
+            AS $$ SELECT 1, 'a' $$ LANGUAGE sql;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "id" && s.ContainerName == "public.search_orders" && s.ReturnType == "bigint");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "customer_name" && s.ContainerName == "public.search_orders" && s.ReturnType == "text");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "total" && s.ContainerName == "public.search_orders" && s.ReturnType == "numeric(12, 2)");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "order_id" && s.ContainerName == "public.load_order");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "order_name" && s.ContainerName == "public.load_order");
+    }
+
+    [Fact]
+    public void Extract_SQL_DoesNotEmitDefinerOrReturnFieldsFromCommentsAndStrings()
+    {
+        const string content = """
+            -- CREATE DEFINER='ghost'@'%' PROCEDURE hidden()
+            SELECT 'RETURNS TABLE(fake int)';
+            CREATE FUNCTION public.real()
+            RETURNS TABLE(real_id int)
+            AS $$ SELECT 1 $$ LANGUAGE sql;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "definer" && s.Name == "ghost@%");
+        Assert.DoesNotContain(symbols, s => s.Kind == "field" && s.Name == "fake");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "real_id");
     }
 
     [Fact]
@@ -23284,7 +23383,7 @@ public class SymbolExtractorTests
         stopwatch.Stop();
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "InstallScriptTests");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Main_WithoutExplicitVersion_DoesNotShortCircuitBrokenZeroVersionInstall");
+        Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "Main_WithoutExplicitVersion_DoesNotShortCircuitBrokenZeroVersionInstall");
         Assert.True(
             stopwatch.Elapsed < TimeSpan.FromSeconds(20),
             $"InstallScriptTests.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < 20s.");

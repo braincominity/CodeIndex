@@ -10,6 +10,50 @@ namespace CodeIndex.Tests;
 /// </summary>
 public class ReferenceExtractorTests
 {
+    [Fact]
+    public void TryGetExtractor_RegisteredLanguage_ReturnsAddressableExtractor()
+    {
+        const string content = """
+            function demo() {
+                runTask();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.True(ReferenceExtractor.TryGetExtractor("javascript", out var extractor));
+        Assert.Equal("javascript", extractor.Language);
+
+        var references = extractor.Extract(new ReferenceExtractionContext(
+            1,
+            extractor.Language,
+            content,
+            symbols));
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "runTask"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "demo");
+    }
+
+    [Fact]
+    public void RegisteredLanguages_MatchSupportedReferenceLanguages()
+    {
+        foreach (var language in ReferenceExtractor.RegisteredLanguages)
+        {
+            Assert.True(ReferenceExtractor.SupportsLanguage(language));
+            Assert.True(ReferenceExtractor.TryGetExtractor(language, out var extractor));
+            Assert.Equal(language, extractor.Language);
+        }
+
+        Assert.True(ReferenceExtractor.SupportsLanguage("vue"));
+        Assert.True(ReferenceExtractor.TryGetExtractor("vue", out var vueExtractor));
+        Assert.Equal("typescript", vueExtractor.Language);
+        Assert.True(ReferenceExtractor.SupportsLanguage("razor"));
+        Assert.True(ReferenceExtractor.TryGetExtractor("razor", out var razorExtractor));
+        Assert.Equal("csharp", razorExtractor.Language);
+    }
+
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]
@@ -15158,6 +15202,29 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "OrderNumbers" && r.ReferenceKind == "reference" && r.Line == 1);
         Assert.Contains(references, r => r.SymbolName == "InvoiceNumbers" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_SystemVariablesEmitsSystemVariableReferences()
+    {
+        const string content = """
+            CREATE PROCEDURE dbo.SaveOrder
+            AS
+            BEGIN
+                SELECT @@IDENTITY;
+                IF @@ROWCOUNT = 0 SELECT @@ERROR;
+                SELECT @@session.sql_mode, @@global.max_connections;
+            END
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "@@IDENTITY" && r.ReferenceKind == "system_variable");
+        Assert.Contains(references, r => r.SymbolName == "@@ROWCOUNT" && r.ReferenceKind == "system_variable");
+        Assert.Contains(references, r => r.SymbolName == "@@ERROR" && r.ReferenceKind == "system_variable");
+        Assert.Contains(references, r => r.SymbolName == "@@session.sql_mode" && r.ReferenceKind == "system_variable");
+        Assert.Contains(references, r => r.SymbolName == "@@global.max_connections" && r.ReferenceKind == "system_variable");
     }
 
     [Fact]
@@ -30859,6 +30926,183 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r =>
             r.SymbolName == "shape.type=fake"
             && r.ReferenceKind == "type_tag");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptNamespaceReExportQualifiedUsage_EmitsModuleReference()
+    {
+        const string content = """
+            export * as Widgets from "./widgets";
+
+            export function render() {
+                return Widgets.Button.create();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "./widgets"
+            && r.ReferenceKind == "reference"
+            && r.Line == 4
+            && r.ContainerKind == "function"
+            && r.ContainerName == "render");
+        Assert.Contains(references, r => r.SymbolName == "create" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptNamespaceImportQualifiedUsage_StopsAfterLocalShadow()
+    {
+        const string content = """
+            import * as Api from "./api";
+
+            export function before() {
+                Api.Client.connect();
+            }
+
+            const Api = localFactory();
+
+            export function after() {
+                Api.Client.connect();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "./api"
+            && r.ReferenceKind == "reference"
+            && r.Line == 4
+            && r.ContainerName == "before");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "./api"
+            && r.ReferenceKind == "reference"
+            && r.Line == 10);
+    }
+
+    [Fact]
+    public void Extract_TypeScriptDynamicImportNamespaceQualifiedUsage_EmitsModuleReference()
+    {
+        const string content = """
+            async function render() {
+                const Lazy = await import("./lazy");
+                return Lazy.Widget.mount();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "./lazy"
+            && r.ReferenceKind == "reference"
+            && r.Line == 3
+            && r.ContainerName == "render");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptDynamicImportNamespaceQualifiedUsage_StopsOutsideLocalScope()
+    {
+        const string content = """
+            async function render() {
+                const Lazy = await import("./lazy");
+                return Lazy.Widget.mount();
+            }
+
+            export function after(Lazy: any) {
+                return Lazy.Widget.mount();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "./lazy"
+            && r.ReferenceKind == "reference"
+            && r.Line == 3
+            && r.ContainerName == "render");
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "./lazy"
+            && r.ReferenceKind == "reference"
+            && r.Line == 7);
+    }
+
+    [Fact]
+    public void Extract_TypeScriptNamedImportAliasQualifiedUsage_EmitsModuleReference()
+    {
+        const string content = """
+            import { InternalNamespace as PublicNamespace } from "./public-api";
+
+            export function render() {
+                PublicNamespace.Widget.mount();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "./public-api"
+            && r.ReferenceKind == "reference"
+            && r.Line == 4
+            && r.ContainerName == "render");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptNamedReExportAliasQualifiedUsage_DoesNotCreateLocalModuleReference()
+    {
+        const string content = """
+            export { InternalNamespace as PublicNamespace } from "./public-api";
+
+            export function render() {
+                PublicNamespace.Widget.mount();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "./public-api"
+            && r.ReferenceKind == "reference"
+            && r.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_TypeScriptNamespaceImportQualifiedUsage_StopsInsideParameterShadowScope()
+    {
+        const string content = """
+            import * as Api from "./api";
+            import { InternalNamespace as PublicNamespace } from "./public-api";
+
+            export function before() {
+                Api.Client.connect();
+                PublicNamespace.Widget.mount();
+            }
+
+            export function shadowed(Api: LocalApi, PublicNamespace: LocalPublic) {
+                Api.Client.connect();
+                PublicNamespace.Widget.mount();
+            }
+
+            export function after() {
+                Api.Client.connect();
+                PublicNamespace.Widget.mount();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "./api" && r.ReferenceKind == "reference" && r.Line == 5);
+        Assert.Contains(references, r => r.SymbolName == "./public-api" && r.ReferenceKind == "reference" && r.Line == 6);
+        Assert.DoesNotContain(references, r => r.SymbolName == "./api" && r.ReferenceKind == "reference" && r.Line == 10);
+        Assert.DoesNotContain(references, r => r.SymbolName == "./public-api" && r.ReferenceKind == "reference" && r.Line == 11);
+        Assert.Contains(references, r => r.SymbolName == "./api" && r.ReferenceKind == "reference" && r.Line == 15);
+        Assert.Contains(references, r => r.SymbolName == "./public-api" && r.ReferenceKind == "reference" && r.Line == 16);
     }
 
     private static SymbolRecord Container(string name, string kind, int startLine, int endLine) =>

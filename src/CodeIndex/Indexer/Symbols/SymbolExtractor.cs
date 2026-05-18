@@ -12,6 +12,17 @@ namespace CodeIndex.Indexer;
 /// </summary>
 public static partial class SymbolExtractor
 {
+    public const int DefaultContractVersion = 1;
+
+    public static int GetContractVersion(string? lang)
+    {
+        return lang switch
+        {
+            null or "" => DefaultContractVersion,
+            _ => DefaultContractVersion,
+        };
+    }
+
     // THREAD-SAFETY: Symbol extraction is intentionally stateless per call. Shared Regex
     // instances and lookup tables are initialized once by the CLR and must be treated as
     // immutable after type initialization; per-file extraction state belongs in local
@@ -112,6 +123,9 @@ public static partial class SymbolExtractor
         @"(?:<(?:(?>[^<>]+)|<(?<CSharpMethodTypeParameterDepth>)|>(?<-CSharpMethodTypeParameterDepth>))*(?(CSharpMethodTypeParameterDepth)(?!))>\s*)?";
     private static readonly Regex CSharpPartialFunctionDeclarationSignatureRegex = new(
         $@"^(?:(?:{CSharpVisibilityPattern}|abstract|async|extern|new|override|sealed|static|unsafe|virtual)\s+)*partial\s+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpTestMethodAttributeRegex = new(
+        @"(?:^|,)\s*(?:(?:\w+\.)*)?(?:Fact|Theory|Test|TestCase|TestCaseSource|TestMethod|DataTestMethod)(?:Attribute)?\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private const string JavaUnicodeEscapePattern = @"\\u+[0-9A-Fa-f]{4}";
     private const string JavaIdentifierPattern =
@@ -317,6 +331,21 @@ public static partial class SymbolExtractor
     private static readonly Regex ObjCCategoryDeclarationRegex = new(
         @"^\s*@(?:interface|implementation)\s+(?<class>\w+)\s*\(\s*(?<category>[^)]+?)\s*\)(?:\s*<[^>]+>)?",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex SqlDefinerRegex = new(
+        @"\bDEFINER\s*=\s*(?:'(?<user1>[^'\r\n]+)'|`(?<user2>[^`\r\n]+)`|(?<user3>[^\s@'`]+))\s*@\s*(?:'(?<host1>[^'\r\n]+)'|`(?<host2>[^`\r\n]+)`|(?<host3>[^\s'`]+))",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex SqlDefinerMarkerRegex = new(
+        @"\bDEFINER\s*=",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex SqlReturnsTableRegex = new(
+        @"\bRETURNS\s+TABLE\s*\((?<columns>(?:[^()]|\([^()]*\))*)\)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline);
+    private static readonly Regex SqlOutParameterRegex = new(
+        @"(?:^|,)\s*(?:OUT|INOUT)\s+(?<name>(?:\[(?:[^\]\r\n]|\]\])+\]|`[^`\r\n]+`|""(?:""""|[^""\r\n])+""|[_\p{L}][\p{L}\p{Mn}\p{Mc}\p{Nd}\p{Pc}$]*))\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex SqlCreateRoutineHeaderRegex = new(
+        @"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:DEFINER\s*=\s*(?:'[^'\r\n]+'|`[^`\r\n]+`|[^\s@'`]+)\s*@\s*(?:'[^'\r\n]+'|`[^`\r\n]+`|[^\s'`]+)\s+)?(?:PROCEDURE|PROC|FUNCTION)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     // Optional TypeScript generic type-argument token that may sit between an HOC call
     // name and its `(`. Consumed only by the TypeScript HOC-binding row — the JavaScript
@@ -3058,6 +3087,13 @@ public static partial class SymbolExtractor
 
                     if (!suppressJavaStatementSymbol)
                     {
+                        if (lang == "csharp"
+                            && pattern.Kind == "function"
+                            && IsCSharpTestMethod(lines, i))
+                        {
+                            kind = "test.method";
+                        }
+
                         var pythonImportEntries = lang == "python" && pattern.Kind == "import"
                             ? TryExpandPythonImportSymbols(lines, i, absoluteStartColumn, pythonModulePrefix)
                             : null;
@@ -3805,6 +3841,12 @@ public static partial class SymbolExtractor
             ExtractPhpDocblockTypeAliasSymbols(fileId, lines, symbols);
         if (lang == "php")
             ExtractPhpDocblockImportTypeSymbols(fileId, lines, symbols);
+        if (lang == "sql")
+        {
+            var sqlSyntheticSymbolLines = MaskSqlSyntheticSymbolLines(lines);
+            ExtractSqlDefinerSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols);
+            ExtractSqlRoutineResultColumnSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols);
+        }
         AssignContainers(symbols, lines, csharpLineStartStates);
         if (lang == "csharp")
             NormalizeCSharpImplicitPartialConstructorReturnTypes(symbols);
@@ -3827,6 +3869,337 @@ public static partial class SymbolExtractor
             if (symbol.Kind == "function" && IsJavaScriptTypeScriptReactHookName(symbol.Name))
                 symbol.Kind = "hook";
         }
+    }
+
+    private static void ExtractSqlDefinerSymbols(long fileId, string[] lines, string[] structuralLines, List<SymbolRecord> symbols)
+    {
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (!SqlDefinerMarkerRegex.IsMatch(structuralLines[i]))
+                continue;
+
+            var match = SqlDefinerRegex.Match(lines[i]);
+            if (!match.Success)
+                continue;
+
+            var user = FirstSuccessfulGroupValue(match, "user1", "user2", "user3");
+            var host = FirstSuccessfulGroupValue(match, "host1", "host2", "host3");
+            if (string.IsNullOrWhiteSpace(user) || string.IsNullOrWhiteSpace(host))
+                continue;
+
+            var name = $"{user}@{host}";
+            var lineNumber = i + 1;
+            AddSymbolRecord(
+                symbols,
+                null,
+                lineNumber,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "definer",
+                    Name = name,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    StartColumn = match.Index,
+                    EndLine = lineNumber,
+                    Signature = lines[i].Trim(),
+                },
+                lines[i]);
+        }
+    }
+
+    private static string[] MaskSqlSyntheticSymbolLines(string[] lines)
+    {
+        var masked = new string[lines.Length];
+        var inBlockComment = false;
+        for (var i = 0; i < lines.Length; i++)
+            masked[i] = MaskSqlSyntheticSymbolLine(lines[i], ref inBlockComment);
+        return masked;
+    }
+
+    private static string MaskSqlSyntheticSymbolLine(string line, ref bool inBlockComment)
+    {
+        var chars = line.ToCharArray();
+        var inSingleQuote = false;
+        for (var i = 0; i < chars.Length; i++)
+        {
+            if (inBlockComment)
+            {
+                if (chars[i] == '*' && i + 1 < chars.Length && chars[i + 1] == '/')
+                {
+                    chars[i] = ' ';
+                    chars[i + 1] = ' ';
+                    i++;
+                    inBlockComment = false;
+                }
+                else
+                {
+                    chars[i] = ' ';
+                }
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (chars[i] == '\'' && i + 1 < chars.Length && chars[i + 1] == '\'')
+                {
+                    chars[i] = ' ';
+                    chars[i + 1] = ' ';
+                    i++;
+                    continue;
+                }
+
+                if (chars[i] == '\'')
+                    inSingleQuote = false;
+                chars[i] = ' ';
+                continue;
+            }
+
+            if (chars[i] == '-' && i + 1 < chars.Length && chars[i + 1] == '-')
+            {
+                for (; i < chars.Length; i++)
+                    chars[i] = ' ';
+                break;
+            }
+
+            if (chars[i] == '/' && i + 1 < chars.Length && chars[i + 1] == '*')
+            {
+                chars[i] = ' ';
+                chars[i + 1] = ' ';
+                i++;
+                inBlockComment = true;
+                continue;
+            }
+
+            if (chars[i] == '\'')
+            {
+                chars[i] = ' ';
+                inSingleQuote = true;
+            }
+        }
+
+        return new string(chars);
+    }
+
+    private static void ExtractSqlRoutineResultColumnSymbols(long fileId, string[] lines, string[] structuralLines, List<SymbolRecord> symbols)
+    {
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (!SqlCreateRoutineHeaderRegex.IsMatch(structuralLines[i]))
+                continue;
+
+            var headerEnd = FindSqlRoutineHeaderEndLine(structuralLines, i);
+            var header = string.Join('\n', structuralLines.Skip(i).Take(headerEnd - i + 1));
+            var owner = symbols
+                .Where(symbol => symbol.Kind == "function" && symbol.Line >= i + 1 && symbol.Line <= headerEnd + 1)
+                .OrderBy(symbol => symbol.Line)
+                .FirstOrDefault();
+            var ownerName = owner?.Name;
+            var ownerBodyStart = owner?.BodyStartLine;
+            var ownerBodyEnd = owner?.BodyEndLine;
+            var lineNumber = i + 1;
+
+            foreach (Match match in SqlReturnsTableRegex.Matches(header))
+            {
+                foreach (var column in EnumerateSqlColumnDefinitions(match.Groups["columns"].Value))
+                    AddSqlRoutineFieldSymbol(fileId, lines, symbols, lineNumber, column.Name, column.Type, ownerName, ownerBodyStart, ownerBodyEnd);
+            }
+
+            var parameterList = ExtractSqlRoutineParameterList(header);
+            if (parameterList != null)
+            {
+                foreach (Match match in SqlOutParameterRegex.Matches(parameterList))
+                {
+                    var rawName = match.Groups["name"].Value;
+                    var name = NormalizeSqlSymbolSegment(rawName);
+                    if (name.Length > 0)
+                        AddSqlRoutineFieldSymbol(fileId, lines, symbols, lineNumber, name, null, ownerName, ownerBodyStart, ownerBodyEnd);
+                }
+            }
+        }
+    }
+
+    private static int FindSqlRoutineHeaderEndLine(string[] lines, int startLineIndex)
+    {
+        for (var i = startLineIndex; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (line.Contains(" AS ", StringComparison.OrdinalIgnoreCase)
+                || line.Contains(" LANGUAGE ", StringComparison.OrdinalIgnoreCase)
+                || line.Contains(';'))
+            {
+                return i;
+            }
+        }
+
+        return startLineIndex;
+    }
+
+    private static string? ExtractSqlRoutineParameterList(string header)
+    {
+        var open = header.IndexOf('(');
+        if (open < 0)
+            return null;
+
+        var depth = 0;
+        for (var i = open; i < header.Length; i++)
+        {
+            if (header[i] == '(')
+                depth++;
+            else if (header[i] == ')')
+            {
+                depth--;
+                if (depth == 0)
+                    return header[(open + 1)..i];
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<(string Name, string? Type)> EnumerateSqlColumnDefinitions(string columns)
+    {
+        foreach (var part in SplitSqlTopLevelComma(columns))
+        {
+            var trimmed = part.Trim();
+            if (trimmed.Length == 0)
+                continue;
+
+            var nameEnd = ScanSqlIdentifierEnd(trimmed, 0);
+            if (nameEnd <= 0)
+                continue;
+
+            var rawName = trimmed[..nameEnd];
+            var name = NormalizeSqlSymbolSegment(rawName);
+            if (name.Length == 0)
+                continue;
+
+            var type = trimmed[nameEnd..].Trim();
+            yield return (name, type.Length == 0 ? null : type);
+        }
+    }
+
+    private static IEnumerable<string> SplitSqlTopLevelComma(string value)
+    {
+        var start = 0;
+        var depth = 0;
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (value[i] == '(')
+                depth++;
+            else if (value[i] == ')' && depth > 0)
+                depth--;
+            else if (value[i] == ',' && depth == 0)
+            {
+                yield return value[start..i];
+                start = i + 1;
+            }
+        }
+
+        yield return value[start..];
+    }
+
+    private static int ScanSqlIdentifierEnd(string value, int start)
+    {
+        if (start >= value.Length)
+            return start;
+
+        if (value[start] == '[')
+        {
+            for (var i = start + 1; i < value.Length; i++)
+            {
+                if (value[i] == ']' && (i + 1 >= value.Length || value[i + 1] != ']'))
+                    return i + 1;
+                if (value[i] == ']' && i + 1 < value.Length && value[i + 1] == ']')
+                    i++;
+            }
+        }
+        else if (value[start] is '"' or '`')
+        {
+            var quote = value[start];
+            for (var i = start + 1; i < value.Length; i++)
+            {
+                if (value[i] == quote && (i + 1 >= value.Length || value[i + 1] != quote))
+                    return i + 1;
+                if (value[i] == quote && i + 1 < value.Length && value[i + 1] == quote)
+                    i++;
+            }
+        }
+        else
+        {
+            var i = start;
+            while (i < value.Length
+                   && (char.IsLetterOrDigit(value[i]) || value[i] == '_' || value[i] == '$'))
+            {
+                i++;
+            }
+
+            return i;
+        }
+
+        return value.Length;
+    }
+
+    private static string NormalizeSqlSymbolSegment(string rawName)
+    {
+        var normalized = SqlSymbolNameNormalizer.Normalize(rawName).Trim();
+        if (normalized.Length >= 2
+            && ((normalized[0] == '[' && normalized[^1] == ']')
+                || (normalized[0] == '`' && normalized[^1] == '`')
+                || (normalized[0] == '"' && normalized[^1] == '"')))
+        {
+            normalized = normalized[1..^1];
+        }
+
+        return normalized
+            .Replace("]]", "]", StringComparison.Ordinal)
+            .Replace("\"\"", "\"", StringComparison.Ordinal)
+            .Replace("``", "`", StringComparison.Ordinal);
+    }
+
+    private static void AddSqlRoutineFieldSymbol(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        int lineNumber,
+        string name,
+        string? returnType,
+        string? ownerName,
+        int? ownerBodyStart,
+        int? ownerBodyEnd)
+    {
+        AddSymbolRecord(
+            symbols,
+            null,
+            lineNumber,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "field",
+                Name = name,
+                Line = lineNumber,
+                StartLine = lineNumber,
+                EndLine = ownerBodyEnd ?? lineNumber,
+                BodyStartLine = ownerBodyStart,
+                BodyEndLine = ownerBodyEnd,
+                Signature = lines[lineNumber - 1].Trim(),
+                ContainerKind = ownerName == null ? null : "function",
+                ContainerName = ownerName,
+                ReturnType = NormalizeMetadata(returnType),
+            },
+            lines[lineNumber - 1]);
+    }
+
+    private static string? FirstSuccessfulGroupValue(Match match, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            var group = match.Groups[name];
+            if (group.Success)
+                return group.Value;
+        }
+
+        return null;
     }
 
     internal static bool IsJavaScriptTypeScriptReactHookName(string name)
@@ -3922,6 +4295,60 @@ public static partial class SymbolExtractor
         }
 
         return new string(chars);
+    }
+
+    private static bool IsCSharpTestMethod(string[] lines, int declarationLineIndex)
+    {
+        var scannedAttributeLine = false;
+        for (var lineIndex = declarationLineIndex; lineIndex >= 0; lineIndex--)
+        {
+            var trimmed = lines[lineIndex].TrimStart();
+            if (trimmed.Length == 0)
+                return false;
+
+            if (!trimmed.StartsWith('['))
+            {
+                if (lineIndex == declarationLineIndex && !scannedAttributeLine)
+                    continue;
+
+                return false;
+            }
+
+            scannedAttributeLine = true;
+            if (CSharpLineHasTestMethodAttribute(trimmed))
+                return true;
+
+            var remainderIndex = trimmed.LastIndexOf(']');
+            if (remainderIndex < 0)
+                return false;
+
+            var remainder = trimmed[(remainderIndex + 1)..].TrimStart();
+            if (remainder.Length > 0)
+                return false;
+        }
+
+        return false;
+    }
+
+    private static bool CSharpLineHasTestMethodAttribute(string trimmedLine)
+    {
+        var cursor = 0;
+        while (cursor < trimmedLine.Length && trimmedLine[cursor] == '[')
+        {
+            var closeIndex = trimmedLine.IndexOf(']', cursor + 1);
+            if (closeIndex < 0)
+                return false;
+
+            var content = trimmedLine[(cursor + 1)..closeIndex];
+            if (CSharpTestMethodAttributeRegex.IsMatch(content))
+                return true;
+
+            cursor = closeIndex + 1;
+            while (cursor < trimmedLine.Length && char.IsWhiteSpace(trimmedLine[cursor]))
+                cursor++;
+        }
+
+        return false;
     }
 
     private static void AddCppFriendDeclarationSymbol(

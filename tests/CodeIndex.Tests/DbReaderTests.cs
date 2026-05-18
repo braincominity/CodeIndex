@@ -91,6 +91,33 @@ public class DbReaderTests : IDisposable
         Assert.Contains("r.symbol_name COLLATE NOCASE LIKE @rankingQueryPrefix ESCAPE '\\'", sql, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void SymbolReferenceKindAggregationPlan_UsesNameKindIndexBeforeAndAfterAnalyze()
+    {
+        var sql = """
+            SELECT r.symbol_name,
+                   GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds,
+                   MIN(r.line) AS first_line,
+                   COUNT(*) AS reference_count
+            FROM symbol_references r
+            WHERE r.symbol_name = @query
+              AND r.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
+            GROUP BY r.symbol_name
+            """;
+
+        var planBeforeAnalyze = ExplainQueryPlan(sql);
+        Assert.Contains("idx_symbol_refs_name_kind", planBeforeAnalyze);
+
+        using (var analyze = _db.Connection.CreateCommand())
+        {
+            analyze.CommandText = "ANALYZE";
+            analyze.ExecuteNonQuery();
+        }
+
+        var planAfterAnalyze = ExplainQueryPlan(sql);
+        Assert.Contains("idx_symbol_refs_name_kind", planAfterAnalyze);
+    }
+
     [Theory]
     [InlineData("js")]
     [InlineData("JS")]
@@ -244,6 +271,19 @@ public class DbReaderTests : IDisposable
         SymbolExtractor.ApplyFamilyScope(symbols, familyScopeKey ?? FileIndexer.DeriveFallbackFamilyScopeKey(path));
         _writer.InsertSymbols(symbols);
         _writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
+    }
+
+    private string ExplainQueryPlan(string sql)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "EXPLAIN QUERY PLAN " + sql;
+        cmd.Parameters.AddWithValue("@query", "authenticate");
+
+        var plan = new StringBuilder();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            plan.AppendLine(reader.GetString(3));
+        return plan.ToString();
     }
 
     private SqliteCommand CreateSearchReferencesCommandForSql(string query)

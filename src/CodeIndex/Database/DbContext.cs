@@ -12,6 +12,7 @@ public class DbContext : IDisposable
 {
     public const int DefaultWalAutocheckpointPages = 1000;
     public const string DefaultSynchronousMode = "NORMAL";
+    public const string SymbolExtractorVersionMetaPrefix = "symbol_extractor_version_";
 
     private static readonly string[] RequiredCodeIndexTables =
     [
@@ -27,6 +28,9 @@ public class DbContext : IDisposable
 
     public SqliteConnection Connection => _connection;
     public bool IsReadOnly => _isReadOnly;
+
+    public static string GetSymbolExtractorVersionMetaKey(string lang)
+        => SymbolExtractorVersionMetaPrefix + lang;
 
     /// <summary>
     /// Connection-scoped schema cache. Created lazily so a `DbContext` that
