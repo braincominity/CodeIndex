@@ -14,8 +14,6 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class IndexCommandRunner
 {
-    private const int CSharpStaticInterfacePrepassMaxChars = 250_000;
-
     public static int Run(string[] indexArgs, JsonSerializerOptions jsonOptions) =>
         Run(indexArgs, jsonOptions, cancellationForTesting: null);
 
@@ -3222,12 +3220,6 @@ public static class IndexCommandRunner
                     continue;
 
                 if (!MayContainCSharpStaticInterfaceContract(content))
-                    continue;
-
-                // This prepass only enriches cross-file static-interface matching. Very large
-                // files still get indexed in the main pass below; skipping their prepass keeps
-                // liveness from getting stuck before normal per-file progress can begin (#2351).
-                if (content.Length > CSharpStaticInterfacePrepassMaxChars)
                     continue;
 
                 pendingSymbols.AddRange(SymbolExtractor.Extract(0, record.Lang, content, record.Path));
