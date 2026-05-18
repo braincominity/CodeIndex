@@ -815,6 +815,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "symbols"))
             return CommandExitCodes.UsageError;
+        if (TryWriteBlankQueryError(options, "symbols"))
+            return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "symbols", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
