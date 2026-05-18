@@ -1296,7 +1296,7 @@ public class DbWriter
             if (stampCurrentSymbolExtractorVersions)
                 StampSymbolExtractorVersions();
 
-            if (!AllFoldedColumnsBackfilled())
+            if (!AllFoldedColumnsBackfilled(requireCurrentFoldKeys: true))
             {
                 if (ownTransaction)
                 {
@@ -2455,7 +2455,9 @@ public class DbWriter
     /// full scan 成功時でも、incremental で skip された legacy 行が NULL のまま残っていれば
     /// fold-ready にしてはならない。stamp 前にこの実検証を通す。
     /// </summary>
-    public bool AllFoldedColumnsBackfilled(bool requireCurrentSymbolExtractorVersions = false)
+    public bool AllFoldedColumnsBackfilled(
+        bool requireCurrentSymbolExtractorVersions = false,
+        bool requireCurrentFoldKeys = false)
     {
         if (requireCurrentSymbolExtractorVersions && !SymbolExtractorVersionsMatchCurrent())
             return false;
@@ -2468,7 +2470,55 @@ public class DbWriter
               + (SELECT COUNT(*) FROM symbol_references WHERE container_name IS NOT NULL AND container_name_folded IS NULL)";
         var raw = cmd.ExecuteScalar();
         long missing = raw is long l ? l : (raw is int i ? i : 0);
-        return missing == 0;
+        if (missing != 0)
+            return false;
+
+        return !requireCurrentFoldKeys || AllFoldedColumnValuesMatchCurrentFold();
+    }
+
+    public bool AllFoldedColumnValuesMatchCurrentFold()
+    {
+        using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT name, name_folded FROM symbols WHERE name IS NOT NULL";
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var expected = NameFold.Fold(reader.GetString(0));
+                var actual = reader.IsDBNull(1) ? null : reader.GetString(1);
+                if (!string.Equals(actual, expected, StringComparison.Ordinal))
+                    return false;
+            }
+        }
+
+        using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = @"
+                SELECT symbol_name, symbol_name_folded, container_name, container_name_folded
+                FROM symbol_references
+                WHERE symbol_name IS NOT NULL OR container_name IS NOT NULL";
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                if (!reader.IsDBNull(0))
+                {
+                    var expected = NameFold.Fold(reader.GetString(0));
+                    var actual = reader.IsDBNull(1) ? null : reader.GetString(1);
+                    if (!string.Equals(actual, expected, StringComparison.Ordinal))
+                        return false;
+                }
+
+                if (!reader.IsDBNull(2))
+                {
+                    var expected = NameFold.Fold(reader.GetString(2));
+                    var actual = reader.IsDBNull(3) ? null : reader.GetString(3);
+                    if (!string.Equals(actual, expected, StringComparison.Ordinal))
+                        return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     public bool SymbolExtractorVersionsMatchCurrent()
