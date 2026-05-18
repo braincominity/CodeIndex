@@ -54,12 +54,9 @@ The lock files for projects with zero direct `PackageReference` entries (e.g. `t
 ### Indexing pipeline
 
 ```
-Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdidxignore` + reparse/Windows Hidden/System attribute pruning) → Language detection → File read (UTF-8)
-  → UPSERT file record
-  → Split into chunks (80 lines, 10-line overlap)
-  → Extract symbols via regex
-  → Extract lightweight references via regex
-  → Batch insert chunks + symbols + references (500 per transaction)
+Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdidxignore` + reparse/Windows Hidden/System attribute pruning)
+  → Parallel extraction workers (`--parallelism`, `CDIDX_INDEX_PARALLELISM`; default CPU count capped at 16) read UTF-8, split chunks, extract symbols/references, and validate content
+  → Single SQLite writer checks unchanged-file reuse, UPSERTs file records, and inserts chunks + symbols + references + issues in per-file transactions
   → Populate FTS5 index
 ```
 
@@ -226,6 +223,7 @@ files 1──N symbol_references
 | `razor_event_binding` | `event` | Razor `@on...="Handler"` event bindings from markup to C# handler names. |
 | `subscribe`, `unsubscribe` | `event` | Event wiring edges kept visible in call-graph queries. |
 | `friend` | `friend` | C++ friend access/coupling edges kept visible in dependency-oriented graph queries. |
+| `system_variable` | raw label | SQL execution-context variables such as T-SQL `@@ROWCOUNT` / `@@IDENTITY` and MySQL `@@session.sql_mode` / `@@global.max_connections`; intrinsic variables have no definition site. |
 | `attribute`, `annotation`, `type_reference`, `implicit_implementation` | raw label | Dependency/reference-only metadata, type-position edges, and compiler-synthesized implementation edges such as C# async iterator `GetAsyncEnumerator` / `MoveNextAsync`; excluded from default call-graph rows. |
 
 TypeScript decorators emit `annotation` rows for the decorator name and must not hide the decorated declaration's type-position edges. For example, `constructor(@Inject() svc: Service)` records `Inject` as `annotation` and `Service` as `type_reference`, and `@Input() profile: UserProfile` records both the decorator and field type.
@@ -438,6 +436,8 @@ The step size is `80 - 10 = 70` lines. A file with N lines produces `ceil((N - 8
 Most languages still use **compiled regex patterns**, matched one line at a time for functions, classes, and sometimes imports. JavaScript and TypeScript add a lightweight lexer/state machine on top of the regex pass for cases that line-oriented regex cannot handle reliably, such as class-body bare methods, computed and modifier-prefixed methods, scope-aware synthetic class expressions, and JS/TS-specific range resolution. Swift still uses the regex path for `func`, `class`, `struct`, `protocol`, `enum`, `indirect enum`, stored properties (including `private(set)` / `fileprivate(set)` and backtick-escaped names), and enum cases, while a small dedicated trailing-lambda pass keeps idiomatic `name { ... }` call sites visible to the graph. Kotlin also stays on the regex path. Scala has a separate block-call pass for `name { ... }` / `name { x => ... }` forms so idiomatic calls such as `foreach {}`, `Try {}`, and `synchronized {}` stay visible too. Common Lisp and Racket use a lightweight S-expression scanner that masks strings, line comments, and `#| ... |#` block comments before extracting definitions and function ranges. HTML uses a dedicated character-level state machine instead of the regex pattern loop — it walks tag openers, quoted/unquoted attribute values (including multi-line values), and masks `<script>`/`<style>`/`<textarea>`/`<title>` bodies plus `<!-- ... -->` comments so attribute-lookalike strings inside those regions do not leak phantom symbols. Named capture groups still extract identifiers for the regex-driven paths. Recent JS/TS additions also cover barrel re-export surfaces across commented, multiline, namespace, minified, TypeScript type-only-star, and `with {}` / `assert {}` import-attribute forms, while preserving the corresponding source-module `import` rows, alongside direct CommonJS named export assignments and their same-line / multiline parenthesized wrappers, multiline / constrained / async TypeScript generic-arrow RHS forms, prefix-safe function/class discrimination, and exported object-literal alias/shorthand properties.
 
 JS/TS export-surface scanning also indexes destructured named exports such as `export const { foo, renamed: localName } = source` by the emitted binding names. TypeScript namespace aliases from `export * as NS from "./module"`, `import * as NS from "./module"`, named import aliases, and `const NS = await import("./module")` also produce a `reference` edge back to the module specifier when later qualified usage such as `NS.Member()` appears; a later local declaration with the same alias name conservatively stops that module-linking range, and dynamic import aliases are limited to their local brace scope. React hook detection is name-based: JavaScript/TypeScript function symbols whose names match `use[A-Z]...` are reclassified as `hook`, and JavaScript/TypeScript calls to `use[A-Z]...()` are emitted as `consumes_hook` references. Module specifiers collected as `import` symbols consult the nearest `tsconfig.json` or `jsconfig.json`, follow relative `extends` chains, and apply `compilerOptions.baseUrl` / `paths` mappings before falling back to the literal specifier. Alias matches only rewrite to project-relative paths when a concrete file exists, trying TypeScript/JavaScript extensions and `index.*` candidates.
+
+SQL symbol extraction treats MySQL backtick-quoted identifiers as case-preserving symbol names while unquoted identifiers continue through the existing case-insensitive lookup paths. MySQL `DEFINER=user@host` clauses emit `definer` symbols, and PostgreSQL `RETURNS TABLE(...)` / `OUT` parameters emit function-scoped `field` symbols for the synthetic result columns.
 
 Supported symbol kinds by language:
 
