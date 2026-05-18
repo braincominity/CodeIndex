@@ -2205,7 +2205,7 @@ jobs:
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Contains("Error [E001_DB_NOT_FOUND]: --db", stderr);
             Assert.Contains("does not point to an existing database file", stderr);
-            Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+            Assert.Contains("Hint: create or refresh the index with `cdidx index <projectPath>`", stderr);
             Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("search")}", stderr);
         }
         finally
@@ -30205,7 +30205,7 @@ jobs:
         // Verify full (absolute) path is shown, not just the basename / フルパス表示を検証
         Assert.Contains(Path.GetFullPath(missingDbPath), stderr);
         Assert.Contains("does not point to an existing database file", stderr);
-        Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+        Assert.Contains("Hint: create or refresh the index with `cdidx index <projectPath>`", stderr);
     }
 
     [Fact]
