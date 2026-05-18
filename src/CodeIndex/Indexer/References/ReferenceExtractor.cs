@@ -966,6 +966,9 @@ public static partial class ReferenceExtractor
         if (ChunkSplitter.HasOversizeLine(content))
             return [];
 
+        if (FileIndexer.HasConflictMarkers(content))
+            return [];
+
         // Normalize CRLF / CR to LF first so direct callers that bypass FileIndexer
         // still present a `\n`-only content stream, and then strip line-leading
         // UTF-8 BOM (U+FEFF) and zero-width space (U+200B) defensively so

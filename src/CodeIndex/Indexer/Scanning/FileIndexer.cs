@@ -70,6 +70,7 @@ public class FileIndexer
     }
 
     private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp", "msbuild"];
+    private const int ConflictMarkerScanLimitBytes = 50 * 1024;
     private static readonly string[] IgnoreFileNames = [".gitignore", ".cdidxignore"];
     // Extension-to-language mapping / 拡張子→言語名マッピング
     private static readonly Dictionary<string, string> LangMap = new(StringComparer.OrdinalIgnoreCase)
@@ -2494,6 +2495,17 @@ public class FileIndexer
             });
         }
 
+        if (TryGetConflictMarkerLine(content, out var conflictMarkerLine))
+        {
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "conflict_markers",
+                Line = conflictMarkerLine,
+                Message = "Git conflict markers detected; resolve the conflict before indexing symbols or references",
+            });
+        }
+
         // Aggregate signal: when a large fraction of the decoded content is U+FFFD, the file
         // most likely uses a non-UTF8 encoding without a BOM (SHIFT_JIS / GBK / ISO-8859-1).
         // Emit one `non_utf8_likely` issue and suppress the per-line `replacement_char`
@@ -2676,6 +2688,48 @@ public class FileIndexer
         }
 
         return issues;
+    }
+
+    public static bool HasConflictMarkers(string content) =>
+        TryGetConflictMarkerLine(content, out _);
+
+    private static bool TryGetConflictMarkerLine(string content, out int line)
+    {
+        line = 0;
+        if (string.IsNullOrEmpty(content))
+            return false;
+
+        var byteCount = 0;
+        var lineStart = 0;
+        var lineNumber = 1;
+        for (int i = 0; i <= content.Length; i++)
+        {
+            if (i < content.Length)
+            {
+                byteCount += content[i] <= '\u007f' ? 1 : System.Text.Encoding.UTF8.GetByteCount(content.AsSpan(i, 1));
+                if (byteCount > ConflictMarkerScanLimitBytes)
+                    return false;
+            }
+
+            if (i < content.Length && content[i] != '\n')
+                continue;
+
+            var lineLength = i - lineStart;
+            if (lineLength > 0 && content[lineStart + lineLength - 1] == '\r')
+                lineLength--;
+            var currentLine = content.AsSpan(lineStart, lineLength);
+            if (currentLine.StartsWith("<<<<<<<", StringComparison.Ordinal)
+                || currentLine.StartsWith(">>>>>>>", StringComparison.Ordinal))
+            {
+                line = lineNumber;
+                return true;
+            }
+
+            lineStart = i + 1;
+            lineNumber++;
+        }
+
+        return false;
     }
 
     /// <summary>

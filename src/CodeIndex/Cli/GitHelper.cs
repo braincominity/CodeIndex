@@ -11,6 +11,19 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class GitHelper
 {
+    public sealed record WorktreeStatus(bool IsDirty, IReadOnlyList<string> UnresolvedMergeFiles);
+
+    private static readonly HashSet<string> UnresolvedMergeStatuses = new(StringComparer.Ordinal)
+    {
+        "DD",
+        "AU",
+        "UD",
+        "UA",
+        "DU",
+        "AA",
+        "UU",
+    };
+
     /// <summary>
     /// Resolve the common git directory for a project root, handling both normal repos and worktrees.
     /// プロジェクトルートの共通gitディレクトリを解決する。通常リポジトリとworktreeの両方に対応。
@@ -284,8 +297,43 @@ public static class GitHelper
     /// </summary>
     public static bool? TryIsWorktreeDirty(string projectRoot)
     {
-        var output = TryRunGit(projectRoot, "status", "--porcelain");
-        return output == null ? null : output.Length > 0;
+        var status = TryGetWorktreeStatus(projectRoot);
+        return status?.IsDirty;
+    }
+
+    /// <summary>
+    /// Try to determine worktree dirtiness and unresolved merge paths from git porcelain status.
+    /// git porcelain status から worktree の dirty 状態と未解決 merge path を取得する。
+    /// </summary>
+    public static WorktreeStatus? TryGetWorktreeStatus(string projectRoot)
+    {
+        var output = TryRunGit(projectRoot, "-c", "core.quotePath=false", "status", "--porcelain");
+        if (output == null)
+            return null;
+
+        var unresolved = new List<string>();
+        foreach (var rawLine in output.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+            if (line.Length < 3)
+                continue;
+
+            var status = line[..2];
+            if (!UnresolvedMergeStatuses.Contains(status))
+                continue;
+
+            unresolved.Add(ParsePorcelainPath(line[3..]));
+        }
+
+        return new WorktreeStatus(output.Length > 0, unresolved);
+    }
+
+    private static string ParsePorcelainPath(string path)
+    {
+        var renameSeparator = path.IndexOf(" -> ", StringComparison.Ordinal);
+        if (renameSeparator >= 0)
+            path = path[(renameSeparator + 4)..];
+        return FileIndexer.NormalizePathSeparators(path);
     }
 
     /// <summary>

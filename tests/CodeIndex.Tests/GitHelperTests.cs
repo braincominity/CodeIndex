@@ -350,6 +350,31 @@ public class GitHelperTests : IDisposable
     }
 
     [Fact]
+    public void TryGetWorktreeStatus_DetectsUnresolvedMergeFiles()
+    {
+        var repoDir = CreateGitRepo();
+
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "base\n");
+        RunGit(repoDir, "add", "tracked.txt");
+        RunGit(repoDir, "commit", "-m", "initial");
+        var defaultBranch = RunGit(repoDir, "rev-parse", "--abbrev-ref", "HEAD").Trim();
+        RunGit(repoDir, "switch", "-c", "feature");
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "feature\n");
+        RunGit(repoDir, "commit", "-am", "feature");
+        RunGit(repoDir, "switch", defaultBranch);
+        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "main\n");
+        RunGit(repoDir, "commit", "-am", "main");
+
+        Assert.Throws<InvalidOperationException>(() => RunGit(repoDir, "merge", "feature"));
+
+        var status = GitHelper.TryGetWorktreeStatus(repoDir);
+
+        Assert.NotNull(status);
+        Assert.True(status.IsDirty);
+        Assert.Contains("tracked.txt", status.UnresolvedMergeFiles);
+    }
+
+    [Fact]
     public void ResolveIgnoreCase_UsesGitConfigWhenRepositorySetsTrue()
     {
         var repoDir = CreateGitRepo();

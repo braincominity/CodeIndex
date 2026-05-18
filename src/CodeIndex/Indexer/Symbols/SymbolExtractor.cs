@@ -2120,6 +2120,9 @@ public static partial class SymbolExtractor
         if (ChunkSplitter.HasOversizeLine(content))
             return [];
 
+        if (FileIndexer.HasConflictMarkers(content))
+            return [];
+
         if (content.Contains('\r'))
             content = content.Replace("\r\n", "\n").Replace("\r", "\n");
         content = FileIndexer.StripLineLeadingInvisibles(content);
