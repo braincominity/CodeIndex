@@ -70,17 +70,16 @@ public static class ChunkSplitter
         // 防御的CRLF正規化 — BuildRecordで正規化済みだが、直接呼び出し時の安全策。
         if (content.Contains('\r'))
             content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-        // Defensive line-leading UTF-8 BOM strip — BuildRecord already strips the
-        // leading BOM and any BOM that follows `\n`, but this method is public and
-        // may be called directly. Mid-line U+FEFF (e.g. inside a string literal)
-        // is preserved. Closes #183.
-        // 防御的な行頭 UTF-8 BOM 剥離 — BuildRecord で先頭 BOM と `\n` 直後の BOM を
-        // 既に剥がしているが、本メソッドはpublicで直接呼ばれうる。行頭以外の
-        // U+FEFF (文字列リテラル内等) はそのまま残す。Closes #183.
-        content = FileIndexer.StripLineLeadingBom(content);
-        // Re-check for empty after BOM/CRLF strip so BOM-only input yields no chunks,
+        // Defensive line-leading invisible strip — BuildRecord already strips the
+        // leading BOM/ZWSP markers and any that follow `\n`, but this method is public
+        // and may be called directly. Mid-line markers are preserved. Closes #183/#2117.
+        // 防御的な行頭不可視文字剥離 — BuildRecord で先頭 BOM/ZWSP と `\n` 直後の marker を
+        // 既に剥がしているが、本メソッドはpublicで直接呼ばれうる。行頭以外はそのまま残す。
+        // Closes #183/#2117.
+        content = FileIndexer.StripLineLeadingInvisibles(content);
+        // Re-check for empty after invisible/CRLF strip so marker-only input yields no chunks,
         // matching the no-chunks contract for empty files.
-        // BOM/CRLF剥離後に再度空判定し、BOMのみの入力が空ファイルと同じく0チャンクになるようにする。
+        // 不可視文字/CRLF剥離後に再度空判定し、markerのみの入力が空ファイルと同じく0チャンクになるようにする。
         if (content.Length == 0)
             return [];
         // Skip oversize-line files (e.g. 1 MB minified `.min.js`, base64 blobs):

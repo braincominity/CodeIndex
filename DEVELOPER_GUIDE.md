@@ -68,6 +68,8 @@ Scoped `--files` / `--commits` refreshes reuse the same path filter as full scan
 
 Query commands that accept path filters (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, and `validate`) expand `--project` into the matching project directory glob before hitting `DbReader`, so all existing SQL path predicates keep working. `index --project` expands to the files under the selected project directory and reuses the existing `--files` update path.
 
+`cdidx batch` is a CLI-side query loop for editor integrations and scripts that need several query commands against the same DB without spawning `cdidx` repeatedly. It opens one `DbContext` / `DbReader`, reads newline-delimited JSON string arrays from stdin, and dispatches only query commands through the existing `QueryCommandRunner` paths so output and validation stay identical to the standalone command shape.
+
 ### Extractor concurrency contract
 
 `SymbolExtractor` and `ReferenceExtractor` must be safe to call concurrently for different files or repeated calls on the same file content. Shared `Regex` instances and static lookup tables are initialized once by the CLR and treated as immutable after type initialization. Per-extraction state belongs in local variables, method parameters, caller-owned collections, or language-specific state objects created for that extraction call.
@@ -749,6 +751,8 @@ Process exit codes are coarse (`0` success, `1` usage, `2` not-found, `3` db, `4
 - **Cross-compiled linux-arm64 without runtime smoke test** — The `release.yml` workflow cross-compiles `linux-arm64` on an x64 runner (`dotnet publish -r linux-arm64 --self-contained`). Tests are skipped because the runner cannot execute ARM binaries natively. Ideally, a QEMU-based smoke test (`cdidx --version`) would run before publishing, but GitHub Actions free-tier runners do not include QEMU or ARM runners. Adding a QEMU setup step is possible but increases CI complexity and wall-clock time for every release. .NET's cross-compilation is an officially supported and widely used feature, so the risk of a broken artifact is low in practice. If ARM-specific failures are reported in the future, adding `docker run --platform linux/arm64` with QEMU should be the first mitigation step.
 - **CLI / MCP only — no public library API (#1557)** — The `cdidx` assembly is shipped as `OutputType=Exe` with `PackAsTool=true` and is published as a .NET global tool, not as a referenceable library. The supported, versioned surfaces are the `cdidx` CLI (including its `--json` output) and the `cdidx mcp` JSON-RPC server. `public` types on the assembly (for example `CodeIndex.Database.DbReader` and DTOs in `CodeIndex.Models` / `CodeIndex.Database`) exist to satisfy CLI / MCP composition and the `CodeIndex.Tests` `InternalsVisibleTo` boundary — they are implementation details that may change, move, or become `internal` without a deprecation cycle. Embedders are expected to depend on the CLI / MCP / JSON surfaces, not on the assembly. See [INTEGRATION_POLICY.md — API Surface and Library Use](INTEGRATION_POLICY.md#api-surface-and-library-use). If a real library API is ever justified, it will be carved out as a separate package with its own interface and versioning contract rather than being implied by whatever happens to be `public` on this assembly.
 - **Extractor plugins (#1937)** — `CodeIndex.Indexer.Extensibility.ISymbolExtractor` and `IReferenceExtractor` are the only supported assembly-extension surface. `cdidx` discovers trusted plugin DLLs in workspace `.cdidx/plugins/` and user `~/.cdidx/plugins/`. A plugin assembly must declare `[assembly: CdidxPlugin(minApiVersion: 1, maxApiVersion: 1)]` and expose a public parameterless type implementing one or both interfaces. Set `FileExtensions` when the plugin owns new file extensions so `FileIndexer` can route those files to the plugin language. Plugins run inside the `cdidx` process and are not sandboxed; install only trusted local DLLs. This narrow contract lets teams add DSL-specific symbols/references without forking CodeIndex, but it is not a general library/SDK embedding API.
+
+<a id="reference-kind-filtering-matrix"></a>
 
 ## Reference-kind filtering matrix
 
@@ -1576,6 +1580,8 @@ CI で `NU1004 The packages lock file is inconsistent with the project dependenc
 `SolutionProjectResolver` は plain-text の `.sln` に含まれる `Project(...) = "...", "...csproj"` 行を読み、C# / F# / VB の project file を解決する。workspace root に `.sln` が 1 つだけある場合、`--project <name|path>` は自動でそれを使う。複数ある場合は caller が `--solution <path>` を渡せる。
 
 path filter を受け付ける query コマンド（`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots`, `validate`）は、`--project` を対応する project directory glob に展開してから `DbReader` に渡す。これにより既存の SQL path predicate をそのまま利用できる。`index --project` は選択された project directory 配下のファイルに展開し、既存の `--files` 更新経路を再利用する。
+
+`cdidx batch` は、同じ DB に複数の query command を投げる editor integration や script 向けの CLI 側 query loop である。1 つの `DbContext` / `DbReader` を開き、stdin から newline-delimited JSON 文字列配列を読み、query command だけを既存の `QueryCommandRunner` 経路へ dispatch するため、出力と validation は単発コマンドと同じ形を保つ。
 
 ### 抽出器の並行実行契約
 

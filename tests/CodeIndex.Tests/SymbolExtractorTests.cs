@@ -23542,9 +23542,9 @@ public class SymbolExtractorTests
     public void Extract_NullContent_ReturnsEmpty()
     {
         // Direct callers that pass `null` must not throw. The #183 CRLF-normalization
-        // step added ahead of StripLineLeadingBom would otherwise dereference `null`
+        // step added ahead of StripLineLeadingInvisibles would otherwise dereference `null`
         // before the helper's IsNullOrEmpty guard could run. Closes #183.
-        // direct call で `null` を渡してもスローしない。#183 で StripLineLeadingBom
+        // direct call で `null` を渡してもスローしない。#183 で StripLineLeadingInvisibles
         // の前段に CRLF 正規化を入れたため、helper 側 IsNullOrEmpty まで届かず
         // `null` を逆参照してしまう回帰を防ぐ。Closes #183.
         Assert.Empty(SymbolExtractor.Extract(1, "csharp", null!));
@@ -23562,10 +23562,10 @@ public class SymbolExtractorTests
     public void Extract_Csharp_CrlfLeadingBom_IndexesFirstLineImport()
     {
         // Direct-call input with CRLF line endings AND a leading BOM: the CRLF → LF
-        // normalization must run before StripLineLeadingBom so the line-leading BOM
-        // logic still recognizes mid-file BOMs (helper treats `\n` as the sole line
+        // normalization must run before StripLineLeadingInvisibles so the line-leading
+        // cleanup still recognizes mid-file BOMs (helper treats `\n` as the sole line
         // separator). Closes #183.
-        // CRLF 改行 + 先頭 BOM の direct call: StripLineLeadingBom は `\n` を唯一の
+        // CRLF 改行 + 先頭 BOM の direct call: StripLineLeadingInvisibles は `\n` を唯一の
         // 行区切りとして扱うので、CRLF → LF 正規化を helper より先に通さないと
         // mid-file 行頭 BOM を剥がし損ねる。Closes #183.
         const string content = "\uFEFFusing System;\r\n\r\n\uFEFFnamespace CrlfBom;\r\n";
