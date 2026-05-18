@@ -100,12 +100,7 @@ public static class GitHelper
     /// </summary>
     public static List<string> GetChangedFilesFromCommit(string projectRoot, string commitId)
     {
-        // Validate commit ID to prevent argument injection (only hex + common ref chars allowed)
-        // Reject values starting with "-" to prevent git option injection even without "--" separator
-        // コミットIDをバリデーションし引数インジェクションを防止（16進数+一般的な参照文字のみ許可）
-        // "-"で始まる値も拒否し、"--"セパレータなしでもgitオプション注入を防止
-        if (commitId.StartsWith('-') || !Regex.IsMatch(commitId, @"^[a-zA-Z0-9_./^~\-]+$"))
-            throw new ArgumentException($"Invalid commit ID: {commitId}");
+        ValidateSingleCommitRef(projectRoot, commitId);
 
         var psi = new ProcessStartInfo
         {
@@ -133,6 +128,36 @@ public static class GitHelper
         return output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Select(FileIndexer.NormalizePathSeparators)
             .ToList();
+    }
+
+    private static void ValidateSingleCommitRef(string projectRoot, string commitId)
+    {
+        // Reject range/pathspec syntax before invoking git so --commits remains a list
+        // of single commit-ish values, not revision-set expressions.
+        if (string.IsNullOrWhiteSpace(commitId)
+            || commitId.StartsWith('-')
+            || commitId.Contains("..", StringComparison.Ordinal)
+            || commitId.Contains("^{", StringComparison.Ordinal)
+            || commitId.Contains(':')
+            || !Regex.IsMatch(commitId, @"^[a-zA-Z0-9_./^~\-]+$"))
+        {
+            throw new ArgumentException(
+                $"Invalid commit ID '{commitId}'. Provide a single commit-ish; ranges and tag refs are not accepted. Use `git rev-parse --verify <ref>^{{commit}}` to validate it.");
+        }
+
+        var symbolicName = TryRunGit(projectRoot, "rev-parse", "--symbolic-full-name", commitId)?.Trim();
+        if (symbolicName != null && symbolicName.StartsWith("refs/tags/", StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Invalid commit ID '{commitId}'. Tag refs are not accepted for --commits; pass the peeled commit SHA from `git rev-parse --verify {commitId}^{{commit}}`.");
+        }
+
+        var resolved = TryRunGit(projectRoot, "rev-parse", "--verify", $"{commitId}^{{commit}}")?.Trim();
+        if (string.IsNullOrWhiteSpace(resolved))
+        {
+            throw new ArgumentException(
+                $"Invalid commit ID '{commitId}'. Git could not resolve it to a single commit. Use `git rev-parse --verify <ref>^{{commit}}` to validate it.");
+        }
     }
 
     /// <summary>
