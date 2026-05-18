@@ -12196,6 +12196,58 @@ jobs:
         }
     }
 
+    [Theory]
+    [InlineData("definition")]
+    [InlineData("symbols")]
+    [InlineData("unused")]
+    [InlineData("hotspots")]
+    public void SymbolKindCommands_InvalidKindFailsWithValidKindList(string command)
+    {
+        var args = command switch
+        {
+            "definition" => new[] { "Target", "--kind", "badkind" },
+            "symbols" => ["Target", "--kind", "badkind"],
+            "unused" => ["--kind", "badkind"],
+            "hotspots" => ["--kind", "badkind"],
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+        {
+            "definition" => QueryCommandRunner.RunDefinition(args, _jsonOptions),
+            "symbols" => QueryCommandRunner.RunSymbols(args, _jsonOptions),
+            "unused" => QueryCommandRunner.RunUnused(args, _jsonOptions),
+            "hotspots" => QueryCommandRunner.RunHotspots(args, _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        });
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("kind 'badkind' is not recognized", stderr);
+        Assert.Contains("Valid symbol kinds:", stderr);
+        Assert.Contains("function", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+    }
+
+    [Theory]
+    [InlineData("references")]
+    [InlineData("callers")]
+    [InlineData("callees")]
+    public void GraphCommands_InvalidReferenceKindFailsWithScopedValidKindList(string command)
+    {
+        var args = new[] { "Target", "--kind", "badkind" };
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(command, args, _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("kind 'badkind' is not recognized", stderr);
+        Assert.Contains(command == "references" ? "Valid reference kinds:" : "Valid call-graph reference kinds:", stderr);
+        Assert.Contains("call", stderr);
+        Assert.Contains(command == "references" ? "type_reference" : "friend", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+    }
+
     [Fact]
     public void RunReferences_CountJsonKeepsSubscribeRowsVisibleByDefault()
     {

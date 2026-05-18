@@ -413,6 +413,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "definition"))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindError("definition", options.Kind))
+            return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "definition", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -570,6 +572,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "references"))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindError("references", options.Kind))
+            return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "references", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -694,6 +698,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryRejectNonCallGraphKindForGraphCommand("callers", options.Kind))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindError("callers", options.Kind))
+            return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "callers", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -817,6 +823,8 @@ public static class QueryCommandRunner
         if (TryWriteParseError(options, "callees"))
             return CommandExitCodes.UsageError;
         if (TryRejectNonCallGraphKindForGraphCommand("callees", options.Kind))
+            return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindError("callees", options.Kind))
             return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "callees", out var exact, out var exactError))
         {
@@ -961,6 +969,8 @@ public static class QueryCommandRunner
         if (TryWriteUnsupportedOptionError("symbols", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("symbols"), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "symbols"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindError("symbols", options.Kind))
             return CommandExitCodes.UsageError;
         if (TryWriteBlankQueryError(options, "symbols"))
             return CommandExitCodes.UsageError;
@@ -2531,6 +2541,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "hotspots"))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindError("hotspots", options.Kind))
+            return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("hotspots", options))
             return CommandExitCodes.UsageError;
         if (!TryResolveHotspotsGroupBy(options.GroupBy, options.Lang, groupByName, out var groupBy, out var groupByError))
@@ -2932,6 +2944,8 @@ public static class QueryCommandRunner
         if (TryWriteUnsupportedOptionError("unused", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("unused")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "unused"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindError("unused", options.Kind))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("unused", options))
             return CommandExitCodes.UsageError;
@@ -4227,6 +4241,34 @@ public static class QueryCommandRunner
         return true;
     }
 
+    private static bool TryWriteInvalidKindError(string commandName, string? kind)
+    {
+        if (string.IsNullOrWhiteSpace(kind))
+            return false;
+
+        var (acceptedKinds, label) = commandName switch
+        {
+            "references" => (AllValidReferenceKinds, "reference kinds"),
+            "callers" or "callees" => (CallGraphOnlyReferenceKinds, "call-graph reference kinds"),
+            "validate" => (AllValidValidateKinds, "validate issue kinds"),
+            _ => (AllValidKinds, "symbol kinds"),
+        };
+
+        if (acceptedKinds.Contains(kind, StringComparer.Ordinal))
+            return false;
+
+        if ((commandName == "references" || commandName == "callers" || commandName == "callees") &&
+            AllValidKinds.Contains(kind, StringComparer.Ordinal))
+            return false;
+
+        Console.Error.WriteLine($"Error: kind '{kind}' is not recognized for --kind on '{commandName}'. Valid {label}: {string.Join(", ", acceptedKinds)}.");
+        var suggestion = ConsoleUi.FindClosestMatch(kind, acceptedKinds);
+        if (suggestion != null)
+            Console.Error.WriteLine($"Did you mean: --kind {suggestion}?");
+        Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+        return true;
+    }
+
     private static bool TryWriteUnsupportedOptionError(string commandName, string[] cmdArgs, IEnumerable<string> supportedOptions, string? queryLiteral = null)
     {
         var supported = supportedOptions.ToHashSet(StringComparer.Ordinal);
@@ -5078,7 +5120,7 @@ public static class QueryCommandRunner
 
     // All valid symbol kinds emitted by SymbolExtractor / SymbolExtractor が出力する全有効シンボル種別
     private static readonly string[] AllValidKinds =
-        ["async_function", "async_generator", "class", "delegate", "enum", "event", "function", "generator", "hook", "import", "interface", "namespace", "property", "struct", "union"];
+        ["associatedtype", "async_function", "async_generator", "class", "delegate", "enum", "event", "function", "generator", "hook", "import", "interface", "namespace", "operator", "property", "struct", "trait", "typealias", "union"];
     // Reference kinds valid on `references --kind`. Includes the compile-time type-position
     // `type_reference` edge emitted by ReferenceExtractor for C#/Java base lists, declaration
     // types, generic constraints, `throws`, `is`/`as`/`instanceof`, and XML-doc `cref` targets.
