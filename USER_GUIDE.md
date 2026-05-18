@@ -1432,7 +1432,7 @@ Scoped updates reuse the same skip and ignore rules as a full scan. If a commit-
 
 The index database is updated file by file inside SQLite transactions. Queries from another process can continue during a long refresh, but they may observe a transitional mix of old and new rows until the indexing command finishes. Treat that as a live snapshot, not a corrupted database: rerun `cdidx status --check --json` after the refresh completes before trusting automation results. If a branch switch or other history-moving operation left rows for files that exist only on the previous checkout, incremental JSON output includes `head_changed`, `prior_indexed_head_commit`, `current_head_commit`, and `head_change_notice`; use `--changed-between <old-ref> <new-ref>` when you know both refs, or run a full project refresh when you need repo-wide stale-path cleanup.
 
-Use `--json` to tell what actually happened. Successful indexing output includes `mode` and `summary.files_scanned` / `summary.files_skipped` / `summary.files_purged`. A scoped update that is promoted because ignore files changed reports a full-scan mode rather than a narrow commit/file update, while ordinary delta runs keep the incremental mode and show how many files were skipped.
+Use `--json` to tell what actually happened. Narrow update output reports `mode: "update"` with `summary.updated`, `summary.removed`, and `summary.skipped`. A run promoted because ignore files changed uses the full-scan JSON shape instead: `mode` remains `"incremental"` unless you passed `--rebuild`, and the summary includes `files_scanned`, `files_skipped`, and `files_purged`.
 
 Example:
 
@@ -3144,7 +3144,7 @@ cdidx ./myproject --files src/app.cs src/utils.cs
 
 インデックスDBはファイル単位の SQLite transaction で更新されます。長い refresh 中も別プロセスからの query は続行できますが、indexing command が完了するまでは古い行と新しい行が混在した途中状態を観測する可能性があります。これはDB破損ではなく、その時点の live snapshot です。自動化で結果を信頼する前に、refresh 完了後に `cdidx status --check --json` を再実行してください。ブランチ切り替えや履歴を書き換える操作により前 checkout にしか存在しない行が残る場合、incremental JSON 出力には `head_changed`、`prior_indexed_head_commit`、`current_head_commit`、`head_change_notice` が含まれます。前後の ref が分かるなら `--changed-between <old-ref> <new-ref>` を使い、repo 全体の stale path cleanup が必要ならフル更新を実行してください。
 
-実際にどの経路になったかは `--json` で確認できます。成功時の indexing 出力には `mode` と `summary.files_scanned` / `summary.files_skipped` / `summary.files_purged` が含まれます。ignore ファイル変更により昇格された部分更新は狭い commit/file 更新ではなく full-scan mode を報告し、通常の差分更新は incremental mode と skip 済みファイル数を示します。
+実際にどの経路になったかは `--json` で確認できます。狭い update 出力は `mode: "update"` と `summary.updated`、`summary.removed`、`summary.skipped` を返します。ignore ファイル変更により昇格された実行は full-scan JSON 形状になり、`--rebuild` を渡していない限り `mode` は `"incremental"` のまま、summary には `files_scanned`、`files_skipped`、`files_purged` が含まれます。
 
 例:
 
