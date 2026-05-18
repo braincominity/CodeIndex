@@ -597,6 +597,7 @@ public class DbWriter
         for (int i = 0; i < symbols.Count; i += BatchSize)
         {
             int end = Math.Min(i + BatchSize, symbols.Count);
+            var foldedNameCache = new Dictionary<string, string?>(StringComparer.Ordinal);
             // Only create a batch transaction when not already inside an outer transaction
             // 外部トランザクション内でない場合のみバッチトランザクションを作成
             using var transaction = !IsInTransaction() ? BeginTransaction() : null;
@@ -667,7 +668,7 @@ public class DbWriter
                 pIsMetadataTarget.Value = symbol.IsMetadataTarget.HasValue
                     ? (symbol.IsMetadataTarget.Value ? 1 : 0)
                     : (object)DBNull.Value;
-                pNameFolded.Value = (object?)NameFold.Fold(symbol.Name) ?? DBNull.Value;
+                pNameFolded.Value = FoldedNameDbValue(symbol.Name, foldedNameCache);
                 cmd.ExecuteNonQuery();
             }
 
@@ -774,6 +775,7 @@ public class DbWriter
         for (int i = 0; i < references.Count; i += BatchSize)
         {
             int end = Math.Min(i + BatchSize, references.Count);
+            var foldedNameCache = new Dictionary<string, string?>(StringComparer.Ordinal);
             // Always open a chunk-scoped transaction or SAVEPOINT so reference_lines and
             // symbol_references share one rollback boundary; without it a mid-chunk failure
             // under an outer transaction would orphan committed reference_lines (#1518).
@@ -838,8 +840,8 @@ public class DbWriter
                 pReferenceLineId.Value = referenceLineId;
                 pContainerKind.Value = (object?)reference.ContainerKind ?? DBNull.Value;
                 pContainerName.Value = (object?)reference.ContainerName ?? DBNull.Value;
-                pSymbolNameFolded.Value = (object?)NameFold.Fold(reference.SymbolName) ?? DBNull.Value;
-                pContainerNameFolded.Value = (object?)NameFold.Fold(reference.ContainerName) ?? DBNull.Value;
+                pSymbolNameFolded.Value = FoldedNameDbValue(reference.SymbolName, foldedNameCache);
+                pContainerNameFolded.Value = FoldedNameDbValue(reference.ContainerName, foldedNameCache);
                 cmd.ExecuteNonQuery();
             }
 
@@ -2633,6 +2635,20 @@ public class DbWriter
         }
 
         return rows.Count;
+    }
+
+    private static object FoldedNameDbValue(string? name, Dictionary<string, string?> cache)
+    {
+        if (name == null)
+            return DBNull.Value;
+
+        if (!cache.TryGetValue(name, out var folded))
+        {
+            folded = NameFold.Fold(name);
+            cache[name] = folded;
+        }
+
+        return (object?)folded ?? DBNull.Value;
     }
 
     private void SetReadyBit(int flag)
