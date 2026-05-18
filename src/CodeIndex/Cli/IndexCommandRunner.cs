@@ -213,9 +213,9 @@ public static class IndexCommandRunner
                 var changedFiles = new HashSet<string>(StringComparer.Ordinal);
                 var relevantIgnoreFileChanged = false;
                 var repoRoot = GitHelper.TryGetRepositoryRoot(options.ProjectPath) ?? Path.GetFullPath(options.ProjectPath!);
-                foreach (var commit in options.Commits)
+                try
                 {
-                    try
+                    foreach (var commit in options.Commits)
                     {
                         var changed = GitHelper.GetChangedFilesFromCommit(options.ProjectPath, commit);
                         var normalized = NormalizeCommitFileTargets(options.ProjectPath, repoRoot, changed, out var commitTouchedRelevantIgnoreFile);
@@ -223,7 +223,16 @@ public static class IndexCommandRunner
                         foreach (var path in normalized)
                             changedFiles.Add(path);
                     }
-                    catch { /* ignore git errors in dry-run */ }
+                }
+                catch (Exception ex)
+                {
+                    return WriteCommandError(
+                        options.Json,
+                        jsonOptions,
+                        $"failed to resolve changed files from git commits: {ex.Message}",
+                        CommandExitCodes.UsageError,
+                        "Check the commit IDs and rerun `cdidx index <projectPath> --commits <id> [id ...]`.",
+                        CommandErrorCodes.UsageError);
                 }
                 if (options.ChangedBetweenRefs.Count == 2)
                 {
