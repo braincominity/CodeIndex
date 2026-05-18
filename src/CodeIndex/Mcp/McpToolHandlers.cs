@@ -2283,6 +2283,7 @@ public partial class McpServer
             // untouched and surface staleness until the next clean refresh. Issues #1508 / #1512.
             // CLI full-scan と同じく成功時のみ HEAD を記録する。partial / 失敗は旧 HEAD を残す。
             writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, currentHeadCommit);
+            writer.SetMeta(DbContext.IndexedHeadCommitBranchMetaKey, GitHelper.TryGetHeadBranch(projectPath));
             // #1509: also persist the always-updated HEAD/branch/timestamp triple so
             // status / consumers can detect cross-session staleness via
             // `commits_ahead_of_indexed_head`. Same best-effort contract — git unavailability
