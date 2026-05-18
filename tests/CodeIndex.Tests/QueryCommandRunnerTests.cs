@@ -2323,6 +2323,30 @@ jobs:
         Assert.Contains("Hint: pass a path to a CodeIndex SQLite database", stderr);
     }
 
+    [Fact]
+    public void WithDb_InvalidSqliteFileSurfacesSqliteCategory_Issue2072()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2072_invalid_sqlite");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "not-a-codeindex.db");
+            File.WriteAllText(dbPath, "this is not a sqlite database");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains($"Error [{CommandErrorCodes.DbError}]: SQLite database error", stderr);
+            Assert.Contains("Hint: check `--db`, verify the index was written by a compatible cdidx version", stderr);
+            Assert.DoesNotContain("database error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("search-extra", "unexpected extra positional 1 argument for search")]
     [InlineData("excerpt-extra", "unexpected extra positional 1 argument for excerpt")]
