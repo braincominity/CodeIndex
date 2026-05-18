@@ -2173,6 +2173,56 @@ jobs:
         Assert.DoesNotContain("Unhandled exception", stderr);
     }
 
+    [Fact]
+    public void RunSearch_ExplicitMissingDbReturnsUsageErrorBeforeOpeningReader_Issue2073()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2073_missing_db");
+        try
+        {
+            var missingDb = Path.Combine(projectRoot, "missing-dir", "codeindex.db");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["QueryCommandRunner", "--db", missingDb],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("Error [E001_DB_NOT_FOUND]: --db", stderr);
+            Assert.Contains("does not point to an existing database file", stderr);
+            Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+            Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("search")}", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("--path")]
+    [InlineData("--exclude-path")]
+    public void RunSearch_InvalidPathGlobReturnsUsageErrorBeforeQuery_Issue2073(string optionName)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2073_invalid_glob");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["QueryCommandRunner", "--db", dbPath, optionName, "[*-z]"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains($"Error: {optionName} '[*-z]' is not a valid glob", stderr);
+            Assert.Contains("character classes are not supported", stderr);
+            Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+            Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("search")}", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     // Issue #1507: missing-value errors for CLI flags must append a per-flag `Hint:` line that
     // shows the expected value type or range (e.g. positive integer, glob pattern, language id),
     // so users do not need to consult `--help` for trivial mistakes. The hint is sourced from
@@ -30051,11 +30101,12 @@ jobs:
             ["--db", missingDbPath],
             _jsonOptions));
 
-        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-        Assert.Contains("Error [E001_DB_NOT_FOUND]: database not found at", stderr);
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("Error [E001_DB_NOT_FOUND]: --db", stderr);
         // Verify full (absolute) path is shown, not just the basename / フルパス表示を検証
         Assert.Contains(Path.GetFullPath(missingDbPath), stderr);
-        Assert.Contains("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.", stderr);
+        Assert.Contains("does not point to an existing database file", stderr);
+        Assert.Contains("Hint: fix the invalid or missing option value", stderr);
     }
 
     [Fact]

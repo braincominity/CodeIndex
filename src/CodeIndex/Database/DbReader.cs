@@ -965,9 +965,25 @@ public partial class DbReader
     {
         var hasWildcard = false;
         var builder = new StringBuilder(input.Length + 2);
+        var escaped = false;
 
         foreach (var ch in input)
         {
+            if (escaped)
+            {
+                if (IsEscapablePathGlobCharacter(ch))
+                {
+                    AppendLikeLiteral(builder, ch);
+                }
+                else
+                {
+                    builder.Append("\\\\");
+                    AppendLikeLiteral(builder, ch);
+                }
+                escaped = false;
+                continue;
+            }
+
             switch (ch)
             {
                 case '*':
@@ -979,7 +995,7 @@ public partial class DbReader
                     hasWildcard = true;
                     break;
                 case '\\':
-                    builder.Append("\\\\");
+                    escaped = true;
                     break;
                 case '%':
                     builder.Append("\\%");
@@ -992,10 +1008,34 @@ public partial class DbReader
                     break;
             }
         }
+        if (escaped)
+            builder.Append("\\\\");
 
         var pattern = builder.ToString();
         return hasWildcard ? pattern : $"%{pattern}%";
     }
+
+    private static void AppendLikeLiteral(StringBuilder builder, char ch)
+    {
+        switch (ch)
+        {
+            case '\\':
+                builder.Append("\\\\");
+                break;
+            case '%':
+                builder.Append("\\%");
+                break;
+            case '_':
+                builder.Append("\\_");
+                break;
+            default:
+                builder.Append(ch);
+                break;
+        }
+    }
+
+    private static bool IsEscapablePathGlobCharacter(char ch)
+        => ch is '*' or '?' or '[' or ']' or '\\' or '%' or '_';
 
     internal static bool IsSqlLanguage(string? lang)
         => string.Equals(NormalizeQueryLanguage(lang), "sql", StringComparison.OrdinalIgnoreCase);
