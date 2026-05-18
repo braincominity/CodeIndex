@@ -2238,12 +2238,13 @@ public partial class McpServer
             // would silently miss legacy rows on the folded-equality path. Codex #86 review.
             // MCP も incremental で skip される legacy 行が残るため、実検証を通してから stamp。
             var backfillReady = writer.AllFoldedColumnsBackfilled();
+            var foldedKeysCurrent = skipped == 0 || writer.AllFoldedColumnValuesMatchCurrentFold();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
             var foldVersionMatchesCurrent = priorFoldVersion == currentFoldVersion;
             var foldFingerprintMatchesCurrent = priorFoldFingerprint == currentFoldFingerprint;
             var canRestampExistingFoldTrust = foldVersionMatchesCurrent && foldFingerprintMatchesCurrent;
-            if (backfillReady && (skipped == 0 || canRestampExistingFoldTrust))
+            if (backfillReady && foldedKeysCurrent && (skipped == 0 || canRestampExistingFoldTrust))
             {
                 // MarkFoldReady re-verifies inside BEGIN IMMEDIATE; a concurrent NULL-folded
                 // insert during this restamp window leaves foldReadyAfter=false and degrades
