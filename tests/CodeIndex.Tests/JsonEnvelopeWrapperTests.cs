@@ -163,12 +163,52 @@ public class JsonEnvelopeWrapperTests
                 "1.0.0"));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            // Legacy default: each result on its own line, no envelope wrapper.
-            // 既存 default: 1 結果 1 行、envelope は付かない。
+            // Legacy default: results remain newline-delimited JSON, followed by a done sentinel.
+            // 既存 default: 結果は newline-delimited JSON のまま、最後に done sentinel が付く。
             Assert.DoesNotContain("\"metadata\"", stdout);
             Assert.DoesNotContain("\"results\"", stdout);
-            using var document = JsonDocument.Parse(stdout.Trim());
-            Assert.Equal("src/App.cs", document.RootElement.GetProperty("path").GetString());
+            var lines = stdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(2, lines.Length);
+            using var resultDocument = JsonDocument.Parse(lines[0]);
+            Assert.Equal("src/App.cs", resultDocument.RootElement.GetProperty("path").GetString());
+            using var doneDocument = JsonDocument.Parse(lines[1]);
+            Assert.True(doneDocument.RootElement.GetProperty("done").GetBoolean());
+            Assert.Equal(1, doneDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.False(doneDocument.RootElement.GetProperty("interrupted").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Search_WithoutEnvelope_ZeroResultsEmitsDoneSentinel()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("envelope_legacy_zero_done");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                "class App {}\n");
+
+            var (exitCode, stdout, _) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "DoesNotExist_xyz_123", "--db", dbPath, "--json"],
+                _jsonOptions,
+                "1.0.0"));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            var lines = stdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(2, lines.Length);
+            using var zeroDocument = JsonDocument.Parse(lines[0]);
+            Assert.Equal(0, zeroDocument.RootElement.GetProperty("count").GetInt32());
+            using var doneDocument = JsonDocument.Parse(lines[1]);
+            Assert.True(doneDocument.RootElement.GetProperty("done").GetBoolean());
+            Assert.Equal(0, doneDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.False(doneDocument.RootElement.GetProperty("interrupted").GetBoolean());
         }
         finally
         {

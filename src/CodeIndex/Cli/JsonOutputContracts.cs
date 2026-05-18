@@ -59,6 +59,11 @@ internal sealed record QueryPathErrorJsonResult(
     [property: JsonPropertyName("path")] string Path,
     [property: JsonPropertyName("error")] string Error);
 
+internal sealed record JsonStreamDoneResult(
+    [property: JsonPropertyName("done")] bool Done,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("interrupted")] bool Interrupted);
+
 internal sealed record LanguageEntryJsonResult(
     [property: JsonPropertyName("lang")] string Lang,
     [property: JsonPropertyName("extensions")] List<string> Extensions,
@@ -239,6 +244,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(IndexUpdateSummaryJsonResult))]
 [JsonSerializable(typeof(IndexWatchEventJsonResult))]
 [JsonSerializable(typeof(HookCommandJsonResult))]
+[JsonSerializable(typeof(JsonStreamDoneResult))]
 [JsonSerializable(typeof(LanguageEntryJsonResult))]
 [JsonSerializable(typeof(LanguagesJsonResult))]
 [JsonSerializable(typeof(List<CalleeResult>))]

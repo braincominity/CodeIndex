@@ -366,7 +366,10 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.Json)
+                {
                     Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, queryOptions: options).ToJsonString(jsonOptions));
+                    WriteJsonStreamDone(0, jsonOptions);
+                }
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine(BuildZeroResultLine("No results found", options));
@@ -382,6 +385,7 @@ public static class QueryCommandRunner
                     Console.WriteLine(JsonSerializer.Serialize(
                         SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus),
                         CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResult));
+                WriteJsonStreamDone(results.Count, jsonOptions);
             }
             else
             {
@@ -399,6 +403,11 @@ public static class QueryCommandRunner
             return CommandExitCodes.Success;
         });
     }
+
+    private static void WriteJsonStreamDone(int count, JsonSerializerOptions jsonOptions)
+        => Console.WriteLine(JsonSerializer.Serialize(
+            new JsonStreamDoneResult(Done: true, Count: count, Interrupted: false),
+            CliJsonSerializerContextFactory.Create(jsonOptions).JsonStreamDoneResult));
 
     public static int RunDefinition(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
