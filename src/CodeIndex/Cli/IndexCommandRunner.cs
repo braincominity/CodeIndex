@@ -1264,7 +1264,16 @@ public static class IndexCommandRunner
         CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
         try
         {
-            csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectRoot, targetPaths);
+            csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(
+                writer,
+                indexer,
+                projectRoot,
+                targetPaths,
+                cancellationToken: cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new IndexInterruptedException(updated + removed, targetPaths.Count);
         }
         finally
         {
@@ -1286,7 +1295,16 @@ public static class IndexCommandRunner
                     }
                 }
 
-                csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectRoot, targetPaths);
+                csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(
+                    writer,
+                    indexer,
+                    projectRoot,
+                    targetPaths,
+                    cancellationToken: cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw new IndexInterruptedException(updated + removed, targetPaths.Count);
             }
             finally
             {
@@ -2427,8 +2445,8 @@ public static class IndexCommandRunner
             WriteProjectRootOnce();
         ConsoleUi.StopSpinner(purgeCts);
         WriteJsonLiveness(purged > 0
-            ? $"purged {purged:N0} stale file(s); indexing..."
-            : "indexing...");
+            ? $"purged {purged:N0} stale file(s); preparing index writes..."
+            : "preparing index writes...");
         if (!options.Json && !options.Quiet)
         {
             if (purged > 0)
@@ -2572,15 +2590,35 @@ public static class IndexCommandRunner
             jsonHeartbeatTask = null;
         }
 
+        WriteJsonLiveness("preparing C# workspace symbols...");
+        string? currentCSharpWorkspaceFile = null;
+        var csharpWorkspaceHeartbeat = StartJsonPhaseHeartbeat(
+            "preparing C# workspace symbols",
+            () => currentCSharpWorkspaceFile);
+        CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
+        try
+        {
+            csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(
+                writer,
+                indexer,
+                projectRoot,
+                files,
+                path => currentCSharpWorkspaceFile = path,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new IndexInterruptedException(0, files.Count);
+        }
+        finally
+        {
+            currentCSharpWorkspaceFile = null;
+            StopJsonPhaseHeartbeat(csharpWorkspaceHeartbeat);
+        }
+
         EnsureIndexingActivityVisible();
         ReportJsonIndexProgressIfNeeded();
         StartJsonHeartbeatIfNeeded();
-        var csharpWorkspace = BuildCSharpStaticInterfaceWorkspaceSymbols(
-            writer,
-            indexer,
-            projectRoot,
-            files,
-            file => currentJsonIndexFile = file);
 
         try
         {
@@ -3244,12 +3282,14 @@ public static class IndexCommandRunner
         FileIndexer indexer,
         string projectRoot,
         IEnumerable<string> filePaths,
-        Action<string?>? reportCurrentFile = null)
+        Action<string?>? reportCurrentFile = null,
+        CancellationToken cancellationToken = default)
     {
         var pendingSymbols = new List<SymbolRecord>();
         var pendingPaths = new HashSet<string>(StringComparer.Ordinal);
         foreach (var filePath in filePaths)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var absolutePath = Path.IsPathRooted(filePath)
                 ? filePath
                 : Path.Combine(projectRoot, filePath.Replace('/', Path.DirectorySeparatorChar));
@@ -3269,6 +3309,9 @@ public static class IndexCommandRunner
                 reportCurrentFile?.Invoke(relativePath);
                 var (record, content, _, _) = indexer.BuildRecordWithRawBytes(absolutePath);
                 if (record.Lang != "csharp")
+                    continue;
+
+                if (!MayContainCSharpStaticInterfaceContract(content))
                     continue;
 
                 pendingSymbols.AddRange(SymbolExtractor.Extract(0, record.Lang, content, record.Path));
@@ -3291,6 +3334,12 @@ public static class IndexCommandRunner
             symbols,
             symbols.Any(IsCSharpStaticInterfaceContractSymbol) || hadPendingContracts);
     }
+
+    private static bool MayContainCSharpStaticInterfaceContract(string content)
+        => ContainsCSharpWord(content, "interface")
+           && ContainsCSharpWord(content, "static")
+           && (ContainsCSharpWord(content, "abstract")
+               || ContainsCSharpWord(content, "virtual"));
 
     private static bool IsCSharpStaticInterfaceContractSymbol(SymbolRecord symbol)
         => symbol.Kind is "function" or "property"
