@@ -1541,8 +1541,11 @@ public static class ConsoleUi
     /// Get console window width safely (some environments throw IOException).
     /// コンソール幅を安全に取得する（一部環境ではIOExceptionが発生する）。
     /// </summary>
-    private static int GetWindowWidth()
+    internal static int GetWindowWidth()
     {
+        if (TryGetColumnsEnvironmentWidth(out var columnsWidth))
+            return columnsWidth;
+
         try
         {
             var w = Console.WindowWidth;
@@ -1552,5 +1555,15 @@ public static class ConsoleUi
         {
             return 80;
         }
+    }
+
+    private static bool TryGetColumnsEnvironmentWidth(out int width)
+    {
+        var columns = Environment.GetEnvironmentVariable("COLUMNS");
+        if (int.TryParse(columns, NumberStyles.Integer, CultureInfo.InvariantCulture, out width) && width > 0)
+            return true;
+
+        width = 0;
+        return false;
     }
 }
