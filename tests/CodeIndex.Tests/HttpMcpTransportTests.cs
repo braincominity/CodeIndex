@@ -105,8 +105,7 @@ public class HttpMcpTransportTests : IDisposable
             Assert.Equal(HttpStatusCode.OK, okResponse.StatusCode);
         }
 
-        var snapshot = records.ToArray();
-        Assert.Equal(3, snapshot.Length);
+        var snapshot = await WaitForRequestLogRecordsAsync(records, 3);
 
         var missingPost = Assert.Single(snapshot, record =>
             record.AuthOutcome == "missing" &&
@@ -352,6 +351,23 @@ public class HttpMcpTransportTests : IDisposable
         _db.Dispose();
         try { File.Delete(_dbPath); } catch { /* best-effort cleanup */ }
         GC.SuppressFinalize(this);
+    }
+
+    private static async Task<HttpMcpTransport.HttpRequestLogRecord[]> WaitForRequestLogRecordsAsync(
+        ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord> records,
+        int expectedCount)
+    {
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            if (records.Count >= expectedCount)
+                return records.ToArray();
+
+            await Task.Delay(10);
+        }
+
+        var snapshot = records.ToArray();
+        Assert.Equal(expectedCount, snapshot.Length);
+        return snapshot;
     }
 
     private sealed class McpHttpHarness : IAsyncDisposable
