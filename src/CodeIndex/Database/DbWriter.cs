@@ -807,9 +807,31 @@ public class DbWriter
         using (var cmd = _conn.CreateCommand())
         {
             cmd.CommandText = @"
-                SELECT s.file_id, s.name, s.line, s.start_column, s.signature, s.kind
+                WITH module_files AS (
+                    SELECT DISTINCT f.id
+                    FROM files f
+                    JOIN symbols ms ON ms.file_id = f.id
+                    WHERE f.lang = 'typescript'
+                      AND (
+                        ms.visibility = 'export'
+                        OR ms.signature GLOB 'export *'
+                        OR ms.signature GLOB 'import *'
+                      )
+                )
+                SELECT s.file_id,
+                       s.name,
+                       s.line,
+                       s.start_column,
+                       s.signature,
+                       s.kind,
+                       CASE
+                         WHEN mf.id IS NULL THEN 'global:' || COALESCE(s.container_name, '')
+                         WHEN s.container_name = 'global' OR s.signature GLOB 'declare global *' THEN 'global:'
+                         ELSE 'module:' || f.path || ':' || COALESCE(s.container_name, '')
+                       END AS scope_key
                 FROM symbols s
                 JOIN files f ON f.id = s.file_id
+                LEFT JOIN module_files mf ON mf.id = f.id
                 WHERE f.lang = 'typescript'
                   AND s.name IS NOT NULL
                   AND s.name <> ''
@@ -823,7 +845,7 @@ public class DbWriter
                 ORDER BY s.name, s.file_id, s.line";
 
             using var reader = cmd.ExecuteReader();
-            var declarations = new List<(long FileId, string Name, int Line, int Column, string Signature, string Kind)>();
+            var declarations = new List<(long FileId, string Name, int Line, int Column, string Signature, string Kind, string ScopeKey)>();
             while (reader.Read())
             {
                 declarations.Add((
@@ -832,10 +854,11 @@ public class DbWriter
                     reader.IsDBNull(2) ? 1 : Math.Max(1, reader.GetInt32(2)),
                     reader.IsDBNull(3) ? 1 : Math.Max(1, reader.GetInt32(3) + 1),
                     reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
-                    reader.IsDBNull(5) ? string.Empty : reader.GetString(5)));
+                    reader.IsDBNull(5) ? string.Empty : reader.GetString(5),
+                    reader.GetString(6)));
             }
 
-            foreach (var group in declarations.GroupBy(static d => d.Name, StringComparer.Ordinal))
+            foreach (var group in declarations.GroupBy(static d => (d.Name, d.ScopeKey)))
             {
                 if (group.Count() < 2)
                     continue;
