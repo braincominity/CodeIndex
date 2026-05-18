@@ -570,7 +570,7 @@ cdidx search "handleRequest" --lang go                  # filter by language
 cdidx search "TODO" --limit 50                          # more results
 cdidx search "auth*"                                    # trailing * on one token opts that token into FTS5 prefix matching
 cdidx search "計算" --prefix                            # widen every token to a prefix phrase (CJK runs are one unicode61 token; opt in to reach `計算する`)
-cdidx search "auth*" --fts                              # raw FTS5 syntax when you need operators like NEAR/OR
+cdidx search "auth*" --fts                              # raw FTS5 syntax when you need operators like NEAR/OR; NEAR distance is capped at 100
 cdidx search "Run();" --exact-substring                 # case-sensitive exact substring, no FTS5
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# exact search/find canonicalizes escaped source identifiers
 cdidx search "--open-reports" --path README.md --count  # quoted literal that starts with --
@@ -2288,7 +2288,7 @@ cdidx search "handleRequest" --lang go                  # 言語でフィルタ
 cdidx search "TODO" --limit 50                          # 結果数を増やす
 cdidx search "auth*"                                    # 末尾の * はそのトークンだけを FTS5 prefix phrase にする shorthand
 cdidx search "計算" --prefix                            # クエリ全体を prefix phrase 化（CJK は unicode61 が連続コードポイントを 1 トークン扱いするため、`計算する` に届かせるには opt-in）
-cdidx search "auth*" --fts                              # 生のFTS5構文。NEAR / OR などの演算子が必要なときだけ使う
+cdidx search "auth*" --fts                              # 生のFTS5構文。NEAR / OR などの演算子が必要なときだけ使う。NEAR distance は 100 まで
 cdidx search "Run();" --exact-substring                 # 大文字小文字区別の完全部分一致、FTS5 なし
 cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# の exact 検索 / find は escaped source identifier を正規化する
 cdidx search "--open-reports" --path README.md --count  # `--` で始まる引用済みリテラル
