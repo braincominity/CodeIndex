@@ -20263,7 +20263,7 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "scala", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Main");
+        Assert.Contains(symbols, s => s.Kind == "object" && s.Name == "Main");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "one" && s.StartLine == 2 && s.EndLine == 2 && s.BodyStartLine == null && s.BodyEndLine == null);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.StartLine == 3 && s.EndLine == 5 && s.BodyStartLine == 3 && s.BodyEndLine == 5);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "three" && s.StartLine == 6 && s.EndLine == 6 && s.BodyStartLine == null && s.BodyEndLine == null);
@@ -20271,6 +20271,36 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UserID");
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Message");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Ping");
+    }
+
+    [Fact]
+    public void Extract_Scala_DetectsCompanionAndSealedObjects()
+    {
+        var content = """
+            package example
+
+            class Config(value: String) {}
+            object Config extends App {
+              def load(): Config = Config("default")
+            }
+
+            object PackageRegistry {
+              def register(): Unit = ()
+            }
+
+            sealed trait Status
+            case object Ready extends Status
+            sealed object Closed extends Status
+            """;
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config" && s.SubKind == "has_companion_object");
+        Assert.Contains(symbols, s => s.Kind == "object" && s.Name == "Config" && s.SubKind == "companion_object");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "load" && s.ContainerKind == "object" && s.ContainerName == "Config");
+        Assert.Contains(symbols, s => s.Kind == "object" && s.Name == "PackageRegistry");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Status");
+        Assert.Contains(symbols, s => s.Kind == "object" && s.Name == "Ready");
+        Assert.Contains(symbols, s => s.Kind == "object" && s.Name == "Closed");
     }
 
     [Fact]
