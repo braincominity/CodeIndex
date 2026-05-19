@@ -45,6 +45,7 @@ public class ConsoleUiTests
         Assert.Contains("--snippet-focus <mode>     search only: long-line focus mode (leftmost|quality|proximity, default: quality)", output);
         Assert.Contains("--max-line-width <n>       search/references/find/excerpt/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: 512)", output);
         Assert.Contains("cdidx find <query> --path <glob>", output);
+        Assert.Contains("--fts                      Use raw FTS5 query syntax for search (max 2000 chars, 64 boolean ops, 16 NEAR ops", output);
         Assert.Contains("--exact-substring          Search only: case-sensitive exact substring (no FTS5)", output);
         Assert.Contains("--exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match", output);
         Assert.Contains("--kind <kind>              definition/symbols/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind", output);
@@ -169,6 +170,28 @@ public class ConsoleUiTests
         var line = ConsoleUi.FormatProgressLine(2, 4, windowWidth: 39, useUnicodeGlyphs: true);
 
         Assert.Equal(" 50.0%  [2/4]", line);
+    }
+
+    [Fact]
+    public void GetWindowWidth_ColumnsEnvVarSet_UsesColumnsValue()
+    {
+        WithColumnsEnvironment("200", () =>
+        {
+            Assert.Equal(200, ConsoleUi.GetWindowWidth());
+        });
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("wide")]
+    public void GetWindowWidth_InvalidColumnsEnvVar_FallsBackToConsoleOrDefault(string? columns)
+    {
+        WithColumnsEnvironment(columns, () =>
+        {
+            Assert.True(ConsoleUi.GetWindowWidth() > 0);
+        });
     }
 
     [Fact]
@@ -865,6 +888,23 @@ public class ConsoleUiTests
                 Environment.SetEnvironmentVariable("LANG", originalLang);
                 Environment.SetEnvironmentVariable("LC_ALL", originalLcAll);
                 Environment.SetEnvironmentVariable("LC_CTYPE", originalLcCType);
+            }
+        }
+    }
+
+    private static void WithColumnsEnvironment(string? columns, Action action)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalColumns = Environment.GetEnvironmentVariable("COLUMNS");
+            try
+            {
+                Environment.SetEnvironmentVariable("COLUMNS", columns);
+                action();
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("COLUMNS", originalColumns);
             }
         }
     }
