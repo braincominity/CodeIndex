@@ -210,6 +210,7 @@ public class QueryCommandRunnerTests
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["Authenticate", "--db", dbPath, "--json", "--profile", "--slow-query-ms", "0"],
                 _jsonOptions));
+            var rawLines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             var lines = stdout
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Where(line =>
@@ -221,6 +222,10 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
+            using (var doneDocument = JsonDocument.Parse(rawLines[^1]))
+            {
+                Assert.True(IsJsonStreamDoneSentinel(doneDocument.RootElement));
+            }
             Assert.Equal(2, lines.Length);
 
             using var resultDocument = JsonDocument.Parse(lines[0]);
