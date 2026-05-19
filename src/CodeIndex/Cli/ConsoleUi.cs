@@ -919,7 +919,7 @@ public static class ConsoleUi
         sb.Append("    case \"$prev\" in\n");
         sb.Append("        --db|--path|--exclude-path|--output|-o) COMPREPLY=($(compgen -f -- \"$cur\")) ;;\n");
         sb.Append($"        --lang) COMPREPLY=($(compgen -W \"{langs}\" -- \"$cur\")) ;;\n");
-        sb.Append("        --kind) COMPREPLY=($(compgen -W \"function class struct interface enum property event delegate namespace import\" -- \"$cur\")) ;;\n");
+        sb.Append("        --kind) COMPREPLY=($(compgen -W \"function lambda class struct interface enum property event delegate namespace import\" -- \"$cur\")) ;;\n");
         sb.Append("        *)\n");
         for (var i = 0; i < EnumeratedCompletionCommands.Length; i++)
         {
@@ -1085,7 +1085,7 @@ public static class ConsoleUi
             "<id>" => "id",
             "<datetime>" => "datetime",
             "<lang>" => $"language:({langs})",
-            "<kind>" => "kind:(function class struct interface enum property event delegate namespace import)",
+            "<kind>" => "kind:(function lambda class struct interface enum property event delegate namespace import)",
             "<query>" => "query",
             "<name>" => "name",
             "<host:port>" => "address",

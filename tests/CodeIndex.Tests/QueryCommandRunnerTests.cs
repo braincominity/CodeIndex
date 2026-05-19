@@ -30374,6 +30374,33 @@ jobs:
     }
 
     [Fact]
+    public void RunSymbols_AcceptsKindLambda()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_kind_lambda");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "transform = lambda value: value + 1\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--kind", "lambda"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var symbol = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("lambda", symbol.GetProperty("kind").GetString());
+            Assert.Equal("transform", symbol.GetProperty("name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_PreservesCommonJsMultilineBraceBodyRanges()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_commonjs_multiline_body_ranges");
