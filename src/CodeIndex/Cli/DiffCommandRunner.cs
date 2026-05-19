@@ -143,16 +143,84 @@ public static class DiffCommandRunner
             ExecuteLong(connection, "SELECT COUNT(*) FROM symbols"),
             ExecuteLong(connection, "SELECT COUNT(*) FROM symbol_references"),
             ReadStrings(connection, "SELECT path FROM files ORDER BY path"),
-            ReadStrings(connection, "SELECT COALESCE((SELECT path FROM files WHERE files.id = symbols.file_id), '') || ':' || COALESCE(line, -1) || ' ' || COALESCE(kind, '') || ' ' || COALESCE(name, '') FROM symbols ORDER BY 1"),
-            ReadStrings(connection, "SELECT COALESCE((SELECT path FROM files WHERE files.id = symbol_references.file_id), '') || ':' || COALESCE(line, -1) || ':' || COALESCE(column_number, -1) || ' ' || COALESCE(reference_kind, '') || ' ' || COALESCE(symbol_name, '') || ' ' || COALESCE(context, '') FROM symbol_references ORDER BY 1"));
+            ReadRows(
+                connection,
+                """
+                SELECT
+                    COALESCE(files.path, ''),
+                    symbols.kind,
+                    symbols.sub_kind,
+                    symbols.name,
+                    symbols.line,
+                    symbols.start_line,
+                    symbols.start_column,
+                    symbols.end_line,
+                    symbols.body_start_line,
+                    symbols.body_end_line,
+                    symbols.signature,
+                    symbols.container_kind,
+                    symbols.container_name,
+                    symbols.container_qualified_name,
+                    symbols.family_key,
+                    symbols.visibility,
+                    symbols.return_type,
+                    symbols.is_metadata_target
+                FROM symbols
+                LEFT JOIN files ON files.id = symbols.file_id
+                ORDER BY
+                    COALESCE(files.path, ''),
+                    symbols.kind,
+                    symbols.sub_kind,
+                    symbols.name,
+                    symbols.line,
+                    symbols.start_line,
+                    symbols.start_column,
+                    symbols.end_line,
+                    symbols.body_start_line,
+                    symbols.body_end_line,
+                    symbols.signature,
+                    symbols.container_kind,
+                    symbols.container_name,
+                    symbols.container_qualified_name,
+                    symbols.family_key,
+                    symbols.visibility,
+                    symbols.return_type,
+                    symbols.is_metadata_target
+                """),
+            ReadRows(
+                connection,
+                """
+                SELECT
+                    COALESCE(files.path, ''),
+                    symbol_references.symbol_name,
+                    symbol_references.reference_kind,
+                    symbol_references.line,
+                    symbol_references.column_number,
+                    symbol_references.context,
+                    symbol_references.reference_line_id,
+                    symbol_references.container_kind,
+                    symbol_references.container_name
+                FROM symbol_references
+                LEFT JOIN files ON files.id = symbol_references.file_id
+                ORDER BY
+                    COALESCE(files.path, ''),
+                    symbol_references.symbol_name,
+                    symbol_references.reference_kind,
+                    symbol_references.line,
+                    symbol_references.column_number,
+                    symbol_references.context,
+                    symbol_references.reference_line_id,
+                    symbol_references.container_kind,
+                    symbol_references.container_name
+                """));
     }
 
     private static DiffJsonResult BuildDiff(DiffDbSnapshot left, DiffDbSnapshot right, DiffCommandOptions options)
     {
         var filesOnlyInLeft = TakeDiff(left.Files, right.Files, options.Limit);
         var filesOnlyInRight = TakeDiff(right.Files, left.Files, options.Limit);
-        var symbolsOnlyInLeft = options.Detailed ? TakeDiff(left.SymbolKeys, right.SymbolKeys, options.Limit) : [];
-        var symbolsOnlyInRight = options.Detailed ? TakeDiff(right.SymbolKeys, left.SymbolKeys, options.Limit) : [];
+        var symbolsOnlyInLeft = options.Detailed ? TakeDiff(left.SymbolRows, right.SymbolRows, options.Limit) : [];
+        var symbolsOnlyInRight = options.Detailed ? TakeDiff(right.SymbolRows, left.SymbolRows, options.Limit) : [];
 
         var summary = new DiffSummaryJsonResult(
             left.FileCount,
@@ -174,8 +242,8 @@ public static class DiffCommandRunner
             summary.SymbolCountDelta == 0 &&
             summary.ReferenceCountDelta == 0 &&
             left.Files.SetEquals(right.Files) &&
-            left.SymbolKeys.SetEquals(right.SymbolKeys) &&
-            left.ReferenceKeys.SetEquals(right.ReferenceKeys);
+            left.SymbolRows.SequenceEqual(right.SymbolRows, StringComparer.Ordinal) &&
+            left.ReferenceRows.SequenceEqual(right.ReferenceRows, StringComparer.Ordinal);
 
         return new DiffJsonResult(
             identical ? "identical" : "different",
@@ -208,6 +276,32 @@ public static class DiffCommandRunner
         return result;
     }
 
+    private static List<string> TakeDiff(List<string> source, List<string> other, int limit)
+    {
+        if (limit == 0)
+            return [];
+
+        var remaining = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var item in other)
+            remaining[item] = remaining.GetValueOrDefault(item) + 1;
+
+        var result = new List<string>(Math.Min(source.Count, limit));
+        foreach (var item in source)
+        {
+            if (remaining.TryGetValue(item, out var count) && count > 0)
+            {
+                remaining[item] = count - 1;
+                continue;
+            }
+
+            result.Add(item);
+            if (result.Count >= limit)
+                break;
+        }
+
+        return result;
+    }
+
     private static long ExecuteLong(SqliteConnection connection, string sql)
     {
         using var command = connection.CreateCommand();
@@ -225,6 +319,35 @@ public static class DiffCommandRunner
         while (reader.Read())
             values.Add(reader.IsDBNull(0) ? string.Empty : reader.GetString(0));
         return values;
+    }
+
+    private static List<string> ReadRows(SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        using var reader = command.ExecuteReader();
+        var values = new List<string>();
+        while (reader.Read())
+            values.Add(EncodeRow(reader));
+        return values;
+    }
+
+    private static string EncodeRow(SqliteDataReader reader)
+    {
+        var fields = new string[reader.FieldCount];
+        for (var i = 0; i < reader.FieldCount; i++)
+        {
+            if (reader.IsDBNull(i))
+            {
+                fields[i] = "-1:";
+                continue;
+            }
+
+            var value = Convert.ToString(reader.GetValue(i), System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+            fields[i] = value.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) + ":" + value;
+        }
+
+        return string.Join("|", fields);
     }
 
     private static void WriteJson(DiffJsonResult result, JsonSerializerOptions jsonOptions)
@@ -294,8 +417,8 @@ public static class DiffCommandRunner
         long SymbolCount,
         long ReferenceCount,
         HashSet<string> Files,
-        HashSet<string> SymbolKeys,
-        HashSet<string> ReferenceKeys);
+        List<string> SymbolRows,
+        List<string> ReferenceRows);
 }
 
 internal sealed class DiffCommandOptions

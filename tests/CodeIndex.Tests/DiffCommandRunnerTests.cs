@@ -122,6 +122,34 @@ public class DiffCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DetectsSameCountSignatureDriftWithoutDetailedMode_Issue1724()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_signature_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_signature_right");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            TestProjectHelper.InsertIndexedFile(leftDb, "src/Same.cs", "csharp", "public class Same { public string Convert(int value) => value.ToString(); }");
+            TestProjectHelper.InsertIndexedFile(rightDb, "src/Same.cs", "csharp", "public class Same { public string Convert(int value) => value.ToString(); }");
+            InsertSyntheticMethodSymbol(leftDb, "src/Same.cs", "Convert", "public string Convert(int value)");
+            InsertSyntheticMethodSymbol(rightDb, "src/Same.cs", "Convert", "public string Convert(long value)");
+
+            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--summary-only"]);
+
+            Assert.Equal(1, exitCode);
+            using var document = JsonDocument.Parse(output);
+            Assert.Equal("different", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(0, document.RootElement.GetProperty("summary").GetProperty("symbol_count_delta").GetInt64());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
     public void Run_ReturnsUnreadableExitCodeForMissingDatabase_Issue1724()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_diff_missing");
@@ -178,13 +206,78 @@ public class DiffCommandRunnerTests
 
     private static void SetUserVersion(string dbPath, int version)
     {
+        ExecuteNonQuery(dbPath, $"PRAGMA user_version = {version}");
+    }
+
+    private static void InsertSyntheticMethodSymbol(string dbPath, string path, string name, string signature)
+    {
+        ExecuteNonQuery(
+            dbPath,
+            """
+            INSERT INTO symbols (
+                file_id,
+                kind,
+                sub_kind,
+                name,
+                line,
+                start_line,
+                start_column,
+                end_line,
+                body_start_line,
+                body_end_line,
+                signature,
+                container_kind,
+                container_name,
+                container_qualified_name,
+                family_key,
+                visibility,
+                return_type,
+                is_metadata_target
+            )
+            VALUES (
+                (
+                SELECT id
+                FROM files
+                WHERE path = $path
+                LIMIT 1
+                ),
+                'method',
+                'method',
+                $name,
+                1,
+                1,
+                42,
+                1,
+                1,
+                1,
+                $signature,
+                'class',
+                'Same',
+                'Same',
+                'Same.Convert',
+                'public',
+                'string',
+                0
+            )
+            """,
+            command =>
+            {
+                command.Parameters.AddWithValue("$path", path);
+                command.Parameters.AddWithValue("$name", name);
+                command.Parameters.AddWithValue("$signature", signature);
+            });
+    }
+
+    private static void ExecuteNonQuery(string dbPath, string sql, Action<SqliteCommand>? configure = null)
+    {
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = dbPath,
         }.ConnectionString);
         connection.Open();
         using var command = connection.CreateCommand();
-        command.CommandText = $"PRAGMA user_version = {version}";
+        command.CommandText = sql;
+        configure?.Invoke(command);
         command.ExecuteNonQuery();
     }
 
