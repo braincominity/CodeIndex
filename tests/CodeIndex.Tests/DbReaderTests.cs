@@ -3557,7 +3557,7 @@ public class DbReaderTests : IDisposable
 
         Assert.True(signal.Relevant);
         Assert.False(signal.Ready);
-        Assert.Contains("csharp", signal.DegradedReason);
+        Assert.Contains("hotspot_family_support_not_indexed=csharp", signal.DegradedReason);
     }
 
     [Fact]

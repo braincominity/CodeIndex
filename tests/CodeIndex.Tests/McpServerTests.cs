@@ -4568,8 +4568,8 @@ public class McpServerTests : IDisposable
             var structured = response["result"]!["structuredContent"]!;
             Assert.False(structured["hotspot_family_ready"]!.GetValue<bool>());
             Assert.False(structured["hotspotFamilyReady"]!.GetValue<bool>());
-            Assert.Contains("csharp", structured["hotspot_family_degraded_reason"]!.GetValue<string>());
-            Assert.Contains("csharp", structured["hotspotFamilyDegradedReason"]!.GetValue<string>());
+            Assert.Contains("hotspot_family_support_not_indexed=csharp", structured["hotspot_family_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("hotspot_family_support_not_indexed=csharp", structured["hotspotFamilyDegradedReason"]!.GetValue<string>());
         }
         finally
         {
@@ -5881,7 +5881,7 @@ public class McpServerTests : IDisposable
             Assert.True(structured["degraded"]!.GetValue<bool>());
             Assert.False(structured["hotspot_family_ready"]!.GetValue<bool>());
             Assert.False(structured["hotspotFamilyReady"]!.GetValue<bool>());
-            Assert.Contains("csharp", structured["hotspot_family_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("hotspot_family_support_not_indexed=csharp", structured["hotspot_family_degraded_reason"]!.GetValue<string>());
             Assert.Contains("degraded", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
         }
         finally
@@ -5972,7 +5972,7 @@ public class McpServerTests : IDisposable
             Assert.False(structured["hotspot_family_ready"]!.GetValue<bool>());
             Assert.False(structured["hotspotFamilyReady"]!.GetValue<bool>());
             Assert.True(structured["degraded"]!.GetValue<bool>());
-            Assert.Contains("csharp", structured["hotspot_family_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("hotspot_family_disabled_at_index_time=csharp", structured["hotspot_family_degraded_reason"]!.GetValue<string>());
         }
         finally
         {

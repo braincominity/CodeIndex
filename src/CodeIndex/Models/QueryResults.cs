@@ -479,11 +479,13 @@ public class StatusResult
     /// <summary>
     /// True when authoritative cross-file hotspot-family grouping metadata is current for every
     /// marker-capable language currently indexed in this DB. False means `hotspots` can still
-    /// run, but duplicate-name families may be conservatively degraded until `cdidx index .`
-    /// restamps the hotspot-family metadata.
+    /// run, but duplicate-name families may be conservatively degraded. The degraded reason
+    /// distinguishes legacy DBs that predate hotspot-family support, stale metadata, and
+    /// indexes written while marker fingerprints were unavailable.
     /// 現在 index 済みの marker-capable 言語すべてで authoritative な hotspot-family metadata
     /// が最新なら true。false の間も `hotspots` は動くが、duplicate-name family は保守的
-    /// fallback に縮退しうるため、`cdidx index .` で metadata を restamp する必要がある。
+    /// fallback に縮退しうる。reason は legacy DB、古い metadata、marker fingerprint 未利用
+    /// index を区別する。
     /// </summary>
     [JsonPropertyName("hotspot_family_ready")]
     public bool HotspotFamilyReady { get; set; } = true;
