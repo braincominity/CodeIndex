@@ -630,7 +630,7 @@ public static class ConsoleUi
         Console.WriteLine("  --focus-line <line>        excerpt: line whose focused column should stay visible (requires --focus-column)");
         Console.WriteLine("  --focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)");
         Console.WriteLine("  --focus-length <n>         excerpt: width of the focused span (default: 1, requires --focus-column)");
-        Console.WriteLine("  --fts                      Use raw FTS5 query syntax for search (trailing * is a prefix shorthand in literal-safe mode)");
+        Console.WriteLine($"  --fts                      Use raw FTS5 query syntax for search (max {DbReader.MaxRawFtsQueryLength} chars, {DbReader.MaxRawFtsBooleanOperators} boolean ops, {DbReader.MaxRawFtsNearOperators} NEAR ops; trailing * is a prefix shorthand in literal-safe mode)");
         Console.WriteLine("  --exact                    Backward-compatible shorthand. Prefer --exact-substring for search, keep --exact for find, and prefer --exact-name for symbols/definition/references/callers/callees/inspect. Pass at most one of --exact, --exact-substring, --exact-name; combining two or more is rejected.");
         Console.WriteLine("  --exact-substring          Search only: case-sensitive exact substring (no FTS5)");
         Console.WriteLine("  --exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match (legacy/stale-fold DBs fall back to ASCII NOCASE; use `cdidx backfill-fold` or check `status --json` fold_ready)");
@@ -1541,8 +1541,11 @@ public static class ConsoleUi
     /// Get console window width safely (some environments throw IOException).
     /// コンソール幅を安全に取得する（一部環境ではIOExceptionが発生する）。
     /// </summary>
-    private static int GetWindowWidth()
+    internal static int GetWindowWidth()
     {
+        if (TryGetColumnsEnvironmentWidth(out var columnsWidth))
+            return columnsWidth;
+
         try
         {
             var w = Console.WindowWidth;
@@ -1552,5 +1555,15 @@ public static class ConsoleUi
         {
             return 80;
         }
+    }
+
+    private static bool TryGetColumnsEnvironmentWidth(out int width)
+    {
+        var columns = Environment.GetEnvironmentVariable("COLUMNS");
+        if (int.TryParse(columns, NumberStyles.Integer, CultureInfo.InvariantCulture, out width) && width > 0)
+            return true;
+
+        width = 0;
+        return false;
     }
 }
