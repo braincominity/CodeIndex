@@ -1276,6 +1276,12 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   `serverInfo.name`, `serverInfo.version` (read via
   `ConsoleUi.LoadVersion()` — the same `version.json` source), and the
   long `instructions` string that guides AI clients on tool selection.
+- The advertised capability surface includes `tools`, `resources`, and
+  `prompts`. `resources/list` pages indexed files as `cdidx://file/<path>`
+  URIs and `resources/read` reconstructs file text from indexed chunks.
+  `prompts/list` exposes the built-in `summarize_file`, `find_unused`, and
+  `impact_of_changing` prompts; `prompts/get` returns a user-message template
+  that directs clients toward the matching cdidx tools.
 - `protocolVersion` is **negotiated**, not hardcoded (#1554). The server
   maintains `McpServer.SupportedProtocolVersions` (newest first:
   `2025-03-26`, `2024-11-05`), reads the client's requested

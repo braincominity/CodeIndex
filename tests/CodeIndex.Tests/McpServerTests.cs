@@ -138,6 +138,64 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void Initialize_AdvertisesResourcesAndPrompts()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var capabilities = response["result"]!["capabilities"]!;
+        Assert.False(capabilities["tools"]!["listChanged"]!.GetValue<bool>());
+        Assert.False(capabilities["resources"]!["subscribe"]!.GetValue<bool>());
+        Assert.False(capabilities["resources"]!["listChanged"]!.GetValue<bool>());
+        Assert.False(capabilities["prompts"]!["listChanged"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ResourcesList_ReturnsIndexedFilesAsResources()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var resource = response["result"]!["resources"]!.AsArray()
+            .Single(r => r!["name"]!.GetValue<string>() == "src/app.cs")!;
+        Assert.Equal("cdidx://file/src/app.cs", resource["uri"]!.GetValue<string>());
+        Assert.Equal("text/x-csharp", resource["mimeType"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ResourcesRead_ReturnsIndexedFileContent()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"cdidx://file/src/app.cs"}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var content = response["result"]!["contents"]!.AsArray().Single()!;
+        Assert.Equal("cdidx://file/src/app.cs", content["uri"]!.GetValue<string>());
+        Assert.Equal("text/x-csharp", content["mimeType"]!.GetValue<string>());
+        Assert.Contains("public class App", content["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void PromptsListAndGet_ReturnPromptMessages()
+    {
+        var list = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"prompts/list","params":{}}""")!;
+        var listResponse = _server.HandleMessage(list)!;
+
+        var names = listResponse["result"]!["prompts"]!.AsArray()
+            .Select(p => p!["name"]!.GetValue<string>())
+            .ToArray();
+        Assert.Contains("summarize_file", names);
+        Assert.Contains("find_unused", names);
+        Assert.Contains("impact_of_changing", names);
+
+        var get = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"prompts/get","params":{"name":"impact_of_changing","arguments":{"symbol":"Run"}}}""")!;
+        var getResponse = _server.HandleMessage(get)!;
+        var message = getResponse["result"]!["messages"]!.AsArray().Single()!;
+        Assert.Equal("user", message["role"]!.GetValue<string>());
+        Assert.Contains("impact_analysis", message["content"]!["text"]!.GetValue<string>());
+        Assert.Contains("Run", message["content"]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void Initialize_RequestedCurrentProtocolVersion_EchoesBack()
     {
         // Issue #1554: when the client pins the current preferred version, the server
