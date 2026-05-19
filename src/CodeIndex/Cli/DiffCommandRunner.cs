@@ -147,6 +147,45 @@ public static class DiffCommandRunner
                 connection,
                 """
                 SELECT
+                    path,
+                    lang,
+                    size,
+                    lines,
+                    checksum,
+                    modified,
+                    indexed_at
+                FROM files
+                ORDER BY
+                    path,
+                    lang,
+                    size,
+                    lines,
+                    checksum,
+                    modified,
+                    indexed_at
+                """),
+            ReadRows(
+                connection,
+                """
+                SELECT
+                    COALESCE(files.path, ''),
+                    chunks.chunk_index,
+                    chunks.start_line,
+                    chunks.end_line,
+                    chunks.content
+                FROM chunks
+                LEFT JOIN files ON files.id = chunks.file_id
+                ORDER BY
+                    COALESCE(files.path, ''),
+                    chunks.chunk_index,
+                    chunks.start_line,
+                    chunks.end_line,
+                    chunks.content
+                """),
+            ReadRows(
+                connection,
+                """
+                SELECT
                     COALESCE(files.path, ''),
                     symbols.kind,
                     symbols.sub_kind,
@@ -242,6 +281,8 @@ public static class DiffCommandRunner
             summary.SymbolCountDelta == 0 &&
             summary.ReferenceCountDelta == 0 &&
             left.Files.SetEquals(right.Files) &&
+            left.FileRows.SequenceEqual(right.FileRows, StringComparer.Ordinal) &&
+            left.ChunkRows.SequenceEqual(right.ChunkRows, StringComparer.Ordinal) &&
             left.SymbolRows.SequenceEqual(right.SymbolRows, StringComparer.Ordinal) &&
             left.ReferenceRows.SequenceEqual(right.ReferenceRows, StringComparer.Ordinal);
 
@@ -417,6 +458,8 @@ public static class DiffCommandRunner
         long SymbolCount,
         long ReferenceCount,
         HashSet<string> Files,
+        List<string> FileRows,
+        List<string> ChunkRows,
         List<string> SymbolRows,
         List<string> ReferenceRows);
 }

@@ -150,6 +150,35 @@ public class DiffCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DetectsSameCountChunkDriftWithoutDetailedMode_Issue1724()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_chunk_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_chunk_right");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            TestProjectHelper.InsertIndexedFile(leftDb, "src/Same.cs", "csharp", "public class Same { public void Run() { } }");
+            TestProjectHelper.InsertIndexedFile(rightDb, "src/Same.cs", "csharp", "public class Same { public void Run() { } }");
+            UpdateFirstChunkContent(rightDb, "public class Same { public void Drifted() { } }");
+
+            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--summary-only"]);
+
+            Assert.Equal(1, exitCode);
+            using var document = JsonDocument.Parse(output);
+            Assert.Equal("different", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(0, document.RootElement.GetProperty("summary").GetProperty("file_count_delta").GetInt64());
+            Assert.Equal(0, document.RootElement.GetProperty("summary").GetProperty("symbol_count_delta").GetInt64());
+            Assert.Equal(0, document.RootElement.GetProperty("summary").GetProperty("reference_count_delta").GetInt64());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
     public void Run_ReturnsUnreadableExitCodeForMissingDatabase_Issue1724()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_diff_missing");
@@ -266,6 +295,23 @@ public class DiffCommandRunnerTests
                 command.Parameters.AddWithValue("$name", name);
                 command.Parameters.AddWithValue("$signature", signature);
             });
+    }
+
+    private static void UpdateFirstChunkContent(string dbPath, string content)
+    {
+        ExecuteNonQuery(
+            dbPath,
+            """
+            UPDATE chunks
+            SET content = $content
+            WHERE id = (
+                SELECT id
+                FROM chunks
+                ORDER BY id
+                LIMIT 1
+            )
+            """,
+            command => command.Parameters.AddWithValue("$content", content));
     }
 
     private static void ExecuteNonQuery(string dbPath, string sql, Action<SqliteCommand>? configure = null)
