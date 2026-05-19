@@ -143,7 +143,8 @@ public static class DiffCommandRunner
             ExecuteLong(connection, "SELECT COUNT(*) FROM symbols"),
             ExecuteLong(connection, "SELECT COUNT(*) FROM symbol_references"),
             ReadStrings(connection, "SELECT path FROM files ORDER BY path"),
-            ReadStrings(connection, "SELECT COALESCE((SELECT path FROM files WHERE files.id = symbols.file_id), '') || ':' || COALESCE(line, -1) || ' ' || COALESCE(kind, '') || ' ' || COALESCE(name, '') FROM symbols ORDER BY 1"));
+            ReadStrings(connection, "SELECT COALESCE((SELECT path FROM files WHERE files.id = symbols.file_id), '') || ':' || COALESCE(line, -1) || ' ' || COALESCE(kind, '') || ' ' || COALESCE(name, '') FROM symbols ORDER BY 1"),
+            ReadStrings(connection, "SELECT COALESCE((SELECT path FROM files WHERE files.id = symbol_references.file_id), '') || ':' || COALESCE(line, -1) || ':' || COALESCE(column_number, -1) || ' ' || COALESCE(reference_kind, '') || ' ' || COALESCE(symbol_name, '') || ' ' || COALESCE(context, '') FROM symbol_references ORDER BY 1"));
     }
 
     private static DiffJsonResult BuildDiff(DiffDbSnapshot left, DiffDbSnapshot right, DiffCommandOptions options)
@@ -173,7 +174,8 @@ public static class DiffCommandRunner
             summary.SymbolCountDelta == 0 &&
             summary.ReferenceCountDelta == 0 &&
             left.Files.SetEquals(right.Files) &&
-            (!options.Detailed || left.SymbolKeys.SetEquals(right.SymbolKeys));
+            left.SymbolKeys.SetEquals(right.SymbolKeys) &&
+            left.ReferenceKeys.SetEquals(right.ReferenceKeys);
 
         return new DiffJsonResult(
             identical ? "identical" : "different",
@@ -292,7 +294,8 @@ public static class DiffCommandRunner
         long SymbolCount,
         long ReferenceCount,
         HashSet<string> Files,
-        HashSet<string> SymbolKeys);
+        HashSet<string> SymbolKeys,
+        HashSet<string> ReferenceKeys);
 }
 
 internal sealed class DiffCommandOptions
