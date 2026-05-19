@@ -114,6 +114,25 @@ public class CliFlagSchemaTests
     }
 
     [Fact]
+    public void VisibilityFilters_AreScopedToSymbolVisibilityCommands()
+    {
+        var visibilityCommands = new[] { "definition", "symbols", "unused", "hotspots" };
+        foreach (var command in visibilityCommands)
+        {
+            Assert.Contains("--visibility", CliFlagSchema.GetAcceptedFlagNamesForCommand(command));
+            Assert.Contains("--exclude-visibility", CliFlagSchema.GetAcceptedFlagNamesForCommand(command));
+            Assert.Contains(CliFlagSchema.GetCompletionFlagsForCommand(command), f => f.Name == "--visibility");
+            Assert.Contains(CliFlagSchema.GetCompletionFlagsForCommand(command), f => f.Name == "--exclude-visibility");
+        }
+
+        foreach (var command in CliFlagSchema.AllCommands.Except(visibilityCommands))
+        {
+            Assert.DoesNotContain("--visibility", CliFlagSchema.GetAcceptedFlagNamesForCommand(command));
+            Assert.DoesNotContain("--exclude-visibility", CliFlagSchema.GetAcceptedFlagNamesForCommand(command));
+        }
+    }
+
+    [Fact]
     public void GetParserFlagsPartitionedByValueBearing_MatchesFlagShape()
     {
         var (withValues, flagOnly) = CliFlagSchema.GetParserFlagsPartitionedByValueBearing("find");

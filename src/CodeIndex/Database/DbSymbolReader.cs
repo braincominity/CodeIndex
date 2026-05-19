@@ -71,6 +71,56 @@ public partial class DbReader
     private const int UnusedPublicCandidateBudget = 2048;
     private const string SymbolLanguageFileIdFilter = " AND s.file_id IN (SELECT id FROM files WHERE lang = @lang)";
 
+    private void AppendVisibilityFilters(ref string sql, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
+    {
+        if (visibilityFilters is { Count: > 0 })
+            sql += $" AND lower({GetSymbolColumnSql("visibility", "''")}) IN ({string.Join(",", ExpandVisibilityFilterValues(visibilityFilters).Select((_, i) => $"@visibility{i}"))})";
+        if (excludeVisibilityFilters is { Count: > 0 })
+            sql += $" AND lower({GetSymbolColumnSql("visibility", "''")}) NOT IN ({string.Join(",", ExpandVisibilityFilterValues(excludeVisibilityFilters).Select((_, i) => $"@excludeVisibility{i}"))})";
+    }
+
+    private static void AddVisibilityFilterParameters(SqliteCommand cmd, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
+    {
+        if (visibilityFilters is { Count: > 0 })
+        {
+            var expanded = ExpandVisibilityFilterValues(visibilityFilters);
+            for (int i = 0; i < expanded.Count; i++)
+                cmd.Parameters.AddWithValue($"@visibility{i}", expanded[i]);
+        }
+
+        if (excludeVisibilityFilters is { Count: > 0 })
+        {
+            var expanded = ExpandVisibilityFilterValues(excludeVisibilityFilters);
+            for (int i = 0; i < expanded.Count; i++)
+                cmd.Parameters.AddWithValue($"@excludeVisibility{i}", expanded[i]);
+        }
+    }
+
+    private static bool HasVisibilityFilters(IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
+        => visibilityFilters is { Count: > 0 } || excludeVisibilityFilters is { Count: > 0 };
+
+    private static List<string> ExpandVisibilityFilterValues(IReadOnlyList<string> filters)
+    {
+        var expanded = new List<string>();
+        foreach (var filter in filters)
+        {
+            string[] aliases = filter switch
+            {
+                "public" => ["public", "pub", "open", "export"],
+                "private" => ["private", "fileprivate"],
+                _ => [filter],
+            };
+
+            foreach (var alias in aliases)
+            {
+                if (!expanded.Contains(alias, StringComparer.Ordinal))
+                    expanded.Add(alias);
+            }
+        }
+
+        return expanded;
+    }
+
     private static string BuildSameFilePrivateUseExclusionSql(string symbolAlias, string fileAlias, string visibilitySql, string startLineSql, string endLineSql)
     {
         return $@"
@@ -140,19 +190,19 @@ public partial class DbReader
     /// Search symbols by name pattern, optionally filtered by kind and language.
     /// シンボルを名前パターンで検索（種別・言語でフィルタ可能）。
     /// </summary>
-    public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
+    public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
         var normalizedQuery = NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact);
-        return SearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
+        return SearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
     }
 
-    public int CountSearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
+    public int CountSearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
         var normalizedQuery = NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact);
-        return CountSearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
+        return CountSearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
     }
 
-    public bool AnySearchSymbols(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
+    public bool AnySearchSymbols(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
         var validQueries = queries?.Select(query => NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (validQueries == null || validQueries.Count == 0)
@@ -167,11 +217,14 @@ public partial class DbReader
         return false;
     }
 
-    public int CountSearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
+    public int CountSearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
+        if (HasVisibilityFilters(visibilityFilters, excludeVisibilityFilters))
+            return SearchSymbols(queries, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters).Count;
+
         var validQueries = queries?.Select(query => NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (validQueries != null && validQueries.Count > 1)
-            return SearchSymbols(validQueries, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact).Count;
+            return SearchSymbols(validQueries, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters).Count;
 
         using var cmd = _conn.CreateCommand();
 
@@ -241,19 +294,25 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             cmd.Parameters.AddWithValue("@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        cmd.Parameters.AddWithValue("@limit", limit);
+        cmd.Parameters.AddWithValue("@limit", HasVisibilityFilters(visibilityFilters, excludeVisibilityFilters) ? int.MaxValue : limit);
 
         var raw = cmd.ExecuteScalar();
         return raw is long l ? (int)l : Convert.ToInt32(raw);
     }
 
-    public QueryCountResult CountSearchSymbolsTotal(string? query = null, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
+    public QueryCountResult CountSearchSymbolsTotal(string? query = null, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
-        return CountSearchSymbolsTotal(query == null ? null : new[] { NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact) ?? query ?? string.Empty }, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
+        return CountSearchSymbolsTotal(query == null ? null : new[] { NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact) ?? query ?? string.Empty }, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
     }
 
-    public QueryCountResult CountSearchSymbolsTotal(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
+    public QueryCountResult CountSearchSymbolsTotal(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
+        if (HasVisibilityFilters(visibilityFilters, excludeVisibilityFilters))
+        {
+            var results = SearchSymbols(queries, int.MaxValue, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
+            return new QueryCountResult(results.Count, results.Select(result => result.Path).Distinct(StringComparer.Ordinal).Count());
+        }
+
         lang = DbReader.NormalizeQueryLanguage(lang);
         using var cmd = _conn.CreateCommand();
 
@@ -351,7 +410,7 @@ public partial class DbReader
     /// 複数名前パターン（OR結合）でシンボルを検索。空/null なら他フィルタに一致する全シンボルを返す。
     /// <paramref name="exact"/> が true の場合、部分一致ではなく大文字小文字を無視した完全一致になる。
     /// </summary>
-    public List<SymbolResult> SearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
+    public List<SymbolResult> SearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
         lang = DbReader.NormalizeQueryLanguage(lang);
         // Multi-name queries: run one search per name to guarantee per-name candidate coverage
@@ -365,7 +424,7 @@ public partial class DbReader
         {
             var perName = new List<List<SymbolResult>>(validQueries.Count);
             foreach (var q in validQueries)
-                perName.Add(SearchSymbols(new[] { q! }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact));
+                perName.Add(SearchSymbols(new[] { q! }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters));
 
             var seen = new HashSet<(string Path, int Line, string Name, string Kind)>();
             var merged = new List<SymbolResult>();
@@ -451,6 +510,7 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
         sql += $" ORDER BY CASE " +
             "WHEN @preferLiteralExactMatch = 1 AND s.name = @rawQuery THEN 0 " +
             "WHEN @preferLiteralNormalizedSqlMatch = 1 AND f.lang = 'sql' AND sql_segment_count(s.name) = @rawQuerySegmentCount AND sql_normalize_name(s.name) = @rawQueryNormalized THEN 1 " +
@@ -517,6 +577,7 @@ public partial class DbReader
         if (since != null && _fileColumns.Contains("modified"))
             cmd.Parameters.AddWithValue("@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
         cmd.Parameters.AddWithValue("@limit", limit);
 
         var results = new List<SymbolResult>();
@@ -549,10 +610,10 @@ public partial class DbReader
     /// Resolve symbol definitions with reconstructed excerpts.
     /// シンボル定義を抜粋付きで解決する。
     /// </summary>
-    public List<DefinitionResult> GetDefinitions(string query, int limit = 20, string? kind = null, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
+    public List<DefinitionResult> GetDefinitions(string query, int limit = 20, string? kind = null, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
         lang = DbReader.NormalizeQueryLanguage(lang);
-        var symbols = SearchSymbols(query, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
+        var symbols = SearchSymbols(query, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
         var results = new List<DefinitionResult>();
 
         foreach (var symbol in symbols)
@@ -593,8 +654,14 @@ public partial class DbReader
         return results;
     }
 
-    public QueryCountResult CountDefinitionsTotal(string query, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
+    public QueryCountResult CountDefinitionsTotal(string query, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
+        if (HasVisibilityFilters(visibilityFilters, excludeVisibilityFilters))
+        {
+            var results = GetDefinitions(query, int.MaxValue, kind, lang, includeBody: false, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
+            return new QueryCountResult(results.Count, results.Select(result => result.Path).Distinct(StringComparer.Ordinal).Count());
+        }
+
         var normalizedQuery = NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact);
         using var cmd = _conn.CreateCommand();
 
@@ -1637,7 +1704,7 @@ public partial class DbReader
     /// 複数の logical target が同名を共有する場合は bare-name 参照で真の対象を特定できないため
     /// 保守的な in-target file 件数へフォールバックし、1 つの logical target family に収まる行は集約する。
     /// </summary>
-    public List<SymbolHotspotResult> GetSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    public List<SymbolHotspotResult> GetSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
         if (!_hasReferencesTable) return [];
         var containerNameSql = GetSymbolColumnSql("container_name");
@@ -1714,6 +1781,7 @@ public partial class DbReader
             sql += $" AND f.lang IN ({string.Join(",", graphLangs.Select((_, i) => $"@gl{i}"))})";
         if (kind != null)
             sql += " AND s.kind = @kind";
+        AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
 
         sql += @"
             ),
@@ -1978,6 +2046,7 @@ public partial class DbReader
         }
         if (kind != null) cmd.Parameters.AddWithValue("@kind", kind);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
         for (int i = 0; i < hotspotFamilyLangs.Count; i++)
             cmd.Parameters.AddWithValue($"@hotspotFamilyLang{i}", hotspotFamilyLangs[i]);
 
@@ -2010,7 +2079,7 @@ public partial class DbReader
     /// フィルタ済みの全 definition site を見た上で、(name, kind) 単位に hotspot を集約して返す。
     /// 代表 site は決定的な順序で選ぶ。
     /// </summary>
-    public List<GroupedHotspotResult> GetGroupedSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    public List<GroupedHotspotResult> GetGroupedSymbolHotspots(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
         if (!_hasReferencesTable) return [];
 
@@ -2075,6 +2144,7 @@ public partial class DbReader
             sql += $" AND f.lang IN ({string.Join(",", graphLangs.Select((_, i) => $"@gl{i}"))})";
         if (kind != null)
             sql += " AND s.kind = @kind";
+        AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
 
         sql += @"
             ),
@@ -2299,6 +2369,7 @@ public partial class DbReader
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
         for (int i = 0; i < hotspotFamilyLangs.Count; i++)
             cmd.Parameters.AddWithValue($"@hotspotFamilyLang{i}", hotspotFamilyLangs[i]);
 
@@ -2371,7 +2442,7 @@ public partial class DbReader
                 )";
     }
 
-    public List<UnusedSymbolResult> GetUnusedSymbols(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    public List<UnusedSymbolResult> GetUnusedSymbols(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
         // Without symbol_references (legacy read-only DB), every symbol would appear unused,
         // which is a meaningless signal. Return empty rather than drowning the caller in noise.
@@ -2385,9 +2456,9 @@ public partial class DbReader
         // グラフ対応言語に制限して偽陽性を防ぐ
         // （未対応言語は参照がインデックスされないため全シンボルが未使用に見える）
         var targetCount = Math.Max(limit, 1);
-        var privateLike = FetchUnusedCandidates(targetCount, 0, 0, kind, lang, pathPatterns, excludePathPatterns, excludeTests);
-        var maybeNonPublic = FetchUnusedCandidates(targetCount, 1, 0, kind, lang, pathPatterns, excludePathPatterns, excludeTests);
-        var reflectionOrConfig = FetchUnusedCandidates(targetCount, 3, 0, kind, lang, pathPatterns, excludePathPatterns, excludeTests);
+        var privateLike = FetchUnusedCandidates(targetCount, 0, 0, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
+        var maybeNonPublic = FetchUnusedCandidates(targetCount, 1, 0, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
+        var reflectionOrConfig = FetchUnusedCandidates(targetCount, 3, 0, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
 
         var publicOrExported = new List<UnusedSymbolResult>();
         var publicBucketOffset = 0;
@@ -2399,7 +2470,7 @@ public partial class DbReader
         while ((publicOrExported.Count < targetCount || reflectionOrConfig.Count < targetCount)
             && publicCandidatesFetched < publicFetchBudget)
         {
-            var batch = FetchUnusedCandidates(publicBatchSize, 2, publicBucketOffset, kind, lang, pathPatterns, excludePathPatterns, excludeTests);
+            var batch = FetchUnusedCandidates(publicBatchSize, 2, publicBucketOffset, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
             if (batch.Count == 0)
                 break;
 
@@ -2426,7 +2497,7 @@ public partial class DbReader
     }
 
     private List<UnusedSymbolResult> FetchUnusedCandidates(int fetchLimit, int provisionalBucketOrder, int offset, string? kind, string? lang,
-        IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+        IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
         var visibilitySql = $"lower({GetSymbolColumnSql("visibility", "''")})";
@@ -2515,6 +2586,7 @@ public partial class DbReader
             sql += " AND s.kind = @kind";
 
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
         sql += @"
             )
             SELECT path, lang, kind, name, line, start_line, end_line, signature, visibility,
@@ -2541,6 +2613,7 @@ public partial class DbReader
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
 
         var results = new List<UnusedSymbolResult>();
         using var reader = cmd.ExecuteTrackedReader();
@@ -2612,7 +2685,7 @@ public partial class DbReader
         return limited;
     }
 
-    public QueryCountResult CountUnusedSymbols(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    public QueryCountResult CountUnusedSymbols(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
@@ -2669,6 +2742,7 @@ public partial class DbReader
             sql += " AND s.kind = @kind";
 
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
         cmd.CommandText = sql;
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
@@ -2681,6 +2755,7 @@ public partial class DbReader
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
 
         using var reader = cmd.ExecuteTrackedReader();
         if (!reader.TrackedRead())
