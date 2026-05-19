@@ -31,19 +31,21 @@ public static class DiffCommandRunner
 
         try
         {
+            var leftHeader = ReadHeader(options.LeftDb!);
+            var rightHeader = ReadHeader(options.RightDb!);
+            if (leftHeader.SchemaVersion != rightHeader.SchemaVersion)
+            {
+                var schemaMismatch = BuildSchemaMismatchDiff(leftHeader, rightHeader, options);
+                WriteResult(schemaMismatch, options, jsonOptions);
+                return SchemaMismatchExitCode;
+            }
+
             var left = ReadSnapshot(options.LeftDb!);
             var right = ReadSnapshot(options.RightDb!);
             var result = BuildDiff(left, right, options);
 
-            if (options.SummaryOnly)
-                WriteSummaryJson(result, jsonOptions);
-            else if (options.Json)
-                WriteJson(result, jsonOptions);
-            else
-                WriteText(result, options);
+            WriteResult(result, options, jsonOptions);
 
-            if (!result.Summary.SchemaVersionsEqual)
-                return SchemaMismatchExitCode;
             return result.Identical ? CommandExitCodes.Success : DriftExitCode;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException or InvalidOperationException)
@@ -344,6 +346,36 @@ public static class DiffCommandRunner
             options.Detailed);
     }
 
+    private static DiffJsonResult BuildSchemaMismatchDiff(DiffDbHeader left, DiffDbHeader right, DiffCommandOptions options)
+    {
+        var summary = new DiffSummaryJsonResult(
+            left.FileCount,
+            right.FileCount,
+            right.FileCount - left.FileCount,
+            left.SymbolCount,
+            right.SymbolCount,
+            right.SymbolCount - left.SymbolCount,
+            left.ReferenceCount,
+            right.ReferenceCount,
+            right.ReferenceCount - left.ReferenceCount,
+            left.SchemaVersion,
+            right.SchemaVersion,
+            false);
+
+        return new DiffJsonResult(
+            "schema_mismatch",
+            false,
+            left.Path,
+            right.Path,
+            summary,
+            [],
+            [],
+            options.Detailed ? [] : null,
+            options.Detailed ? [] : null,
+            options.Limit,
+            options.Detailed);
+    }
+
     private static List<string> TakeDiff(HashSet<string> source, HashSet<string> other, int limit)
     {
         if (limit == 0)
@@ -393,6 +425,46 @@ public static class DiffCommandRunner
         command.CommandText = sql;
         var value = command.ExecuteScalar();
         return Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static DiffDbHeader ReadHeader(string dbPath)
+    {
+        var isUri = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
+        if (!isUri && !File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
+            throw new IOException($"database not found: {dbPath}");
+
+        var connectionString = isUri
+            ? $"Data Source={dbPath}"
+            : new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = SqliteOpenMode.ReadOnly,
+            }.ConnectionString;
+
+        using var connection = new SqliteConnection(connectionString);
+        connection.Open();
+
+        return new DiffDbHeader(
+            Path.GetFullPath(isUri ? dbPath : dbPath),
+            ExecuteLong(connection, "PRAGMA user_version"),
+            ExecuteCountIfTableExists(connection, "files"),
+            ExecuteCountIfTableExists(connection, "symbols"),
+            ExecuteCountIfTableExists(connection, "symbol_references"));
+    }
+
+    private static long ExecuteCountIfTableExists(SqliteConnection connection, string table)
+    {
+        using (var exists = connection.CreateCommand())
+        {
+            exists.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $table";
+            exists.Parameters.AddWithValue("$table", table);
+            if (exists.ExecuteScalar() is null)
+                return 0;
+        }
+
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT COUNT(*) FROM {table}";
+        return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static HashSet<string> ReadStrings(SqliteConnection connection, string sql)
@@ -447,6 +519,16 @@ public static class DiffCommandRunner
         Console.WriteLine(JsonSerializer.Serialize(
             new DiffSummaryOnlyJsonResult(result.Status, result.Identical, result.LeftDb, result.RightDb, result.Summary),
             CliJsonSerializerContextFactory.Create(jsonOptions).DiffSummaryOnlyJsonResult));
+    }
+
+    private static void WriteResult(DiffJsonResult result, DiffCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        if (options.SummaryOnly)
+            WriteSummaryJson(result, jsonOptions);
+        else if (options.Json)
+            WriteJson(result, jsonOptions);
+        else
+            WriteText(result, options);
     }
 
     private static void WriteText(DiffJsonResult result, DiffCommandOptions options)
@@ -509,6 +591,13 @@ public static class DiffCommandRunner
         List<string> MetaRows,
         List<string> SymbolRows,
         List<string> ReferenceRows);
+
+    private sealed record DiffDbHeader(
+        string Path,
+        long SchemaVersion,
+        long FileCount,
+        long SymbolCount,
+        long ReferenceCount);
 }
 
 internal sealed class DiffCommandOptions

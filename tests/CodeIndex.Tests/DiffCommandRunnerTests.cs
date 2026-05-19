@@ -68,6 +68,30 @@ public class DiffCommandRunnerTests
     }
 
     [Fact]
+    public void Run_ReturnsSchemaMismatchForLegacyDatabaseBeforeReadingMissingTables_Issue1724()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_legacy_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_legacy_right");
+        try
+        {
+            var legacyDb = CreateLegacyDbWithoutGraphTables(leftRoot);
+            var currentDb = SeedDb(rightRoot, includeExtraFile: false);
+
+            var (exitCode, output) = RunWithCapturedOut([legacyDb, currentDb, "--summary-only"]);
+
+            Assert.Equal(2, exitCode);
+            using var document = JsonDocument.Parse(output);
+            Assert.Equal("schema_mismatch", document.RootElement.GetProperty("status").GetString());
+            Assert.False(document.RootElement.GetProperty("summary").GetProperty("schema_versions_equal").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DetectsSameCountSymbolDriftWithoutDetailedMode_Issue1724()
     {
         var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_symbol_left");
@@ -259,6 +283,35 @@ public class DiffCommandRunnerTests
                 """);
         }
 
+        return dbPath;
+    }
+
+    private static string CreateLegacyDbWithoutGraphTables(string projectRoot)
+    {
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "legacy.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+        }.ConnectionString);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            PRAGMA user_version = 1;
+            CREATE TABLE files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                path TEXT NOT NULL UNIQUE,
+                lang TEXT,
+                size INTEGER,
+                lines INTEGER,
+                checksum TEXT,
+                modified DATETIME,
+                indexed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO files (path, lang, size, lines, checksum, modified)
+            VALUES ('src/Legacy.cs', 'csharp', 12, 1, 'legacy', '2026-01-01T00:00:00Z');
+            """;
+        command.ExecuteNonQuery();
         return dbPath;
     }
 
