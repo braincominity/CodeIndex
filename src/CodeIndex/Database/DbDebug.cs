@@ -9,8 +9,9 @@ namespace CodeIndex.Database;
 /// Opt-in reader debug helper: when CDIDX_DEBUG=1, tracks the last SQL,
 /// bound parameters, and last-read row so that reader-level exceptions
 /// (e.g. "The data is NULL at ordinal N") can be attributed to a concrete
-/// query and row. Text values are redacted by default (length + short SHA256
-/// prefix). Setting CDIDX_DEBUG=unsafe alone is no longer enough to dump raw
+/// query and row. Text values are redacted by default (length + salted short
+/// SHA256 prefix, with path values reduced to shape only). Setting
+/// CDIDX_DEBUG=unsafe alone is no longer enough to dump raw
 /// text content — the process must also be started with the explicit
 /// `--debug-unsafe` CLI flag (set via <see cref="EnableUnsafeForProcess"/>).
 /// Without that per-invocation flag the helper downgrades to redacted mode and
@@ -27,6 +28,7 @@ namespace CodeIndex.Database;
 public static class DbDebug
 {
     private const int MaxNumericChars = 64;
+    private static readonly byte[] s_hashSalt = RandomNumberGenerator.GetBytes(16);
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SqliteDataReader, ActiveProfile> s_activeProfiles = new();
 
     [ThreadStatic]
@@ -176,7 +178,7 @@ public static class DbDebug
         _lastSql = cmd.CommandText;
         var ps = new List<(string, string)>(cmd.Parameters.Count);
         foreach (SqliteParameter p in cmd.Parameters)
-            ps.Add((p.ParameterName, FormatValue(p.Value, mode)));
+            ps.Add((p.ParameterName, FormatValue(p.Value, mode, p.ParameterName)));
         _lastParams = ps;
         _lastRow = null;
         _hasContext = true;
@@ -251,7 +253,7 @@ public static class DbDebug
             var name = reader.GetName(i);
             try
             {
-                var value = reader.IsDBNull(i) ? "<NULL>" : FormatValue(reader.GetValue(i), mode);
+                var value = reader.IsDBNull(i) ? "<NULL>" : FormatValue(reader.GetValue(i), mode, name);
                 row.Add((name, value));
             }
             catch (Exception ex)
@@ -278,7 +280,7 @@ public static class DbDebug
         var mode = ResolveMode();
         var sb = new StringBuilder();
         sb.AppendLine("--- CDIDX_DEBUG ---");
-        sb.AppendLine($"Mode: {(mode == DebugMode.Unsafe ? "unsafe (raw content)" : "redacted (text hashed)")}");
+        sb.AppendLine($"Mode: {(mode == DebugMode.Unsafe ? "unsafe (raw content)" : "redacted (salted text hashes; path shape only)")}");
         sb.AppendLine($"Exception: {ex.GetType().FullName}: {ex.Message}");
         if (_lastSql != null)
         {
@@ -307,37 +309,55 @@ public static class DbDebug
         Console.Error.Write(sb.ToString());
     }
 
-    private static string FormatValue(object? value, DebugMode mode)
+    private static string FormatValue(object? value, DebugMode mode, string? valueName = null)
     {
         if (value is null || value is DBNull)
             return "<NULL>";
         return value switch
         {
-            string str => FormatString(str, mode),
+            string str => FormatString(str, mode, valueName),
             byte[] bytes => $"<byte[{bytes.Length}]>",
             _ => TruncateNumeric(value.ToString() ?? "<NULL>"),
         };
     }
 
-    private static string FormatString(string s, DebugMode mode)
+    private static string FormatString(string s, DebugMode mode, string? valueName)
     {
         if (mode == DebugMode.Unsafe)
         {
             var shown = s.Length <= 200 ? s : s.Substring(0, 200) + $"…<+{s.Length - 200}>";
             return "\"" + shown + "\"";
         }
-        // Redacted mode: emit length + short SHA256 prefix so values are
-        // comparable across rows without exposing source content.
+        if (LooksLikePathName(valueName))
+            return $"<path segments={CountPathSegments(s)}>";
+
+        // Redacted mode: emit length + per-process salted short SHA256 prefix,
+        // preserving within-run correlation without stable cross-log fingerprints.
         return $"<str len={s.Length} sha256={ShortHash(s)}>";
     }
 
     private static string ShortHash(string s)
     {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(s));
+        var valueBytes = Encoding.UTF8.GetBytes(s);
+        var input = new byte[s_hashSalt.Length + valueBytes.Length];
+        Buffer.BlockCopy(s_hashSalt, 0, input, 0, s_hashSalt.Length);
+        Buffer.BlockCopy(valueBytes, 0, input, s_hashSalt.Length, valueBytes.Length);
+        var bytes = SHA256.HashData(input);
         var sb = new StringBuilder(16);
         for (int i = 0; i < 8; i++)
             sb.Append(bytes[i].ToString("x2"));
         return sb.ToString();
+    }
+
+    private static bool LooksLikePathName(string? valueName) =>
+        !string.IsNullOrWhiteSpace(valueName)
+        && valueName.Contains("path", StringComparison.OrdinalIgnoreCase);
+
+    private static int CountPathSegments(string path)
+    {
+        var normalized = path.Replace('\\', '/');
+        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length;
     }
 
     private static string TruncateNumeric(string s)

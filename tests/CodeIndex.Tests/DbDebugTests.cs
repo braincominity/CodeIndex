@@ -142,6 +142,43 @@ public class DbDebugTests
     }
 
     [Fact]
+    public void DumpToStderr_RedactedMode_UsesPathShapeForPathValues()
+    {
+        Environment.SetEnvironmentVariable("CDIDX_DEBUG", "1");
+        try
+        {
+            DbDebug.ResetContext();
+            using var conn = new SqliteConnection("Data Source=:memory:");
+            conn.Open();
+            using (var init = conn.CreateCommand())
+            {
+                init.CommandText = "CREATE TABLE t (file_path TEXT, content TEXT); INSERT INTO t VALUES ('/home/user/private/src/secret_module.cs', 'SECRET_SOURCE_CODE_TOKEN');";
+                init.ExecuteNonQuery();
+            }
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT file_path, content FROM t WHERE file_path = @path";
+            cmd.Parameters.AddWithValue("@path", "/home/user/private/src/secret_module.cs");
+            using (var reader = cmd.ExecuteTrackedReader())
+            {
+                while (reader.TrackedRead()) { }
+            }
+
+            var output = CaptureStderr(() => DbDebug.DumpToStderr(new InvalidOperationException("boom")));
+            Assert.Contains("@path = <path segments=5>", output);
+            Assert.Contains("[file_path] = <path segments=5>", output);
+            Assert.Contains("[content] = <str len=24 sha256=", output);
+            Assert.DoesNotContain("/home/user/private/src/secret_module.cs", output);
+            Assert.DoesNotContain("SECRET_SOURCE_CODE_TOKEN", output);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_DEBUG", null);
+            DbDebug.ResetContext();
+        }
+    }
+
+    [Fact]
     public void DumpToStderr_UnsafeMode_IncludesRawContent()
     {
         Environment.SetEnvironmentVariable("CDIDX_DEBUG", "unsafe");
