@@ -32,6 +32,40 @@ internal sealed record DbIntegrityCheckJsonResult(
     [property: JsonPropertyName("ok")] bool Ok,
     [property: JsonPropertyName("issues")] List<string> Issues);
 
+internal sealed record DiffSummaryJsonResult(
+    [property: JsonPropertyName("left_file_count")] long LeftFileCount,
+    [property: JsonPropertyName("right_file_count")] long RightFileCount,
+    [property: JsonPropertyName("file_count_delta")] long FileCountDelta,
+    [property: JsonPropertyName("left_symbol_count")] long LeftSymbolCount,
+    [property: JsonPropertyName("right_symbol_count")] long RightSymbolCount,
+    [property: JsonPropertyName("symbol_count_delta")] long SymbolCountDelta,
+    [property: JsonPropertyName("left_reference_count")] long LeftReferenceCount,
+    [property: JsonPropertyName("right_reference_count")] long RightReferenceCount,
+    [property: JsonPropertyName("reference_count_delta")] long ReferenceCountDelta,
+    [property: JsonPropertyName("left_schema_version")] long LeftSchemaVersion,
+    [property: JsonPropertyName("right_schema_version")] long RightSchemaVersion,
+    [property: JsonPropertyName("schema_versions_equal")] bool SchemaVersionsEqual);
+
+internal sealed record DiffJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("identical")] bool Identical,
+    [property: JsonPropertyName("left_db")] string LeftDb,
+    [property: JsonPropertyName("right_db")] string RightDb,
+    [property: JsonPropertyName("summary")] DiffSummaryJsonResult Summary,
+    [property: JsonPropertyName("files_only_in_left")] List<string> FilesOnlyInLeft,
+    [property: JsonPropertyName("files_only_in_right")] List<string> FilesOnlyInRight,
+    [property: JsonPropertyName("symbols_only_in_left")] List<string>? SymbolsOnlyInLeft,
+    [property: JsonPropertyName("symbols_only_in_right")] List<string>? SymbolsOnlyInRight,
+    [property: JsonPropertyName("limit")] int Limit,
+    [property: JsonPropertyName("detailed")] bool Detailed);
+
+internal sealed record DiffSummaryOnlyJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("identical")] bool Identical,
+    [property: JsonPropertyName("left_db")] string LeftDb,
+    [property: JsonPropertyName("right_db")] string RightDb,
+    [property: JsonPropertyName("summary")] DiffSummaryJsonResult Summary);
+
 internal sealed record ReportBundleSummary(
     [property: JsonPropertyName("output_path")] string OutputPath,
     [property: JsonPropertyName("version")] string Version,
@@ -224,6 +258,9 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(DefinitionResult))]
 [JsonSerializable(typeof(Dictionary<string, int>))]
 [JsonSerializable(typeof(Dictionary<string, long>))]
+[JsonSerializable(typeof(DiffJsonResult))]
+[JsonSerializable(typeof(DiffSummaryOnlyJsonResult))]
+[JsonSerializable(typeof(DiffSummaryJsonResult))]
 [JsonSerializable(typeof(ExactZeroHintResult))]
 [JsonSerializable(typeof(FileDependencyResult))]
 [JsonSerializable(typeof(FileExcerptResult))]

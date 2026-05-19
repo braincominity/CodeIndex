@@ -90,6 +90,9 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 - Read commands accept `--profile` to append SQL timing, row-count, and
   `EXPLAIN QUERY PLAN` JSON after the normal result; `--slow-query-ms <n>` logs
   profiled SQL statements that meet the threshold.
+- `cdidx diff <db1> <db2>` compares two index databases for CI or drift
+  debugging, reporting schema, file, symbol, and reference deltas with stable
+  exit codes: `0` identical, `1` drift, `2` schema mismatch, `3` unreadable DB.
 - The documented `status --json` trust contract covers `fold_ready`,
   `fold_ready_reason`, `graph_table_available`, `issues_table_available`,
   `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`,
@@ -251,6 +254,9 @@ cdidx mcp
 - read 系コマンドは `--profile` で通常結果の後に SQL の時間、行数、
   `EXPLAIN QUERY PLAN` の JSON を追加できます。`--slow-query-ms <n>` は
   閾値以上の profiled SQL をログに記録します。
+- `cdidx diff <db1> <db2>` は CI や drift 調査向けに 2 つの index DB を比較し、
+  schema、file、symbol、reference の差分を報告します。exit code は `0` identical、
+  `1` drift、`2` schema mismatch、`3` unreadable DB です。
 - 文書化された `status --json` trust contract は `fold_ready`、
   `fold_ready_reason`、`graph_table_available`、`issues_table_available`、
   `sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`、
