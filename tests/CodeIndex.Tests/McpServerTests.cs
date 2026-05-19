@@ -175,6 +175,16 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ResourcesRead_NonStringUri_ReturnsInvalidParams()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":42}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("missing_parameter", response["error"]!["data"]!["category"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void PromptsListAndGet_ReturnPromptMessages()
     {
         var list = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"prompts/list","params":{}}""")!;

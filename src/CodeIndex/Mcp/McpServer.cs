@@ -1028,7 +1028,7 @@ public partial class McpServer : IDisposable
 
     private JsonNode HandleResourcesRead(JsonNode? id, JsonNode? readParams)
     {
-        var uri = readParams?["uri"]?.GetValue<string>();
+        var uri = TryReadStringValue(readParams?["uri"]);
         if (string.IsNullOrWhiteSpace(uri))
             return CreateErrorResponse(hasId: true, id: id, code: -32602, message: "Missing resource uri",
                 category: McpErrorEnvelope.CategoryMissingParameter,
@@ -1078,7 +1078,7 @@ public partial class McpServer : IDisposable
 
     private JsonNode HandlePromptsGet(JsonNode? id, JsonNode? getParams)
     {
-        var name = getParams?["name"]?.GetValue<string>();
+        var name = TryReadStringValue(getParams?["name"]);
         if (string.IsNullOrWhiteSpace(name))
             return CreateErrorResponse(hasId: true, id: id, code: -32602, message: "Missing prompt name",
                 category: McpErrorEnvelope.CategoryMissingParameter,
@@ -1154,11 +1154,18 @@ public partial class McpServer : IDisposable
         }
 
         var decoded = Uri.UnescapeDataString(parsed.AbsolutePath.TrimStart('/'));
-        if (decoded.Length == 0 || decoded.Contains("..", StringComparison.Ordinal) || Path.IsPathRooted(decoded))
+        if (decoded.Length == 0
+            || Path.IsPathRooted(decoded)
+            || decoded.Split('/').Any(segment => segment.Length == 0 || segment is "." or ".."))
+        {
             return false;
+        }
         path = decoded;
         return true;
     }
+
+    private static string? TryReadStringValue(JsonNode? node)
+        => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
 
     private static string GetResourceMimeType(string? lang)
         => lang?.ToLowerInvariant() switch
