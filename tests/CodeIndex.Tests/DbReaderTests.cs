@@ -48,9 +48,39 @@ public class DbReaderTests : IDisposable
     [InlineData("*.py", "%.py")]
     [InlineData("src/*.py", "src/%.py")]
     [InlineData("foo?bar", "foo_bar")]
+    [InlineData(@"literal\*.py", "%literal*.py%")]
+    [InlineData(@"literal\?.py", "%literal?.py%")]
+    [InlineData(@"literal\[name\].py", "%literal[name].py%")]
+    [InlineData(@"src\Foo.cs", @"%src\\Foo.cs%")]
     public void BuildPathLikePattern_TreatsGlobTokensAsWildcards(string input, string expected)
     {
         Assert.Equal(expected, DbReader.BuildPathLikePattern(input));
+    }
+
+    [Fact]
+    public void DegradationReasonCodes_AllCodesHaveActionableMetadata()
+    {
+        foreach (var code in DegradationReasonCodes.All)
+        {
+            var metadata = DegradationReasonCodes.GetMetadata(code);
+
+            Assert.Equal(code, metadata.Code);
+            Assert.False(string.IsNullOrWhiteSpace(metadata.HumanText));
+            Assert.Contains("cdidx", metadata.RecommendedAction, StringComparison.Ordinal);
+            Assert.Contains("cdidx", metadata.AlternativeAction, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData(DegradationReasonCodes.MissingFoldBackfill, "--exact falls back")]
+    [InlineData(DegradationReasonCodes.StaleFoldKeyVersion, "older fold-key version")]
+    [InlineData(DegradationReasonCodes.StaleFoldKeyFingerprint, "older runtime fingerprint")]
+    [InlineData(DegradationReasonCodes.FoldRowsNotRestamped, "not restamped")]
+    public void DegradationReasonCodes_BuildsFoldExplanationFromCode(string code, string expectedText)
+    {
+        var explanation = DegradationReasonCodes.BuildFoldNotReadyExplanation(code);
+
+        Assert.Contains(expectedText, explanation, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -67,6 +97,44 @@ public class DbReaderTests : IDisposable
 
         Assert.Equal(1, counts.Count);
         Assert.Equal(1, counts.FileCount);
+    }
+
+    [Theory]
+    [InlineData("rowid:authenticate", "rowid:")]
+    [InlineData("title:authenticate", "title:")]
+    [InlineData("{title}:authenticate", "title:")]
+    [InlineData("{rowid title}:authenticate", "rowid:")]
+    public void Search_RawFtsRejectsUnknownColumnQualifiers(string query, string expectedQualifier)
+    {
+        var ex = Assert.Throws<FtsQuerySyntaxException>(() => _reader.Search(query, rawQuery: true));
+
+        Assert.Contains(expectedQualifier, ex.Message);
+        Assert.Contains("'content' column", ex.Message);
+    }
+
+    [Fact]
+    public void Search_RawFtsAllowsContentColumnQualifier()
+    {
+        var results = _reader.Search("content:authenticate", rawQuery: true);
+
+        Assert.Contains(results, r => r.Path == "src/auth.py");
+    }
+
+    [Fact]
+    public void Search_RawFtsAllowsContentColumnListQualifier()
+    {
+        var results = _reader.Search("{content}:authenticate", rawQuery: true);
+
+        Assert.Contains(results, r => r.Path == "src/auth.py");
+    }
+
+    [Fact]
+    public void CountSearchResults_RawFtsRejectsUnknownColumnQualifiersBeforeSqlite()
+    {
+        var ex = Assert.Throws<FtsQuerySyntaxException>(() => _reader.CountSearchResults("rowid:authenticate", rawQuery: true));
+
+        Assert.Contains("rowid:", ex.Message);
+        Assert.Contains("'content' column", ex.Message);
     }
 
     [Fact]

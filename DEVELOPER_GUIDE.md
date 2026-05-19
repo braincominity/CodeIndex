@@ -62,6 +62,18 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
 
 Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
 
+### CLI recoverable error format
+
+Recoverable command errors in human output use the canonical line shape below. Include only non-null lines, but every error must include a recovery hint:
+
+```text
+Error: <message>
+Hint: <actionable recovery path>
+Usage: <command shape>
+```
+
+When an error code is available, the first line is `Error [<code>]: <message>`. Use `CommandErrorWriter` for new CLI parse, validation, and filesystem preflight errors so `ProgramRunner`, `IndexCommandRunner`, and query runners keep the same format. JSON error payloads continue to use `CommandErrorJsonResult`.
+
 ### C# / .NET integration
 
 `SolutionProjectResolver` parses the plain-text `.sln` `Project(...) = "...", "...csproj"` entries and resolves C# / F# / VB project files. When exactly one `.sln` exists at the workspace root, `--project <name|path>` uses it automatically; otherwise callers can pass `--solution <path>`.
@@ -79,6 +91,27 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 ### Status freshness age threshold
 
 `status --check` keeps the DB/worktree checksum comparison in `IndexFreshnessChecker`, but the user-facing age hint threshold is resolved in `QueryCommandRunner`: CLI `--stale-after <duration>` wins over `CDIDX_STALE_AFTER`, which wins over `.cdidxrc.json`'s `stale_after`, then the 24-hour default. Supported duration suffixes are `m`, `h`, and `d`. JSON output includes `stale_after_seconds` and `index_age_seconds` only for `--check`, so clients can confirm which threshold was applied without inferring it from text.
+
+### Degradation reason codes
+
+Readiness degradation reason codes are centralized in `DegradationReasonCodes`. Add new codes there with human text, a recommended action, and an alternative action before emitting them from readers, CLI, or MCP payloads.
+
+Current stable codes and triggers:
+
+| Code | Trigger | Recovery |
+|---|---|---|
+| `missing_fold_backfill` | legacy rows do not have folded-name values | `cdidx backfill-fold` or full rebuild |
+| `stale_fold_key_version` | folded rows were stamped with an older fold-key version | `cdidx backfill-fold` or full rebuild |
+| `stale_fold_key_fingerprint` | folded rows were stamped under an older runtime fingerprint | `cdidx backfill-fold` or full rebuild |
+| `fold_rows_not_restamped` | fold metadata is current but one or more folded rows were not restamped | `cdidx backfill-fold` or full rebuild |
+| `fold_ready=false` | aggregate fold readiness bit is degraded | `cdidx backfill-fold` or full rebuild |
+| `sql_graph_contract_ready=false` | SQL graph rows do not match the current call-column / qualified-name contract | `cdidx index <projectPath>` |
+| `hotspot_family_ready=false` | one or more hotspot-family languages lack current authoritative family stamps | `cdidx index <projectPath>` |
+| `graph_table_available=false` | `symbol_references` is missing or not graph-ready | `cdidx index <projectPath>` |
+| `issues_table_available=false` | `file_issues` is missing or not issue-ready | `cdidx index <projectPath>` |
+| `csharp_symbol_name_ready=false` | C# canonical symbol-name stamps are stale | `cdidx index <projectPath>` |
+| `csharp_metadata_target_ready=false` | C# metadata-target stamps are stale | `cdidx index <projectPath>` |
+| `index_newer_than_reader=true` | the DB was written with a newer persisted contract than this reader understands | use a current `cdidx` binary or rebuild with this version |
 
 ### SQLite WAL durability policy
 
@@ -218,6 +251,8 @@ files 1──N symbol_references
 ### Reference taxonomy
 
 `symbol_references.reference_kind` stores raw extractor labels. Default call-graph surfaces (`callers`, `callees`, inspect/analyze caller and callee bundles, and their JSON/MCP fields) expose logical labels so downstream grouping does not mix collapsed and raw event kinds. Use `--raw-kinds` on `callers` / `callees`, or `references --kind <raw-kind>`, when debugging raw extractor output.
+
+Reference extraction deduplicates only within the same indexed file and language context. When adding extractor paths, include the file id and language hint in shared `seen` keys so same line/column/name edges from polyglot workspaces do not collapse across Java, Rust, C#, SQL, or other language-specific normalization contexts.
 
 | Raw kind | Logical graph kind | Notes |
 |---|---|---|
@@ -555,6 +590,8 @@ The documented `status --json` trust contract spans `fold_ready`, `fold_ready_re
 `references` already prefixes each human-readable row with `reference_kind`, and `callers` does the same for its grouped caller rows. When one grouped container mixes kinds (for example `call` and `subscribe` on the same event member), the human-readable label joins the distinct kinds with `+` (for example `call+subscribe`) instead of collapsing to a single preferred label, and the reference-kind column widens dynamically to fit the longest label in the batch so mixed rows do not overrun the neighbouring column. JSON output for `callers` and `callees` keeps the scalar `reference_kind` for back-compat (it reports the preferred summary kind `instantiate` > `subscribe` > `MIN(call)`) and adds a sorted `reference_kinds` array plus a `has_mixed_reference_kinds` bool so consumers can detect mixed containers without trusting a single collapsed label. This lets terminal users distinguish `call` / `instantiate` / `subscribe` / mixed without re-running the command with `--json` and lets AI clients answer mixed-kind questions without chasing a second `--exact` query.
 
 MCP tool calls return structured JSON in `structuredContent` plus a short summary in `content`, so clients can consume typed data directly.
+
+Exact-match flag compatibility is documented in [USER_GUIDE.md](USER_GUIDE.md#flag-compatibility-and-migrations). Keep MCP schemas aligned with that table: `search.exact` is the legacy alias for `exactSubstring`, while name-based tools use `exact` as the legacy alias for `exactName`. Do not add new exact-match aliases without updating the compatibility table, CLI help, MCP descriptions, and changelog fragment together.
 
 `search`, `definition`, `references`, `callers`, `callees`, `symbols`, and `files` also share path-aware narrowing via `--path`, repeatable `--exclude-path`, and `--exclude-tests`. The read layer ranks source files ahead of tests and docs, and `search` further boosts exact symbol-name and path matches so AI clients are more likely to land on implementation files first.
 
@@ -2043,6 +2080,8 @@ CLI/MCP のトップレベル JSON DTO（`StatusResult`、`RepoMapResult`、`Sym
 `references` は以前から人間向け出力の各行先頭に `reference_kind` を表示しており、`callers` も grouped caller 行に対して同じタグを出す。1 つの grouped container で kind が混在する場合（例: 同じ event メンバに対する `call` と `subscribe`）は、単一 preferred label へ潰さずに `call+subscribe` のように distinct kind を `+` で連結して表示する。reference-kind 列の幅はバッチ内で最も長いラベルに合わせて動的に広がるため、mixed 行が隣接列を押し出さない。`callers` / `callees` の JSON 出力では、後方互換のため scalar な `reference_kind`（preferred 順 `instantiate` > `subscribe` > `MIN(call)` の要約 kind）を残しつつ、ソート済みの `reference_kinds` 配列と `has_mixed_reference_kinds` bool も追加した。これにより consumer は単一 summary label に騙されずに mixed container を検出できる。端末上でも `call` / `instantiate` / `subscribe` / mixed を `--json` なしで見分けられ、AI クライアントも `--exact` を改めて投げ直さずに mixed-kind の問いに答えられる。
 
 MCPツール呼び出しは `structuredContent` に構造化JSON、`content` に短い要約を返すため、クライアントは型付きデータを直接利用できます。
+
+exact-match flag の互換性は [USER_GUIDE.md](USER_GUIDE.md#フラグ互換性と移行) に記載しています。MCP schema はこの表と同期してください。`search.exact` は `exactSubstring` の legacy alias、name-based tools の `exact` は `exactName` の legacy alias です。新しい exact-match alias を追加する場合は、compatibility table、CLI help、MCP description、changelog fragment を同じ変更で更新してください。
 
 `search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files` は `--path`、繰り返し指定できる `--exclude-path`、`--exclude-tests` による絞り込みを共有します。読み取り層は tests や docs より source を優先し、`search` はシンボル名やパスがクエリと正確に一致する候補をさらに上位に出して、AIクライアントが実装ファイルへ早く到達できるようにします。
 

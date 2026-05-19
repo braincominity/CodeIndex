@@ -524,7 +524,7 @@ public partial class DbReader
                 Relevant: true,
                 DegradedReason: ready
                     ? null
-                    : $"cross-file hotspot family grouping for '{lang}' is degraded; run `cdidx index <projectPath>` to restamp authoritative hotspot families.");
+                    : DegradationReasonCodes.BuildHotspotFamilyLanguageDegradedReason(lang));
         }
 
         var relevantLanguages = _indexedHotspotFamilyLanguages
@@ -542,7 +542,7 @@ public partial class DbReader
         return new HotspotFamilySignal(
             Ready: false,
             Relevant: true,
-            DegradedReason: $"cross-file hotspot family grouping is degraded for: {string.Join(", ", unreadyLanguages)}; run `cdidx index <projectPath>` to restamp authoritative hotspot families.");
+            DegradedReason: DegradationReasonCodes.BuildHotspotFamilyLanguagesDegradedReason(unreadyLanguages));
     }
 
     private HashSet<string> LoadIndexes(string tableName)
@@ -573,12 +573,12 @@ public partial class DbReader
         var storedVersion = ParseFoldVersion(_conn);
         var storedFingerprint = ParseFoldFingerprint(_conn);
         if (storedVersion < 0 || string.IsNullOrWhiteSpace(storedFingerprint))
-            return "missing_fold_backfill";
+            return DegradationReasonCodes.MissingFoldBackfill;
         if (storedVersion != NameFold.Version)
-            return "stale_fold_key_version";
+            return DegradationReasonCodes.StaleFoldKeyVersion;
         if (!string.Equals(storedFingerprint, NameFold.Fingerprint(), StringComparison.Ordinal))
-            return "stale_fold_key_fingerprint";
-        return "fold_rows_not_restamped";
+            return DegradationReasonCodes.StaleFoldKeyFingerprint;
+        return DegradationReasonCodes.FoldRowsNotRestamped;
     }
 
     private HashSet<string> LoadIndexedHotspotFamilyLanguages()
@@ -824,7 +824,7 @@ public partial class DbReader
         return new SqlGraphContractSignal(
             Ready: false,
             Relevant: true,
-            DegradedReason: "sql_graph_contract_ready=false (SQL graph rows may still use a stale call-column / qualified-name contract; rerun `cdidx index <projectPath>` before trusting SQL graph/dependency results)");
+            DegradedReason: DegradationReasonCodes.BuildSqlGraphContractDegradedReason());
     }
 
     private static ExactQuerySignal CombineExactSignals(params ExactQuerySignal?[] signals)
@@ -965,9 +965,25 @@ public partial class DbReader
     {
         var hasWildcard = false;
         var builder = new StringBuilder(input.Length + 2);
+        var escaped = false;
 
         foreach (var ch in input)
         {
+            if (escaped)
+            {
+                if (IsEscapablePathGlobCharacter(ch))
+                {
+                    AppendLikeLiteral(builder, ch);
+                }
+                else
+                {
+                    builder.Append("\\\\");
+                    AppendLikeLiteral(builder, ch);
+                }
+                escaped = false;
+                continue;
+            }
+
             switch (ch)
             {
                 case '*':
@@ -979,7 +995,7 @@ public partial class DbReader
                     hasWildcard = true;
                     break;
                 case '\\':
-                    builder.Append("\\\\");
+                    escaped = true;
                     break;
                 case '%':
                     builder.Append("\\%");
@@ -992,10 +1008,34 @@ public partial class DbReader
                     break;
             }
         }
+        if (escaped)
+            builder.Append("\\\\");
 
         var pattern = builder.ToString();
         return hasWildcard ? pattern : $"%{pattern}%";
     }
+
+    private static void AppendLikeLiteral(StringBuilder builder, char ch)
+    {
+        switch (ch)
+        {
+            case '\\':
+                builder.Append("\\\\");
+                break;
+            case '%':
+                builder.Append("\\%");
+                break;
+            case '_':
+                builder.Append("\\_");
+                break;
+            default:
+                builder.Append(ch);
+                break;
+        }
+    }
+
+    private static bool IsEscapablePathGlobCharacter(char ch)
+        => ch is '*' or '?' or '[' or ']' or '\\' or '%' or '_';
 
     internal static bool IsSqlLanguage(string? lang)
         => string.Equals(NormalizeQueryLanguage(lang), "sql", StringComparison.OrdinalIgnoreCase);

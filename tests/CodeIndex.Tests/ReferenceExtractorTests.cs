@@ -12,6 +12,32 @@ namespace CodeIndex.Tests;
 public class ReferenceExtractorTests
 {
     [Fact]
+    public void BuildReferenceDedupeKey_IncludesFileIdAndLanguage()
+    {
+        var javaKey = ReferenceExtractor.BuildReferenceDedupeKey(1, "java", 3, 5, "type_reference", "Runner");
+        var rustKey = ReferenceExtractor.BuildReferenceDedupeKey(2, "rust", 3, 5, "type_reference", "Runner");
+
+        Assert.NotEqual(javaKey, rustKey);
+        Assert.StartsWith("1:java:", javaKey, StringComparison.Ordinal);
+        Assert.StartsWith("2:rust:", rustKey, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AddTypeReferenceSegment_DedupesWithinFileAndLanguageOnly()
+    {
+        var references = new List<ReferenceRecord>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        ReferenceExtractor.AddTypeReferenceSegment(references, seen, 1, "Runner", 4, "Runner value", 7, null, "java");
+        ReferenceExtractor.AddTypeReferenceSegment(references, seen, 1, "Runner", 4, "Runner value", 7, null, "java");
+        ReferenceExtractor.AddTypeReferenceSegment(references, seen, 2, "Runner", 4, "Runner value", 7, null, "rust");
+
+        Assert.Equal(2, references.Count);
+        Assert.Contains(references, reference => reference.FileId == 1 && reference.SymbolName == "Runner");
+        Assert.Contains(references, reference => reference.FileId == 2 && reference.SymbolName == "Runner");
+    }
+
+    [Fact]
     public void Extract_CustomReferencePlugin_HandlesUnsupportedLanguage()
     {
         lock (TestConsoleLock.Gate)
@@ -25315,6 +25341,33 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SwiftPropertyObserverCalls_AreAttributedToProperty()
+    {
+        const string content = """
+            class C {
+                var x: Int = 0 {
+                    didSet { print(x) }
+                    @willSet { precondition(newValue >= 0) }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "print"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerKind == "property"
+            && reference.ContainerName == "x");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "precondition"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerKind == "property"
+            && reference.ContainerName == "x");
+    }
+
+    [Fact]
     public void Extract_SwiftTypedThrows_RecordsThrownErrorType()
     {
         const string content = """
@@ -29911,6 +29964,65 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "Brand" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "RuntimeConfig" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "parse" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptConstAssertion_CapturesSyntheticAndLiteralTypeReferences()
+    {
+        const string content = """
+            const tuple = ["alpha", "beta"] as const;
+            const config = { mode: "strict", retries: 3, enabled: true } as const;
+            const escaped = { pattern: "{", closing: "]", mode: "strict" } as const;
+            const multilineTuple = [
+                "multi-alpha",
+                "multi-beta"
+            ] as const;
+            const multilineConfig = {
+                mode: "wide",
+                retries: 5
+            } as const;
+            const withComments = [/* 99 */ "kept", // 100
+                101
+            ] as const;
+            const urlTuple = ["https://example.test/a", "after-url"] as const;
+            const expressions = [1 + 2, flag ? "yes" : "no", { "quotedKey": "quotedValue" }] as const;
+            const compactExpressions = [1+2, 1-2, -1] as const;
+            const radixNumbers = [0x10, 0b1010, 0o755, 123n] as const;
+            const cast = value as RuntimeConfig;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Equal(10, references.Count(r => r.SymbolName == "const" && r.ReferenceKind == "const_assertion"));
+        Assert.Contains(references, r => r.SymbolName == "\"alpha\"" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "\"beta\"" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "\"strict\"" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "\"{\"" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "\"]\"" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "\"multi-alpha\"" && r.ReferenceKind == "type_reference" && r.Line == 5);
+        Assert.Contains(references, r => r.SymbolName == "\"multi-beta\"" && r.ReferenceKind == "type_reference" && r.Line == 6);
+        Assert.Contains(references, r => r.SymbolName == "\"wide\"" && r.ReferenceKind == "type_reference" && r.Line == 9);
+        Assert.Contains(references, r => r.SymbolName == "5" && r.ReferenceKind == "type_reference" && r.Line == 10);
+        Assert.Contains(references, r => r.SymbolName == "\"kept\"" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "101" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "\"https://example.test/a\"" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "\"after-url\"" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "\"quotedValue\"" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "-1" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "0x10" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "0b1010" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "0o755" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "123n" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "3" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "true" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "RuntimeConfig" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "3" && r.ReferenceKind == "type_reference" && r.Column == 43);
+        Assert.Contains(references, r => r.SymbolName == "true" && r.ReferenceKind == "type_reference" && r.Column == 55);
+        Assert.DoesNotContain(references, r => r.SymbolName is "99" or "100" or "1" or "2" or "1+2" or "1-2");
+        Assert.DoesNotContain(references, r => r.SymbolName is "\"yes\"" or "\"no\"" or "\"quotedKey\"");
+        Assert.DoesNotContain(references, r => r.SymbolName == "const" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "RuntimeConfig" && r.ReferenceKind == "const_assertion");
     }
 
     [Fact]

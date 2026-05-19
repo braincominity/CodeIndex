@@ -274,6 +274,8 @@ public partial class DbReader
         if (query.Length > MaxRawFtsQueryLength)
             throw new FtsQuerySyntaxException($"raw FTS5 query is too long ({query.Length} characters); maximum is {MaxRawFtsQueryLength}. Split the query or drop `--fts` for literal-safe search.");
 
+        ValidateRawFtsColumns(query);
+
         var booleanOperators = 0;
         var nearOperators = 0;
         var depth = 0;
@@ -351,6 +353,77 @@ public partial class DbReader
             || message.Contains("unterminated string", StringComparison.OrdinalIgnoreCase)
             || message.Contains("no such column", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static void ValidateRawFtsColumns(string query)
+    {
+        var inQuote = false;
+
+        for (var i = 0; i < query.Length; i++)
+        {
+            var ch = query[i];
+            if (ch == '"')
+            {
+                if (inQuote && i + 1 < query.Length && query[i + 1] == '"')
+                {
+                    i++;
+                    continue;
+                }
+
+                inQuote = !inQuote;
+                continue;
+            }
+
+            if (inQuote || ch != ':')
+                continue;
+
+            if (i > 0 && query[i - 1] == '}')
+            {
+                ValidateRawFtsColumnList(query, i);
+                continue;
+            }
+
+            var end = i;
+            var start = end - 1;
+            while (start >= 0 && IsFtsColumnIdentifierChar(query[start]))
+                start--;
+            start++;
+
+            if (start == end)
+                continue;
+
+            ValidateRawFtsColumn(query[start..end]);
+        }
+
+    }
+
+    private static void ValidateRawFtsColumnList(string query, int colonIndex)
+    {
+        var start = colonIndex - 2;
+        while (start >= 0 && query[start] != '{')
+            start--;
+
+        if (start < 0)
+            return;
+
+        var columns = query[(start + 1)..(colonIndex - 1)]
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var column in columns)
+            ValidateRawFtsColumn(column);
+    }
+
+    private static void ValidateRawFtsColumn(string column)
+    {
+        const string validColumn = "content";
+        if (string.Equals(column, validColumn, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        throw new FtsQuerySyntaxException(
+            $"unknown FTS5 column qualifier '{column}:'. The fts_chunks index only exposes the '{validColumn}' column; use '{validColumn}:' or drop the qualifier.",
+            new ArgumentException("Unknown FTS5 column qualifier.", nameof(column)));
+    }
+
+    private static bool IsFtsColumnIdentifierChar(char ch)
+        => ch == '_' || char.IsAsciiLetterOrDigit(ch);
 
     private static void ValidateRawFtsNearDistance(string query)
     {

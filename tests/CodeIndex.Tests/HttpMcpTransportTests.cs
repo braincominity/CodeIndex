@@ -105,24 +105,27 @@ public class HttpMcpTransportTests : IDisposable
             Assert.Equal(HttpStatusCode.OK, okResponse.StatusCode);
         }
 
-        var logged = records.ToArray();
-        Assert.Equal(3, logged.Length);
-        Assert.Equal("missing", logged[0].AuthOutcome);
-        Assert.Equal((int)HttpStatusCode.Unauthorized, logged[0].StatusCode);
-        Assert.Equal("POST", logged[0].Method);
-        Assert.Equal("/", logged[0].Path);
-        Assert.Null(logged[0].RequestId);
-        Assert.True(logged[0].DurationMs >= 0);
-        Assert.False(string.IsNullOrWhiteSpace(logged[0].CorrelationId));
-        Assert.False(string.IsNullOrWhiteSpace(logged[0].RemotePeer));
+        var snapshot = await WaitForRequestLogRecordsAsync(records, 3);
 
-        Assert.Equal("missing", logged[1].AuthOutcome);
-        Assert.Equal("GET", logged[1].Method);
-        Assert.Equal((int)HttpStatusCode.Unauthorized, logged[1].StatusCode);
+        var missingPost = Assert.Single(snapshot, record =>
+            record.AuthOutcome == "missing" &&
+            record.StatusCode == (int)HttpStatusCode.Unauthorized &&
+            record.Method == "POST");
+        Assert.Equal("/", missingPost.Path);
+        Assert.Null(missingPost.RequestId);
+        Assert.True(missingPost.DurationMs >= 0);
+        Assert.False(string.IsNullOrWhiteSpace(missingPost.CorrelationId));
+        Assert.False(string.IsNullOrWhiteSpace(missingPost.RemotePeer));
 
-        Assert.Equal("ok", logged[2].AuthOutcome);
-        Assert.Equal("7", logged[2].RequestId);
-        Assert.Equal((int)HttpStatusCode.OK, logged[2].StatusCode);
+        var missingGet = Assert.Single(snapshot, record =>
+            record.AuthOutcome == "missing" &&
+            record.Method == "GET");
+        Assert.Equal((int)HttpStatusCode.Unauthorized, missingGet.StatusCode);
+
+        var okPost = Assert.Single(snapshot, record =>
+            record.AuthOutcome == "ok" &&
+            record.RequestId == "7");
+        Assert.Equal((int)HttpStatusCode.OK, okPost.StatusCode);
     }
 
     [Fact]
@@ -348,6 +351,23 @@ public class HttpMcpTransportTests : IDisposable
         _db.Dispose();
         try { File.Delete(_dbPath); } catch { /* best-effort cleanup */ }
         GC.SuppressFinalize(this);
+    }
+
+    private static async Task<HttpMcpTransport.HttpRequestLogRecord[]> WaitForRequestLogRecordsAsync(
+        ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord> records,
+        int expectedCount)
+    {
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            if (records.Count >= expectedCount)
+                return records.ToArray();
+
+            await Task.Delay(10);
+        }
+
+        var snapshot = records.ToArray();
+        Assert.Equal(expectedCount, snapshot.Length);
+        return snapshot;
     }
 
     private sealed class McpHttpHarness : IAsyncDisposable

@@ -413,6 +413,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "definition"))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "definition", KnownSymbolKindFilters))
+            return CommandExitCodes.InvalidArgument;
         if (!TryResolveNameExactMode(options, "definition", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -1362,6 +1364,7 @@ public static class QueryCommandRunner
             var results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.ContextBefore, options.ContextAfter, options.Exact, options.MaxLineWidth);
             if (results.Count == 0)
             {
+                var candidateFileCount = reader.CountFindCandidateFiles(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
                 if (options.Json)
                 {
                     var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", queryOptions: options, extraFields: payload =>
@@ -1372,14 +1375,22 @@ public static class QueryCommandRunner
                         payload["before"] = options.ContextBefore;
                         payload["after"] = options.ContextAfter;
                         payload["exact"] = options.Exact;
-                        payload["file_count"] = 0;
+                        payload["file_count"] = candidateFileCount;
                     });
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
                 {
                     Console.Error.WriteLine(BuildZeroResultLine("No matches found", options));
-                    WriteZeroResultHints(options, reader, filterHint: "try broadening --path or adding another --path value; --path is required for find.");
+                    if (candidateFileCount > 0)
+                    {
+                        var fileText = ConsoleUi.Counted(candidateFileCount, "file");
+                        WriteZeroResultHints(options, reader, filterHint: $"--path matched {fileText}, but the query did not match their contents. Try a broader query or check the query syntax.");
+                    }
+                    else
+                    {
+                        WriteZeroResultHints(options, reader, filterHint: "try broadening --path or adding another --path value; --path is required for find.");
+                    }
                 }
                 return CommandExitCodes.NotFound;
             }
@@ -1446,23 +1457,23 @@ public static class QueryCommandRunner
                     i++;
                 }
                 if ((arg == "--limit" || arg == "--top") && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var limit) || limit <= 0))
-                    return $"Error: {arg} requires a positive integer, got '{value}'";
+                    return BuildPositiveIntegerError("--limit", value, arg);
                 if ((arg == "--limit" || arg == "--top")
                     && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var limitCeil)
                     && NumericFlagUpperBounds.TryGetValue("--limit", out var limitMax)
                     && limitCeil > limitMax)
-                    return $"Error: --limit must be less than or equal to {limitMax}, got '{value}'.";
+                    return BuildPositiveIntegerUpperBoundError("--limit", value, limitMax);
                 if (arg == "--max-line-width" && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var widthValue) || widthValue < 0))
-                    return $"Error: {arg} requires a non-negative integer, got '{value}'";
+                    return BuildNonNegativeIntegerError(arg, value);
                 if (arg == "--max-line-width" && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var widthCeil) && widthCeil > LineWidthFormatter.MaxAllowedLineWidth)
-                    return $"Error: --max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth} (got '{value}').";
+                    return BuildNonNegativeIntegerUpperBoundError("--max-line-width", value, LineWidthFormatter.MaxAllowedLineWidth);
                 if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var context) || context < 0))
-                    return $"Error: {arg} requires a non-negative integer, got '{value}'";
+                    return BuildNonNegativeIntegerError(arg, value);
                 if ((arg == "--before" || arg == "--after")
                     && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var contextCeil)
                     && NumericFlagUpperBounds.TryGetValue(arg, out var contextMax)
                     && contextCeil > contextMax)
-                    return $"Error: {arg} must be less than or equal to {contextMax}, got '{value}'.";
+                    return BuildNonNegativeIntegerUpperBoundError(arg, value, contextMax);
                 if (arg == "--query")
                 {
                     queryCount++;
@@ -2539,6 +2550,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "hotspots"))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "hotspots", KnownSymbolKindFilters))
+            return CommandExitCodes.InvalidArgument;
         if (TryWriteUnexpectedPositionals("hotspots", options))
             return CommandExitCodes.UsageError;
         if (!TryResolveHotspotsGroupBy(options.GroupBy, options.Lang, groupByName, out var groupBy, out var groupByError))
@@ -2941,6 +2954,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "unused"))
             return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "unused", KnownSymbolKindFilters))
+            return CommandExitCodes.InvalidArgument;
         if (TryWriteUnexpectedPositionals("unused", options))
             return CommandExitCodes.UsageError;
 
@@ -3280,6 +3295,7 @@ public static class QueryCommandRunner
         int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
         bool contextAfterExplicit = false;
         var pathPatterns = new List<string>();
+        var userPathPatterns = new List<string>();
         var projectFilters = new List<string>();
         string? solutionFilter = null;
         var excludePaths = new List<string>();
@@ -3610,7 +3626,10 @@ public static class QueryCommandRunner
                     break;
                 case "--path":
                     if (TryReadStringOptionValue(args, ref i, "--path", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var pathPattern, out var pathError))
+                    {
                         pathPatterns.Add(pathPattern!); // Repeatable; multiple values OR together / 繰り返し可、複数値は OR で結合
+                        userPathPatterns.Add(pathPattern!);
+                    }
                     else
                         AddParseError(pathError!);
                     break;
@@ -3802,6 +3821,8 @@ public static class QueryCommandRunner
             }
         }
 
+        ValidateQueryPathOptionValues(userPathPatterns, excludePaths, AddParseError);
+
         return new QueryCommandOptions
         {
             DbPath = dbPath,
@@ -3852,6 +3873,60 @@ public static class QueryCommandRunner
             ExtraNames = extraNames,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
+    }
+
+    private static void ValidateQueryPathOptionValues(
+        IReadOnlyList<string> pathPatterns,
+        IReadOnlyList<string> excludePaths,
+        Action<string> addParseError)
+    {
+        foreach (var pattern in pathPatterns)
+            ValidatePathGlobPattern("--path", pattern, addParseError);
+        foreach (var pattern in excludePaths)
+            ValidatePathGlobPattern("--exclude-path", pattern, addParseError);
+    }
+
+    private static void ValidatePathGlobPattern(string optionName, string pattern, Action<string> addParseError)
+    {
+        if (TryFindUnsupportedBracketGlob(pattern, out var reason))
+        {
+            addParseError($"Error: {optionName} '{pattern}' is not a valid glob: {reason}. Hint: escape '[' or ']' with a backslash when matching literal path characters, or use only '*' and '?' wildcards.");
+        }
+    }
+
+    private static bool TryFindUnsupportedBracketGlob(string pattern, out string reason)
+    {
+        var escaped = false;
+        for (var i = 0; i < pattern.Length; i++)
+        {
+            var ch = pattern[i];
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (ch == '\\')
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                reason = "character classes are not supported";
+                return true;
+            }
+
+            if (ch == ']')
+            {
+                reason = "unmatched ']'";
+                return true;
+            }
+        }
+
+        reason = string.Empty;
+        return false;
     }
 
     internal static bool TryParseReferenceRankMode(string value, out ReferenceRankMode rankMode)
@@ -4226,13 +4301,39 @@ public static class QueryCommandRunner
 
     private static bool TryWriteParseError(QueryCommandOptions options, string commandName)
     {
-        if (options.ParseError == null)
+        var dbPathError = BuildExplicitDbPathParseError(options);
+        if (options.ParseError == null && dbPathError == null)
             return false;
 
-        Console.Error.WriteLine(options.ParseError);
-        Console.Error.WriteLine("Hint: fix the invalid or missing option value, then rerun with the command shape below.");
-        Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+        var primaryError = options.ParseError ?? dbPathError!;
+        CommandErrorWriter.Write(
+            StripErrorPrefix(primaryError),
+            primaryError == dbPathError && options.ParseError == null
+                ? "create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command."
+                : "fix the invalid or missing option value, then rerun with the command shape below.",
+            GetUsageLineOrThrow(commandName),
+            ExtractErrorCode(primaryError));
+        if (options.ParseError != null && dbPathError != null)
+            CommandErrorWriter.Write(
+                StripErrorPrefix(dbPathError),
+                "create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.",
+                GetUsageLineOrThrow(commandName),
+                ExtractErrorCode(dbPathError));
         return true;
+    }
+
+    private static string? BuildExplicitDbPathParseError(QueryCommandOptions options)
+    {
+        if (!options.DbPathExplicit)
+            return null;
+        if (string.IsNullOrWhiteSpace(options.DbPath))
+            return BuildMissingOptionValueError("--db");
+        if (options.DbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return null;
+        if (File.Exists(LongPath.EnsureWindowsPrefix(options.DbPath)))
+            return null;
+
+        return $"Error [{CommandErrorCodes.DbNotFound}]: --db '{options.DbPath}' does not point to an existing database file.";
     }
 
     private static readonly HashSet<string> KnownSymbolKindFilters = new(StringComparer.Ordinal)
@@ -4278,9 +4379,10 @@ public static class QueryCommandRunner
             && !acceptedKinds.Contains(options.Kind)
             && !alternateAcceptedKinds.Any(kinds => kinds.Contains(options.Kind)))
         {
-            Console.Error.WriteLine($"Error: invalid --kind value `{options.Kind}`.");
-            Console.Error.WriteLine($"Hint: use one of: {string.Join(", ", acceptedKinds)}.");
-            Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+            CommandErrorWriter.Write(
+                $"invalid --kind value `{options.Kind}`.",
+                $"use one of: {string.Join(", ", acceptedKinds)}.",
+                GetUsageLineOrThrow(commandName));
             return true;
         }
 
@@ -4330,24 +4432,25 @@ public static class QueryCommandRunner
 
             if (normalizedArg == "--group-by-name")
             {
-                Console.Error.WriteLine("Error: --group-by-name is only supported by 'hotspots'.");
-                Console.Error.WriteLine("Hint: remove `--group-by-name` here, or rerun with `cdidx hotspots --group-by-name ...`.");
-                Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+                CommandErrorWriter.Write(
+                    "--group-by-name is only supported by 'hotspots'.",
+                    "remove `--group-by-name` here, or rerun with `cdidx hotspots --group-by-name ...`.",
+                    GetUsageLineOrThrow(commandName));
                 return true;
             }
 
             if (normalizedArg == "--group-by")
             {
-                Console.Error.WriteLine("Error: --group-by is only supported by 'hotspots'.");
-                Console.Error.WriteLine("Hint: remove `--group-by` here, or rerun with `cdidx hotspots --group-by <symbol|file|statement> ...`.");
-                Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+                CommandErrorWriter.Write(
+                    "--group-by is only supported by 'hotspots'.",
+                    "remove `--group-by` here, or rerun with `cdidx hotspots --group-by <symbol|file|statement> ...`.",
+                    GetUsageLineOrThrow(commandName));
                 return true;
             }
 
             if (normalizedArg == arg && ValueTakingOptions.Contains(normalizedArg) && i + 1 < cmdArgs.Length)
                 i++;
 
-            Console.Error.WriteLine($"Error: {arg} is not supported for {commandName}.");
             // Suggest the closest accepted flag for this command when the user mistypes
             // a flag name (e.g. `--paht` → `--path`). Built on the same suggester used for
             // subcommand typos so the recovery experience is consistent (#1582).
@@ -4366,10 +4469,13 @@ public static class QueryCommandRunner
             if (eq > 0)
                 nameForSuggestion = nameForSuggestion[..eq];
             var suggestion = ConsoleUi.FindClosestMatch(nameForSuggestion, supported.Where(o => o != "--"));
-            if (suggestion != null)
-                Console.Error.WriteLine($"Did you mean: {suggestion}?");
-            Console.Error.WriteLine($"Hint: remove `{arg}` and rerun, or use only the options shown in `{commandName} --help`.");
-            Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+            var hint = suggestion == null
+                ? $"remove `{arg}` and rerun, or use only the options shown in `{commandName} --help`."
+                : $"Did you mean: {suggestion}? Remove `{arg}` and rerun, or use `{suggestion}` if that is what you meant.";
+            CommandErrorWriter.Write(
+                $"{arg} is not supported for {commandName}.",
+                hint,
+                GetUsageLineOrThrow(commandName));
             return true;
         }
 
@@ -4381,9 +4487,10 @@ public static class QueryCommandRunner
         if (options.ExtraNames.Count == 0)
             return false;
 
-        Console.Error.WriteLine($"Error: unexpected extra positional {ConsoleUi.Counted(options.ExtraNames.Count, "argument")} for {commandName}: {string.Join(", ", options.ExtraNames.Select(name => $"`{name}`"))}.");
-        Console.Error.WriteLine("Hint: quote multi-word queries as a single argument, or remove the extra positional values.");
-        Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+        CommandErrorWriter.Write(
+            $"unexpected extra positional {ConsoleUi.Counted(options.ExtraNames.Count, "argument")} for {commandName}: {string.Join(", ", options.ExtraNames.Select(name => $"`{name}`"))}.",
+            "quote multi-word queries as a single argument, or remove the extra positional values.",
+            GetUsageLineOrThrow(commandName));
         return true;
     }
 
@@ -4396,9 +4503,10 @@ public static class QueryCommandRunner
         if (unexpected.Count == 0)
             return false;
 
-        Console.Error.WriteLine($"Error: {commandName} does not accept positional arguments: {string.Join(", ", unexpected)}.");
-        Console.Error.WriteLine("Hint: remove the extra positional arguments and use the documented flags only.");
-        Console.Error.WriteLine($"Usage: {GetUsageLineOrThrow(commandName)}");
+        CommandErrorWriter.Write(
+            $"{commandName} does not accept positional arguments: {string.Join(", ", unexpected)}.",
+            "remove the extra positional arguments and use the documented flags only.",
+            GetUsageLineOrThrow(commandName));
         return true;
     }
 
@@ -4441,11 +4549,7 @@ public static class QueryCommandRunner
     }
 
     private static void WriteUsageError(string message, string usage, string hint)
-    {
-        Console.Error.WriteLine($"Error: {message}");
-        Console.Error.WriteLine($"Hint: {hint}");
-        Console.Error.WriteLine($"Usage: {usage}");
-    }
+        => CommandErrorWriter.Write(message, hint, usage);
 
     // Reject queries that were supplied but resolve to empty / whitespace-only text so the user gets
     // a distinct error instead of the generic "<cmd> requires a query argument" message that fires
@@ -4467,9 +4571,29 @@ public static class QueryCommandRunner
     }
 
     private static void WriteValidationError(string message, string hint)
+        => CommandErrorWriter.Write(message, hint);
+
+    private static string StripErrorPrefix(string message)
     {
-        Console.Error.WriteLine($"Error: {message}");
-        Console.Error.WriteLine($"Hint: {hint}");
+        const string prefix = "Error: ";
+        if (message.StartsWith(prefix, StringComparison.Ordinal))
+            return message[prefix.Length..];
+
+        var codedPrefixEnd = message.IndexOf("]: ", StringComparison.Ordinal);
+        if (message.StartsWith("Error [", StringComparison.Ordinal) && codedPrefixEnd >= 0)
+            return message[(codedPrefixEnd + 3)..];
+
+        return message;
+    }
+
+    private static string? ExtractErrorCode(string message)
+    {
+        const string prefix = "Error [";
+        if (!message.StartsWith(prefix, StringComparison.Ordinal))
+            return null;
+
+        var end = message.IndexOf("]: ", StringComparison.Ordinal);
+        return end > prefix.Length ? message[prefix.Length..end] : null;
     }
 
     private static void WriteRepoMapSection(string title, IEnumerable<string> rows)
@@ -4737,13 +4861,13 @@ public static class QueryCommandRunner
         => !signal.ExactIndexAvailable
            && !signal.HasMissingIndex
            && !signal.HasMissingTable
-           && signal.DegradedReason?.Contains("sql_graph_contract_ready=false", StringComparison.OrdinalIgnoreCase) == true;
+           && signal.DegradedReason?.Contains(DegradationReasonCodes.SqlGraphContractNotReady, StringComparison.OrdinalIgnoreCase) == true;
 
     private static bool IsCSharpCanonicalNameSignal(ExactQuerySignal signal)
         => !signal.ExactIndexAvailable
            && !signal.HasMissingIndex
            && !signal.HasMissingTable
-           && signal.DegradedReason?.Contains("csharp_symbol_name_ready=false", StringComparison.OrdinalIgnoreCase) == true;
+           && signal.DegradedReason?.Contains(DegradationReasonCodes.CSharpSymbolNameNotReady, StringComparison.OrdinalIgnoreCase) == true;
 
     private static int WriteStatusReadinessExplanation(string fieldName)
     {
@@ -4806,10 +4930,10 @@ public static class QueryCommandRunner
             "hotspot_family_ready" => status.HotspotFamilyDegradedReason ?? fallback,
             "fold_ready" => BuildFoldNotReadyExplanation(status.FoldReadyReason),
             "index_newer_than_reader" => status.IndexNewerThanReaderReason ?? fallback,
-            "graph_table_available" => "reference / caller / callee / unused counts are degraded to 0 because the symbol_references table is missing.",
-            "issues_table_available" => "validate output is degraded to empty because the file_issues table is missing.",
-            "csharp_symbol_name_ready" => "C# exact-name for operators / conversion operators / indexers is degraded.",
-            "csharp_metadata_target_ready" => "C# deps / impact metadata-attribute edges fall back to the signature / name-suffix heuristic.",
+            "graph_table_available" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.GraphTableMissing).HumanText,
+            "issues_table_available" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.IssuesTableMissing).HumanText,
+            "csharp_symbol_name_ready" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.CSharpSymbolNameNotReady).HumanText,
+            "csharp_metadata_target_ready" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.CSharpMetadataTargetNotReady).HumanText,
             _ => fallback,
         };
 
@@ -4907,13 +5031,7 @@ public static class QueryCommandRunner
            && status.CSharpMetadataTargetReady;
 
     private static string BuildFoldNotReadyExplanation(string? foldReadyReason)
-        => foldReadyReason switch
-        {
-            "missing_fold_backfill" => "--exact falls back to ASCII COLLATE NOCASE because legacy rows without `name_folded` remain.",
-            "stale_fold_key_version" => "--exact falls back to ASCII COLLATE NOCASE because unchanged rows still carry an older fold-key version.",
-            "stale_fold_key_fingerprint" => "--exact falls back to ASCII COLLATE NOCASE because unchanged rows still carry folded keys generated under an older runtime fingerprint.",
-            _ => "--exact falls back to ASCII COLLATE NOCASE because some folded-name rows were not restamped under the current runtime."
-        };
+        => DegradationReasonCodes.BuildFoldNotReadyExplanation(foldReadyReason);
 
     private static string BuildFoldNotReadyWarning(string? foldReadyReason, string backfillCommand, string rebuildCommand)
         => $"{BuildFoldNotReadyExplanation(foldReadyReason)} Run `{backfillCommand}` to restamp folded-name columns in place, or `{rebuildCommand}` for a full rebuild.";
@@ -5138,7 +5256,7 @@ public static class QueryCommandRunner
 
     // All valid symbol kinds emitted by SymbolExtractor / SymbolExtractor が出力する全有効シンボル種別
     private static readonly string[] AllValidKinds =
-        ["async_function", "async_generator", "class", "delegate", "enum", "event", "function", "generator", "hook", "import", "interface", "namespace", "property", "struct", "union"];
+        KnownSymbolKindFilters.OrderBy(kind => kind, StringComparer.Ordinal).ToArray();
     // Reference kinds valid on `references --kind`. Includes the compile-time type-position
     // `type_reference` edge emitted by ReferenceExtractor for C#/Java base lists, declaration
     // types, generic constraints, `throws`, `is`/`as`/`instanceof`, and XML-doc `cref` targets.
@@ -5667,13 +5785,13 @@ public static class QueryCommandRunner
         if (!int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out value) || value <= 0)
         {
             value = 0;
-            error = $"Error: {optionName} requires a positive integer, got '{rawValue}'. Hint: retry with `{optionName} 1` or another positive integer.";
+            error = BuildPositiveIntegerError(optionName, rawValue);
             return false;
         }
 
         if (NumericFlagUpperBounds.TryGetValue(optionName, out var maxAllowed) && value > maxAllowed)
         {
-            error = $"Error: {optionName} must be less than or equal to {maxAllowed}, got '{rawValue}'. Hint: retry with `{optionName} {maxAllowed}` or a smaller positive integer.";
+            error = BuildPositiveIntegerUpperBoundError(optionName, rawValue, maxAllowed);
             value = 0;
             return false;
         }
@@ -5687,19 +5805,44 @@ public static class QueryCommandRunner
         if (!int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out value) || value < 0)
         {
             value = 0;
-            error = $"Error: {optionName} requires a non-negative integer, got '{rawValue}'. Hint: retry with `{optionName} 0` or another non-negative integer.";
+            error = BuildNonNegativeIntegerError(optionName, rawValue);
             return false;
         }
 
         if (NumericFlagUpperBounds.TryGetValue(optionName, out var maxAllowed) && value > maxAllowed)
         {
-            error = $"Error: {optionName} must be less than or equal to {maxAllowed}, got '{rawValue}'. Hint: retry with `{optionName} {maxAllowed}` or a smaller non-negative integer.";
+            error = BuildNonNegativeIntegerUpperBoundError(optionName, rawValue, maxAllowed);
             value = 0;
             return false;
         }
 
         error = null;
         return true;
+    }
+
+    private static string BuildPositiveIntegerError(string optionName, string rawValue, string? displayOptionName = null)
+    {
+        displayOptionName ??= optionName;
+        if (NumericFlagUpperBounds.TryGetValue(optionName, out var maxAllowed))
+            return $"Error: {displayOptionName} requires an integer between 1 and {maxAllowed}, got '{rawValue}'. Hint: retry with `{displayOptionName} 1` or another value up to {maxAllowed}.";
+        return $"Error: {displayOptionName} requires a positive integer, got '{rawValue}'. Hint: retry with `{displayOptionName} 1` or another positive integer.";
+    }
+
+    private static string BuildPositiveIntegerUpperBoundError(string optionName, string rawValue, int maxAllowed)
+    {
+        return $"Error: {optionName} must be less than or equal to {maxAllowed}, got '{rawValue}'. Hint: retry with `{optionName} {maxAllowed}` or a smaller positive integer.";
+    }
+
+    private static string BuildNonNegativeIntegerError(string optionName, string rawValue)
+    {
+        if (NumericFlagUpperBounds.TryGetValue(optionName, out var maxAllowed))
+            return $"Error: {optionName} requires an integer between 0 and {maxAllowed}, got '{rawValue}'. Hint: retry with `{optionName} 0` or another value up to {maxAllowed}.";
+        return $"Error: {optionName} requires a non-negative integer, got '{rawValue}'. Hint: retry with `{optionName} 0` or another non-negative integer.";
+    }
+
+    private static string BuildNonNegativeIntegerUpperBoundError(string optionName, string rawValue, int maxAllowed)
+    {
+        return $"Error: {optionName} must be less than or equal to {maxAllowed}, got '{rawValue}'. Hint: retry with `{optionName} {maxAllowed}` or a smaller non-negative integer.";
     }
 
     private static bool TryReadRawOptionValue(string[] args, ref int index, string optionName, string? inlineValue, out string? value, out string? error)

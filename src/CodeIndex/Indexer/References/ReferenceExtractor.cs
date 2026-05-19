@@ -969,6 +969,9 @@ public static partial class ReferenceExtractor
         if (ChunkSplitter.HasOversizeLine(content))
             return [];
 
+        if (FileIndexer.HasConflictMarkers(content))
+            return [];
+
         // Normalize CRLF / CR to LF first so direct callers that bypass FileIndexer
         // still present a `\n`-only content stream, and then strip line-leading
         // UTF-8 BOM (U+FEFF) and zero-width space (U+200B) defensively so
@@ -2013,6 +2016,7 @@ public static partial class ReferenceExtractor
             {
                 TypeScriptReferenceExtractor.EmitTypePositionReferences(
                     preparedLines,
+                    lines,
                     i,
                     preparedLine,
                     lines[i],
@@ -2217,7 +2221,7 @@ public static partial class ReferenceExtractor
                     // `instantiate` が同様の扱いをしているため、括弧あり/なしで挙動を揃える。
                     var initContainer = ResolveContainerForCall(nameIndex);
                     var name = language == "csharp" ? NormalizeCSharpIdentifier(rawName) : rawName;
-                    AddReference(references, seen, fileId, name, nameIndex, "instantiate", context, lineNumber, initContainer);
+                    AddReference(references, seen, fileId, name, nameIndex, "instantiate", context, lineNumber, initContainer, language);
                 }
 
                 // The initializer regex has the same one-level generic ceiling as CallRegex,
@@ -2246,7 +2250,8 @@ public static partial class ReferenceExtractor
                             "instantiate",
                             context,
                             lineNumber,
-                            initContainer);
+                            initContainer,
+                            language);
                     }
                 }
 
@@ -2503,13 +2508,13 @@ public static partial class ReferenceExtractor
                 var callContainer = ResolveContainerForCall(callIndex);
                 if (IsConstructorCallName(language, preparedLine, callIndex))
                 {
-                    AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
+                    AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer, language);
                     return true;
                 }
                 if (language == "rust"
                     && RustReferenceExtractor.IsLikelyInstantiationCallName(name, normalizedName, preparedLine, callIndex))
                 {
-                    AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
+                    AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer, language);
                     return true;
                 }
                 if (IsIgnoredCallName(language, name))
@@ -2529,7 +2534,7 @@ public static partial class ReferenceExtractor
                 var metadataKind = TryClassifyMetadataReference(language, preparedLine, callIndex, insideCSharpAttributeRange);
                 if (metadataKind != null)
                 {
-                    AddReference(references, seen, fileId, normalizedName, callIndex, metadataKind, context, lineNumber, callContainer);
+                    AddReference(references, seen, fileId, normalizedName, callIndex, metadataKind, context, lineNumber, callContainer, language);
                     if (language == "csharp"
                         && metadataKind == "attribute"
                         && CSharpReferenceExtractor.TryGetCallerInfoAttributeTypeName(name, preparedLine, callIndex) is { } callerInfoAttributeTypeName)
@@ -2543,7 +2548,8 @@ public static partial class ReferenceExtractor
                             "type_reference",
                             context,
                             lineNumber,
-                            callContainer);
+                            callContainer,
+                            language);
                     }
                     return true;
                 }
@@ -2725,7 +2731,7 @@ public static partial class ReferenceExtractor
                     {
                         var normalizedName = NormalizeAtPrefixedIdentifier(name);
                         var callContainer = ResolveContainerForCall(callIndex);
-                        AddReference(references, seen, fileId, normalizedName, callIndex, "call", context, lineNumber, callContainer);
+                        AddReference(references, seen, fileId, normalizedName, callIndex, "call", context, lineNumber, callContainer, language);
                     }
 
                     GradleReferenceExtractor.EmitDslCallReferences(
@@ -2946,7 +2952,7 @@ public static partial class ReferenceExtractor
                         continue;
                     if (definitionNames != null && definitionNames.Contains(name))
                         continue;
-                    AddReference(references, seen, fileId, name, nameIndex, "attribute", context, lineNumber, container);
+                    AddReference(references, seen, fileId, name, nameIndex, "attribute", context, lineNumber, container, language);
                     var genericStart = nameIndex + rawName.Length;
                     while (genericStart < preparedLine.Length && char.IsWhiteSpace(preparedLine[genericStart]))
                         genericStart++;
@@ -3426,7 +3432,8 @@ public static partial class ReferenceExtractor
         string referenceKind,
         string context,
         int lineNumber,
-        SymbolRecord? container)
+        SymbolRecord? container,
+        string? language = null)
     {
         AddReference(
             references,
@@ -3437,7 +3444,8 @@ public static partial class ReferenceExtractor
             referenceKind,
             context,
             lineNumber,
-            container);
+            container,
+            language);
     }
 
     internal static void AddReference(
@@ -3449,10 +3457,11 @@ public static partial class ReferenceExtractor
         string referenceKind,
         string context,
         int lineNumber,
-        SymbolRecord? container)
+        SymbolRecord? container,
+        string? language = null)
     {
         var column = nameIndex + 1;
-        var dedupeKey = $"{lineNumber}:{column}:{referenceKind}:{name}";
+        var dedupeKey = BuildReferenceDedupeKey(fileId, language, lineNumber, column, referenceKind, name);
         if (!seen.Add(dedupeKey))
             return;
 
@@ -3467,6 +3476,18 @@ public static partial class ReferenceExtractor
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
         });
+    }
+
+    internal static string BuildReferenceDedupeKey(
+        long fileId,
+        string? language,
+        int lineNumber,
+        int column,
+        string referenceKind,
+        string name)
+    {
+        var languageSegment = string.IsNullOrWhiteSpace(language) ? "-" : language;
+        return $"{fileId}:{languageSegment}:{lineNumber}:{column}:{referenceKind}:{name}";
     }
 
     private readonly record struct PythonLogicalHeaderReferenceLine(string Text, int[] PhysicalLines, int[] PhysicalColumns);
@@ -3703,7 +3724,7 @@ public static partial class ReferenceExtractor
             if (!IsIgnoredTypeReferenceSegment(language, normalizedSegment, isEscapedCSharpIdentifier))
             {
                 int column = argStartInLine + offset + 1; // 1-based / 1始まり
-                var dedupeKey = $"{lineNumber}:{column}:type_reference:{normalizedSegment}";
+                var dedupeKey = BuildReferenceDedupeKey(fileId, language, lineNumber, column, "type_reference", normalizedSegment);
                 if (seen.Add(dedupeKey))
                 {
                     references.Add(new ReferenceRecord
@@ -3913,7 +3934,7 @@ public static partial class ReferenceExtractor
             if (!IsValidCSharpReflectionSymbolName(symbolName))
                 continue;
 
-            AddReference(references, seen, fileId, symbolName, nameIndex, "type_reference", context, lineNumber, container);
+            AddReference(references, seen, fileId, symbolName, nameIndex, "type_reference", context, lineNumber, container, "csharp");
         }
     }
 

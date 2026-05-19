@@ -65,19 +65,13 @@ public static class IndexCommandRunner
 
         if (!Directory.Exists(options.ProjectPath))
         {
-            if (options.Json)
-                Console.WriteLine(JsonSerializer.Serialize(new CommandErrorJsonResult(
-                    "error",
-                    $"directory not found: {options.ProjectPath}",
-                    "Check the project path and rerun `cdidx index <projectPath>` with an existing directory.",
-                    CommandErrorCodes.DirectoryNotFound),
-                    jsonContext.CommandErrorJsonResult));
-            else
-            {
-                Console.Error.WriteLine($"Error [{CommandErrorCodes.DirectoryNotFound}]: directory not found: {options.ProjectPath}");
-                Console.Error.WriteLine("Hint: check the project path and rerun `cdidx index <projectPath>` with an existing directory.");
-            }
-            return CommandExitCodes.NotFound;
+            return CommandErrorWriter.WriteJsonOrHuman(
+                options.Json,
+                jsonOptions,
+                $"directory not found: {options.ProjectPath}",
+                CommandExitCodes.NotFound,
+                "check the project path and rerun `cdidx index <projectPath>` with an existing directory.",
+                errorCode: CommandErrorCodes.DirectoryNotFound);
         }
 
         if (options.Watch)
@@ -877,7 +871,7 @@ public static class IndexCommandRunner
         {
             return Path.GetFullPath(value);
         }
-        catch
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
             return value;
         }
@@ -898,7 +892,7 @@ public static class IndexCommandRunner
         {
             return Environment.CurrentDirectory;
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return null;
         }
@@ -993,6 +987,10 @@ public static class IndexCommandRunner
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var sqlGraphContractMatchesCurrent = priorSqlGraphContractVersion == currentSqlGraphContractVersion;
+        var unresolvedMergeExitCode = RejectUnresolvedMergeState(projectRoot, options.Json, jsonOptions);
+        if (unresolvedMergeExitCode != null)
+            return unresolvedMergeExitCode.Value;
+
         var targetPaths = new HashSet<string>(StringComparer.Ordinal);
         var relevantIgnoreFileChanged = false;
 
@@ -1575,12 +1573,14 @@ public static class IndexCommandRunner
                     record.Path,
                     record.Modified,
                     record.Checksum,
+                    language: record.Lang,
                     allowReuse: record.Lang is not ("javascript" or "typescript")
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                         && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                         && (record.Lang != "sql" || sqlGraphContractMatchesCurrent));
                 if (existingId != null)
                 {
+                    writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
                     skipped++;
                     if (options.Verbose && !options.Json && !options.Quiet)
                     {
@@ -1593,6 +1593,7 @@ public static class IndexCommandRunner
 
                 DemoteReadinessOnce();
                 using var txn = writer.BeginTransaction();
+                writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
                 WriteProjectRootOnce();
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
@@ -2182,21 +2183,27 @@ public static class IndexCommandRunner
         return buffer.ToString();
     }
 
-    private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null, string? errorCode = null)
+    private static int? RejectUnresolvedMergeState(string projectRoot, bool json, JsonSerializerOptions jsonOptions)
     {
-        if (json)
-            Console.WriteLine(JsonSerializer.Serialize(
-                new CommandErrorJsonResult("error", message, hint, errorCode),
-                CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult));
-        else
-        {
-            var prefix = errorCode is null ? "Error" : $"Error [{errorCode}]";
-            Console.Error.WriteLine($"{prefix}: {message}");
-            if (hint != null)
-                Console.Error.WriteLine($"Hint: {hint}");
-        }
-        return exitCode;
+        var status = GitHelper.TryGetWorktreeStatus(projectRoot);
+        if (status == null || status.UnresolvedMergeFiles.Count == 0)
+            return null;
+
+        var paths = string.Join(", ", status.UnresolvedMergeFiles.Take(5));
+        if (status.UnresolvedMergeFiles.Count > 5)
+            paths += $", ... {status.UnresolvedMergeFiles.Count - 5:N0} more";
+
+        return WriteCommandError(
+            json,
+            jsonOptions,
+            $"unresolved merge conflicts detected; refusing to index conflicted files ({paths})",
+            CommandExitCodes.UsageError,
+            "Resolve the conflicts and run `git merge --continue`, or abort the merge with `git merge --abort`, then rerun `cdidx index`.",
+            CommandErrorCodes.UsageError);
     }
+
+    private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null, string? errorCode = null)
+        => CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, message, exitCode, hint, errorCode: errorCode);
 
     private static int WriteInterruptedResult(bool json, JsonSerializerOptions jsonOptions, int filesProcessed, int? filesTotal)
     {
@@ -2286,6 +2293,10 @@ public static class IndexCommandRunner
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         _ = priorMetadataTargetCsharp; // full-scan resolver runs unconditionally on success / 成功時に常に再解決するため不要
+        var unresolvedMergeExitCode = RejectUnresolvedMergeState(projectRoot, options.Json, jsonOptions);
+        if (unresolvedMergeExitCode != null)
+            return unresolvedMergeExitCode.Value;
+
         var normalizedProjectRoot = Path.GetFullPath(projectRoot);
         var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
             ? null
@@ -2507,6 +2518,7 @@ public static class IndexCommandRunner
         var redirectedIndexingMessagePrinted = false;
         var indexProgressVisible = false;
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
+        var skippedSymbolExtractorLanguages = new HashSet<string>(StringComparer.Ordinal);
         var lastJsonProgressAt = Stopwatch.GetTimestamp();
         string? currentJsonIndexFile = null;
         CancellationTokenSource? jsonHeartbeatCts = null;
@@ -2750,6 +2762,7 @@ public static class IndexCommandRunner
                             record.Path,
                             record.Modified,
                             record.Checksum,
+                            language: record.Lang,
                             allowReuse: record.Lang is not ("javascript" or "typescript")
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                                 && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
@@ -2758,8 +2771,11 @@ public static class IndexCommandRunner
                     }
                     if (existingId != null)
                     {
+                        writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
                         skipped++;
                         processed++;
+                        if (!string.IsNullOrWhiteSpace(record.Lang))
+                            skippedSymbolExtractorLanguages.Add(record.Lang);
                         if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang) && record.Lang != null)
                             reusedHotspotFamilyLanguages.Add(record.Lang);
                         if (options.Verbose && !options.Json && !options.Quiet)
@@ -2781,6 +2797,7 @@ public static class IndexCommandRunner
                     }
 
                     using var txn = writer.BeginTransaction();
+                    writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
                     var fileId = writer.UpsertFile(record);
                     var chunks = item.Chunks == null
                         ? ChunkSplitter.Split(fileId, item.Content!)
@@ -2917,14 +2934,17 @@ public static class IndexCommandRunner
             // guarantee 100% backfill on a legacy DB).
             // fold は実検証が通ったときだけ stamp。legacy DB で skip された行は NULL のため、
             // 黙って stamp すると reader が fold 経路で legacy 行を見逃す。codex #86 レビュー。
-            var backfillReady = writer.AllFoldedColumnsBackfilled(requireCurrentSymbolExtractorVersions: skipped != 0);
+            var backfillReady = skipped == 0
+                ? writer.AllFoldedColumnsBackfilled()
+                : writer.AllFoldedColumnsBackfilled(skippedSymbolExtractorLanguages);
+            var foldedKeysCurrent = skipped == 0 || writer.AllFoldedColumnValuesMatchCurrentFold();
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
             var foldVersionMatchesCurrent = priorFoldVersion == currentFoldVersion;
             var foldFingerprintMatchesCurrent = priorFoldFingerprint == currentFoldFingerprint;
             var canRestampExistingFoldTrust = foldVersionMatchesCurrent
                 && foldFingerprintMatchesCurrent
-                && priorSymbolExtractorVersionsMatchCurrent;
+                && writer.SymbolExtractorVersionsMatchCurrent(skippedSymbolExtractorLanguages);
             // A normal `index .` run still skips unchanged files. If the prior fold metadata
             // is stale, those skipped rows keep the old physical folded keys, so stamping the
             // NEW metadata for the whole DB would silently misadvertise trust. Only stamp when
@@ -2935,7 +2955,7 @@ public static class IndexCommandRunner
             // skipped 行は旧 key のまま残る。全件再生成済み（skipped==0）か、事前 metadata が
             // current と一致しているときだけ FoldReady を stamp する。途中中断で
             // user_version だけ落ちた current DB もここで回復させる。
-            if (backfillReady && (skipped == 0 || canRestampExistingFoldTrust))
+            if (backfillReady && foldedKeysCurrent && (skipped == 0 || canRestampExistingFoldTrust))
             {
                 // MarkFoldReady re-verifies inside BEGIN IMMEDIATE; if a concurrent writer slipped
                 // in a NULL-folded row between the upfront check and this stamp, the stamp is
@@ -3117,25 +3137,19 @@ public static class IndexCommandRunner
     private static string GetFoldReadyReason(bool backfillReady, bool foldVersionMatchesCurrent, bool foldFingerprintMatchesCurrent)
     {
         if (!backfillReady)
-            return "missing_fold_backfill";
+            return DegradationReasonCodes.MissingFoldBackfill;
 
         if (!foldVersionMatchesCurrent)
-            return "stale_fold_key_version";
+            return DegradationReasonCodes.StaleFoldKeyVersion;
 
         if (!foldFingerprintMatchesCurrent)
-            return "stale_fold_key_fingerprint";
+            return DegradationReasonCodes.StaleFoldKeyFingerprint;
 
-        return "fold_rows_not_restamped";
+        return DegradationReasonCodes.FoldRowsNotRestamped;
     }
 
     private static string BuildFoldNotReadyExplanation(string? foldReadyReason)
-        => foldReadyReason switch
-        {
-            "missing_fold_backfill" => "--exact falls back to ASCII COLLATE NOCASE because legacy rows without `name_folded` remain.",
-            "stale_fold_key_version" => "--exact falls back to ASCII COLLATE NOCASE because unchanged rows still carry an older fold-key version.",
-            "stale_fold_key_fingerprint" => "--exact falls back to ASCII COLLATE NOCASE because unchanged rows still carry folded keys generated under an older runtime fingerprint.",
-            _ => "--exact falls back to ASCII COLLATE NOCASE because some folded-name rows were not restamped under the current runtime."
-        };
+        => DegradationReasonCodes.BuildFoldNotReadyExplanation(foldReadyReason);
 
     private static string BuildFoldBackfillCommand(string resolvedDbPath)
         => $"cdidx backfill-fold --db {QuoteCommandArgument(resolvedDbPath)}";
@@ -3230,19 +3244,19 @@ public static class IndexCommandRunner
 
         var degradedParts = new List<string>();
         if (!graphTableAvailable)
-            degradedParts.Add("graph_table_available=false");
+            degradedParts.Add(DegradationReasonCodes.GraphTableMissing);
         if (!issuesTableAvailable)
-            degradedParts.Add("issues_table_available=false");
+            degradedParts.Add(DegradationReasonCodes.IssuesTableMissing);
         if (!sqlGraphContractReady)
-            degradedParts.Add("sql_graph_contract_ready=false");
+            degradedParts.Add(DegradationReasonCodes.SqlGraphContractNotReady);
         if (!hotspotFamilyReady)
-            degradedParts.Add("hotspot_family_ready=false");
+            degradedParts.Add(DegradationReasonCodes.HotspotFamilyNotReady);
         if (!csharpSymbolNameReady)
-            degradedParts.Add("csharp_symbol_name_ready=false");
+            degradedParts.Add(DegradationReasonCodes.CSharpSymbolNameNotReady);
         if (!csharpMetadataTargetReady)
-            degradedParts.Add("csharp_metadata_target_ready=false");
+            degradedParts.Add(DegradationReasonCodes.CSharpMetadataTargetNotReady);
         if (!foldReady)
-            degradedParts.Add("fold_ready=false");
+            degradedParts.Add(DegradationReasonCodes.FoldReadyNotReady);
 
         return $"Index completed with degraded readiness ({string.Join(", ", degradedParts)}). Run `cdidx status --db \"{resolvedDbPath}\" --json` to inspect the current DB state.";
     }
@@ -3352,7 +3366,7 @@ public static class IndexCommandRunner
 
                 pendingSymbols.AddRange(SymbolExtractor.Extract(0, record.Lang, content, record.Path));
             }
-            catch
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
                 // The real indexing pass reports file failures; this pre-pass only supplies
                 // workspace symbols for cross-file static interface member matching.
@@ -3371,11 +3385,284 @@ public static class IndexCommandRunner
             symbols.Any(IsCSharpStaticInterfaceContractSymbol) || hadPendingContracts);
     }
 
-    private static bool MayContainCSharpStaticInterfaceContract(string content)
-        => ContainsCSharpWord(content, "interface")
-           && ContainsCSharpWord(content, "static")
-           && (ContainsCSharpWord(content, "abstract")
-               || ContainsCSharpWord(content, "virtual"));
+    internal static bool MayContainCSharpStaticInterfaceContract(string content)
+    {
+        var masked = MaskCSharpCommentsAndStrings(content);
+        var index = 0;
+        while ((index = IndexOfCSharpWord(masked, "interface", index)) >= 0)
+        {
+            var bodyStart = masked.IndexOf('{', index + "interface".Length);
+            if (bodyStart < 0)
+                return false;
+
+            if (CSharpInterfaceBodyMayContainStaticContract(masked, bodyStart))
+                return true;
+
+            index = bodyStart + 1;
+        }
+
+        return false;
+    }
+
+    private static bool CSharpInterfaceBodyMayContainStaticContract(string masked, int bodyStart)
+    {
+        var depth = 1;
+        var memberStart = bodyStart + 1;
+        for (var index = bodyStart + 1; index < masked.Length; index++)
+        {
+            var ch = masked[index];
+            if (ch == '{')
+            {
+                if (depth == 1 && CSharpMemberHeaderHasStaticContract(masked, memberStart, index))
+                    return true;
+
+                depth++;
+            }
+            else if (ch == '}')
+            {
+                depth--;
+                if (depth == 0)
+                    return false;
+
+                if (depth == 1)
+                    memberStart = index + 1;
+            }
+            else if (ch == ';' && depth == 1)
+            {
+                if (CSharpMemberHeaderHasStaticContract(masked, memberStart, index))
+                    return true;
+
+                memberStart = index + 1;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool CSharpMemberHeaderHasStaticContract(string masked, int start, int endExclusive)
+    {
+        if (start < 0 || endExclusive <= start || endExclusive > masked.Length)
+            return false;
+
+        var header = masked[start..endExclusive];
+        return ContainsCSharpWord(header, "static")
+               && (ContainsCSharpWord(header, "abstract")
+                   || ContainsCSharpWord(header, "virtual"));
+    }
+
+    private static int IndexOfCSharpWord(string text, string word, int startIndex)
+    {
+        var index = Math.Max(0, startIndex);
+        while (index < text.Length)
+        {
+            index = text.IndexOf(word, index, StringComparison.Ordinal);
+            if (index < 0)
+                return -1;
+
+            var before = index == 0 ? '\0' : text[index - 1];
+            var afterIndex = index + word.Length;
+            var after = afterIndex >= text.Length ? '\0' : text[afterIndex];
+            if (!IsCSharpIdentifierPart(before) && !IsCSharpIdentifierPart(after))
+                return index;
+
+            index += word.Length;
+        }
+
+        return -1;
+    }
+
+    private static string MaskCSharpCommentsAndStrings(string content)
+    {
+        var chars = content.ToCharArray();
+        var inLineComment = false;
+        var inBlockComment = false;
+        var inString = false;
+        var inChar = false;
+        var inVerbatimString = false;
+        var inRawString = false;
+        var rawQuoteCount = 0;
+
+        for (var index = 0; index < chars.Length; index++)
+        {
+            var ch = chars[index];
+            var next = index + 1 < chars.Length ? chars[index + 1] : '\0';
+
+            if (inLineComment)
+            {
+                if (ch is '\r' or '\n')
+                {
+                    inLineComment = false;
+                }
+                else
+                {
+                    chars[index] = ' ';
+                }
+
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    chars[index] = ' ';
+                    chars[index + 1] = ' ';
+                    index++;
+                    inBlockComment = false;
+                }
+                else if (ch is not ('\r' or '\n'))
+                {
+                    chars[index] = ' ';
+                }
+
+                continue;
+            }
+
+            if (inRawString)
+            {
+                if (ch == '"' && HasConsecutiveQuotes(chars, index, rawQuoteCount))
+                {
+                    for (var quote = 0; quote < rawQuoteCount && index + quote < chars.Length; quote++)
+                        chars[index + quote] = ' ';
+                    index += rawQuoteCount - 1;
+                    inRawString = false;
+                }
+                else if (ch is not ('\r' or '\n'))
+                {
+                    chars[index] = ' ';
+                }
+
+                continue;
+            }
+
+            if (inVerbatimString)
+            {
+                if (ch == '"' && next == '"')
+                {
+                    chars[index] = ' ';
+                    chars[index + 1] = ' ';
+                    index++;
+                }
+                else if (ch == '"')
+                {
+                    chars[index] = ' ';
+                    inVerbatimString = false;
+                }
+                else if (ch is not ('\r' or '\n'))
+                {
+                    chars[index] = ' ';
+                }
+
+                continue;
+            }
+
+            if (inString)
+            {
+                if (ch == '\\' && next != '\0')
+                {
+                    chars[index] = ' ';
+                    chars[index + 1] = ' ';
+                    index++;
+                }
+                else if (ch == '"')
+                {
+                    chars[index] = ' ';
+                    inString = false;
+                }
+                else if (ch is not ('\r' or '\n'))
+                {
+                    chars[index] = ' ';
+                }
+
+                continue;
+            }
+
+            if (inChar)
+            {
+                if (ch == '\\' && next != '\0')
+                {
+                    chars[index] = ' ';
+                    chars[index + 1] = ' ';
+                    index++;
+                }
+                else if (ch == '\'')
+                {
+                    chars[index] = ' ';
+                    inChar = false;
+                }
+                else if (ch is not ('\r' or '\n'))
+                {
+                    chars[index] = ' ';
+                }
+
+                continue;
+            }
+
+            if (ch == '/' && next == '/')
+            {
+                chars[index] = ' ';
+                chars[index + 1] = ' ';
+                index++;
+                inLineComment = true;
+            }
+            else if (ch == '/' && next == '*')
+            {
+                chars[index] = ' ';
+                chars[index + 1] = ' ';
+                index++;
+                inBlockComment = true;
+            }
+            else if (ch == '@' && next == '"')
+            {
+                chars[index] = ' ';
+                chars[index + 1] = ' ';
+                index++;
+                inVerbatimString = true;
+            }
+            else if (ch == '"' && HasConsecutiveQuotes(chars, index, 3))
+            {
+                rawQuoteCount = CountConsecutiveQuotes(chars, index);
+                for (var quote = 0; quote < rawQuoteCount && index + quote < chars.Length; quote++)
+                    chars[index + quote] = ' ';
+                index += rawQuoteCount - 1;
+                inRawString = true;
+            }
+            else if (ch == '"')
+            {
+                chars[index] = ' ';
+                inString = true;
+            }
+            else if (ch == '\'')
+            {
+                chars[index] = ' ';
+                inChar = true;
+            }
+        }
+
+        return new string(chars);
+    }
+
+    private static bool HasConsecutiveQuotes(char[] chars, int index, int count)
+    {
+        if (index + count > chars.Length)
+            return false;
+
+        for (var offset = 0; offset < count; offset++)
+        {
+            if (chars[index + offset] != '"')
+                return false;
+        }
+
+        return true;
+    }
+
+    private static int CountConsecutiveQuotes(char[] chars, int index)
+    {
+        var count = 0;
+        while (index + count < chars.Length && chars[index + count] == '"')
+            count++;
+        return count;
+    }
 
     private static bool IsCSharpStaticInterfaceContractSymbol(SymbolRecord symbol)
         => symbol.Kind is "function" or "property"
