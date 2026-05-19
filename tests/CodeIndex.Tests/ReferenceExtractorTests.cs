@@ -14329,6 +14329,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_ScalaObjectBody_AssignsObjectContainerToCalls()
+    {
+        const string content = """
+            object Main {
+              val config = loadConfig()
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "loadConfig"
+            && r.ReferenceKind == "call"
+            && r.ContainerKind == "object"
+            && r.ContainerName == "Main");
+    }
+
+    [Fact]
     public void Extract_CsharpEventSubscription_DetectsAsSubscribe()
     {
         const string content = """

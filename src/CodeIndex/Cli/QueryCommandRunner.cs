@@ -4427,6 +4427,7 @@ public static class QueryCommandRunner
         "method",
         "module",
         "namespace",
+        "object",
         "operator",
         "procedure",
         "property",

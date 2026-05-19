@@ -1117,7 +1117,7 @@ public static partial class ReferenceExtractor
             .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null &&
                               (IsFunctionLikeSymbolKind(symbol.Kind) || symbol.Kind == "hook" || symbol.Kind == "class"
                                || symbol.Kind == "struct" || symbol.Kind == "namespace"
-                               || symbol.Kind == "property" || symbol.Kind == "class_hook"))
+                               || symbol.Kind == "object" || symbol.Kind == "property" || symbol.Kind == "class_hook"))
             .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
             .ToList();
         var containerResolver = new InnermostContainerResolver(containerCandidates);

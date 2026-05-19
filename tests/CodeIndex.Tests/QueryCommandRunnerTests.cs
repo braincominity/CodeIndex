@@ -30530,6 +30530,31 @@ jobs:
     }
 
     [Fact]
+    public void RunSymbols_AcceptsScalaObjectKindFilter()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_scala_object_kind");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Main.scala", "scala", "object Main {\n  def run(): Unit = ()\n}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "scala", "--kind", "object"],
+                _jsonOptions));
+
+            var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("object", row.GetProperty("kind").GetString());
+            Assert.Equal("Main", row.GetProperty("name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_PreservesCommonJsMultilineBraceBodyRanges()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_commonjs_multiline_body_ranges");

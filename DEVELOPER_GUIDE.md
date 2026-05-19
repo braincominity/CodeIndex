@@ -271,6 +271,10 @@ TypeScript decorators emit `annotation` rows for the decorator name and must not
 
 Python extraction uses `function` for ordinary functions and methods, `class` for class declarations and dynamic class factories, `property` for class attributes, `@property` descriptors, accessor decorators, `Final` constants, and walrus-assigned names, and `class_hook` for lifecycle dunder hooks such as `__init_subclass__`, `__class_getitem__`, `__set_name__`, and `__class_subclasses__`. `SubKind` refines Python property accessors as `getter` / `setter` / `deleter`, walrus assignments as `walrus`, and class hooks as `dunder`.
 
+### Scala symbol taxonomy
+
+Scala extraction uses `class` for `class` / `case class` declarations and `object` for singleton `object`, `case object`, and sealed-object declarations. When a top-level `object X` appears in the same file as a top-level `class X`, `SubKind` records `companion_object` on the object and `has_companion_object` on the class so inspect/outline consumers can show the companion relationship without treating the singleton as an instantiable class (#1823, related taxonomy tracking in #1772).
+
 ### Extending reference extraction
 
 Reference extraction is routed through `IReferenceExtractor` instances keyed by normalized language strings. Use `ReferenceExtractor.TryGetExtractor(language, out var extractor)` when a caller needs to invoke a language extractor directly; aliases such as `vue` / `svelte` normalize to `typescript`, and `razor` / `blazor` / `cshtml` normalize to `csharp`. The public `ReferenceExtractor.Extract(...)` method remains the compatibility entry point and delegates through the same registry.
@@ -1777,6 +1781,10 @@ files 1──N symbol_references
 | `attribute`, `annotation`, `type_reference`, `implicit_implementation` | raw label | 依存関係 / reference 専用の metadata、型位置エッジ、および C# async iterator の `GetAsyncEnumerator` / `MoveNextAsync` のようなコンパイラ合成の実装エッジ。既定の call-graph 行からは除外する。 |
 
 TypeScript decorator は decorator 名を `annotation` 行として出力し、decorated declaration の型位置エッジを隠してはならない。たとえば `constructor(@Inject() svc: Service)` は `Inject` を `annotation`、`Service` を `type_reference` として記録し、`@Input() profile: UserProfile` も decorator と field type の両方を記録する。
+
+### Scala symbol taxonomy
+
+Scala 抽出は `class` / `case class` 宣言を `class`、singleton の `object` / `case object` / sealed object 宣言を `object` として記録する。同じファイルに top-level の `class X` と top-level の `object X` がある場合、`SubKind` は object 側に `companion_object`、class 側に `has_companion_object` を記録し、singleton をインスタンス化可能な class と扱わずに inspect / outline consumer が companion 関係を表示できるようにする (#1823、taxonomy tracking は #1772 に関連)。
 
 ### TypeScript type-graph extraction
 
