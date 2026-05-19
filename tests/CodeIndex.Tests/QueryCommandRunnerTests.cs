@@ -30542,6 +30542,33 @@ jobs:
     }
 
     [Fact]
+    public void RunSymbols_AcceptsKindLambda()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_kind_lambda");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "transform = lambda value: value + 1\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--kind", "lambda"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var symbol = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("lambda", symbol.GetProperty("kind").GetString());
+            Assert.Equal("transform", symbol.GetProperty("name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_AcceptsScalaObjectKindFilter()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_scala_object_kind");
@@ -30601,12 +30628,12 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("function", foo.GetProperty("kind").GetString());
+            Assert.Equal("lambda", foo.GetProperty("kind").GetString());
             Assert.Equal(1, foo.GetProperty("start_line").GetInt32());
             Assert.Equal(4, foo.GetProperty("end_line").GetInt32());
             Assert.Equal(2, foo.GetProperty("body_start_line").GetInt32());
             Assert.Equal(4, foo.GetProperty("body_end_line").GetInt32());
-            Assert.Equal("function", bar.GetProperty("kind").GetString());
+            Assert.Equal("lambda", bar.GetProperty("kind").GetString());
             Assert.Equal(5, bar.GetProperty("start_line").GetInt32());
             Assert.Equal(8, bar.GetProperty("end_line").GetInt32());
             Assert.Equal(6, bar.GetProperty("body_start_line").GetInt32());

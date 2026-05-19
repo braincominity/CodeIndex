@@ -4457,6 +4457,7 @@ public static class QueryCommandRunner
         "import",
         "interface",
         "label",
+        "lambda",
         "method",
         "module",
         "namespace",

@@ -101,7 +101,7 @@ public static partial class ReferenceExtractor
     };
 
     private static bool IsFunctionLikeSymbolKind(string kind)
-        => kind is "function" or "async_function" or "generator" or "async_generator";
+        => kind is "function" or "lambda" or "async_function" or "generator" or "async_generator";
 
     private static readonly Dictionary<string, HashSet<string>> LanguageSpecificIgnoredCallNames = new(StringComparer.Ordinal)
     {

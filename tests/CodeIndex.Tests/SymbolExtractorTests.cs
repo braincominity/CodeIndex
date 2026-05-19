@@ -283,6 +283,17 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_DetectsAssignedLambdaAsLambda()
+    {
+        var content = "transform = lambda value: value + 1";
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        var lambda = Assert.Single(symbols, s => s.Kind == "lambda");
+        Assert.Equal("transform", lambda.Name);
+        Assert.Equal(1, lambda.Line);
+    }
+
+    [Fact]
     public void Extract_Python_DetectsClasses()
     {
         var content = "class UserService:\n    pass";
@@ -1816,7 +1827,7 @@ public class SymbolExtractorTests
         // Assert.Single で、新 HOC 行が同一行に重複シンボルを生やしていないことを保証する。
         // arrow 行が stopAfterFirstPatternMatch で先勝ちしている。
         var foo = Assert.Single(symbols.Where(s => s.Name == "Foo"));
-        Assert.Equal("function", foo.Kind);
+        Assert.Equal("lambda", foo.Kind);
         // Arrow pattern uses BodyStyle.Brace, so EndLine is advanced past StartLine
         // when the body spans multiple lines. The HOC row (BodyStyle.None) would
         // leave EndLine equal to StartLine; a strictly greater end line proves the
@@ -1851,7 +1862,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Connected");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Styled");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Callback");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "Callback");
     }
 
     [Fact]
@@ -2000,9 +2011,9 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "logout" && s.ContainerName == "User");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "compute" && s.ContainerName == "Base");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "count" && s.ContainerName == "Base");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Header");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "add");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "handler");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "Header");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "add");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "handler");
     }
 
     [Fact]
@@ -2104,7 +2115,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
         var callback = Assert.Single(symbols.Where(s => s.Name == "Callback"));
-        Assert.Equal("function", callback.Kind);
+        Assert.Equal("lambda", callback.Kind);
         // Arrow row (BodyStyle.Brace) pushes EndLine past StartLine for a multi-line body.
         // HOC row (BodyStyle.None) would leave EndLine==StartLine.
         // arrow 行は複数行本体で EndLine を StartLine より後ろへ伸ばす。HOC 行
@@ -2871,7 +2882,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "multilineBar" && s.Visibility == "export");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "noSemi" && s.Visibility == "export");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "afterNoSemi" && s.Visibility == "export");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fn" && s.Visibility == "export");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "fn" && s.Visibility == "export");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "fn" && s.Visibility == "export");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "skipped" && s.Visibility == "export");
     }
@@ -4013,7 +4024,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "bar");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "baz");
     }
 
@@ -4060,8 +4071,8 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "bar");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "baz");
     }
 
@@ -4082,8 +4093,8 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "bar");
     }
 
     [Fact]
@@ -4097,9 +4108,9 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "baz");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "baz");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "qux");
     }
 
@@ -4118,13 +4129,13 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        var foo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "foo"));
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "foo"));
         Assert.Equal(1, foo.StartLine);
         Assert.Equal(4, foo.EndLine);
         Assert.Equal(2, foo.BodyStartLine);
         Assert.Equal(4, foo.BodyEndLine);
 
-        var bar = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "bar"));
+        var bar = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "bar"));
         Assert.Equal(5, bar.StartLine);
         Assert.Equal(8, bar.EndLine);
         Assert.Equal(6, bar.BodyStartLine);
@@ -4155,9 +4166,9 @@ public class SymbolExtractorTests
         var defaults = symbols
             .Where(s => s.Kind == "function" && s.Name == "default" && s.Visibility == "export")
             .ToList();
-        Assert.Equal(2, defaults.Count);
+        Assert.Single(defaults);
         Assert.Contains(defaults, s => s.StartLine == 1 && s.BodyStartLine == 3 && s.BodyEndLine == 5);
-        Assert.Contains(defaults, s => s.StartLine == 7 && s.BodyStartLine == 7 && s.BodyEndLine == 9);
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "default" && s.Visibility == "export" && s.StartLine == 7 && s.BodyStartLine == 7 && s.BodyEndLine == 9);
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "default");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "named" && s.ContainerName == "module.exports");
     }
@@ -4287,7 +4298,7 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "enabled");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "enabled");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "flag");
         Assert.DoesNotContain(symbols, s => s.Name == "hidden");
     }
@@ -4303,7 +4314,7 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        var foo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "foo"));
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "foo"));
         Assert.Equal(1, foo.StartLine);
         Assert.Equal(4, foo.EndLine);
         Assert.Equal(2, foo.BodyStartLine);
@@ -4321,9 +4332,9 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "baz");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "baz");
     }
 
     [Fact]
@@ -4340,9 +4351,9 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "baz");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "baz");
     }
 
     [Fact]
@@ -4500,7 +4511,7 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "factory");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "factory");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "method");
     }
@@ -4518,7 +4529,7 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        var factory = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "factory"));
+        var factory = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "factory"));
         Assert.Equal(1, factory.StartLine);
         Assert.Equal(6, factory.EndLine);
         Assert.Equal(2, factory.BodyStartLine);
@@ -4541,7 +4552,7 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        var factory = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "factory"));
+        var factory = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "factory"));
         Assert.Equal(1, factory.StartLine);
         Assert.Equal(4, factory.EndLine);
         Assert.Equal(2, factory.BodyStartLine);
@@ -4567,7 +4578,7 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        var factory = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "factory"));
+        var factory = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "factory"));
         Assert.Equal(4, factory.EndLine);
         Assert.Equal(4, factory.BodyEndLine);
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
@@ -4589,7 +4600,7 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
-        var factory = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "factory"));
+        var factory = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "factory"));
         Assert.Equal(4, factory.EndLine);
         Assert.Equal(4, factory.BodyEndLine);
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
@@ -5076,7 +5087,7 @@ public class SymbolExtractorTests
     {
         var symbols = SymbolExtractor.Extract(1, language, content);
 
-        var function = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "default"));
+        var function = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "default"));
         Assert.Equal("export", function.Visibility);
         Assert.Equal(1, function.StartLine);
         Assert.Equal(expectedBodyStartLine, function.BodyStartLine);
@@ -5093,7 +5104,7 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        var function = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "default"));
+        var function = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "default"));
         Assert.Equal("export", function.Visibility);
         Assert.Equal(1, function.StartLine);
     }
@@ -6369,7 +6380,7 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "factory");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "factory");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Hidden");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "method");
     }
@@ -6387,7 +6398,7 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        var factory = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "factory"));
+        var factory = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "factory"));
         Assert.Equal(1, factory.StartLine);
         Assert.Equal(6, factory.EndLine);
         Assert.Equal(2, factory.BodyStartLine);
@@ -6410,7 +6421,7 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        var factory = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "factory"));
+        var factory = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "factory"));
         Assert.Equal(1, factory.StartLine);
         Assert.Equal(4, factory.EndLine);
         Assert.Equal(2, factory.BodyStartLine);
@@ -6436,7 +6447,7 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        var factory = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "factory"));
+        var factory = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "factory"));
         Assert.Equal(4, factory.EndLine);
         Assert.Equal(4, factory.BodyEndLine);
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
@@ -6458,7 +6469,7 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
-        var factory = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "factory"));
+        var factory = Assert.Single(symbols.Where(s => s.Kind == "lambda" && s.Name == "factory"));
         Assert.Equal(4, factory.EndLine);
         Assert.Equal(4, factory.BodyEndLine);
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service");
@@ -6886,6 +6897,26 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserService");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetUser");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsAssignedLambdaAsLambda()
+    {
+        var content = """
+            public class Worker
+            {
+                public void Run()
+                {
+                    var transform = value => value + 1;
+                    Func<int, int> projector = (value) => value * 2;
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "transform");
+        Assert.Contains(symbols, s => s.Kind == "lambda" && s.Name == "projector");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name is "transform" or "projector");
     }
 
     [Fact]
@@ -12074,6 +12105,25 @@ public class SymbolExtractorTests
         var unnamedGenericMethod = Assert.Single(symbols, s => s.Name == "Snapshot");
         Assert.Equal("struct", unnamedGenericMethod.ContainerKind);
         Assert.Equal("Store", unnamedGenericMethod.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_Go_DetectsAssignedFuncLiteralAsLambda()
+    {
+        var content = """
+            package demo
+
+            func Run() {
+                transform := func(value int) int {
+                    return value + 1
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        var lambda = Assert.Single(symbols, s => s.Kind == "lambda");
+        Assert.Equal("transform", lambda.Name);
+        Assert.Equal(4, lambda.Line);
     }
 
     [Fact]

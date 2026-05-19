@@ -145,11 +145,11 @@ chunks (
     UNIQUE(file_id, chunk_index)
 )
 
--- Extracted symbols (functions, classes, imports, namespaces)
+-- Extracted symbols (functions, lambdas, classes, imports, namespaces)
 symbols (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-    kind            TEXT,                    -- "function", "class", "import", "namespace", ...
+    kind            TEXT,                    -- "function", "lambda", "class", "import", "namespace", ...
     sub_kind        TEXT,                    -- language-specific subtype such as kotlin_value_class
     name            TEXT,
     line            INTEGER,                 -- 1-based anchor line
@@ -1671,11 +1671,11 @@ chunks (
     UNIQUE(file_id, chunk_index)
 )
 
--- 抽出されたシンボル（関数、クラス、インポート、名前空間など）
+-- 抽出されたシンボル（関数、ラムダ、クラス、インポート、名前空間など）
 symbols (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-    kind            TEXT,                    -- "function"、"class"、"import"、"namespace" など
+    kind            TEXT,                    -- "function"、"lambda"、"class"、"import"、"namespace" など
     sub_kind        TEXT,                    -- kotlin_value_class などの言語固有の細分類
     name            TEXT,
     line            INTEGER,                 -- 1始まりのアンカー行

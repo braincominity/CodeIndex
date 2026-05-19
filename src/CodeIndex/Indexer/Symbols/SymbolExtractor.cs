@@ -786,6 +786,7 @@ public static partial class SymbolExtractor
         ["python"] =
         [
             new("function", new Regex(@"^\s*(?:async\s+)?def\s+(?<name>\w+)\s*(?:\[[^\]]*\])?\s*(?:\(|\[)", RegexOptions.Compiled), BodyStyle.Indent),
+            new("lambda",   new Regex(@"^\s*(?<name>\w+)\s*=\s*lambda\b", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Indent),
             new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:(?:typing|collections)\.)?(?:NamedTuple|namedtuple)\s*\(", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:dataclasses\.)?make_dataclass\s*\(", RegexOptions.Compiled), BodyStyle.None),
@@ -814,8 +815,9 @@ public static partial class SymbolExtractor
             // `function` と名前の間に任意の `*` を許容し、ジェネレータ関数 (`function* gen()`, `async function* asyncGen()`) にも対応
             new("function", new Regex(@"^\s*(?<visibility>export)\s+(?<name>default)\s+(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+(?:default\s+)?)?(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)(?:\w+)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("lambda", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("lambda", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function\s*(?<generator>\*)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)\w+\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // HOC-wrapped / call-result component bindings such as
             // `const Wrapped = React.memo(...)`, `const Box = React.forwardRef(...)`,
             // `const Connected = connect(...)(Component)`, `const Styled = styled.div`...``,
@@ -889,7 +891,9 @@ public static partial class SymbolExtractor
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+(?:default\s+)?)?(?:declare\s+)?(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("import", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)" + TypeScriptOptionalTypeParameterListPattern + @"\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("property", new Regex(@"^\s*(?:(?<visibility>export)\s+)?declare\s+(?:const|let|var)\s+(?<name>\w+)(?::\s*[^;=]+)?\s*;", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("lambda", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("lambda", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function\s*(?<generator>\*)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)\w+\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // HOC-wrapped / call-result component bindings — same narrow HOC-prefix set
             // as the JavaScript row above, extended with an optional TypeScript generic
             // type-argument token between the HOC call name and its `(` via the shared
@@ -1123,6 +1127,7 @@ public static partial class SymbolExtractor
             // 注意: `new` は除外しない。`new void Hidden()` は C# のメンバー隠蔽宣言として有効。
             new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|new|file|ref(?:\s+readonly)?)\s+)*async\s+(?<returnType>(?=[\w@?.<>\[\],:\s]*IAsync(?:Enumerable|Enumerator)\b){CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\s*(?:(?:{CSharpVisibilityPattern}|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*delegate\b(?!\s*\*))(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?<returnType>{CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("lambda",    new Regex($@"^\s*(?:var|{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*=\s*(?:async\s+)?(?:\([^)]*\)|{CSharpIdentifierPattern})\s*=>", RegexOptions.Compiled), BodyStyle.None),
             // Constructor (no return type, name followed by parenthesis) — needs visibility.
             // `unsafe` / `extern` can appear before or after visibility, and C# 14 partial
             // constructors place `partial` after visibility, so declarations like
@@ -1310,6 +1315,7 @@ public static partial class SymbolExtractor
         [
             new("namespace", new Regex(@"^\s*package\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("function", new Regex(@"^func\s+(?:\([^)]+\)\s+)?(?<name>\w+)(?:\[[^\]\r\n]+\])?\s*[\(\[]", RegexOptions.Compiled), BodyStyle.Brace),
+            new("lambda",   new Regex(@"^\s*(?<name>\w+)\s*(?::=|=)\s*func\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
             new("struct",   new Regex(@"^type\s+(?<name>\w+)(?:\[[^\]]+\])?\s+struct\b", RegexOptions.Compiled), BodyStyle.Brace),
             new("interface", new Regex(@"^type\s+(?<name>\w+)(?:\[[^\]]+\])?\s+interface\b", RegexOptions.Compiled), BodyStyle.Brace),
             // Type alias (type Name = OtherType or type Name OtherType) / 型エイリアス
@@ -3966,7 +3972,7 @@ public static partial class SymbolExtractor
     {
         foreach (var symbol in symbols)
         {
-            if (symbol.Kind == "function" && IsJavaScriptTypeScriptReactHookName(symbol.Name))
+            if (symbol.Kind is "function" or "lambda" && IsJavaScriptTypeScriptReactHookName(symbol.Name))
                 symbol.Kind = "hook";
         }
     }
