@@ -374,6 +374,7 @@ public class DbReaderTests : IDisposable
                 false,
                 0,
                 true,
+                false,
             ]));
     }
 
@@ -10282,6 +10283,86 @@ public class DbReaderTests : IDisposable
         var caller = Assert.Single(impact);
         Assert.Equal("ImpactCycleB", caller.CallerName);
         Assert.Equal(1, caller.Depth);
+    }
+
+    [Fact]
+    public void GetCallers_ReportsAndCanExcludeSelfReferences()
+    {
+        InsertIndexedFile("src/self_reference_query.cs", "csharp",
+            """
+            public static class SelfReferenceQuery
+            {
+                public static void SelfReferenceTarget() { SelfReferenceTarget(); }
+            }
+            """);
+
+        var callers = _reader.GetCallers(
+            "SelfReferenceTarget", lang: "csharp", exact: true, pathPatterns: ["self_reference_query"]);
+        var caller = Assert.Single(callers);
+        Assert.Equal("SelfReferenceTarget", caller.CallerName);
+        Assert.True(caller.HasSelfReference);
+        Assert.False(caller.HasMutualRecursion);
+
+        Assert.Empty(_reader.GetCallers(
+            "SelfReferenceTarget",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["self_reference_query"],
+            excludeSelfReferences: true));
+    }
+
+    [Fact]
+    public void SearchReferences_ReportsAndCanExcludeSelfReferences()
+    {
+        InsertIndexedFile("src/self_reference_search.cs", "csharp",
+            """
+            public static class SelfReferenceSearch
+            {
+                public static void SearchSelfTarget() { SearchSelfTarget(); }
+            }
+            """);
+
+        var reference = Assert.Single(_reader.SearchReferences(
+            "SearchSelfTarget", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["self_reference_search"]));
+        Assert.True(reference.IsSelfReference);
+        Assert.False(reference.IsMutualRecursion);
+
+        Assert.Empty(_reader.SearchReferences(
+            "SearchSelfTarget",
+            lang: "csharp",
+            referenceKind: "call",
+            exact: true,
+            pathPatterns: ["self_reference_search"],
+            excludeSelfReferences: true));
+    }
+
+    [Fact]
+    public void SearchReferences_StampsMutualRecursionAcrossFiles()
+    {
+        InsertIndexedFile("src/mutual_recursion_a.cs", "csharp",
+            """
+            public static class MutualRecursionA
+            {
+                public static void CrossCycleA() { CrossCycleB(); }
+            }
+            """);
+        InsertIndexedFile("src/mutual_recursion_b.cs", "csharp",
+            """
+            public static class MutualRecursionB
+            {
+                public static void CrossCycleB() { CrossCycleA(); }
+            }
+            """);
+
+        var aToB = Assert.Single(_reader.SearchReferences(
+            "CrossCycleB", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["mutual_recursion_a"]));
+        var bToA = Assert.Single(_reader.SearchReferences(
+            "CrossCycleA", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["mutual_recursion_b"]));
+
+        Assert.True(aToB.IsMutualRecursion);
+        Assert.True(bToA.IsMutualRecursion);
+        Assert.False(aToB.IsSelfReference);
+        Assert.False(bToA.IsSelfReference);
     }
 
     [Fact]

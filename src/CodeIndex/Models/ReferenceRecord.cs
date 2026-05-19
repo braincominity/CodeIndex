@@ -29,4 +29,10 @@ public class ReferenceRecord
 
     /// <summary>Enclosing symbol name when known / 親シンボル名</summary>
     public string? ContainerName { get; set; }
+
+    /// <summary>True when the enclosing symbol references itself / 親シンボル自身への参照なら true</summary>
+    public bool IsSelfReference { get; set; }
+
+    /// <summary>True when this edge is part of a direct two-symbol cycle / 直接の2シンボル循環に含まれるなら true</summary>
+    public bool IsMutualRecursion { get; set; }
 }

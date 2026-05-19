@@ -10,6 +10,8 @@
   "context_truncated": false,
   "container_kind": "function",
   "container_name": "Match",
+  "is_self_reference": false,
+  "is_mutual_recursion": false,
   "exact_index_available": true
 }
 {
@@ -24,5 +26,7 @@
   "context_truncated": false,
   "container_kind": "function",
   "container_name": "Use",
+  "is_self_reference": false,
+  "is_mutual_recursion": false,
   "exact_index_available": true
 }

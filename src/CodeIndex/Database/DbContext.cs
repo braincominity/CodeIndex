@@ -1166,6 +1166,8 @@ public class DbContext : IDisposable
         EnsureColumn("symbols", "name_folded", "TEXT");
         EnsureColumn("symbol_references", "symbol_name_folded", "TEXT");
         EnsureColumn("symbol_references", "container_name_folded", "TEXT");
+        EnsureColumn("symbol_references", "is_self_reference", "INTEGER NOT NULL DEFAULT 0");
+        EnsureColumn("symbol_references", "is_mutual_recursion", "INTEGER NOT NULL DEFAULT 0");
 
         // Indexes / インデックス
         Execute("CREATE INDEX IF NOT EXISTS idx_files_lang     ON files(lang)");
@@ -1390,10 +1392,16 @@ public class DbContext : IDisposable
                 context         TEXT,
                 reference_line_id INTEGER REFERENCES reference_lines(id),
                 container_kind  TEXT,
-                container_name  TEXT
+                container_name  TEXT,
+                is_self_reference INTEGER NOT NULL DEFAULT 0,
+                is_mutual_recursion INTEGER NOT NULL DEFAULT 0
             )"));
         yield return ("EnsureColumn symbol_references.reference_line_id",
             () => EnsureColumn("symbol_references", "reference_line_id", "INTEGER REFERENCES reference_lines(id)"));
+        yield return ("EnsureColumn symbol_references.is_self_reference",
+            () => EnsureColumn("symbol_references", "is_self_reference", "INTEGER NOT NULL DEFAULT 0"));
+        yield return ("EnsureColumn symbol_references.is_mutual_recursion",
+            () => EnsureColumn("symbol_references", "is_mutual_recursion", "INTEGER NOT NULL DEFAULT 0"));
         yield return ("CREATE INDEX idx_symbol_refs_name",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name      ON symbol_references(symbol_name)"));
         yield return ("CREATE INDEX idx_symbol_refs_file",

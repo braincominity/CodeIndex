@@ -202,6 +202,8 @@ public class ReferenceResult
     public bool ContextTruncated { get; set; }
     public string? ContainerKind { get; set; }
     public string? ContainerName { get; set; }
+    public bool IsSelfReference { get; set; }
+    public bool IsMutualRecursion { get; set; }
 }
 
 public class CallerResult
@@ -227,6 +229,8 @@ public class CallerResult
     public double ReferenceWeightScore { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
+    public bool HasSelfReference { get; set; }
+    public bool HasMutualRecursion { get; set; }
 }
 
 public class CalleeResult
