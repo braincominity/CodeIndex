@@ -49,6 +49,7 @@ public static class DbDebug
     // 既定値は false で、環境変数だけでは生テキストモードに入れない（#1530）。
     private static int _allowUnsafeProcess;
     private static int _unsafeDowngradeWarned;
+    private static int _invalidDebugValueWarned;
 
     public static bool IsEnabled => ResolveMode() != DebugMode.Off;
 
@@ -70,6 +71,7 @@ public static class DbDebug
     {
         Interlocked.Exchange(ref _allowUnsafeProcess, 0);
         Interlocked.Exchange(ref _unsafeDowngradeWarned, 0);
+        Interlocked.Exchange(ref _invalidDebugValueWarned, 0);
         EndProfile();
     }
 
@@ -94,19 +96,53 @@ public static class DbDebug
     private static DebugMode ResolveMode()
     {
         var raw = Environment.GetEnvironmentVariable("CDIDX_DEBUG");
-        if (string.IsNullOrEmpty(raw))
+        if (string.IsNullOrWhiteSpace(raw))
             return DebugMode.Off;
-        if (raw.Equals("unsafe", StringComparison.OrdinalIgnoreCase) ||
-            raw.Equals("full", StringComparison.OrdinalIgnoreCase))
+        var value = raw.Trim();
+        if (value.Equals("unsafe", StringComparison.OrdinalIgnoreCase) ||
+            value.Equals("full", StringComparison.OrdinalIgnoreCase))
         {
             if (IsUnsafeAllowedForProcess())
                 return DebugMode.Unsafe;
             WarnUnsafeDowngradedOnce();
             return DebugMode.Redacted;
         }
-        if (raw == "1" || raw.Equals("true", StringComparison.OrdinalIgnoreCase))
-            return DebugMode.Redacted;
+
+        if (TryParseDebugBool(value, out var enabled))
+            return enabled ? DebugMode.Redacted : DebugMode.Off;
+
+        WarnInvalidDebugValueOnce(value);
         return DebugMode.Off;
+    }
+
+    private static bool TryParseDebugBool(string raw, out bool value)
+    {
+        value = false;
+        switch (raw.ToLowerInvariant())
+        {
+            case "1":
+            case "true":
+            case "yes":
+            case "on":
+                value = true;
+                return true;
+            case "0":
+            case "false":
+            case "no":
+            case "off":
+                value = false;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static void WarnInvalidDebugValueOnce(string value)
+    {
+        if (Interlocked.Exchange(ref _invalidDebugValueWarned, 1) != 0)
+            return;
+        Console.Error.WriteLine(
+            $"[cdidx] CDIDX_DEBUG value '{value}' is not recognized. Expected one of: 1, 0, true, false, yes, no, on, off, unsafe, full. Falling back to off.");
     }
 
     private static void WarnUnsafeDowngradedOnce()

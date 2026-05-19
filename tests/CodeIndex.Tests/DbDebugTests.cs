@@ -31,6 +31,71 @@ public class DbDebugTests
         Assert.Empty(output);
     }
 
+    [Theory]
+    [InlineData("1")]
+    [InlineData("true")]
+    [InlineData("TRUE")]
+    [InlineData("yes")]
+    [InlineData("on")]
+    public void IsEnabled_AcceptsTruthyDebugValues(string value)
+    {
+        Environment.SetEnvironmentVariable("CDIDX_DEBUG", value);
+        try
+        {
+            DbDebug.ResetForTesting();
+            var output = CaptureStderr(() => Assert.True(DbDebug.IsEnabled));
+            Assert.Empty(output);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_DEBUG", null);
+            DbDebug.ResetForTesting();
+        }
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("false")]
+    [InlineData("FALSE")]
+    [InlineData("no")]
+    [InlineData("off")]
+    public void IsEnabled_AcceptsFalsyDebugValues(string value)
+    {
+        Environment.SetEnvironmentVariable("CDIDX_DEBUG", value);
+        try
+        {
+            DbDebug.ResetForTesting();
+            var output = CaptureStderr(() => Assert.False(DbDebug.IsEnabled));
+            Assert.Empty(output);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_DEBUG", null);
+            DbDebug.ResetForTesting();
+        }
+    }
+
+    [Fact]
+    public void IsEnabled_InvalidDebugValue_WarnsOnceAndFallsBackToOff()
+    {
+        Environment.SetEnvironmentVariable("CDIDX_DEBUG", "maybe");
+        try
+        {
+            DbDebug.ResetForTesting();
+            var first = CaptureStderr(() => Assert.False(DbDebug.IsEnabled));
+            var second = CaptureStderr(() => Assert.False(DbDebug.IsEnabled));
+
+            Assert.Contains("CDIDX_DEBUG value 'maybe' is not recognized", first);
+            Assert.Contains("Falling back to off", first);
+            Assert.Empty(second);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_DEBUG", null);
+            DbDebug.ResetForTesting();
+        }
+    }
+
     [Fact]
     public void DumpToStderr_RedactsTextByDefault()
     {

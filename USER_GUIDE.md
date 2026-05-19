@@ -946,7 +946,7 @@ For scripts and AI agents that need to classify failures without substring-match
 
 ### Debugging reader errors
 
-If a query fails with a SQLite reader error such as `The data is NULL at ordinal N`, set `CDIDX_DEBUG=1` and rerun. The failing SQL, bound parameters, and the last-read row's columns will be printed to stderr so the offending record can be located. No-op when unset.
+If a query fails with a SQLite reader error such as `The data is NULL at ordinal N`, set `CDIDX_DEBUG=1` and rerun. The failing SQL, bound parameters, and the last-read row's columns will be printed to stderr so the offending record can be located. No-op when unset. Redacted mode accepts `1`, `true`, `yes`, or `on`; off mode accepts `0`, `false`, `no`, or `off`; `unsafe` and `full` request raw mode when paired with `--debug-unsafe`. Unrecognized non-empty values warn once and fall back to off.
 
   Text values (chunk `content`, `context`, paths, signatures, string parameters) are **redacted by default** — only the length and a short SHA256 prefix are emitted, so diagnostics can be pasted into issues without leaking indexed source code. Numeric columns, column names, NULL markers, and SQL text are shown as-is. To include raw text content in a local troubleshooting session, set `CDIDX_DEBUG=unsafe` **and** pass `--debug-unsafe` on the command line — env-var-only `unsafe` is downgraded to redacted with a one-shot warning so a stale `CDIDX_DEBUG=unsafe` in a shell profile or CI environment cannot quietly leak indexed source content. Never paste raw-mode output publicly.
 
