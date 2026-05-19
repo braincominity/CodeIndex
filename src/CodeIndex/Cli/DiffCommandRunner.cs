@@ -214,10 +214,34 @@ public static class DiffCommandRunner
                 connection,
                 """
                 SELECT
+                    key,
+                    value
+                FROM codeindex_meta
+                WHERE
+                    key = 'hotspot_family_version'
+                    OR key = 'hotspot_family_marker_fingerprint'
+                    OR key LIKE 'hotspot_family_version_%'
+                    OR key LIKE 'hotspot_family_marker_fingerprint_%'
+                    OR key = 'csharp_symbol_name_contract_version'
+                    OR key = 'sql_graph_contract_version'
+                    OR key LIKE 'symbol_extractor_version_%'
+                    OR key LIKE 'metadata_target_version_%'
+                    OR key = 'workspace_path_case_sensitive'
+                    OR key = 'unknown_extension_file_count'
+                    OR key = 'cdidx_writer_version'
+                ORDER BY
+                    key,
+                    value
+                """),
+            ReadRows(
+                connection,
+                """
+                SELECT
                     COALESCE(files.path, ''),
                     symbols.kind,
                     symbols.sub_kind,
                     symbols.name,
+                    symbols.name_folded,
                     symbols.line,
                     symbols.start_line,
                     symbols.start_column,
@@ -239,6 +263,7 @@ public static class DiffCommandRunner
                     symbols.kind,
                     symbols.sub_kind,
                     symbols.name,
+                    symbols.name_folded,
                     symbols.line,
                     symbols.start_line,
                     symbols.start_column,
@@ -260,25 +285,29 @@ public static class DiffCommandRunner
                 SELECT
                     COALESCE(files.path, ''),
                     symbol_references.symbol_name,
+                    symbol_references.symbol_name_folded,
                     symbol_references.reference_kind,
                     symbol_references.line,
                     symbol_references.column_number,
                     symbol_references.context,
                     symbol_references.reference_line_id,
                     symbol_references.container_kind,
-                    symbol_references.container_name
+                    symbol_references.container_name,
+                    symbol_references.container_name_folded
                 FROM symbol_references
                 LEFT JOIN files ON files.id = symbol_references.file_id
                 ORDER BY
                     COALESCE(files.path, ''),
                     symbol_references.symbol_name,
+                    symbol_references.symbol_name_folded,
                     symbol_references.reference_kind,
                     symbol_references.line,
                     symbol_references.column_number,
                     symbol_references.context,
                     symbol_references.reference_line_id,
                     symbol_references.container_kind,
-                    symbol_references.container_name
+                    symbol_references.container_name,
+                    symbol_references.container_name_folded
                 """));
     }
 
@@ -313,6 +342,7 @@ public static class DiffCommandRunner
             left.ChunkRows.SequenceEqual(right.ChunkRows, StringComparer.Ordinal) &&
             left.ReferenceLineRows.SequenceEqual(right.ReferenceLineRows, StringComparer.Ordinal) &&
             left.FileIssueRows.SequenceEqual(right.FileIssueRows, StringComparer.Ordinal) &&
+            left.MetaRows.SequenceEqual(right.MetaRows, StringComparer.Ordinal) &&
             left.SymbolRows.SequenceEqual(right.SymbolRows, StringComparer.Ordinal) &&
             left.ReferenceRows.SequenceEqual(right.ReferenceRows, StringComparer.Ordinal);
 
@@ -572,6 +602,7 @@ public static class DiffCommandRunner
         List<string> ChunkRows,
         List<string> ReferenceLineRows,
         List<string> FileIssueRows,
+        List<string> MetaRows,
         List<string> SymbolRows,
         List<string> ReferenceRows);
 
