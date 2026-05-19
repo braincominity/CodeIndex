@@ -966,6 +966,80 @@ jobs:
     }
 
     [Fact]
+    public void RunSearch_RawFtsTooLongQueryReturnsUsageError()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_too_long");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
+            var query = new string('a', DbReader.MaxRawFtsQueryLength + 1);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [query, "--db", dbPath, "--fts"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("raw FTS5 query is too long", stderr);
+            Assert.Contains("literal-safe search", stderr);
+            Assert.DoesNotContain("database error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RawFtsTooManyNearOperatorsReturnsUsageError()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_too_many_near");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
+            var query = string.Join(" OR ", Enumerable.Repeat("NEAR(spawn app, 5)", DbReader.MaxRawFtsNearOperators + 1));
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [query, "--db", dbPath, "--fts", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("raw FTS5 query is too complex", stderr);
+            Assert.Contains("NEAR operators", stderr);
+            Assert.DoesNotContain("database error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RawFtsLowercaseOperatorWordsAreTerms()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_lowercase_terms");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "and or not near");
+            var query = string.Join(" ", Enumerable.Repeat("and", DbReader.MaxRawFtsBooleanOperators + 1));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [query, "--db", dbPath, "--fts", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.DoesNotContain("too complex", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_TrailingWildcardActsAsPrefixShorthand()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_prefix_shorthand");
@@ -2388,6 +2462,55 @@ jobs:
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("Error: --db requires a value.", stderr);
         Assert.Contains("Hint: pass a path to a CodeIndex SQLite database", stderr);
+    }
+
+    [Fact]
+    public void WithDb_InvalidSqliteFileSurfacesSqliteCategory_Issue2072()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2072_invalid_sqlite");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "not-a-codeindex.db");
+            File.WriteAllText(dbPath, "this is not a sqlite database");
+            var dbUri = new Uri(dbPath).AbsoluteUri + "?mode=ro&immutable=1;Pooling=False";
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbUri],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains($"Error [{CommandErrorCodes.DbError}]: SQLite database error", stderr);
+            Assert.Contains("Hint: check `--db`, verify the index was written by a compatible cdidx version", stderr);
+            Assert.DoesNotContain("database error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void WithDb_SqliteCantOpenSurfacesAccessOpenCategory_Issue2072()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2072_cantopen");
+        try
+        {
+            var missingParent = Path.Combine(projectRoot, "missing-parent");
+            var dbUri = new Uri(Path.Combine(missingParent, "codeindex.db")).AbsoluteUri + "?mode=ro";
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbUri],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains($"Error [{CommandErrorCodes.DbError}]: database access/open denied:", stderr);
+            Assert.Contains("verify parent directory permissions", stderr);
+            Assert.DoesNotContain("SQLite database error", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Theory]
