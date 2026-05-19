@@ -928,8 +928,10 @@ public class ConsoleUiTests
             var originalNoUnicode = Environment.GetEnvironmentVariable("NO_UNICODE");
             var originalAtBridgeType = Environment.GetEnvironmentVariable("AT_BRIDGE_TYPE");
             var originalAccessibilityEnabled = Environment.GetEnvironmentVariable("ACCESSIBILITY_ENABLED");
+            var originalOutputEncoding = Console.OutputEncoding;
             try
             {
+                Console.OutputEncoding = Encoding.UTF8;
                 Environment.SetEnvironmentVariable("CDIDX_ASCII", cdidxAscii);
                 Environment.SetEnvironmentVariable("LANG", lang);
                 Environment.SetEnvironmentVariable("LC_ALL", null);
@@ -950,6 +952,7 @@ public class ConsoleUiTests
                 Environment.SetEnvironmentVariable("NO_UNICODE", originalNoUnicode);
                 Environment.SetEnvironmentVariable("AT_BRIDGE_TYPE", originalAtBridgeType);
                 Environment.SetEnvironmentVariable("ACCESSIBILITY_ENABLED", originalAccessibilityEnabled);
+                Console.OutputEncoding = originalOutputEncoding;
             }
         }
     }
