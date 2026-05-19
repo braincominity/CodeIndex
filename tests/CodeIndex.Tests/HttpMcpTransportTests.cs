@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Mcp;
@@ -77,7 +78,15 @@ public class HttpMcpTransportTests : IDisposable
     public async Task HttpTransport_RequestLogger_RecordsMethodStatusDurationAndAuthOutcome()
     {
         var records = new List<HttpMcpTransport.HttpRequestLogRecord>();
-        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: "token", requestLogger: records.Add);
+        using var recordsReady = new CountdownEvent(3);
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath, bearerToken: "token", requestLogger: record =>
+        {
+            lock (records)
+            {
+                records.Add(record);
+            }
+            recordsReady.Signal();
+        });
 
         using var client = new HttpClient();
         using (var missingAuth = new HttpRequestMessage(HttpMethod.Post, harness.Endpoint)
@@ -104,23 +113,30 @@ public class HttpMcpTransportTests : IDisposable
             Assert.Equal(HttpStatusCode.OK, okResponse.StatusCode);
         }
 
-        Assert.Equal(3, records.Count);
-        Assert.Equal("missing", records[0].AuthOutcome);
-        Assert.Equal((int)HttpStatusCode.Unauthorized, records[0].StatusCode);
-        Assert.Equal("POST", records[0].Method);
-        Assert.Equal("/", records[0].Path);
-        Assert.Null(records[0].RequestId);
-        Assert.True(records[0].DurationMs >= 0);
-        Assert.False(string.IsNullOrWhiteSpace(records[0].CorrelationId));
-        Assert.False(string.IsNullOrWhiteSpace(records[0].RemotePeer));
+        Assert.True(recordsReady.Wait(TimeSpan.FromSeconds(5)));
+        HttpMcpTransport.HttpRequestLogRecord[] snapshot;
+        lock (records)
+        {
+            snapshot = records.ToArray();
+        }
 
-        Assert.Equal("missing", records[1].AuthOutcome);
-        Assert.Equal("GET", records[1].Method);
-        Assert.Equal((int)HttpStatusCode.Unauthorized, records[1].StatusCode);
+        Assert.Equal(3, snapshot.Length);
+        Assert.Equal("missing", snapshot[0].AuthOutcome);
+        Assert.Equal((int)HttpStatusCode.Unauthorized, snapshot[0].StatusCode);
+        Assert.Equal("POST", snapshot[0].Method);
+        Assert.Equal("/", snapshot[0].Path);
+        Assert.Null(snapshot[0].RequestId);
+        Assert.True(snapshot[0].DurationMs >= 0);
+        Assert.False(string.IsNullOrWhiteSpace(snapshot[0].CorrelationId));
+        Assert.False(string.IsNullOrWhiteSpace(snapshot[0].RemotePeer));
 
-        Assert.Equal("ok", records[2].AuthOutcome);
-        Assert.Equal("7", records[2].RequestId);
-        Assert.Equal((int)HttpStatusCode.OK, records[2].StatusCode);
+        Assert.Equal("missing", snapshot[1].AuthOutcome);
+        Assert.Equal("GET", snapshot[1].Method);
+        Assert.Equal((int)HttpStatusCode.Unauthorized, snapshot[1].StatusCode);
+
+        Assert.Equal("ok", snapshot[2].AuthOutcome);
+        Assert.Equal("7", snapshot[2].RequestId);
+        Assert.Equal((int)HttpStatusCode.OK, snapshot[2].StatusCode);
     }
 
     [Fact]
