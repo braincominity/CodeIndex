@@ -12,6 +12,32 @@ namespace CodeIndex.Tests;
 public class ReferenceExtractorTests
 {
     [Fact]
+    public void BuildReferenceDedupeKey_IncludesFileIdAndLanguage()
+    {
+        var javaKey = ReferenceExtractor.BuildReferenceDedupeKey(1, "java", 3, 5, "type_reference", "Runner");
+        var rustKey = ReferenceExtractor.BuildReferenceDedupeKey(2, "rust", 3, 5, "type_reference", "Runner");
+
+        Assert.NotEqual(javaKey, rustKey);
+        Assert.StartsWith("1:java:", javaKey, StringComparison.Ordinal);
+        Assert.StartsWith("2:rust:", rustKey, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AddTypeReferenceSegment_DedupesWithinFileAndLanguageOnly()
+    {
+        var references = new List<ReferenceRecord>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        ReferenceExtractor.AddTypeReferenceSegment(references, seen, 1, "Runner", 4, "Runner value", 7, null, "java");
+        ReferenceExtractor.AddTypeReferenceSegment(references, seen, 1, "Runner", 4, "Runner value", 7, null, "java");
+        ReferenceExtractor.AddTypeReferenceSegment(references, seen, 2, "Runner", 4, "Runner value", 7, null, "rust");
+
+        Assert.Equal(2, references.Count);
+        Assert.Contains(references, reference => reference.FileId == 1 && reference.SymbolName == "Runner");
+        Assert.Contains(references, reference => reference.FileId == 2 && reference.SymbolName == "Runner");
+    }
+
+    [Fact]
     public void Extract_CustomReferencePlugin_HandlesUnsupportedLanguage()
     {
         lock (TestConsoleLock.Gate)
@@ -25312,6 +25338,33 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "Base"
             && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SwiftPropertyObserverCalls_AreAttributedToProperty()
+    {
+        const string content = """
+            class C {
+                var x: Int = 0 {
+                    didSet { print(x) }
+                    @willSet { precondition(newValue >= 0) }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "print"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerKind == "property"
+            && reference.ContainerName == "x");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "precondition"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerKind == "property"
+            && reference.ContainerName == "x");
     }
 
     [Fact]

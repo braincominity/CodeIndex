@@ -222,7 +222,7 @@ internal static class JvmMethodReferenceExtractor
         SymbolRecord? container)
     {
         name = NormalizeMethodReferenceName(language, name);
-        var dedupeKey = $"{lineNumber}:{column}:call:{name}";
+        var dedupeKey = ReferenceExtractor.BuildReferenceDedupeKey(fileId, language, lineNumber, column, "call", name);
         if (!seen.Add(dedupeKey))
             return;
 

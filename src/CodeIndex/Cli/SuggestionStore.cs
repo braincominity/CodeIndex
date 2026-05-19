@@ -172,7 +172,7 @@ public class SuggestionStore
 
                     SaveUnlocked(existing);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
                 {
                     // Best-effort — GitHub submission failure does not fail the local operation.
                     // ベストエフォート — GitHub 送信失敗はローカル操作を失敗させない。
@@ -454,9 +454,9 @@ public class SuggestionStore
             File.WriteAllText(tempPath, json);
             File.Move(tempPath, _filePath, overwrite: true);
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            try { File.Delete(tempPath); } catch { /* best-effort cleanup / ベストエフォートのクリーンアップ */ }
+            try { File.Delete(tempPath); } catch (Exception deleteEx) when (deleteEx is IOException or UnauthorizedAccessException) { /* best-effort cleanup / ベストエフォートのクリーンアップ */ }
             throw;
         }
     }
@@ -562,7 +562,7 @@ public class SuggestionStore
             if (File.Exists(LongPath.EnsureWindowsPrefix(_filePath)))
                 File.Move(LongPath.EnsureWindowsPrefix(_filePath), LongPath.EnsureWindowsPrefix(backupPath), overwrite: true);
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Best-effort — if we can't rename, continue with empty list.
             // ベストエフォート — リネームできなければ空リストで続行。

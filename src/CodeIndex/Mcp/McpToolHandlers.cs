@@ -2152,6 +2152,7 @@ public partial class McpServer
                     record.Path,
                     record.Modified,
                     record.Checksum,
+                    language: record.Lang,
                     allowReuse: record.Lang is not ("javascript" or "typescript")
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                         && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
@@ -2254,19 +2255,19 @@ public partial class McpServer
                 // 場合は missing_fold_backfill に降格する。Issue #1535。
                 foldReadyAfter = writer.MarkFoldReady();
                 if (!foldReadyAfter)
-                    foldReadyReason = "missing_fold_backfill";
+                    foldReadyReason = DegradationReasonCodes.MissingFoldBackfill;
             }
             else if (!backfillReady)
             {
-                foldReadyReason = "missing_fold_backfill";
+                foldReadyReason = DegradationReasonCodes.MissingFoldBackfill;
             }
             else if (!foldVersionMatchesCurrent)
             {
-                foldReadyReason = "stale_fold_key_version";
+                foldReadyReason = DegradationReasonCodes.StaleFoldKeyVersion;
             }
             else if (!foldFingerprintMatchesCurrent)
             {
-                foldReadyReason = "stale_fold_key_fingerprint";
+                foldReadyReason = DegradationReasonCodes.StaleFoldKeyFingerprint;
             }
 
             writer.WriteCdidxWriterVersion(_version);

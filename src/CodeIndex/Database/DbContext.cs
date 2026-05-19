@@ -263,7 +263,7 @@ public class DbContext : IDisposable
                 if (attempt < maxOpenAttempts)
                     sleep?.Invoke(50 * attempt);
             }
-            catch
+            catch (Exception)
             {
                 connection.Dispose();
                 throw;
@@ -316,7 +316,7 @@ public class DbContext : IDisposable
             var uri = new Uri(trimmed);
             return uri.IsFile ? uri.LocalPath : null;
         }
-        catch
+        catch (UriFormatException)
         {
             return null;
         }
