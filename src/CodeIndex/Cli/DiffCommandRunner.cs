@@ -187,6 +187,47 @@ public static class DiffCommandRunner
                 """
                 SELECT
                     COALESCE(files.path, ''),
+                    reference_lines.line,
+                    reference_lines.context
+                FROM reference_lines
+                LEFT JOIN files ON files.id = reference_lines.file_id
+                ORDER BY
+                    COALESCE(files.path, ''),
+                    reference_lines.line,
+                    reference_lines.context
+                """),
+            ReadRows(
+                connection,
+                """
+                SELECT
+                    COALESCE(files.path, ''),
+                    file_issues.kind,
+                    file_issues.line,
+                    file_issues.message
+                FROM file_issues
+                LEFT JOIN files ON files.id = file_issues.file_id
+                ORDER BY
+                    COALESCE(files.path, ''),
+                    file_issues.kind,
+                    file_issues.line,
+                    file_issues.message
+                """),
+            ReadRows(
+                connection,
+                """
+                SELECT
+                    key,
+                    value
+                FROM codeindex_meta
+                ORDER BY
+                    key,
+                    value
+                """),
+            ReadRows(
+                connection,
+                """
+                SELECT
+                    COALESCE(files.path, ''),
                     symbols.kind,
                     symbols.sub_kind,
                     symbols.name,
@@ -283,6 +324,9 @@ public static class DiffCommandRunner
             left.Files.SetEquals(right.Files) &&
             left.FileRows.SequenceEqual(right.FileRows, StringComparer.Ordinal) &&
             left.ChunkRows.SequenceEqual(right.ChunkRows, StringComparer.Ordinal) &&
+            left.ReferenceLineRows.SequenceEqual(right.ReferenceLineRows, StringComparer.Ordinal) &&
+            left.FileIssueRows.SequenceEqual(right.FileIssueRows, StringComparer.Ordinal) &&
+            left.MetaRows.SequenceEqual(right.MetaRows, StringComparer.Ordinal) &&
             left.SymbolRows.SequenceEqual(right.SymbolRows, StringComparer.Ordinal) &&
             left.ReferenceRows.SequenceEqual(right.ReferenceRows, StringComparer.Ordinal);
 
@@ -460,6 +504,9 @@ public static class DiffCommandRunner
         HashSet<string> Files,
         List<string> FileRows,
         List<string> ChunkRows,
+        List<string> ReferenceLineRows,
+        List<string> FileIssueRows,
+        List<string> MetaRows,
         List<string> SymbolRows,
         List<string> ReferenceRows);
 }

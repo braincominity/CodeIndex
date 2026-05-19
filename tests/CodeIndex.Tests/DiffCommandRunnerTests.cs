@@ -179,6 +179,35 @@ public class DiffCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DetectsSameCountReferenceLineDriftWithoutDetailedMode_Issue1724()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_refline_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_refline_right");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            TestProjectHelper.InsertIndexedFile(leftDb, "src/Same.cs", "csharp", "public class Same { public void Run() { Foo(); } }");
+            TestProjectHelper.InsertIndexedFile(rightDb, "src/Same.cs", "csharp", "public class Same { public void Run() { Foo(); } }");
+            UpdateFirstReferenceLineContext(rightDb, "public class Same { public void Run() { Drifted(); } }");
+
+            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--summary-only"]);
+
+            Assert.Equal(1, exitCode);
+            using var document = JsonDocument.Parse(output);
+            Assert.Equal("different", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(0, document.RootElement.GetProperty("summary").GetProperty("file_count_delta").GetInt64());
+            Assert.Equal(0, document.RootElement.GetProperty("summary").GetProperty("symbol_count_delta").GetInt64());
+            Assert.Equal(0, document.RootElement.GetProperty("summary").GetProperty("reference_count_delta").GetInt64());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
     public void Run_ReturnsUnreadableExitCodeForMissingDatabase_Issue1724()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_diff_missing");
@@ -312,6 +341,23 @@ public class DiffCommandRunnerTests
             )
             """,
             command => command.Parameters.AddWithValue("$content", content));
+    }
+
+    private static void UpdateFirstReferenceLineContext(string dbPath, string context)
+    {
+        ExecuteNonQuery(
+            dbPath,
+            """
+            UPDATE reference_lines
+            SET context = $context
+            WHERE id = (
+                SELECT id
+                FROM reference_lines
+                ORDER BY id
+                LIMIT 1
+            )
+            """,
+            command => command.Parameters.AddWithValue("$context", context));
     }
 
     private static void ExecuteNonQuery(string dbPath, string sql, Action<SqliteCommand>? configure = null)
