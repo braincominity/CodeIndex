@@ -720,7 +720,7 @@ public class DbWriter
         if (references.Count == 0) return;
 
         var referenceLineIds = new Dictionary<(long FileId, int Line), long>();
-        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 11);
+        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 13);
         for (int i = 0; i < references.Count; i += rowsPerStatement)
         {
             int end = Math.Min(i + rowsPerStatement, references.Count);
@@ -748,7 +748,8 @@ public class DbWriter
                 INSERT INTO symbol_references (
                     file_id, symbol_name, reference_kind, line, column_number,
                     context, reference_line_id, container_kind, container_name,
-                    symbol_name_folded, container_name_folded
+                    symbol_name_folded, container_name_folded, is_self_reference,
+                    is_mutual_recursion
                 )
                 VALUES ");
 
@@ -771,7 +772,8 @@ public class DbWriter
                 sql.Append($@"(
                     @fid{suffix}, @symbolName{suffix}, @referenceKind{suffix}, @line{suffix}, @columnNumber{suffix},
                     @context{suffix}, @referenceLineId{suffix}, @containerKind{suffix}, @containerName{suffix},
-                    @symbolNameFolded{suffix}, @containerNameFolded{suffix}
+                    @symbolNameFolded{suffix}, @containerNameFolded{suffix}, @isSelfReference{suffix},
+                    @isMutualRecursion{suffix}
                 )");
                 cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = reference.FileId;
                 cmd.Parameters.Add($"@symbolName{suffix}", SqliteType.Text).Value = reference.SymbolName;
@@ -784,12 +786,42 @@ public class DbWriter
                 cmd.Parameters.Add($"@containerName{suffix}", SqliteType.Text).Value = (object?)reference.ContainerName ?? DBNull.Value;
                 cmd.Parameters.Add($"@symbolNameFolded{suffix}", SqliteType.Text).Value = FoldedNameDbValue(reference.SymbolName, foldedNameCache);
                 cmd.Parameters.Add($"@containerNameFolded{suffix}", SqliteType.Text).Value = FoldedNameDbValue(reference.ContainerName, foldedNameCache);
+                cmd.Parameters.Add($"@isSelfReference{suffix}", SqliteType.Integer).Value = reference.IsSelfReference ? 1 : 0;
+                cmd.Parameters.Add($"@isMutualRecursion{suffix}", SqliteType.Integer).Value = reference.IsMutualRecursion ? 1 : 0;
             }
 
             cmd.CommandText = sql.ToString();
             cmd.ExecuteNonQuery();
             transaction.Commit();
         }
+
+        RefreshMutualRecursionFlags();
+    }
+
+    private void RefreshMutualRecursionFlags()
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            UPDATE symbol_references AS r
+            SET is_mutual_recursion = CASE
+                WHEN r.is_self_reference = 0
+                 AND r.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
+                 AND r.container_name IS NOT NULL
+                 AND r.container_name <> ''
+                 AND r.symbol_name IS NOT NULL
+                 AND r.symbol_name <> ''
+                 AND EXISTS (
+                    SELECT 1
+                    FROM symbol_references AS reverse
+                    WHERE reverse.is_self_reference = 0
+                      AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
+                      AND reverse.container_name = r.symbol_name COLLATE NOCASE
+                      AND reverse.symbol_name = r.container_name COLLATE NOCASE
+                 )
+                THEN 1
+                ELSE 0
+            END";
+        cmd.ExecuteNonQuery();
     }
 
     public int RebuildTypeScriptAugmentationReferences(string? projectRoot = null)

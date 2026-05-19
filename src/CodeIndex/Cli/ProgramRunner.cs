@@ -170,6 +170,7 @@ internal static class ProgramRunner
                 exitCode = commandName switch
                 {
                     "index" => IndexCommandRunner.Run(subArgs, jsonOptions),
+                    "diff" => DiffCommandRunner.Run(subArgs, jsonOptions),
                     "hooks" => HookCommandRunner.Run(subArgs, jsonOptions),
                     "backfill-fold" => IndexCommandRunner.RunBackfillFold(subArgs, jsonOptions),
                     "db" => DbCommandRunner.RunIntegrityCheck(subArgs, jsonOptions),

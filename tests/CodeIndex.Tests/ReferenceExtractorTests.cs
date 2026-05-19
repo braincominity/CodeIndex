@@ -12,6 +12,52 @@ namespace CodeIndex.Tests;
 public class ReferenceExtractorTests
 {
     [Fact]
+    public void Extract_CSharpSelfCall_StampsSelfReference()
+    {
+        const string content = """
+            public static class CycleFixture
+            {
+                public static void Recurse() { Recurse(); }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var selfCall = Assert.Single(references, reference =>
+            reference.SymbolName == "Recurse"
+            && reference.ReferenceKind == "call");
+        Assert.True(selfCall.IsSelfReference);
+        Assert.False(selfCall.IsMutualRecursion);
+    }
+
+    [Fact]
+    public void Extract_PythonMutualCalls_StampsBothCycleEdges()
+    {
+        const string content = """
+            def alpha():
+                beta()
+
+            def beta():
+                alpha()
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.ContainerName == "alpha"
+            && reference.SymbolName == "beta"
+            && reference.IsMutualRecursion
+            && !reference.IsSelfReference);
+        Assert.Contains(references, reference =>
+            reference.ContainerName == "beta"
+            && reference.SymbolName == "alpha"
+            && reference.IsMutualRecursion
+            && !reference.IsSelfReference);
+    }
+
+    [Fact]
     public void BuildReferenceDedupeKey_IncludesFileIdAndLanguage()
     {
         var javaKey = ReferenceExtractor.BuildReferenceDedupeKey(1, "java", 3, 5, "type_reference", "Runner");
@@ -14280,6 +14326,24 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "println");
         Assert.Contains(references, r => r.SymbolName == "compute");
+    }
+
+    [Fact]
+    public void Extract_ScalaObjectBody_AssignsObjectContainerToCalls()
+    {
+        const string content = """
+            object Main {
+              val config = loadConfig()
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "loadConfig"
+            && r.ReferenceKind == "call"
+            && r.ContainerKind == "object"
+            && r.ContainerName == "Main");
     }
 
     [Fact]

@@ -1672,7 +1672,8 @@ public static partial class SymbolExtractor
             new("function", new Regex(@"^\s*(?<visibility>private|protected)?\s*(?:override\s+)?def\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("interface", new Regex(@"^\s*(?<visibility>private|protected)?\s*(?:sealed\s+)?trait\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("enum",     new Regex(@"^\s*(?<visibility>private|protected)?\s*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("class",    new Regex(@"^\s*(?<visibility>private|protected)?\s*(?:abstract\s+|sealed\s+|final\s+)?(?:case\s+)?(?:class|object)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex(@"^\s*(?<visibility>private|protected)?\s*(?:abstract\s+|sealed\s+|final\s+)?(?:case\s+)?class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("object",   new Regex(@"^\s*(?<visibility>private|protected)?\s*(?:sealed\s+|final\s+)?(?:case\s+)?object\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("import",   new Regex(@"^\s*type\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
         ],
@@ -2089,7 +2090,7 @@ public static partial class SymbolExtractor
 
     private static readonly HashSet<string> ContainerKinds =
     [
-        "class", "struct", "interface", "namespace", "enum", "heading", "specialization", "class_hook"
+        "class", "struct", "interface", "namespace", "enum", "object", "heading", "specialization", "class_hook"
     ];
 
     /// <summary>
@@ -3936,11 +3937,35 @@ public static partial class SymbolExtractor
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
         if (lang is "javascript" or "typescript")
             ClassifyJavaScriptTypeScriptReactHooks(symbols);
+        if (lang == "scala")
+            ClassifyScalaCompanions(symbols);
         KotlinSymbolNameNormalizer.NormalizeSecondaryConstructorNames(symbols);
         if (lang == "shell")
             ExpandShellAliasSymbols(fileId, lines, symbols);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
+    }
+
+    private static void ClassifyScalaCompanions(List<SymbolRecord> symbols)
+    {
+        var topLevelClasses = symbols
+            .Where(symbol => symbol.Kind == "class"
+                && string.IsNullOrWhiteSpace(symbol.ContainerKind)
+                && !string.IsNullOrWhiteSpace(symbol.Name))
+            .GroupBy(symbol => symbol.Name, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+
+        foreach (var scalaObject in symbols.Where(symbol => symbol.Kind == "object"
+                     && string.IsNullOrWhiteSpace(symbol.ContainerKind)
+                     && !string.IsNullOrWhiteSpace(symbol.Name)))
+        {
+            if (!topLevelClasses.TryGetValue(scalaObject.Name, out var companionClasses))
+                continue;
+
+            scalaObject.SubKind ??= "companion_object";
+            foreach (var companionClass in companionClasses)
+                companionClass.SubKind ??= "has_companion_object";
+        }
     }
 
     private static void ClassifyJavaScriptTypeScriptReactHooks(List<SymbolRecord> symbols)

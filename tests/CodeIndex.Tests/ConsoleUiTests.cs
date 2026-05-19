@@ -53,7 +53,7 @@ public class ConsoleUiTests
         Assert.Contains("--commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)", output);
         Assert.Contains("--files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed", output);
         Assert.Contains("--duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms", output);
-        Assert.Contains("--ascii                    Use ASCII progress glyphs", output);
+        Assert.Contains("--ascii                    Use ASCII spinner/progress glyphs", output);
         Assert.Contains("cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json]", output);
         Assert.Contains("--focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)", output);
         Assert.Contains("--focus-line <line>        excerpt: line whose focused column should stay visible", output);
@@ -137,9 +137,39 @@ public class ConsoleUiTests
     [Fact]
     public void GetSpinnerFrames_Default_UsesRotatingBrailleSequence()
     {
-        var frames = ConsoleUi.GetSpinnerFrames(null);
+        WithUnicodeEnvironment(cdidxAscii: null, lang: "en_US.UTF-8", () =>
+        {
+            var frames = ConsoleUi.GetSpinnerFrames(null);
 
-        Assert.Equal(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], frames);
+            Assert.Equal(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], frames);
+        });
+    }
+
+    [Fact]
+    public void GetSpinnerFrames_CdidxAsciiEnvVar_UsesAsciiSequence()
+    {
+        WithUnicodeEnvironment(cdidxAscii: "1", lang: "en_US.UTF-8", () =>
+        {
+            Assert.Equal(["|", "/", "-", "\\"], ConsoleUi.GetSpinnerFrames(null));
+        });
+    }
+
+    [Fact]
+    public void GetSpinnerFrames_PosixLang_UsesAsciiSequence()
+    {
+        WithUnicodeEnvironment(cdidxAscii: null, lang: "C", () =>
+        {
+            Assert.Equal(["|", "/", "-", "\\"], ConsoleUi.GetSpinnerFrames(null));
+        });
+    }
+
+    [Fact]
+    public void GetSpinnerFrames_AsciiOverrideWinsOverThemedSpinner()
+    {
+        WithUnicodeEnvironment(cdidxAscii: "1", lang: "en_US.UTF-8", () =>
+        {
+            Assert.Equal(["|", "/", "-", "\\"], ConsoleUi.GetSpinnerFrames("--sushi"));
+        });
     }
 
     [Fact]
@@ -207,6 +237,42 @@ public class ConsoleUiTests
     public void ShouldUseUnicodeGlyphs_PosixLangDisablesUnicode()
     {
         WithUnicodeEnvironment(cdidxAscii: null, lang: "C", () =>
+        {
+            Assert.False(ConsoleUi.ShouldUseUnicodeGlyphs());
+        });
+    }
+
+    [Fact]
+    public void ShouldUseUnicodeGlyphs_NonUtf8LangDisablesUnicode()
+    {
+        WithUnicodeEnvironment(cdidxAscii: null, lang: "en_US", () =>
+        {
+            Assert.False(ConsoleUi.ShouldUseUnicodeGlyphs());
+        });
+    }
+
+    [Fact]
+    public void ShouldUseUnicodeGlyphs_DumbTerminalDisablesUnicode()
+    {
+        WithUnicodeEnvironment(cdidxAscii: null, lang: "en_US.UTF-8", term: "dumb", action: () =>
+        {
+            Assert.False(ConsoleUi.ShouldUseUnicodeGlyphs());
+        });
+    }
+
+    [Fact]
+    public void ShouldUseUnicodeGlyphs_NoUnicodeEnvVarDisablesUnicode()
+    {
+        WithUnicodeEnvironment(cdidxAscii: null, lang: "en_US.UTF-8", noUnicode: "1", action: () =>
+        {
+            Assert.False(ConsoleUi.ShouldUseUnicodeGlyphs());
+        });
+    }
+
+    [Fact]
+    public void ShouldUseUnicodeGlyphs_AccessibilityEnvVarDisablesUnicode()
+    {
+        WithUnicodeEnvironment(cdidxAscii: null, lang: "en_US.UTF-8", accessibilityEnabled: "1", action: () =>
         {
             Assert.False(ConsoleUi.ShouldUseUnicodeGlyphs());
         });
@@ -866,7 +932,14 @@ public class ConsoleUiTests
         }
     }
 
-    private static void WithUnicodeEnvironment(string? cdidxAscii, string? lang, Action action)
+    private static void WithUnicodeEnvironment(
+        string? cdidxAscii,
+        string? lang,
+        Action action,
+        string? term = null,
+        string? noUnicode = null,
+        string? atBridgeType = null,
+        string? accessibilityEnabled = null)
     {
         lock (TestConsoleLock.Gate)
         {
@@ -874,12 +947,22 @@ public class ConsoleUiTests
             var originalLang = Environment.GetEnvironmentVariable("LANG");
             var originalLcAll = Environment.GetEnvironmentVariable("LC_ALL");
             var originalLcCType = Environment.GetEnvironmentVariable("LC_CTYPE");
+            var originalTerm = Environment.GetEnvironmentVariable("TERM");
+            var originalNoUnicode = Environment.GetEnvironmentVariable("NO_UNICODE");
+            var originalAtBridgeType = Environment.GetEnvironmentVariable("AT_BRIDGE_TYPE");
+            var originalAccessibilityEnabled = Environment.GetEnvironmentVariable("ACCESSIBILITY_ENABLED");
+            var originalOutputEncoding = Console.OutputEncoding;
             try
             {
+                Console.OutputEncoding = Encoding.UTF8;
                 Environment.SetEnvironmentVariable("CDIDX_ASCII", cdidxAscii);
                 Environment.SetEnvironmentVariable("LANG", lang);
                 Environment.SetEnvironmentVariable("LC_ALL", null);
                 Environment.SetEnvironmentVariable("LC_CTYPE", null);
+                Environment.SetEnvironmentVariable("TERM", term);
+                Environment.SetEnvironmentVariable("NO_UNICODE", noUnicode);
+                Environment.SetEnvironmentVariable("AT_BRIDGE_TYPE", atBridgeType);
+                Environment.SetEnvironmentVariable("ACCESSIBILITY_ENABLED", accessibilityEnabled);
                 action();
             }
             finally
@@ -888,6 +971,11 @@ public class ConsoleUiTests
                 Environment.SetEnvironmentVariable("LANG", originalLang);
                 Environment.SetEnvironmentVariable("LC_ALL", originalLcAll);
                 Environment.SetEnvironmentVariable("LC_CTYPE", originalLcCType);
+                Environment.SetEnvironmentVariable("TERM", originalTerm);
+                Environment.SetEnvironmentVariable("NO_UNICODE", originalNoUnicode);
+                Environment.SetEnvironmentVariable("AT_BRIDGE_TYPE", originalAtBridgeType);
+                Environment.SetEnvironmentVariable("ACCESSIBILITY_ENABLED", originalAccessibilityEnabled);
+                Console.OutputEncoding = originalOutputEncoding;
             }
         }
     }

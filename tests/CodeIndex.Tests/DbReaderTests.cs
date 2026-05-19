@@ -374,6 +374,7 @@ public class DbReaderTests : IDisposable
                 false,
                 0,
                 true,
+                false,
             ]));
     }
 
@@ -3557,7 +3558,7 @@ public class DbReaderTests : IDisposable
 
         Assert.True(signal.Relevant);
         Assert.False(signal.Ready);
-        Assert.Contains("csharp", signal.DegradedReason);
+        Assert.Contains("hotspot_family_support_not_indexed=csharp", signal.DegradedReason);
     }
 
     [Fact]
@@ -10285,6 +10286,86 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetCallers_ReportsAndCanExcludeSelfReferences()
+    {
+        InsertIndexedFile("src/self_reference_query.cs", "csharp",
+            """
+            public static class SelfReferenceQuery
+            {
+                public static void SelfReferenceTarget() { SelfReferenceTarget(); }
+            }
+            """);
+
+        var callers = _reader.GetCallers(
+            "SelfReferenceTarget", lang: "csharp", exact: true, pathPatterns: ["self_reference_query"]);
+        var caller = Assert.Single(callers);
+        Assert.Equal("SelfReferenceTarget", caller.CallerName);
+        Assert.True(caller.HasSelfReference);
+        Assert.False(caller.HasMutualRecursion);
+
+        Assert.Empty(_reader.GetCallers(
+            "SelfReferenceTarget",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["self_reference_query"],
+            excludeSelfReferences: true));
+    }
+
+    [Fact]
+    public void SearchReferences_ReportsAndCanExcludeSelfReferences()
+    {
+        InsertIndexedFile("src/self_reference_search.cs", "csharp",
+            """
+            public static class SelfReferenceSearch
+            {
+                public static void SearchSelfTarget() { SearchSelfTarget(); }
+            }
+            """);
+
+        var reference = Assert.Single(_reader.SearchReferences(
+            "SearchSelfTarget", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["self_reference_search"]));
+        Assert.True(reference.IsSelfReference);
+        Assert.False(reference.IsMutualRecursion);
+
+        Assert.Empty(_reader.SearchReferences(
+            "SearchSelfTarget",
+            lang: "csharp",
+            referenceKind: "call",
+            exact: true,
+            pathPatterns: ["self_reference_search"],
+            excludeSelfReferences: true));
+    }
+
+    [Fact]
+    public void SearchReferences_StampsMutualRecursionAcrossFiles()
+    {
+        InsertIndexedFile("src/mutual_recursion_a.cs", "csharp",
+            """
+            public static class MutualRecursionA
+            {
+                public static void CrossCycleA() { CrossCycleB(); }
+            }
+            """);
+        InsertIndexedFile("src/mutual_recursion_b.cs", "csharp",
+            """
+            public static class MutualRecursionB
+            {
+                public static void CrossCycleB() { CrossCycleA(); }
+            }
+            """);
+
+        var aToB = Assert.Single(_reader.SearchReferences(
+            "CrossCycleB", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["mutual_recursion_a"]));
+        var bToA = Assert.Single(_reader.SearchReferences(
+            "CrossCycleA", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["mutual_recursion_b"]));
+
+        Assert.True(aToB.IsMutualRecursion);
+        Assert.True(bToA.IsMutualRecursion);
+        Assert.False(aToB.IsSelfReference);
+        Assert.False(bToA.IsSelfReference);
+    }
+
+    [Fact]
     public void GetTransitiveCallers_MetadataCycleDoesNotParticipateInBfs()
     {
         // Issue #1864: metadata-only edges are compile-time dependency edges, not runtime
@@ -12725,7 +12806,7 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void GetUnusedSymbols_PrivateHelperWithSameFileUse_IsNotLabeledHighConfidence()
+    public void GetUnusedSymbols_PrivateHelperWithSameFileUse_IsNotReported()
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
@@ -12742,14 +12823,22 @@ public class DbReaderTests : IDisposable
                 FileId = fileId,
                 ChunkIndex = 0,
                 StartLine = 1,
-                EndLine = 8,
-                Content = """
+                EndLine = 13,
+                Content = """""
                 public class LocalUseFixture
                 {
                     public void Run() { Hidden(); }
+                    public void RunInterpolated() { _ = $"{HiddenInterpolated()}"; }
+                    public void RunRawInterpolated() { _ = $"""{RawInterpolated()}"""; }
                     private void Hidden() { }
+                    private void HiddenInterpolated() { }
+                    private void RawInterpolated() { }
+                    // CommentOnly is not a real use.
+                    private void CommentOnly() { }
+                    private void StringOnly() { _ = "StringOnly"; }
+                    private void RawStringOnly() { _ = """RawStringOnly"""; }
                 }
-                """,
+                """"",
             }
         ]);
         _writer.InsertSymbols(
@@ -12771,6 +12860,71 @@ public class DbReaderTests : IDisposable
             {
                 FileId = fileId,
                 Kind = "function",
+                Name = "HiddenInterpolated",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 6,
+                Signature = "private void HiddenInterpolated() { }",
+                Visibility = "private",
+                ContainerKind = "class",
+                ContainerName = "LocalUseFixture",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "RawInterpolated",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
+                Signature = "private void RawInterpolated() { }",
+                Visibility = "private",
+                ContainerKind = "class",
+                ContainerName = "LocalUseFixture",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "CommentOnly",
+                Line = 9,
+                StartLine = 9,
+                EndLine = 9,
+                Signature = "private void CommentOnly() { }",
+                Visibility = "private",
+                ContainerKind = "class",
+                ContainerName = "LocalUseFixture",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "StringOnly",
+                Line = 10,
+                StartLine = 10,
+                EndLine = 10,
+                Signature = "private void StringOnly() { _ = \"StringOnly\"; }",
+                Visibility = "private",
+                ContainerKind = "class",
+                ContainerName = "LocalUseFixture",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "RawStringOnly",
+                Line = 11,
+                StartLine = 11,
+                EndLine = 11,
+                Signature = "private void RawStringOnly() { _ = \"\"\"RawStringOnly\"\"\"; }",
+                Visibility = "private",
+                ContainerKind = "class",
+                ContainerName = "LocalUseFixture",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
                 Name = "Hidden",
                 Line = 4,
                 StartLine = 4,
@@ -12785,10 +12939,12 @@ public class DbReaderTests : IDisposable
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
             pathPatterns: ["local_use_fixture.cs"], excludePathPatterns: null, excludeTests: false);
 
-        var hidden = Assert.Single(unused, symbol => symbol.Name == "Hidden");
-        Assert.Equal("likely_unused_private", hidden.UnusedBucket);
-        Assert.Equal("medium", hidden.UnusedConfidence);
-        Assert.Contains("same-file uses may still be missed", hidden.UnusedReason);
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "Hidden");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "HiddenInterpolated");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "RawInterpolated");
+        Assert.Contains(unused, symbol => symbol.Name == "CommentOnly");
+        Assert.Contains(unused, symbol => symbol.Name == "StringOnly");
+        Assert.Contains(unused, symbol => symbol.Name == "RawStringOnly");
     }
 
     [Fact]
@@ -15183,8 +15339,9 @@ public class DbReaderTests : IDisposable
                 Content = """
                 public class LocalUseFixture
                 {
-                    public void Run() { Hidden(); }
-                    private void Hidden() { }
+                    public void Run() { HiddenUsed(); }
+                    private void HiddenUsed() { }
+                    private void HiddenUnused() { }
                     internal void InternalOnly() { }
                 }
                 """,
@@ -15220,11 +15377,24 @@ public class DbReaderTests : IDisposable
             {
                 FileId = fileId,
                 Kind = "function",
-                Name = "Hidden",
+                Name = "HiddenUsed",
                 Line = 4,
                 StartLine = 4,
                 EndLine = 4,
-                Signature = "private void Hidden() { }",
+                Signature = "private void HiddenUsed() { }",
+                Visibility = "private",
+                ContainerKind = "class",
+                ContainerName = "LocalUseFixture",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "HiddenUnused",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "private void HiddenUnused() { }",
                 Visibility = "private",
                 ContainerKind = "class",
                 ContainerName = "LocalUseFixture",
@@ -15234,9 +15404,9 @@ public class DbReaderTests : IDisposable
                 FileId = fileId,
                 Kind = "function",
                 Name = "InternalOnly",
-                Line = 5,
-                StartLine = 5,
-                EndLine = 5,
+                Line = 6,
+                StartLine = 6,
+                EndLine = 6,
                 Signature = "internal void InternalOnly() { }",
                 Visibility = "internal",
                 ContainerKind = "class",
@@ -15246,9 +15416,13 @@ public class DbReaderTests : IDisposable
 
         var unused = _reader.GetUnusedSymbols(limit: 3, kind: null, lang: "csharp",
             pathPatterns: ["diversified_unused_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+        var count = _reader.CountUnusedSymbols(kind: null, lang: "csharp",
+            pathPatterns: ["diversified_unused_fixture.cs"], excludePathPatterns: null, excludeTests: false);
 
-        Assert.Equal(["Hidden", "InternalOnly", "LocalUseFixture"], unused.Select(symbol => symbol.Name).ToArray());
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "HiddenUsed");
+        Assert.Equal(["HiddenUnused", "InternalOnly", "LocalUseFixture"], unused.Select(symbol => symbol.Name).ToArray());
         Assert.Equal(["likely_unused_private", "maybe_unused_nonpublic", "public_or_exported_no_refs"], unused.Select(symbol => symbol.UnusedBucket).ToArray());
+        Assert.Equal(4, count.Count);
     }
 
     [Fact]
@@ -15354,8 +15528,8 @@ public class DbReaderTests : IDisposable
         var unused = _reader.GetUnusedSymbols(limit: 4, kind: null, lang: "csharp",
             pathPatterns: ["reflection_diversified_unused_fixture.cs"], excludePathPatterns: null, excludeTests: false);
 
-        Assert.Equal(["Hidden", "InternalOnly", "UserDto", "FullName"], unused.Select(symbol => symbol.Name).ToArray());
-        Assert.Equal(["likely_unused_private", "maybe_unused_nonpublic", "public_or_exported_no_refs", "reflection_or_config_suspect"], unused.Select(symbol => symbol.UnusedBucket).ToArray());
+        Assert.Equal(["InternalOnly", "UserDto", "FullName", "Run"], unused.Select(symbol => symbol.Name).ToArray());
+        Assert.Equal(["maybe_unused_nonpublic", "public_or_exported_no_refs", "reflection_or_config_suspect", "public_or_exported_no_refs"], unused.Select(symbol => symbol.UnusedBucket).ToArray());
     }
 
     [Fact]

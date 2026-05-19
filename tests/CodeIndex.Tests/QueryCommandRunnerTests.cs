@@ -210,10 +210,22 @@ public class QueryCommandRunnerTests
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["Authenticate", "--db", dbPath, "--json", "--profile", "--slow-query-ms", "0"],
                 _jsonOptions));
-            var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var rawLines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var lines = stdout
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(line =>
+                {
+                    using var document = JsonDocument.Parse(line);
+                    return !IsJsonStreamDoneSentinel(document.RootElement);
+                })
+                .ToArray();
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
+            using (var doneDocument = JsonDocument.Parse(rawLines[^1]))
+            {
+                Assert.True(IsJsonStreamDoneSentinel(doneDocument.RootElement));
+            }
             Assert.Equal(2, lines.Length);
 
             using var resultDocument = JsonDocument.Parse(lines[0]);
@@ -267,13 +279,13 @@ public class QueryCommandRunnerTests
             var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
                 input,
                 () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
-            var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var lines = ParseJsonLines(stdout);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(2, lines.Length);
-            using var searchDocument = JsonDocument.Parse(lines[0]);
-            using var symbolDocument = JsonDocument.Parse(lines[1]);
+            Assert.Equal(2, lines.Count);
+            using var searchDocument = lines[0];
+            using var symbolDocument = lines[1];
             Assert.Equal("src/auth.cs", searchDocument.RootElement.GetProperty("path").GetString());
             Assert.Equal("AuthFixture", symbolDocument.RootElement.GetProperty("name").GetString());
         }
@@ -6328,10 +6340,10 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(["Hidden", "InternalOnly", "UserDto", "FullName"], symbols.EnumerateArray().Select(symbol => symbol.GetProperty("name").GetString()).ToArray());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
+            Assert.Equal(["InternalOnly", "UserDto", "FullName", "Run"], symbols.EnumerateArray().Select(symbol => symbol.GetProperty("name").GetString()).ToArray());
+            Assert.False(json.GetProperty("returned_bucket_counts").TryGetProperty("likely_unused_private", out _));
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(2, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
         }
         finally
@@ -10897,7 +10909,7 @@ jobs:
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
             Assert.True(json.GetProperty("degraded").GetBoolean());
-            Assert.Contains("csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
+            Assert.Contains("hotspot_family_support_not_indexed=csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
             Assert.True(json.GetProperty("graph_table_available").GetBoolean());
         }
         finally
@@ -10942,7 +10954,7 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
             Assert.True(json.GetProperty("degraded").GetBoolean());
-            Assert.Contains("csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
+            Assert.Contains("hotspot_family_support_not_indexed=csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
         }
         finally
         {
@@ -12040,7 +12052,40 @@ jobs:
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
             Assert.True(json.GetProperty("degraded").GetBoolean());
-            Assert.Contains("csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
+            Assert.Contains("hotspot_family_disabled_at_index_time=csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_ZeroJson_ReportsStaleHotspotFamilyMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_family_stale_zero_json");
+        try
+        {
+            var dbPath = CreateHotspotFamilyFixtureDb(projectRoot, markHotspotFamilyReady: true);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), "1");
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.Contains("hotspot_family_metadata_stale=csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
         }
         finally
         {
@@ -30524,6 +30569,31 @@ jobs:
     }
 
     [Fact]
+    public void RunSymbols_AcceptsScalaObjectKindFilter()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_scala_object_kind");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Main.scala", "scala", "object Main {\n  def run(): Unit = ()\n}\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "scala", "--kind", "object"],
+                _jsonOptions));
+
+            var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("object", row.GetProperty("kind").GetString());
+            Assert.Equal("Main", row.GetProperty("name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_PreservesCommonJsMultilineBraceBodyRanges()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_commonjs_multiline_body_ranges");
@@ -31012,7 +31082,11 @@ jobs:
     {
         var jsonLine = stdout
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Last();
+            .Last(line =>
+            {
+                using var document = JsonDocument.Parse(line);
+                return !IsJsonStreamDoneSentinel(document.RootElement);
+            });
         return JsonDocument.Parse(jsonLine);
     }
 
@@ -31144,8 +31218,16 @@ jobs:
         return stdout
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(line => JsonDocument.Parse(line))
+            .Where(document => !IsJsonStreamDoneSentinel(document.RootElement))
             .ToList();
     }
+
+    private static bool IsJsonStreamDoneSentinel(JsonElement element)
+        => element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty("done", out var done)
+            && done.ValueKind is JsonValueKind.True
+            && element.TryGetProperty("interrupted", out _)
+            && element.TryGetProperty("count", out _);
 
     private static (string ProjectRoot, string DbPath) CreateUnusedFixtureDb()
     {

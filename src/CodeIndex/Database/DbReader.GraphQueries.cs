@@ -11,7 +11,7 @@ public partial class DbReader
     /// Find callers for a referenced symbol.
     /// 指定シンボルを呼び出している呼び出し元を探す。
     /// </summary>
-    public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, ReferenceRankMode rankMode = ReferenceRankMode.Weighted)
+    public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, ReferenceRankMode rankMode = ReferenceRankMode.Weighted, bool excludeSelfReferences = false)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return new List<CallerResult>();
@@ -21,6 +21,8 @@ public partial class DbReader
         using var cmd = _conn.CreateCommand();
         var referenceLineJoin = ReferenceLineJoinSql("r");
         var contextSql = ReferenceContextSql("r");
+        var selfReferenceSql = _referenceColumns.Contains("is_self_reference") ? "r.is_self_reference" : "0";
+        var mutualRecursionSql = _referenceColumns.Contains("is_mutual_recursion") ? "r.is_mutual_recursion" : "0";
         var callerContainerPredicate = BuildCallerContainerPredicate("f", "r");
         var supportedLangPredicate = BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang");
 
@@ -39,7 +41,9 @@ public partial class DbReader
                        " + ReferenceKindCountSql("r.reference_kind", "instantiate") + @" AS instantiate_count,
                        " + ReferenceKindCountSql("r.reference_kind", "subscribe") + @" AS subscribe_count,
                        " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score,
-                       r.line
+                       r.line,
+                       MAX(" + selfReferenceSql + @") AS is_self_reference,
+                       MAX(" + mutualRecursionSql + @") AS is_mutual_recursion
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id" + referenceLineJoin + @"
                 WHERE " + callerContainerPredicate + @"
@@ -52,7 +56,9 @@ public partial class DbReader
                    " + ReferenceKindCountSql("r.reference_kind", "call") + @" AS call_count,
                    " + ReferenceKindCountSql("r.reference_kind", "instantiate") + @" AS instantiate_count,
                    " + ReferenceKindCountSql("r.reference_kind", "subscribe") + @" AS subscribe_count,
-                   " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score
+                   " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score,
+                   MAX(" + selfReferenceSql + @") AS is_self_reference,
+                   MAX(" + mutualRecursionSql + @") AS is_mutual_recursion
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id" + referenceLineJoin + @"
             WHERE " + BuildCallerContainerPredicate("f", "r");
@@ -63,6 +69,8 @@ public partial class DbReader
             sql += " AND r.reference_kind = @referenceKind";
         else
             sql += NonInvocationReferenceKindsExclusion;
+        if (excludeSelfReferences)
+            sql += $" AND {selfReferenceSql} = 0";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
         var cssScssVariableAlias = ComputeCssScssVariableAlias(query);
@@ -108,7 +116,9 @@ public partial class DbReader
                    SUM(r.call_count) AS call_count,
                    SUM(r.instantiate_count) AS instantiate_count,
                    SUM(r.subscribe_count) AS subscribe_count,
-                   SUM(r.weighted_score) AS weighted_score
+                   SUM(r.weighted_score) AS weighted_score,
+                   MAX(r.is_self_reference) AS is_self_reference,
+                   MAX(r.is_mutual_recursion) AS is_mutual_recursion
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name";
         }
@@ -167,6 +177,8 @@ public partial class DbReader
                 ReferenceWeightScore = reader.GetDouble(12),
                 FirstLine = reader.GetInt32(6),
                 ReferenceCount = reader.GetInt32(7),
+                HasSelfReference = reader.GetInt32(13) != 0,
+                HasMutualRecursion = reader.GetInt32(14) != 0,
             });
         }
         return results;
@@ -774,6 +786,8 @@ public partial class DbReader
         using var cmd = _conn.CreateCommand();
         var referenceLineJoin = ReferenceLineJoinSql("r");
         var contextSql = ReferenceContextSql("r");
+        var selfReferenceSql = _referenceColumns.Contains("is_self_reference") ? "r.is_self_reference" : "0";
+        var mutualRecursionSql = _referenceColumns.Contains("is_mutual_recursion") ? "r.is_mutual_recursion" : "0";
 
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "callerLang");
 
@@ -805,11 +819,14 @@ public partial class DbReader
         var callerContainerPredicate = BuildCallerContainerPredicate("f", "r");
         var sql = $@"
             WITH logical_references AS (
-                SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.line
+                SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.line,
+                       MAX({selfReferenceSql}) AS is_self_reference,
+                       MAX({mutualRecursionSql}) AS is_mutual_recursion
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id{referenceLineJoin}
                 WHERE {callerContainerPredicate}
                   AND r.reference_kind IN {CallGraphReferenceKindsSql}
+                  AND {selfReferenceSql} = 0
                   AND {supportedLangFilter}
                   {nameCondition}";
         if (lang != null)
@@ -819,7 +836,9 @@ public partial class DbReader
                 GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number
             )
             SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
-                   MIN(line) AS first_line, COUNT(*) AS reference_count
+                   MIN(line) AS first_line, COUNT(*) AS reference_count,
+                   MAX(is_self_reference) AS is_self_reference,
+                   MAX(is_mutual_recursion) AS is_mutual_recursion
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name";
         sql += $" ORDER BY {GetPathBucketOrderSql("r.path")}, reference_count DESC, r.path, COALESCE(r.container_name, ''), COALESCE(r.container_kind, ''), r.symbol_name, first_line LIMIT @limit OFFSET @offset";
@@ -848,6 +867,8 @@ public partial class DbReader
                 CalleeName = reader.GetString(4),
                 FirstLine = reader.GetInt32(5),
                 ReferenceCount = reader.GetInt32(6),
+                HasSelfReference = reader.GetInt32(7) != 0,
+                HasMutualRecursion = reader.GetInt32(8) != 0,
             });
         }
         return results;

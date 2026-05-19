@@ -410,6 +410,9 @@ public class DbContext : IDisposable
             "sql_normalize_csharp_verbatim_name",
             (string? text) => string.IsNullOrWhiteSpace(text) ? null : CSharpVerbatimNameNormalizer.Normalize(text));
         connection.CreateFunction(
+            "csharp_identifier_occurrence_count",
+            (string? text, string? identifier) => CountCSharpIdentifierOccurrences(text, identifier));
+        connection.CreateFunction(
             "sql_normalize_exact_source_name",
             (string? text, string? lang) => string.IsNullOrWhiteSpace(text) ? null : ExactSourceSearchNormalizer.Normalize(text, lang));
         connection.CreateFunction(
@@ -476,6 +479,315 @@ public class DbContext : IDisposable
             "sql_allow_leaf_fallback_at",
             (string? symbolName, string? context, string? containerName, long? columnNumber) =>
                 SqlNameResolver.AllowLeafFallbackAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber)) ? 1 : 0);
+    }
+
+    private static int CountCSharpIdentifierOccurrences(string? text, string? identifier)
+    {
+        if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(identifier))
+            return 0;
+
+        text = MaskCSharpCommentsAndStrings(text);
+        var count = 0;
+        var searchIndex = 0;
+        while (searchIndex < text.Length)
+        {
+            var index = text.IndexOf(identifier, searchIndex, StringComparison.Ordinal);
+            if (index < 0)
+                break;
+
+            var beforeIndex = index - 1;
+            var afterIndex = index + identifier.Length;
+            var hasIdentifierBefore = beforeIndex >= 0 && IsCSharpIdentifierPart(text[beforeIndex]);
+            var hasIdentifierAfter = afterIndex < text.Length && IsCSharpIdentifierPart(text[afterIndex]);
+            if (!hasIdentifierBefore && !hasIdentifierAfter)
+                count++;
+
+            searchIndex = index + identifier.Length;
+        }
+
+        return count;
+    }
+
+    private static bool IsCSharpIdentifierPart(char ch)
+    {
+        return ch == '_' || char.IsLetterOrDigit(ch);
+    }
+
+    private static string MaskCSharpCommentsAndStrings(string text)
+    {
+        var chars = text.ToCharArray();
+        var inBlockComment = false;
+        var inLineComment = false;
+        var inString = false;
+        var inChar = false;
+        var inVerbatimString = false;
+
+        for (var i = 0; i < chars.Length; i++)
+        {
+            var ch = chars[i];
+            var next = i + 1 < chars.Length ? chars[i + 1] : '\0';
+
+            if (inLineComment)
+            {
+                if (ch is '\r' or '\n')
+                    inLineComment = false;
+                else
+                    chars[i] = ' ';
+                continue;
+            }
+
+            if (inBlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    chars[i] = ' ';
+                    chars[i + 1] = ' ';
+                    i++;
+                    inBlockComment = false;
+                }
+                else if (ch is not ('\r' or '\n'))
+                {
+                    chars[i] = ' ';
+                }
+                continue;
+            }
+
+            if (inString)
+            {
+                if (ch == '\\' && !inVerbatimString && next != '\0')
+                {
+                    chars[i] = ' ';
+                    if (next is not ('\r' or '\n'))
+                        chars[i + 1] = ' ';
+                    i++;
+                    continue;
+                }
+
+                if (inVerbatimString && ch == '"' && next == '"')
+                {
+                    chars[i] = ' ';
+                    chars[i + 1] = ' ';
+                    i++;
+                    continue;
+                }
+
+                if (ch == '"')
+                    inString = false;
+
+                chars[i] = ch is '\r' or '\n' ? ch : ' ';
+                continue;
+            }
+
+            if (inChar)
+            {
+                if (ch == '\\' && next != '\0')
+                {
+                    chars[i] = ' ';
+                    if (next is not ('\r' or '\n'))
+                        chars[i + 1] = ' ';
+                    i++;
+                    continue;
+                }
+
+                if (ch == '\'')
+                    inChar = false;
+
+                chars[i] = ch is '\r' or '\n' ? ch : ' ';
+                continue;
+            }
+
+            if (ch == '/' && next == '/')
+            {
+                chars[i] = ' ';
+                chars[i + 1] = ' ';
+                i++;
+                inLineComment = true;
+                continue;
+            }
+
+            if (ch == '/' && next == '*')
+            {
+                chars[i] = ' ';
+                chars[i + 1] = ' ';
+                i++;
+                inBlockComment = true;
+                continue;
+            }
+
+            if (TryMaskCSharpRawString(chars, ref i))
+                continue;
+
+            if (TryMaskCSharpInterpolatedString(chars, ref i))
+                continue;
+
+            if (ch == '@' && next == '"')
+            {
+                chars[i] = ' ';
+                chars[i + 1] = ' ';
+                i++;
+                inString = true;
+                inVerbatimString = true;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                chars[i] = ' ';
+                inString = true;
+                inVerbatimString = false;
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                chars[i] = ' ';
+                inChar = true;
+            }
+        }
+
+        return new string(chars);
+    }
+
+    private static bool TryMaskCSharpRawString(char[] chars, ref int index)
+    {
+        var start = index;
+        var cursor = start;
+        while (cursor < chars.Length && chars[cursor] == '$')
+            cursor++;
+
+        if (cursor + 2 >= chars.Length
+            || chars[cursor] != '"'
+            || chars[cursor + 1] != '"'
+            || chars[cursor + 2] != '"')
+        {
+            return false;
+        }
+
+        var quoteCount = 0;
+        while (cursor + quoteCount < chars.Length && chars[cursor + quoteCount] == '"')
+            quoteCount++;
+        if (quoteCount < 3)
+            return false;
+
+        var interpolationDollarCount = cursor - start;
+        MaskRangePreservingNewLines(chars, start, cursor + quoteCount);
+        var search = cursor + quoteCount;
+        var interpolationBraceDepth = 0;
+        while (search < chars.Length)
+        {
+            if (interpolationBraceDepth == 0 && HasQuoteRun(chars, search, quoteCount))
+            {
+                MaskRangePreservingNewLines(chars, search, search + quoteCount);
+                index = search + quoteCount - 1;
+                return true;
+            }
+
+            if (interpolationDollarCount > 0 && chars[search] == '{')
+            {
+                interpolationBraceDepth++;
+            }
+            else if (interpolationBraceDepth > 0 && chars[search] == '}')
+            {
+                interpolationBraceDepth--;
+            }
+            else if (interpolationBraceDepth == 0 && chars[search] is not ('\r' or '\n'))
+            {
+                chars[search] = ' ';
+            }
+            search++;
+        }
+
+        index = chars.Length - 1;
+        return true;
+    }
+
+    private static bool TryMaskCSharpInterpolatedString(char[] chars, ref int index)
+    {
+        var start = index;
+        if (chars[start] != '$')
+            return false;
+
+        var cursor = start + 1;
+        var verbatim = false;
+        if (cursor < chars.Length && chars[cursor] == '@')
+        {
+            verbatim = true;
+            cursor++;
+        }
+
+        if (cursor >= chars.Length || chars[cursor] != '"')
+            return false;
+
+        MaskRangePreservingNewLines(chars, start, cursor + 1);
+        var braceDepth = 0;
+        for (var i = cursor + 1; i < chars.Length; i++)
+        {
+            var ch = chars[i];
+            var next = i + 1 < chars.Length ? chars[i + 1] : '\0';
+
+            if (braceDepth == 0 && ch == '"' && !(verbatim && next == '"'))
+            {
+                chars[i] = ' ';
+                index = i;
+                return true;
+            }
+
+            if (verbatim && braceDepth == 0 && ch == '"' && next == '"')
+            {
+                chars[i] = ' ';
+                chars[i + 1] = ' ';
+                i++;
+                continue;
+            }
+
+            if (!verbatim && braceDepth == 0 && ch == '\\' && next != '\0')
+            {
+                chars[i] = ' ';
+                if (next is not ('\r' or '\n'))
+                    chars[i + 1] = ' ';
+                i++;
+                continue;
+            }
+
+            if (ch == '{')
+            {
+                braceDepth++;
+                continue;
+            }
+
+            if (braceDepth > 0 && ch == '}')
+            {
+                braceDepth--;
+                continue;
+            }
+
+            if (braceDepth == 0 && ch is not ('\r' or '\n'))
+                chars[i] = ' ';
+        }
+
+        index = chars.Length - 1;
+        return true;
+    }
+
+    private static bool HasQuoteRun(char[] chars, int start, int quoteCount)
+    {
+        if (start + quoteCount > chars.Length)
+            return false;
+        for (var i = 0; i < quoteCount; i++)
+        {
+            if (chars[start + i] != '"')
+                return false;
+        }
+        return true;
+    }
+
+    private static void MaskRangePreservingNewLines(char[] chars, int start, int end)
+    {
+        for (var i = start; i < end && i < chars.Length; i++)
+        {
+            if (chars[i] is not ('\r' or '\n'))
+                chars[i] = ' ';
+        }
     }
 
     private static void RegisterConnectionFunctionsWithRetry(
@@ -854,6 +1166,8 @@ public class DbContext : IDisposable
         EnsureColumn("symbols", "name_folded", "TEXT");
         EnsureColumn("symbol_references", "symbol_name_folded", "TEXT");
         EnsureColumn("symbol_references", "container_name_folded", "TEXT");
+        EnsureColumn("symbol_references", "is_self_reference", "INTEGER NOT NULL DEFAULT 0");
+        EnsureColumn("symbol_references", "is_mutual_recursion", "INTEGER NOT NULL DEFAULT 0");
 
         // Indexes / インデックス
         Execute("CREATE INDEX IF NOT EXISTS idx_files_lang     ON files(lang)");
@@ -1078,10 +1392,16 @@ public class DbContext : IDisposable
                 context         TEXT,
                 reference_line_id INTEGER REFERENCES reference_lines(id),
                 container_kind  TEXT,
-                container_name  TEXT
+                container_name  TEXT,
+                is_self_reference INTEGER NOT NULL DEFAULT 0,
+                is_mutual_recursion INTEGER NOT NULL DEFAULT 0
             )"));
         yield return ("EnsureColumn symbol_references.reference_line_id",
             () => EnsureColumn("symbol_references", "reference_line_id", "INTEGER REFERENCES reference_lines(id)"));
+        yield return ("EnsureColumn symbol_references.is_self_reference",
+            () => EnsureColumn("symbol_references", "is_self_reference", "INTEGER NOT NULL DEFAULT 0"));
+        yield return ("EnsureColumn symbol_references.is_mutual_recursion",
+            () => EnsureColumn("symbol_references", "is_mutual_recursion", "INTEGER NOT NULL DEFAULT 0"));
         yield return ("CREATE INDEX idx_symbol_refs_name",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name      ON symbol_references(symbol_name)"));
         yield return ("CREATE INDEX idx_symbol_refs_file",

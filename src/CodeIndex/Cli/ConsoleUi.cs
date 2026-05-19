@@ -78,6 +78,7 @@ public static class ConsoleUi
         ("outline", "cdidx outline <path> [--db <path>] [--json]"),
         ("status", "cdidx status [--db <path>] [--json] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--stale-after <duration>] [--explain <field>]"),
         ("db", "cdidx db --integrity-check [--db <path>] [--json]"),
+        ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n>]"),
         ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n>] [--no-log] [--include-args]"),
         ("validate", "cdidx validate [--db <path>] [--json] [--kind <kind>] [--path <glob>]"),
         ("impact", "cdidx impact <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--max-hops <n>] [--count] [--with-paths]"),
@@ -101,6 +102,7 @@ public static class ConsoleUi
         "⠋", "⠙", "⠹", "⠸", "⠼",
         "⠴", "⠦", "⠧", "⠇", "⠏",
     ];
+    private static readonly string[] AsciiSpinnerFrames = ["|", "/", "-", "\\"];
 
     internal static string Counted(int count, string singular, string? plural = null, string? format = null)
     {
@@ -225,8 +227,13 @@ public static class ConsoleUi
     /// Get spinner frames based on easter egg flag.
     /// イースターエッグフラグに基づくスピナーフレームを取得。
     /// </summary>
-    public static string[] GetSpinnerFrames(string? easterEgg) => easterEgg switch
+    public static string[] GetSpinnerFrames(string? easterEgg)
     {
+        if (!ShouldUseUnicodeGlyphs())
+            return AsciiSpinnerFrames;
+
+        return easterEgg switch
+        {
         "--sushi" =>
         [
             "\U0001f363 Slicing       ", "\U0001f363 Slicing.      ", "\U0001f363 Slicing..     ", "\U0001f363 Slicing...    ",
@@ -276,8 +283,9 @@ public static class ConsoleUi
             "\U0001f943 Slainte!      ",
         ],
         // Default: Braille spinner / デフォルト: ブレイルスピナー
-        _ => DefaultBrailleSpinnerFrames,
-    };
+            _ => DefaultBrailleSpinnerFrames,
+        };
+    }
 
     // --- Progress bar / プログレスバー ---
 
@@ -571,6 +579,7 @@ public static class ConsoleUi
         Console.WriteLine("  outline <path>             Show a file outline ordered by line, start column, kind, and name");
         Console.WriteLine("  status                     Show database statistics; add --check to verify DB/worktree match or --explain <field> for readiness help");
         Console.WriteLine("  db --integrity-check       Run SQLite `PRAGMA integrity_check` and report findings");
+        Console.WriteLine("  diff <db1> <db2>           Compare two index databases; exit 0 identical, 1 drift, 2 schema mismatch, 3 unreadable");
         Console.WriteLine("  report --output <path>     Build a redacted crash-repro tarball (.tgz) for bug reports");
         Console.WriteLine("  validate                   Report encoding issues (U+FFFD, BOM, null bytes, mixed line endings, UTF-16 BOM, likely non-UTF8)");
         Console.WriteLine("  impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints");
@@ -601,7 +610,7 @@ public static class ConsoleUi
         Console.WriteLine("  --debounce <ms>            Watch only: coalesce bursts of file events into one update after <ms> of quiet (default: 500)");
         Console.WriteLine("  --color <when>             Color output: `auto` (default), `always`, or `never`; flag wins over `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR` env vars, which win over TTY auto-detect");
         Console.WriteLine("  --palette <name>           ANSI palette: `basic` (8-color, default fallback), `256`, or `truecolor`; flag wins over `CDIDX_COLOR_PALETTE` env var, which wins over `COLORTERM` / `TERM` auto-detect");
-        Console.WriteLine("  --ascii                    Use ASCII progress glyphs (`#` / `-`) instead of Unicode block glyphs (also honors CDIDX_ASCII=1 and LANG=C/POSIX)");
+        Console.WriteLine("  --ascii                    Use ASCII spinner/progress glyphs instead of Unicode glyphs (also honors CDIDX_ASCII=1, NO_UNICODE, TERM=dumb, accessibility env hints, and non-UTF-8 locales)");
         Console.WriteLine("  --metrics <path>           Append one JSONL record per CLI command / MCP tool call to <path> (also honors CDIDX_METRICS=<path>)");
         Console.WriteLine("  --help, -h                 Show this help message");
         Console.WriteLine("  --version, -V              Show version information");
@@ -1510,6 +1519,13 @@ public static class ConsoleUi
         if (IsAsciiOutputRequested())
             return false;
 
+        if (IsDumbTerminal())
+            return false;
+
+        var locale = FirstNonEmptyEnvironmentVariable("LC_ALL", "LC_CTYPE", "LANG");
+        if (locale != null && !IsUnicodeLocale(locale))
+            return false;
+
         return Console.OutputEncoding.CodePage == Encoding.UTF8.CodePage
             || Console.OutputEncoding.CodePage == Encoding.Unicode.CodePage;
     }
@@ -1523,15 +1539,46 @@ public static class ConsoleUi
         if (!string.IsNullOrEmpty(ascii) && ascii != "0")
             return true;
 
+        var noUnicode = Environment.GetEnvironmentVariable("NO_UNICODE");
+        if (!string.IsNullOrEmpty(noUnicode) && noUnicode != "0")
+            return true;
+
+        var atBridgeType = Environment.GetEnvironmentVariable("AT_BRIDGE_TYPE");
+        if (!string.IsNullOrEmpty(atBridgeType))
+            return true;
+
+        var accessibilityEnabled = Environment.GetEnvironmentVariable("ACCESSIBILITY_ENABLED");
+        if (!string.IsNullOrEmpty(accessibilityEnabled) && accessibilityEnabled != "0")
+            return true;
+
         return IsPosixLocale(Environment.GetEnvironmentVariable("LC_ALL"))
             || IsPosixLocale(Environment.GetEnvironmentVariable("LC_CTYPE"))
             || IsPosixLocale(Environment.GetEnvironmentVariable("LANG"));
     }
 
+    private static bool IsDumbTerminal()
+        => string.Equals(Environment.GetEnvironmentVariable("TERM"), "dumb", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsPosixLocale(string? locale)
         => locale != null
             && (locale.Equals("C", StringComparison.OrdinalIgnoreCase)
                 || locale.Equals("POSIX", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsUnicodeLocale(string locale)
+        => locale.Contains(".UTF-8", StringComparison.OrdinalIgnoreCase)
+            || locale.Contains(".UTF8", StringComparison.OrdinalIgnoreCase);
+
+    private static string? FirstNonEmptyEnvironmentVariable(params string[] names)
+    {
+        foreach (var name in names)
+        {
+            var value = Environment.GetEnvironmentVariable(name);
+            if (!string.IsNullOrEmpty(value))
+                return value;
+        }
+
+        return null;
+    }
 
     internal static void SetAsciiOutput(bool enabled) => _asciiOutputForced = enabled;
 

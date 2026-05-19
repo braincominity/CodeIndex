@@ -15,6 +15,9 @@ public static class DegradationReasonCodes
     public const string FoldReadyNotReady = "fold_ready=false";
     public const string SqlGraphContractNotReady = "sql_graph_contract_ready=false";
     public const string HotspotFamilyNotReady = "hotspot_family_ready=false";
+    public const string HotspotFamilySupportNotIndexed = "hotspot_family_support_not_indexed";
+    public const string HotspotFamilyMetadataStale = "hotspot_family_metadata_stale";
+    public const string HotspotFamilyDisabledAtIndexTime = "hotspot_family_disabled_at_index_time";
     public const string GraphTableMissing = "graph_table_available=false";
     public const string IssuesTableMissing = "issues_table_available=false";
     public const string CSharpSymbolNameNotReady = "csharp_symbol_name_ready=false";
@@ -30,6 +33,9 @@ public static class DegradationReasonCodes
         FoldReadyNotReady,
         SqlGraphContractNotReady,
         HotspotFamilyNotReady,
+        HotspotFamilySupportNotIndexed,
+        HotspotFamilyMetadataStale,
+        HotspotFamilyDisabledAtIndexTime,
         GraphTableMissing,
         IssuesTableMissing,
         CSharpSymbolNameNotReady,
@@ -108,6 +114,21 @@ public static class DegradationReasonCodes
                 code,
                 "Cross-file hotspot grouping may be degraded for one or more languages.",
                 "Run `cdidx index <projectPath>` to restamp authoritative hotspot families.",
+                "Run `cdidx index <projectPath> --rebuild` for a full rebuild."),
+            HotspotFamilySupportNotIndexed => new(
+                code,
+                "Cross-file hotspot grouping is unavailable because this DB predates hotspot-family metadata or lacks the required symbol columns.",
+                "Run `cdidx index <projectPath>` to rebuild and stamp authoritative hotspot families.",
+                "Run `cdidx index <projectPath> --rebuild` for a full rebuild."),
+            HotspotFamilyMetadataStale => new(
+                code,
+                "Cross-file hotspot grouping metadata was written by an older hotspot-family contract.",
+                "Run `cdidx index <projectPath> --files <changedFiles>` or `cdidx index <projectPath>` to restamp authoritative hotspot families.",
+                "Run `cdidx index <projectPath> --rebuild` for a full rebuild."),
+            HotspotFamilyDisabledAtIndexTime => new(
+                code,
+                "Cross-file hotspot grouping metadata was stamped without marker fingerprints, so authoritative family grouping cannot be trusted.",
+                "Run `cdidx index <projectPath>` to rebuild and stamp authoritative hotspot families.",
                 "Run `cdidx index <projectPath> --rebuild` for a full rebuild."),
             GraphTableMissing => new(
                 code,

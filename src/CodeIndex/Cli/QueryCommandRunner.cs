@@ -343,6 +343,7 @@ public static class QueryCommandRunner
         if (TryWriteUnexpectedExtraPositionals("search", options))
             return CommandExitCodes.UsageError;
 
+        int? jsonDoneCount = null;
         return WithDb(options, jsonOptions, reader =>
         {
             if (options.CountOnly)
@@ -366,7 +367,10 @@ public static class QueryCommandRunner
             if (results.Count == 0)
             {
                 if (options.Json)
+                {
                     Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, queryOptions: options).ToJsonString(jsonOptions));
+                    jsonDoneCount = 0;
+                }
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine(BuildZeroResultLine("No results found", options));
@@ -382,6 +386,7 @@ public static class QueryCommandRunner
                     Console.WriteLine(JsonSerializer.Serialize(
                         SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus),
                         CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResult));
+                jsonDoneCount = results.Count;
             }
             else
             {
@@ -397,8 +402,17 @@ public static class QueryCommandRunner
                 Console.Error.WriteLine($"({results.Count} results in {fileCount} files)");
             }
             return CommandExitCodes.Success;
+        }, exitCode =>
+        {
+            if (options.Json && jsonDoneCount.HasValue)
+                WriteJsonStreamDone(jsonDoneCount.Value, jsonOptions);
         });
     }
+
+    private static void WriteJsonStreamDone(int count, JsonSerializerOptions jsonOptions)
+        => Console.WriteLine(JsonSerializer.Serialize(
+            new JsonStreamDoneResult(Done: true, Count: count, Interrupted: false),
+            CliJsonSerializerContextFactory.Create(jsonOptions).JsonStreamDoneResult));
 
     public static int RunDefinition(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -4141,7 +4155,7 @@ public static class QueryCommandRunner
     // preview 系オプションの検証はコマンド別 allowlist に寄せたため、この shim は常に null を返す。
     private static string? ValidatePreviewOptions(string commandName, string[] args, bool allowMaxLineWidth, bool allowFocusOptions) => null;
 
-    private static int WithDb(QueryCommandOptions options, JsonSerializerOptions jsonOptions, Func<DbReader, int> action)
+    private static int WithDb(QueryCommandOptions options, JsonSerializerOptions jsonOptions, Func<DbReader, int> action, Action<int>? afterProfile = null)
     {
         var dbPath = options.DbPath;
         if (s_batchReader == null)
@@ -4190,6 +4204,7 @@ public static class QueryCommandRunner
             var profileEntries = profiling ? Database.DbDebug.EndProfile() : [];
             if (options.Profile)
                 WriteProfilePayload(profileEntries, jsonOptions);
+            afterProfile?.Invoke(exitCode);
             return exitCode;
         }
         catch (FtsQuerySyntaxException ex)
@@ -4428,6 +4443,7 @@ public static class QueryCommandRunner
         "method",
         "module",
         "namespace",
+        "object",
         "operator",
         "procedure",
         "property",
