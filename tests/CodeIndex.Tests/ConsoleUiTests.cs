@@ -172,6 +172,28 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void GetWindowWidth_ColumnsEnvVarSet_UsesColumnsValue()
+    {
+        WithColumnsEnvironment("200", () =>
+        {
+            Assert.Equal(200, ConsoleUi.GetWindowWidth());
+        });
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("wide")]
+    public void GetWindowWidth_InvalidColumnsEnvVar_FallsBackToConsoleOrDefault(string? columns)
+    {
+        WithColumnsEnvironment(columns, () =>
+        {
+            Assert.True(ConsoleUi.GetWindowWidth() > 0);
+        });
+    }
+
+    [Fact]
     public void ShouldUseUnicodeGlyphs_CdidxAsciiEnvVarDisablesUnicode()
     {
         WithUnicodeEnvironment(cdidxAscii: "1", lang: "en_US.UTF-8", () =>
@@ -865,6 +887,23 @@ public class ConsoleUiTests
                 Environment.SetEnvironmentVariable("LANG", originalLang);
                 Environment.SetEnvironmentVariable("LC_ALL", originalLcAll);
                 Environment.SetEnvironmentVariable("LC_CTYPE", originalLcCType);
+            }
+        }
+    }
+
+    private static void WithColumnsEnvironment(string? columns, Action action)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalColumns = Environment.GetEnvironmentVariable("COLUMNS");
+            try
+            {
+                Environment.SetEnvironmentVariable("COLUMNS", columns);
+                action();
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("COLUMNS", originalColumns);
             }
         }
     }
