@@ -71,6 +71,27 @@ public partial class DbReader
     private const int UnusedPublicCandidateBudget = 2048;
     private const string SymbolLanguageFileIdFilter = " AND s.file_id IN (SELECT id FROM files WHERE lang = @lang)";
 
+    private static string BuildSameFilePrivateUseExclusionSql(string symbolAlias, string fileAlias, string visibilitySql, string startLineSql, string endLineSql)
+    {
+        return $@"
+              AND NOT (
+                  {fileAlias}.lang = 'csharp'
+                  AND {visibilitySql} IN ('private', 'fileprivate')
+                  AND {symbolAlias}.name <> ''
+                  AND EXISTS (
+                      SELECT 1
+                      FROM chunks same_file_chunk
+                      WHERE same_file_chunk.file_id = {symbolAlias}.file_id
+                        AND csharp_identifier_occurrence_count(same_file_chunk.content, {symbolAlias}.name) > 0
+                        AND (
+                            same_file_chunk.end_line < {startLineSql}
+                            OR same_file_chunk.start_line > {endLineSql}
+                            OR csharp_identifier_occurrence_count(same_file_chunk.content, {symbolAlias}.name) > 1
+                        )
+                  )
+              )";
+    }
+
     private static string GetHotspotReferenceWeightSql(string referenceKindSql) => $@"
         CASE {referenceKindSql}
             WHEN 'call' THEN 1.0
@@ -2474,6 +2495,15 @@ public partial class DbReader
                                 ))
                          ))
                   )";
+        if (_hasChunksTable && HasTable("chunks"))
+        {
+            sql += BuildSameFilePrivateUseExclusionSql(
+                "s",
+                "f",
+                visibilitySql,
+                GetSymbolColumnSql("start_line", "s.line"),
+                GetSymbolColumnSql("end_line", "s.line"));
+        }
         sql += $"\n              AND {BuildAmbiguousCSharpEnumMemberExclusionSql("s", "f", pathPatterns, excludePathPatterns, excludeTests)}";
 
         if (lang != null)
@@ -2619,6 +2649,15 @@ public partial class DbReader
                                 ))
                      ))
               )";
+        if (_hasChunksTable && HasTable("chunks"))
+        {
+            sql += BuildSameFilePrivateUseExclusionSql(
+                "s",
+                "f",
+                $"lower({GetSymbolColumnSql("visibility", "''")})",
+                GetSymbolColumnSql("start_line", "s.line"),
+                GetSymbolColumnSql("end_line", "s.line"));
+        }
         sql += $"\n              AND {BuildAmbiguousCSharpEnumMemberExclusionSql("s", "f", pathPatterns, excludePathPatterns, excludeTests)}";
 
         if (lang != null)
@@ -3545,7 +3584,7 @@ public partial class DbReader
             return (
                 UnusedBucketLikelyPrivate,
                 "medium",
-                "private/file-local symbol with no indexed references; same-file uses may still be missed");
+                "private/file-local symbol with no indexed references after same-file text validation");
         }
 
         return (
