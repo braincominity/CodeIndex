@@ -11,6 +11,163 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.23.0] - 2026-05-19
+
+#### Added
+
+- **Visibility filters for symbol-surface queries (#1412)** — `symbols`, `definition`, `unused`, and `hotspots` now accept `--visibility` and `--exclude-visibility` for `public`, `protected`, `internal`, and `private` symbols.
+- **Added .sln/.csproj project filters (#1707)** — `cdidx index` and path-filtered query commands now accept `--project <name|path>`, with `--solution <path>` for workspaces that need an explicit solution file.
+- **Added `cdidx diff <db1> <db2>` for index database drift checks (#1724)** — the new command compares schema versions plus file, symbol, and reference counts, lists one-sided files with a cap, supports JSON / summary-only / detailed symbol diff modes, and returns stable exit codes for identical, drift, schema mismatch, and unreadable database outcomes.
+- **Extractor plugins can add custom language support (#1937)** — `cdidx` now exposes narrow symbol/reference extractor interfaces and discovers trusted plugin DLLs from `.cdidx/plugins/` and `~/.cdidx/plugins/`, including plugin-owned file extensions, so teams can index project-specific DSLs without forking CodeIndex.
+- **Added `cdidx batch` for repeated CLI queries (#2119)** — scripts and editor integrations can now stream JSON-array query commands through one process and reuse a single SQLite connection instead of paying setup cost for every query.
+
+#### Changed
+
+- **Reference extraction now exposes registered per-language extractors (#1760)** — callers can resolve an `IReferenceExtractor` by language and invoke it with `ReferenceExtractionContext`, while the existing `ReferenceExtractor.Extract(...)` entry point keeps behavior-compatible routing.
+- **Full-scan indexing now parallelizes extraction (#1842)** — `cdidx index` runs file reads, chunking, symbol extraction, reference extraction, and content validation through bounded worker tasks while keeping SQLite writes single-consumer; use `--parallelism <n>` or `CDIDX_INDEX_PARALLELISM` to tune the worker count.
+- **HTTP MCP transport now accepts an independent SSE event stream (#2204)** — `cdidx mcp --transport http` now serves `GET /events` as `text/event-stream`, applies the same bearer-token rules as POST requests, and keeps the event stream from blocking normal JSON-RPC `POST /` calls. The current server does not yet emit unsolicited frames.
+- **HTTP MCP request-loop logging now records structured request outcomes (#2205)** — When persistent lifecycle logging is enabled, `cdidx mcp --transport http` writes one `mcp_http_request` record per request with correlation id, JSON-RPC request id when available, remote peer, method, path, status, duration, and auth outcome without logging request or response bodies.
+
+#### Fixed
+
+- **`unused` now suppresses C# private same-file false positives (#1403)** — private and file-private C# candidates are checked against same-file indexed text before reporting, so symbols used only within their defining file are no longer listed as likely unused.
+- **C# hotspots no longer promote bodyless call-site method names (#1405)** — `hotspots` and grouped hotspot results now skip C# function candidates without a body span, preventing BCL/library calls such as `GetInt32` from being reported as project definitions.
+- **`find` now distinguishes path misses from content misses (#1406)** — when `--path` matches files but the query has no in-file hits, the CLI now says the path matched and suggests broadening the query instead of incorrectly telling users to broaden `--path`.
+- **Bare catch blocks no longer swallow fatal or cancellation exceptions (#1411)** — best-effort CLI and database cleanup/probe paths now catch only the expected exception types, or explicitly rethrow after cleanup, so cancellation, out-of-memory failures, and programming errors surface correctly.
+- **MCP cancellation notifications now cancel matching in-flight requests (#1418)** — `$/cancelRequest` and `notifications/cancelled` now look up the JSON-RPC request id, cancel the per-request token, and return a structured `request_cancelled` error when the handler observes cancellation.
+- **Top-level CLI cancellation now returns the documented cancellation exit code (#1430)** — `OperationCanceledException` no longer falls through to the generic database-error handler when a command is cancelled before completion.
+- **JS/TS default-export async arrow call attribution is now covered (#1439)** — regression coverage now verifies calls inside `export default async (...) => { ... }` attach to the synthetic `default` function container.
+- **Swift property observers keep property scope (#1444)** — `didSet` / `willSet` observers, including Swift 6 `@didSet` / `@willSet` spelling, now index as property child accessors so references inside observer bodies are attributed to the owning property.
+- **Kotlin and Scala triple-quoted string masking is now covered for #1446** — regression coverage confirms call-shaped sample code inside raw string bodies does not create phantom references.
+- **TypeScript `satisfies` references no longer leak into the call graph (#1447)** — references on the right-hand side of `satisfies` are kept as `type_reference` edges and suppressed as phantom `call` edges.
+- **C# raw string closing delimiter detection now requires an exact quote count (#1453)** — longer quote runs inside raw string content no longer end the string early or expose code-shaped text as phantom symbols.
+- **C# class and struct primary constructor parameters are now indexed as contained properties (#1454)** — `class C(string name)` and `struct S(int value)` now surface their primary constructor parameters as symbols on the containing type, matching the captured-member references used inside the type body.
+- **C# generic attribute type arguments are now indexed (#1455)** — C# 11 no-argument generic attributes such as `[Serializable<MyType>]` now emit `type_reference` rows for their type arguments.
+- **C# static interface member implementations now emit override-style edges (#1457)** — `references` can now see implementations of `static abstract` and `static virtual` interface methods such as generic-math `Parse` members.
+- **Pinned JS/TS CRLF template-literal column stability (#1465)** — added regression coverage that CRLF-encoded JavaScript and TypeScript template literals produce the same symbol line, column, and signature metadata as LF-encoded input.
+- **Unsupported installer RIDs now fail before artifact download (#1601)** — `install.sh` validates the detected RID against the published release asset list and reports the detected RID, supported RIDs, install/build alternatives, and the platform-support issue link instead of falling through to a release-asset 404.
+- **`search --json` now ends clean streams with a done sentinel (#1659)** — result streams now append `{"done":true,"count":N,"interrupted":false}`, including zero-result output, so consumers can distinguish clean completion from truncated output.
+- **Kotlin infix calls are now indexed as call references (#1661)** — Kotlin expressions such as `1 to "one"`, bitwise infix operations, ranges, and same-file `infix fun` calls now emit `call` references for the infix function name.
+- **Large source files are rejected before multi-megabyte payload allocation (#1695)** — the default indexing file-size cap is now 4 MiB, so 10 MiB generated/vendor sources are skipped before the indexer accumulates a contiguous byte array; intentional large sources can still opt in with `--max-file-bytes` or `CDIDX_MAX_FILE_BYTES`.
+- **Bulk indexing writes now use multi-row SQLite inserts (#1699)** — chunk, symbol, and reference writes pack rows into bounded `VALUES` batches while preserving FTS and reference-line behavior.
+- **Search now has a final stable tiebreaker (#1731)** — chunk search ordering now ends with the persisted chunk id, so rank/path ties no longer fall through to SQLite's implementation-defined row order.
+- **Progress spinners now fall back to ASCII on non-Unicode terminals (#1767)** — `cdidx` now uses `|` / `/` / `-` / `\` spinner frames when `--ascii`, `CDIDX_ASCII=1`, `NO_UNICODE`, `TERM=dumb`, accessibility environment hints, or a non-UTF-8 locale indicates Unicode glyphs may render poorly.
+- **Console width now honors `COLUMNS` (#1770)** - `cdidx` uses a positive `COLUMNS` value before falling back to `Console.WindowWidth` or 80 columns, so piped and scripted output can request wider terminal formatting.
+- **Progress bars now have an ASCII fallback (#1772)** - `--ascii`, `CDIDX_ASCII=1`, and `LANG=C` / `POSIX` locales render indexing progress with `#` / `-` bars instead of Unicode block glyphs, and very narrow Unicode terminals fall back to a percentage-only line.
+- **C# normalized snippets no longer clamp to a fabricated raw span (#1774)** — search snippets now explicitly validate raw index map endpoints before focusing a clamped C# normalized match, falling back to unfocused clamping when the normalized span cannot be reconstructed.
+- **Scala singleton objects now use the `object` symbol kind (#1823)** — top-level `object`, `case object`, and sealed-object declarations are no longer indexed as generic classes, and same-file class/object companions are marked through `SubKind`.
+- **React custom hooks now surface as hook symbols (#1885)** — JavaScript/TypeScript functions named with the `use[A-Z]...` convention are indexed as `hook` symbols, and hook calls are emitted as `consumes_hook` references for composition graph queries.
+- **TypeScript and JavaScript import symbols now resolve tsconfig path aliases (#1886)** — static module specifiers captured from imports, require calls, dynamic imports, workers, and related JS/TS module-loading forms now use `tsconfig.json` / `jsconfig.json` `baseUrl` and `paths` mappings when the target file exists.
+- **Python stringified annotations are parsed as type references (#1887)** — quoted forward references in function and variable annotations now emit clean type-reference rows without leaking quote characters into symbol names.
+- **Fixed TypeScript mapped-type reference extraction (#1888)** — mapped type clauses such as `keyof T`, `T[K]`, template literal type holes, and conditional `infer` clauses now emit type-parameter references instead of leaving utility-type chains opaque.
+- **Python class lifecycle hooks are distinguished from ordinary methods (#1889)** — `__init_subclass__`, `__class_getitem__`, `__set_name__`, and `__class_subclasses__` now surface as `class_hook` symbols with `dunder` sub-kind metadata.
+- **Python walrus assignments now appear in symbols (#1891)** — names introduced by `:=` are indexed as `property` symbols with `walrus` sub-kind metadata.
+- **Python multiline function and class headers are retained for extraction (#1893)** — wrapped signatures and PEP 695 type-parameter headers now feed symbol signatures and annotation reference extraction.
+- **Python PEP 604 builtin union members are emitted as type references (#1896)** — annotations such as `int | str`, `list[int | bytes]`, and `Result | None` now preserve builtin union members in reference output.
+- **TypeScript namespace re-export usage now links back to the source module (#1900)** — qualified usages such as `NS.Member()` now emit a module `reference` edge when `NS` came from `export * as NS from "./module"`, namespace imports, named import aliases, or dynamic import namespace assignments.
+- **TypeScript decorated declarations keep their type references (#1903)** — Angular, NestJS, and TypeORM-style decorators now emit decorator metadata without hiding parameter, return, or field type-reference edges.
+- **Go extraction now preserves test roles, qualified receiver containers, and concurrency edges (#1908, #1910, #1983)** — Go symbols now tag test, benchmark, fuzz, example, init, and test-helper functions; qualified pointer receivers attach to their bare type container; and references include goroutine spawn plus channel send/receive edges.
+- **Rust async `impl Future<Output = T>` return constraints now keep the associated output visible (#1914)** — Rust type-reference extraction now emits the `Output` binding key in `Future<Output = T>` signatures instead of dropping part of the async return contract.
+- **Rust file modules are distinguished from inline modules (#1915)** — `mod foo;` is indexed as a file module while inline `mod foo { ... }` keeps namespace scoping for nested symbols.
+- **Rust explicit lifetimes are emitted as references (#1916)** — function signatures, generic bounds, HRTB clauses, and `'static` constraints now produce `lifetime_reference` entries without turning lifetimes into ordinary type references.
+- **Kotlin value classes and inline functions now expose symbol sub-kinds (#1920)** — `symbols`, `definition`, `inspect`, and MCP `analyze_symbol` JSON can distinguish Kotlin `value class` / legacy `inline class` and `inline fun` declarations, including `inline reified` functions.
+- **Locked the symbol reference kind aggregation plan (#1922)** — regression coverage now verifies that `GROUP_CONCAT(DISTINCT r.reference_kind)` summaries constrained by symbol name and reference kind use the `idx_symbol_refs_name_kind` compound index before and after SQLite `ANALYZE`.
+- **SQL now indexes `@@` system-variable references (#1923)** — T-SQL `@@ROWCOUNT` / `@@IDENTITY` and MySQL `@@session.*` / `@@global.*` variables are emitted as `system_variable` references.
+- **SQL now indexes MySQL `DEFINER` identities (#1924)** — `CREATE DEFINER='user'@'host' ...` headers now emit `definer` symbols and document the MySQL backtick identifier policy.
+- **SQL now indexes PostgreSQL result-column symbols (#1929)** — `RETURNS TABLE(...)` columns and `OUT` parameters are emitted as function-scoped `field` symbols.
+- **Swift property wrappers and computed accessors are now visible (#1945)** — wrapped properties emit projected `$name` symbols and wrapper type references, while explicit computed-property accessors are indexed as `accessor` symbols.
+- **Hardlinked files are indexed once (#1946)** - Repository scans now skip second and later paths that resolve to the same hardlinked file, reporting a non-fatal warning instead of duplicating symbols and references.
+- **CLI recoverable errors now use one human-readable shape (#1955)** — parse, validation, and path preflight failures now share the `Error` / `Hint` / optional `Usage` format so users get a consistent recovery path.
+- **Bounded caller graph paging now avoids fixed 200-row intermediate pages (#1959)** — transitive impact traversal now asks SQLite only for the remaining caller result capacity plus one truncation sentinel, and boundary checks page one caller at a time instead of materializing a fixed 200-row page.
+- **C# test methods now index as `test.method` (#1961)** — methods decorated with common xUnit, MSTest, or NUnit test attributes are classified separately from ordinary functions while keeping their names, signatures, visibility, and return types searchable.
+- **Reduced indexing allocations for large source files (#1962)** — File content line endings are now normalized in a single pass, and JavaScript/TypeScript extraction seeds hot `StringBuilder` instances with input-size estimates.
+- **Reference edges now mark self-references and direct mutual recursion (#1966)** — indexed references persist `is_self_reference` / `is_mutual_recursion`, reference and caller results expose those flags, and opt-in reader filters can exclude self-reference edges from graph views.
+- **Centralized degraded-readiness reason codes (#1968)** — readiness degradation codes now live in a shared registry with human text and recovery actions, reducing silent mismatches between DB readers, CLI output, and MCP consumers.
+- **Lambda-like symbols now use `kind="lambda"` (#1969)** — JavaScript/TypeScript arrow and anonymous function bindings, Python `lambda` assignments, C# assigned lambdas, and Go assigned function literals are indexed separately from named function declarations.
+- **Hotspot-family degradation now reports actionable reasons (#1971)** — `hotspot_family_degraded_reason` distinguishes legacy DBs without hotspot-family metadata, stale metadata, and indexes written without marker fingerprints so users know whether to rebuild or restamp the index.
+- **C# scoped method parameters are now indexed (#1980)** — `scoped ref` and `scoped Span<T>` method parameters are emitted as parameter-like property symbols under their function container, preserving the scoped modifier in the symbol signature.
+- **C# partial methods with omitted return types now index as `void` (#1981)** — `symbols` / `definition` no longer drop old-style `partial M();` declarations when their return type is implied.
+- **C# type signatures now preserve split nested generic constraints (#1984)** — multiline `where` clauses such as `where T : IEnumerable<U>` now keep the generic constraint type arguments in stored symbol signatures.
+- **TypeScript conditional generic constraints now emit branch type references (#1985)** — generic constraints such as `<T extends Array<infer U> ? Promise<U[]> : Nested<Fallback>>` now index references from the condition, true branch, and false branch.
+- **Python property accessors now carry accessor metadata (#1986)** — `@prop.getter`, `@prop.setter`, and `@prop.deleter` decorated methods remain property symbols and expose `getter`, `setter`, or `deleter` sub-kind metadata.
+- **Rust `dyn` and associated-type constraints expose trait-bound keys (#1987)** — trait-object and opaque-return type references now retain associated-type binding keys such as `Item` and `Output` alongside their value types.
+- **JS/TS references now keep optional member chains and discriminant guards (#1989)** — optional chains such as `foo?.bar?.baz` now emit full member-chain references, and string-literal guards such as `foo.type === 'bar'` emit discriminator property and type-tag references.
+- **Reference deduplication is now file- and language-aware (#1991)** — shared extractor dedupe keys include the indexed file id and language hint, preventing same-position reference names from collapsing across polyglot extraction contexts.
+- **Razor event handlers now get explicit binding references (#2030)** — `@on...="Handler"` markup emits `razor_event_binding` references, records inherited interface handler bindings when `@implements` is present, and indexes `@attribute` directive types.
+- **Partial reindex no longer restamps folded-name readiness after symbol extractor contract changes (#2064)** — `cdidx` now stores per-language symbol extractor contract versions with FoldReady metadata, so partial `--files` / `--commits` updates leave folded exact-match trust degraded until a full rebuild refreshes untouched legacy rows.
+- **Partial indexing now purges stale rename rows with matching checksums (#2065)** — unchanged-skip and reindex paths now remove deleted old paths that share the current file checksum, preventing duplicate chunks or symbols after rename-and-restore workflows.
+- **Fold readiness now validates skipped rows' stored folded keys (#2066)** — partial and unchanged indexing no longer re-advertise Unicode exact-match trust when existing folded values were generated under a stale runtime fingerprint.
+- **Incremental indexing now invalidates files when a language extractor contract changes (#2067)** - unchanged files are re-extracted when their stored language extractor version is stale, preventing old symbol signatures from surviving partial updates.
+- **Read-path schema migrations now preserve SQLite foreign-key enforcement (#2068)** — `TryMigrateForRead()` runs opportunistic schema changes in one transaction and re-enables `PRAGMA foreign_keys` before and after migration so newly added reference-line constraints are enforced.
+- **`GetUnchangedFileId()` now avoids a separate checksum touch query (#2069)** — unchanged-file detection now returns the existing file id and refreshes matching-checksum timestamps with one atomic `UPDATE ... RETURNING` statement instead of selecting the checksum and issuing a separate timestamp update.
+- **Invalid `--kind` values now list valid choices (#2070)** - symbol and graph commands that accept `--kind` now fail before querying the index when the value is unknown, and print the valid symbol, reference, or call-graph reference kinds for that command.
+- **Numeric CLI parse errors now include bounds context (#2071)** — invalid values for bounded integer flags such as `--limit`, `--snippet-lines`, and `--max-line-width` now report the accepted range instead of only saying that a positive or non-negative integer is required.
+- **Database open failures now keep their root-cause category (#2072)** - query commands distinguish access, I/O, SQLite corruption, and other SQLite open errors in stderr instead of collapsing them into one generic database error.
+- **Invalid query `--db` and path glob inputs now fail during CLI parsing (#2073)** — explicit missing database paths and unsupported bracket-style `--path` / `--exclude-path` globs now return usage errors before opening the reader or running a query, while escaped glob characters remain literal path matches.
+- **Cached folded-name computation during batch writes (#2075)** — symbol and reference inserts now reuse per-batch `NameFold.Fold` results for repeated names, reducing redundant Unicode normalization work without changing persisted values.
+- **TypeScript type aliases now index generic default type references (#2079)** — `type Dict<K = DefaultKey, V = DefaultValue> = Record<K, V>` now emits `type_reference` edges for the default types and alias RHS so generic alias dependencies stay visible in the graph.
+- **TypeScript `as const` assertions now emit const-assertion references (#2080)** — const-asserted array and object literals now produce a synthetic `const_assertion` reference plus literal type references, so downstream reference and impact queries can distinguish const narrowing from ordinary runtime casts.
+- **TSX generic component invocations now index type arguments (#2081)** — component tags such as `<List<Item> />`, `<Provider<State, Action> />`, and `<Foo<{ a: number }> {...rest} />` now emit component call edges and `type_reference` rows for their explicit JSX type arguments.
+- **JavaScript and TypeScript async generators now get explicit symbol kinds (#2082)** — `async function`, generator, and async generator declarations and methods are now classified as `async_function`, `generator`, and `async_generator`, so `--kind` filters can distinguish iterator-producing APIs from ordinary functions.
+- **TypeScript merged interfaces now emit augmentation references (#2083)** — duplicate TypeScript `interface` declarations, including ambient module augmentations, are connected with `augmentation` references after indexing, so merged surfaces are visible to reference and impact queries.
+- **Raw FTS5 search now validates column qualifiers (#2088)** — `cdidx search --fts` now rejects unknown FTS5 column qualifiers such as `rowid:` or `title:` before executing SQLite, and documents that only `content:` is valid for the `fts_chunks` index.
+- **Raw FTS5 `NEAR(...)` distances are now bounded (#2089)** — `search --fts` rejects `NEAR` distances outside `0..100` before executing SQLite, preventing extreme values from dominating query latency or memory.
+- **Raw FTS5 search now rejects pathological query complexity (#2090)** — `search --fts` now fails fast on overly long, deeply nested, or operator-heavy raw FTS5 queries instead of letting SQLite evaluate potentially expensive expression trees.
+- **Update-mode file filters now resolve symlinked parent directories before project-root containment checks (#2091)** — explicit `--files` / `--commits` targets reached through a directory symlink are rejected when their real target is outside the indexed project root.
+- **Octopus merge commit updates now include every changed file (#2092)** — `--commits` deduplicates `git diff-tree -m` output across all parents and rejects branch, tag, and range refs where a hex commit ID is required.
+- **`--commits` now rejects git ranges and tag refs before indexing (#2093)** - commit-scoped updates validate each argument as a single commit-ish and return a usage error instead of silently treating revision-set syntax or tag refs as commit inputs.
+- **Bare repositories and detached HEAD changes are detected more accurately (#2094)** — Git helper logic now classifies bare repositories explicitly, resolves their repository root/common directory without requiring a `.git` entry, and treats branch/detached HEAD transitions at the same commit as a workspace HEAD change.
+- **Indexing now refuses unresolved merge states (#2095)** — `cdidx index` detects git unmerged paths before scanning and conflict markers now surface as file issues while symbol/reference extraction skips conflicted content.
+- **CLI exit codes now distinguish retryable DB locks, invalid arguments, and cancellation (#2096)** — scripts can branch on transient SQLite `BUSY` / `LOCKED` failures (`6`), invalid option values (`7`), and Ctrl-C cancellation (`8`) instead of treating them all as generic usage or database errors.
+- **Search truncation metadata now reports omitted character counts (#2097)** — `search --json` and MCP `search` now include `truncation_context.char_counts` / `total_chars`, and truncated highlights include `truncated_char_counts`, so clients can distinguish small clamps from large elisions without reverse-engineering snippet markers.
+- **SQL recursive CTE references are now indexed distinctly (#2098)** — `WITH RECURSIVE` CTE names are indexed as symbols, and source references inside CTE bodies now use `cte_body_reference` so recursive self-references are not flattened into the outer query scope.
+- **Line-leading zero-width spaces are stripped during indexing (#2117)** — the line-leading invisible cleanup now removes `U+200B` alongside `U+FEFF`, while preserving mid-line occurrences and the no-allocation fast path for files that do not need cleanup.
+- **Removed an unreachable transitive impact depth guard (#2120)** — `GetTransitiveCallers` now relies on its enqueue-side max-depth bound without carrying a dequeue branch that cannot be reached.
+- **Pinned impact depth-bound consistency (#2121)** — added an AnalyzeImpact regression test confirming `maxDepth` remains inclusive across caller chains, and documented that file dependency aggregation has no depth-bound traversal contract.
+- **CSS compound selectors now emit class and ID references (#2127)** — selectors such as `a.btn` and `button#main` now contribute `.btn` / `#main` reference edges while still ignoring selector-looking text inside attribute values.
+- **Impact file hints now anchor on C# event subscriptions (#2132)** — `impact` treats `subscribe` / `unsubscribe` reference rows as strong file-level evidence, so event subscription sites are not dropped when no structured type evidence or metadata bypass applies.
+- **Suggestion records now persist GitHub submission attempt diagnostics (#2134)** — local suggestion JSON and suggestion CLI exports now expose the last submit attempt time, attempt count, and last submission error so operators can distinguish never-attempted, retryable, and rejected suggestions.
+- **`suggest_improvement` retry idempotency no longer depends only on GitHub Search indexing (#2135)** - `GitHubIssueReporter` now falls back to listing `ai-suggestion` Issues directly and matching the suggestion hash in their bodies before creating a new upstream Issue, preventing duplicates when GitHub Search has not indexed a just-created Issue yet.
+- **`callers` / `callees --kind import` now rejects through the non-call-graph path (#2138)** — `import` is reported as a structural dependency edge and the CLI/MCP surfaces point users to `references <name> --kind import` instead of warning that it is only a symbol kind.
+- **MCP exact flag aliases now reject ambiguous combinations (#2140)** — MCP tools now fail fast when callers combine `exact`, `exactSubstring`, and `exactName`, matching the CLI guard instead of silently OR-merging conflicting exact-match intent.
+- **`cdidx symbols` now rejects whitespace-only positional queries (#2144)** — `symbols "   "` now fails fast with `Error: symbols query cannot be empty or whitespace-only`, matching the distinct blank-query diagnostics used by the other query commands.
+- **MCP required string parameters now distinguish missing from blank values (#2145)** — MCP tool calls keep `Missing required parameter: <name>` for absent arguments and return `Parameter "<name>" cannot be empty or whitespace-only` when the argument is present but blank.
+- **Long Windows paths now work across non-walker DB, lock, config, and metadata probes (#2189)** — DB existence checks, lock metadata reads, suggestion/config/report files, Git metadata probes, MCP readiness checks, and exclude-file reads now route filesystem API paths through `LongPath.EnsureWindowsPrefix(...)` where appropriate, so deep Windows workspaces no longer silently report missing files after the indexer itself can see them.
+- **DbReader now reuses prepared commands for C# reference-resolution lookups (#2208)** — reader instances created from a shared `DbContext` now lease cached prepared commands for repeated C# symbol/reference resolution queries instead of recreating the same SQLite commands in tight loops.
+- **Top-level CLI crashes no longer leak .NET stack traces to stderr (#2223)** — unhandled command failures now return a database-error exit code after writing a single sanitized stderr line while keeping full details in diagnostic logs.
+- **JSON index refresh now emits liveness on stderr (#2234)** — `cdidx index ... --json` now reports long-running update phases on stderr without polluting the final stdout JSON, so external runners no longer see a silent refresh while C# workspace analysis is still active.
+- **HTTP MCP transport tests now fail fast on stalled requests (#2249)** — the HTTP test harness uses a bounded request timeout and surfaces an already-failed server loop immediately, making full-suite failures easier to diagnose instead of waiting on the default `HttpClient` timeout.
+- **Full test suite no longer assumes trimmed self-contained publish output contains `cdidx.dll` (#2250)** — the published CLI test now accepts either the managed DLL entry point or the native apphost emitted by the active SDK/RID.
+- **Hook command tests now isolate Console output capture (#2269)** — hook install/status/uninstall tests route command output through the shared console capture lock so unrelated full-suite failures no longer cascade into writes against disposed `Console` writers.
+- **C# indexing no longer stalls on namespace, class declaration, and line-comment text (#2300, #2303, #2318, #2328, #2331)** — the C# symbol scanner now stops class declaration collection at terminators, skips member-header merging for namespace/import/comment lines, and the C# attribute scanner ignores `//` comment tails before doing cross-line attribute lookahead. Full-scan liveness output also reports files processed by the C# workspace pre-pass.
+- **Index JSON liveness now identifies the C# workspace-symbol prepass (#2351)** — full scans report the pre-indexing C# workspace-symbol preparation phase separately, including the current file when available, so a slow prepass no longer looks like indexing is silently frozen at `0/N` files.
+- **C# incremental index refresh no longer stalls on static-interface helper code (#2380)** — the static interface contract pre-pass now only invokes symbol extraction for files that contain a plausible contract member inside an interface body, avoiding false positives from helper method names and string literals such as `CSharpStaticInterface...`.
+
+#### Deprecated
+
+- **Impact traversal depth is now exposed as max hops (#2122)** — `cdidx impact` accepts the clearer `--max-hops` option, and MCP `impact_analysis` accepts `maxHops`. The old `--depth` / `maxDepth` names remain compatible during the deprecation period and surface warnings when used.
+
+#### Documentation
+
+- **Added a command reference table to USER_GUIDE (#1856)** — users can now scan the CLI command surface by category with related MCP tool names before diving into detailed examples.
+- **Documented CLI default values and drift expectations (#1859)** — USER_GUIDE now calls out the canonical defaults and the files that must stay synchronized when those defaults change.
+- **Added large-repository performance tuning guidance (#1862)** — USER_GUIDE now explains what to measure first, which indexing and query knobs to tune, and the trade-offs for large repositories.
+- **Added a language extraction matrix (#1863)** — USER_GUIDE now summarizes symbol and graph coverage by language family, including when users should fall back to text search.
+- **Added runnable examples for advanced analysis commands (#1867)** — USER_GUIDE now includes practical validate, unused, hotspots, and impact examples with interpretation notes and limitations.
+- **Documented exact-match flag compatibility (#2076)** — added the `--exact` migration table for `--exact-substring` and `--exact-name`, including MCP alias guidance and the current stability note.
+- **Documented incremental update fallback behavior (#2077)** — USER_GUIDE now explains when scoped `--files` / `--commits` updates can promote to a full incremental scan, what concurrent readers may observe during a long refresh, and how to confirm the actual update mode from JSON output.
+- **Documented the CLI JSON versus MCP response schema boundary (#2078)** — `INTEGRATION_POLICY.md` now spells out how `search`, `references`, `callers`, and `callees` differ between CLI `--json` output and MCP tool responses, including the grouped-row snake_case CLI fields and camelCase MCP fields for the summary kind, kind array, and mixed-kind flag.
+- **Linked the `reference_kind` filtering matrix from user-facing docs (#2116)** — README and USER_GUIDE now point users from `callers` / `impact` / `deps` descriptions to the matrix that explains count differences and metadata-edge reconciliation.
+- **Documented sandboxed build validation without shared compilation (#2133)** — the precommit workflow now tells agents to add `-p:UseSharedCompilation=false` to build and test commands when sandboxed environments cannot use the shared Roslyn compilation server reliably.
+
+#### Internal
+
+- **Added regression coverage for production reference and Swift symbol extractors (#1815)** — Swift, Objective-C, Gradle, Terraform, PowerShell, and Batch reference extraction now have focused tests, and Swift symbol extraction has representative declaration coverage.
+- **C# scope resolution now reuses active scope results for repeated file/line lookups (#2074)** — `DbReader` caches resolved namespace, containing-type, and `using static` active scopes per C# file and line, reducing allocation churn during batch reference resolution.
+- **Split reference search readers out of `DbReader.cs` (#2115)** — reference lookup and count helpers now live in their own partial `DbReader` file, reducing the remaining reader monolith without changing query behavior.
+- **Moved the EnsureColumn race-recovery test seam out of DbContext (#2313)** — the duplicate-column recovery logic now lives in an internal helper that tests can drive directly, so `DbContext` no longer carries a mutable test-only hook.
+- **GitHub issue reporter tests now match the two-step duplicate check request flow (#2394)** — the create-failure diagnostic test expects both pre-create lookup requests before the failing issue creation request.
+
 ### [1.22.3] - 2026-05-17
 
 #### Fixed
@@ -2389,6 +2546,163 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.23.0] - 2026-05-19
+
+#### 追加
+
+- **symbol surface query の visibility filter を追加 (#1412)** — `symbols`、`definition`、`unused`、`hotspots` が `public`、`protected`、`internal`、`private` に対する `--visibility` / `--exclude-visibility` を受け付けるようになりました。
+- **.sln/.csproj project filter を追加しました (#1707)** — `cdidx index` と path filter 対応の query コマンドが `--project <name|path>` を受け付け、明示的な solution file が必要な workspace では `--solution <path>` を指定できます。
+- **index DB の drift 確認向けに `cdidx diff <db1> <db2>` を追加しました (#1724)** — 新コマンドは schema version と file / symbol / reference 件数を比較し、片側だけにある file を上限付きで表示します。JSON、summary-only、詳細 symbol diff mode に対応し、identical / drift / schema mismatch / unreadable database の安定した exit code を返します。
+- **Extractor plugin でカスタム言語対応を追加できるようになりました (#1937)** — `cdidx` は限定的な symbol/reference extractor interface を公開し、`.cdidx/plugins/` と `~/.cdidx/plugins/` の trusted plugin DLL と plugin 所有の拡張子を検出するため、CodeIndex を fork せずにプロジェクト固有 DSL をインデックスできます。
+- **反復 CLI query 向けに `cdidx batch` を追加しました (#2119)** — script や editor integration は JSON 配列形式の query command を 1 プロセスへ流し込み、query ごとの初期化コストを払わず 1 つの SQLite connection を再利用できます。
+
+#### 変更
+
+- **参照抽出が登録済みの言語別 extractor を公開するようになりました (#1760)** — 呼び出し側は言語から `IReferenceExtractor` を解決し、`ReferenceExtractionContext` で直接実行できます。既存の `ReferenceExtractor.Extract(...)` 入口は互換性のあるルーティングを維持します。
+- **フルスキャン index の抽出処理を並列化しました (#1842)** — `cdidx index` はファイル読み込み、chunk 分割、symbol 抽出、reference 抽出、content 検証を bounded worker task で実行し、SQLite 書き込みは単一 consumer のまま維持します。worker 数は `--parallelism <n>` または `CDIDX_INDEX_PARALLELISM` で調整できます。
+- **HTTP MCP transport が独立した SSE event stream を受け付けるようになりました (#2204)** — `cdidx mcp --transport http` は `GET /events` を `text/event-stream` として提供し、POST リクエストと同じ bearer token ルールを適用し、event stream が通常の JSON-RPC `POST /` 呼び出しを塞がないようにしました。現サーバーは自発的な frame をまだ送信しません。
+- **HTTP MCP request loop が構造化されたリクエスト結果を記録するようになりました (#2205)** — 永続 lifecycle log が有効な場合、`cdidx mcp --transport http` はリクエストごとに `mcp_http_request` レコードを 1 件出力し、correlation id、利用可能な JSON-RPC request id、remote peer、method、path、status、duration、auth outcome を記録します。リクエスト/レスポンス本文は記録しません。
+
+#### 修正
+
+- **`unused` が C# private の同一ファイル利用を false positive として出さないようになりました (#1403)** — C# の private / file-private 候補は報告前に同一ファイルの indexed text と照合され、定義ファイル内だけで使われているシンボルを likely unused として列挙しなくなりました。
+- **C# の `hotspots` が body を持たない呼び出し地点のメソッド名を昇格しないようになりました (#1405)** — `hotspots` と grouped hotspot は body span のない C# function 候補を除外し、`GetInt32` などの BCL / ライブラリ呼び出しをプロジェクト定義として報告しないようになりました。
+- **`find` が path の不一致と本文検索の不一致を区別するようになりました (#1406)** — `--path` がファイルに一致しているものの query が本文内で一致しない場合、CLI は path が一致したことを示し、誤って `--path` を広げるよう促すのではなく query を広げるよう案内します。
+- **裸の catch ブロックが致命的例外やキャンセル例外を握りつぶさないようになりました (#1411)** — CLI と database のベストエフォートな cleanup/probe 経路は想定される例外型だけを捕捉するか、cleanup 後に明示的に再送出するため、キャンセル、メモリ不足、プログラミングエラーが正しく表面化します。
+- **MCP のキャンセル通知が対応する実行中リクエストを中断するようになりました (#1418)** — `$/cancelRequest` と `notifications/cancelled` は JSON-RPC request id を検索して per-request token を cancel し、ハンドラが cancellation を観測した場合は構造化された `request_cancelled` エラーを返すようになりました。
+- **CLI 最上位の cancellation が documented cancellation exit code を返すようになりました (#1430)** — command が完了前に cancel されたとき、`OperationCanceledException` が generic database-error handler に落ちなくなりました。
+- **JS/TS の default export async arrow の呼び出し帰属をテストで固定しました (#1439)** — `export default async (...) => { ... }` 内の呼び出しが合成 `default` 関数コンテナへ紐付くことを回帰テストで確認するようになりました。
+- **Swift の property observer が property scope を維持するようになりました (#1444)** — `didSet` / `willSet` observer は Swift 6 の `@didSet` / `@willSet` 表記を含めて property の子 accessor として index されるため、observer body 内の参照が所有元 property に帰属するようになりました。
+- **Kotlin / Scala の三重引用符文字列マスクを #1446 として固定しました** — raw 文字列本文内の呼び出し形サンプルコードが疑似参照にならないことを回帰テストで確認するようにしました。
+- **TypeScript の `satisfies` 参照が call graph に漏れなくなりました (#1447)** — `satisfies` 右辺の参照は `type_reference` エッジとして保持し、phantom な `call` エッジとしては出さないようにしました。
+- **C# raw string の終端 delimiter 判定で quote 数の完全一致を要求するようになりました (#1453)** — raw string 本文内のより長い quote run が文字列を早期終了させ、コード風テキストを疑似シンボルとして露出する問題を防ぎました。
+- **C# の class / struct primary constructor 引数を contained property として index するようになりました (#1454)** — `class C(string name)` や `struct S(int value)` の primary constructor 引数が包含型上の symbol として出るようになり、型本体内で使われる captured member 参照とつながります。
+- **C# generic attribute の型引数を index するようになりました (#1455)** — `[Serializable<MyType>]` のような C# 11 の引数なし generic attribute で、型引数の `type_reference` 行を出力するようになりました。
+- **C# の static interface member 実装が override 相当の edge を出すようになりました (#1457)** — generic math の `Parse` のような `static abstract` / `static virtual` interface method の実装を `references` で確認できるようになりました。
+- **JS/TS の CRLF テンプレートリテラルで列情報が安定することを固定しました (#1465)** — CRLF エンコードの JavaScript / TypeScript テンプレートリテラルでも、LF 入力と同じシンボルの行・列・シグネチャ metadata を返すことを回帰テストで保証しました。
+- **installer の未対応 RID を artifact download 前に拒否するようになりました (#1601)** — `install.sh` は検出した RID を公開済み release asset 一覧と照合し、release asset の 404 まで進む代わりに、検出 RID、対応 RID、install/build の代替手段、platform support リクエスト用 issue link を表示します。
+- **`search --json` が正常終了時に done sentinel を出力するようになりました (#1659)** — 結果ストリームの末尾に `{"done":true,"count":N,"interrupted":false}` を追加し、ゼロ件出力でも正常終了と途中で切れた出力を判別できるようになりました。
+- **Kotlin の infix 呼び出しを call reference として索引化するようになりました (#1661)** — `1 to "one"`、ビット演算の infix、range、同一ファイル内の `infix fun` 呼び出しで、infix 関数名の `call` reference を出力します。
+- **大容量 source file は multi-MB payload 確保前に拒否されるようになりました (#1695)** — index の既定ファイルサイズ上限を 4 MiB にし、10 MiB の生成物 / vendor source はインデクサが連続した byte 配列を累積する前にスキップされます。意図的に大容量 source を索引したい場合は引き続き `--max-file-bytes` または `CDIDX_MAX_FILE_BYTES` で opt-in できます。
+- **bulk indexing write が SQLite の複数行 insert を使うようになりました (#1699)** — chunk / symbol / reference の書き込みを上限付きの `VALUES` batch にまとめ、FTS と reference-line の挙動を維持します。
+- **検索結果に最後の安定した tie-breaker を追加しました (#1731)** — チャンク検索の並び順の末尾に永続化された chunk id を加え、rank / path が同点の結果が SQLite の実装依存の行順に落ちないようにしました。
+- **非 Unicode 端末では進捗スピナーが ASCII にフォールバックするようになりました (#1767)** — `--ascii`、`CDIDX_ASCII=1`、`NO_UNICODE`、`TERM=dumb`、accessibility 系の環境変数、または非 UTF-8 locale により Unicode glyph の表示が不安定と判断できる場合、`cdidx` は `|` / `/` / `-` / `\` のスピナーを使います。
+- **コンソール幅が `COLUMNS` を反映するようになりました (#1770)** - `cdidx` は正の `COLUMNS` 値を `Console.WindowWidth` や 80 列 fallback より優先するため、pipe や script 経由の出力でも広い端末幅を指定できます。
+- **進捗バーに ASCII fallback を追加しました (#1772)** - `--ascii`、`CDIDX_ASCII=1`、`LANG=C` / `POSIX` locale では、indexing の進捗を Unicode のブロック文字ではなく `#` / `-` のバーで表示し、非常に狭い Unicode 端末では percentage-only の行に fallback します。
+- **C# 正規化スニペットが作り物の raw span にクランプされないようになりました (#1774)** — 検索スニペットは C# 正規化一致をクランプの焦点にする前に raw index map の両端を明示的に検証し、正規化 span を復元できない場合は焦点なしのクランプへフォールバックします。
+- **Scala の singleton object を `object` symbol kind として記録するようになりました (#1823)** — top-level の `object`、`case object`、sealed object 宣言を generic class として index しなくなり、同一ファイルの class/object companion は `SubKind` で示します。
+- **React custom hook が hook シンボルとして表示されるようになりました (#1885)** — `use[A-Z]...` 命名規則の JavaScript/TypeScript 関数を `hook` シンボルとして索引し、hook 呼び出しを composition graph 用の `consumes_hook` 参照として出力します。
+- **TypeScript / JavaScript の import シンボルが tsconfig path alias を解決するようになりました (#1886)** — import、require、dynamic import、worker などの JS/TS module load から取得した静的 specifier は、対象ファイルが存在する場合に `tsconfig.json` / `jsconfig.json` の `baseUrl` と `paths` mapping を使うようになりました。
+- **Python の文字列化 annotation を型参照として解析するようになりました (#1887)** — 関数・変数 annotation の quoted forward reference が、quote 文字をシンボル名に混入させずに type-reference 行として出るようになりました。
+- **TypeScript mapped type の参照抽出を修正しました (#1888)** — `keyof T`、`T[K]`、template literal type の hole、conditional type の `infer` 句が type parameter への参照を出すようになり、utility type chain が不透明にならないようになりました。
+- **Python の class lifecycle hook を通常メソッドと区別するようになりました (#1889)** — `__init_subclass__`、`__class_getitem__`、`__set_name__`、`__class_subclasses__` が `dunder` sub-kind 付きの `class_hook` シンボルとして出るようになりました。
+- **Python の walrus 代入が symbols に出るようになりました (#1891)** — `:=` で導入された名前を `walrus` sub-kind 付きの `property` シンボルとして index します。
+- **Python の複数行 function / class ヘッダを抽出に使うようになりました (#1893)** — 折り返された signature と PEP 695 type-parameter ヘッダが、symbol signature と annotation reference 抽出に反映されます。
+- **Python PEP 604 の builtin union メンバーを型参照として出すようになりました (#1896)** — `int | str`、`list[int | bytes]`、`Result | None` などの annotation で builtin union メンバーが reference 出力に残ります。
+- **TypeScript namespace re-export の使用箇所が元 module に戻れるようになりました (#1900)** — `NS` が `export * as NS from "./module"`、namespace import、named import alias、dynamic import の namespace 代入に由来する場合、`NS.Member()` のような qualified usage から module への `reference` edge も出すようになりました。
+- **TypeScript の decorated declaration で型参照が維持されるようになりました (#1903)** — Angular / NestJS / TypeORM 形式の decorator は decorator metadata を出力しつつ、parameter / return / field の type-reference edge を隠さなくなりました。
+- **Go 抽出が test role、修飾 receiver container、concurrency edge を保持するようになりました (#1908, #1910, #1983)** — Go の symbol は test / benchmark / fuzz / example / init / test helper を分類し、修飾付き pointer receiver は bare type container に紐づき、reference には goroutine spawn と channel send/receive edge が含まれます。
+- **Rust async の `impl Future<Output = T>` 戻り値制約で associated output が見えるようになりました (#1914)** — Rust の type-reference 抽出は `Future<Output = T>` シグネチャ内の `Output` binding key を落とさず、async 戻り値の契約を保持します。
+- **Rust の file module と inline module を区別するようになりました (#1915)** — `mod foo;` は file module として index され、inline の `mod foo { ... }` はネストした symbol の namespace scope を維持します。
+- **Rust の明示 lifetime を reference として出力するようになりました (#1916)** — function signature、generic bound、HRTB clause、`'static` 制約が `lifetime_reference` を生成し、lifetime を通常の type reference として扱わないようになりました。
+- **Kotlin の value class と inline 関数がシンボル細分類を公開するようになりました (#1920)** — `symbols` / `definition` / `inspect` / MCP `analyze_symbol` の JSON で、Kotlin の `value class` / 旧 `inline class` と `inline fun`（`inline reified` を含む）を区別できるようになりました。
+- **シンボル参照 kind 集計のクエリ計画を固定しました (#1922)** — シンボル名と参照 kind で絞る `GROUP_CONCAT(DISTINCT r.reference_kind)` 要約が、SQLite の `ANALYZE` 前後で compound index の `idx_symbol_refs_name_kind` を使うことを回帰テストで確認するようになりました。
+- **SQL が `@@` system variable 参照を index するようになりました (#1923)** — T-SQL の `@@ROWCOUNT` / `@@IDENTITY` と MySQL の `@@session.*` / `@@global.*` 変数を `system_variable` 参照として出力します。
+- **SQL が MySQL `DEFINER` identity を index するようになりました (#1924)** — `CREATE DEFINER='user'@'host' ...` ヘッダーを `definer` シンボルとして出力し、MySQL backtick 識別子の方針も文書化しました。
+- **SQL が PostgreSQL の result column シンボルを index するようになりました (#1929)** — `RETURNS TABLE(...)` の列と `OUT` パラメーターを関数スコープの `field` シンボルとして出力します。
+- **Swift の property wrapper と computed property accessor が見えるようになりました (#1945)** — wrapper 付き property は projected `$name` シンボルと wrapper 型参照を出力し、明示的な computed property accessor は `accessor` シンボルとして index されます。
+- **ハードリンクされたファイルを 1 回だけ index するようになりました (#1946)** - リポジトリ走査では同じハードリンク実体を指す 2 つ目以降の path をスキップし、symbol / reference を重複登録する代わりに非 fatal warning として報告します。
+- **CLI の回復可能なエラーが人間向けの共通形式になりました (#1955)** — parse / validation / path preflight の失敗が `Error` / `Hint` / 必要に応じた `Usage` 形式を共有し、ユーザーが一貫した復旧手順を確認できるようになりました。
+- **caller graph のページングが固定 200 行の中間ページを避けるようになりました (#1959)** — transitive impact traversal は残りの caller result 容量に truncation 検出用の 1 件を足した分だけを SQLite に要求し、boundary check も固定 200 行を materialize せず 1 caller ずつページングします。
+- **C# のテストメソッドを `test.method` として index するようになりました (#1961)** — xUnit、MSTest、NUnit の一般的なテスト属性が付いたメソッドを通常の関数と区別しつつ、名前、シグネチャ、visibility、戻り値型は従来どおり検索可能に保ちます。
+- **大きなソースファイルの索引時割り当てを削減しました (#1962)** — ファイル内容の改行正規化を 1 パス化し、JavaScript / TypeScript 抽出のホットパス `StringBuilder` に入力サイズ由来の初期容量を設定しました。
+- **参照エッジが自己参照と直接の相互再帰を記録するようになりました (#1966)** — index 済み参照に `is_self_reference` / `is_mutual_recursion` を永続化し、references / callers の結果でフラグを公開し、必要な reader では自己参照エッジを graph view から除外できるようにしました。
+- **readiness degradation reason code を一元化しました (#1968)** — degradation code を human text と復旧 action 付きの共有 registry に集約し、DB reader、CLI 出力、MCP 利用側の間で文字列不一致が静かに混入しにくくなりました。
+- **ラムダ相当のシンボルを `kind="lambda"` として扱うようになりました (#1969)** — JavaScript/TypeScript の arrow / anonymous function 束縛、Python の `lambda` 代入、C# の代入ラムダ、Go の代入関数リテラルを、名前付き関数宣言とは別に索引します。
+- **hotspot-family の縮退理由を具体的に表示するようになりました (#1971)** — `hotspot_family_degraded_reason` が hotspot-family metadata の無い legacy DB、古い metadata、marker fingerprint 無しで書かれた index を区別し、rebuild / restamp のどちらが必要か判断できるようにします。
+- **C# の scoped メソッドパラメータを index するようになりました (#1980)** — `scoped ref` や `scoped Span<T>` のメソッドパラメータを function 配下の parameter 相当 property symbol として出力し、symbol signature に scoped modifier を保持します。
+- **戻り値型を省略した C# partial method を `void` としてインデックスするようになりました (#1981)** — 古い形式の `partial M();` 宣言で戻り値型が暗黙の場合でも、`symbols` / `definition` から欠落しなくなりました。
+- **C# 型シグネチャが分割されたネスト generic 制約を保持するようになりました (#1984)** — `where T : IEnumerable<U>` のような複数行の `where` 句で、保存される symbol signature に generic 制約の型引数が残るようになりました。
+- **TypeScript の conditional generic constraint が分岐内の型参照を出力するようになりました (#1985)** — `<T extends Array<infer U> ? Promise<U[]> : Nested<Fallback>>` のような generic constraint で、条件・true 分岐・false 分岐の型参照を index するようになりました。
+- **Python property accessor が accessor metadata を持つようになりました (#1986)** — `@prop.getter`、`@prop.setter`、`@prop.deleter` の decorated method は property symbol のまま、`getter`、`setter`、`deleter` の sub-kind metadata を出します。
+- **Rust の `dyn` と associated-type 制約で trait-bound key が見えるようになりました (#1987)** — trait object や opaque return の type reference で、`Item` や `Output` などの associated-type binding key を値の型とあわせて保持します。
+- **JS/TS 参照が optional member chain と discriminant guard を保持するようになりました (#1989)** — `foo?.bar?.baz` のような optional chain で完全な member-chain 参照を出し、`foo.type === 'bar'` のような文字列リテラル guard で discriminator property と type-tag 参照を出すようになりました。
+- **参照 dedupe が file/language aware になりました (#1991)** — 共有 extractor の dedupe key に indexed file id と language hint を含め、polyglot な抽出コンテキストで同じ位置・同じ名前の参照が誤って統合されないようにしました。
+- **Razor イベントハンドラが明示的な binding 参照として記録されるようになりました (#2030)** — `@on...="Handler"` マークアップは `razor_event_binding` 参照を出力し、`@implements` がある場合は継承 interface 側の handler binding も記録し、`@attribute` directive の型も index します。
+- **シンボル抽出器の契約変更後に partial reindex が folded-name readiness を再 stamp しないようにしました (#2064)** — `cdidx` は FoldReady metadata と合わせて言語別の symbol extractor contract version を保存するため、partial `--files` / `--commits` 更新では未更新の legacy 行が full rebuild で再生成されるまで folded exact-match trust を縮退させます。
+- **partial index が checksum 一致の古い rename 行を削除するようになりました (#2065)** — unchanged skip と reindex の経路で、現在のファイルと同じ checksum を持つ削除済み旧 path を削除し、rename 後に戻す操作で chunk / symbol が重複して残る問題を防ぎます。
+- **Fold readiness が skip 行に保存済みの folded key も検証するようになりました (#2066)** — partial / unchanged indexing で、古い runtime fingerprint 由来の folded 値が残っている場合に Unicode exact-match trust を再広告しなくなりました。
+- **言語 extractor contract が変わった場合に incremental index がファイルを再抽出するようになりました (#2067)** - 保存済みの言語 extractor version が古い unchanged file は再抽出されるため、部分更新後も古い symbol signature が残り続ける問題を防ぎます。
+- **read path のスキーマ移行で SQLite foreign key enforcement を維持するようになりました (#2068)** — `TryMigrateForRead()` は機会的なスキーマ変更を 1 つの transaction で実行し、migration 前後に `PRAGMA foreign_keys` を再有効化するため、新しく追加された reference-line 制約が enforcement されます。
+- **`GetUnchangedFileId()` が checksum 一致時の別 touch クエリを避けるようになりました (#2069)** — 未変更ファイル判定は、checksum が一致する timestamp 更新時も個別の `SELECT` / `UPDATE` に分けず、1 つの atomic な `UPDATE ... RETURNING` で既存ファイル ID の返却と timestamp 更新を行います。
+- **不正な `--kind` 値で有効な候補を表示するようになりました (#2070)** - `--kind` を受け付ける symbol / graph コマンドは未知の値を index 照会前に失敗させ、そのコマンドで有効な symbol / reference / call-graph reference kind を表示します。
+- **数値 CLI オプションの parse error に範囲情報を含めるようにしました (#2071)** — `--limit`、`--snippet-lines`、`--max-line-width` など上限付き整数フラグの不正値は、正の整数または非負整数が必要というだけでなく、受け入れ可能な範囲も表示するようになりました。
+- **database open 失敗時に根本原因の分類を保持するようになりました (#2072)** - query command の stderr で access、I/O、SQLite corruption、その他の SQLite open error を区別し、汎用 database error に潰さないようにしました。
+- **query 系 `--db` と path glob の不正入力を CLI parse 時点で検出するようにしました (#2073)** — 明示指定された存在しない database path と、bracket 形式の未対応 `--path` / `--exclude-path` glob は、reader を開いたり query を実行したりする前に usage error を返します。escape された glob 文字は literal path match として扱います。
+- **バッチ書き込み中の folded-name 計算をキャッシュしました (#2075)** — symbol / reference の挿入時に、同じ名前に対する `NameFold.Fold` 結果をバッチ内で再利用し、永続化される値を変えずに重複した Unicode 正規化処理を削減します。
+- **TypeScript の type alias が generic default type 参照を index するようになりました (#2079)** — `type Dict<K = DefaultKey, V = DefaultValue> = Record<K, V>` で default type と alias RHS の `type_reference` エッジを出力し、generic alias の依存関係が graph 上で見えるようになりました。
+- **TypeScript の `as const` assertion が const assertion 参照を出すようになりました (#2080)** — `as const` 付きの配列 / オブジェクトリテラルは合成 `const_assertion` 参照とリテラル型参照を出すため、下流の references / impact クエリが const narrowing と通常の runtime cast を区別できるようになりました。
+- **TSX の generic component 呼び出しで型引数を index するようになりました (#2081)** — `<List<Item> />`、`<Provider<State, Action> />`、`<Foo<{ a: number }> {...rest} />` のような component tag で、component call edge と明示 JSX 型引数の `type_reference` 行を出力するようになりました。
+- **JavaScript / TypeScript の async generator に明示的な symbol kind を付与しました (#2082)** — `async function`、generator、async generator の宣言とメソッドを `async_function`、`generator`、`async_generator` として分類し、`--kind` フィルタで通常関数と iterator を返す API を区別できるようにしました。
+- **TypeScript の merged interface が augmentation 参照を出すようになりました (#2083)** — ambient module augmentation を含む TypeScript の同名 `interface` 宣言を index 後に `augmentation` 参照で接続し、merged surface が references / impact query から見えるようになりました。
+- **生の FTS5 検索で列修飾子を検証するようになりました (#2088)** — `cdidx search --fts` は SQLite 実行前に `rowid:` や `title:` のような未知の FTS5 列修飾子を拒否し、`fts_chunks` index で有効な列修飾子は `content:` だけであることを文書化しました。
+- **生 FTS5 の `NEAR(...)` distance に上限を設けました (#2089)** — `search --fts` は SQLite 実行前に `0..100` の範囲外の `NEAR` distance を拒否し、極端な値が query latency や memory を占有しないようにしました。
+- **raw FTS5 検索が病的に複雑なクエリを拒否するようになりました (#2090)** — `search --fts` は長すぎる、深くネストした、または演算子が多すぎる raw FTS5 クエリを SQLite に評価させる前に明確なエラーで拒否します。
+- **更新モードのファイルフィルタが project root 内外判定前に親ディレクトリ symlink を解決するようになりました (#2091)** — ディレクトリ symlink 経由で到達する `--files` / `--commits` の明示対象は、実体が index 対象の project root 外にある場合に拒否されます。
+- **octopus merge commit の更新で全変更ファイルを含めるようになりました (#2092)** — `--commits` は `git diff-tree -m` の親ごとの出力を重複排除し、hex commit ID が必要な場所で branch/tag/range ref を拒否します。
+- **`--commits` が index 前に git range と tag ref を拒否するようになりました (#2093)** - commit 指定の更新では各引数を単一 commit-ish として検証し、revision-set 構文や tag ref を commit 入力として黙って扱わず usage error を返します。
+- **bare repository と detached HEAD の変化検出をより正確にしました (#2094)** — Git helper が bare repository を明示的に分類し、`.git` エントリが無い場合でも repository root/common directory を解決します。同一 commit 上の branch/detached HEAD 遷移も workspace HEAD の変化として扱うようにしました。
+- **未解決 merge 状態では indexing を拒否するようになりました (#2095)** — `cdidx index` は scan 前に git の unmerged path を検出し、conflict marker を file issue として表示しつつ conflicted content の symbol/reference 抽出をスキップします。
+- **CLI exit code がリトライ可能な DB lock、invalid argument、cancel を区別するようになりました (#2096)** — script は transient な SQLite `BUSY` / `LOCKED` 失敗 (`6`)、不正な option 値 (`7`)、Ctrl-C cancel (`8`) を generic な usage/database error と分けて判定できます。
+- **検索スニペットの切り詰めメタデータが省略文字数を返すようになりました (#2097)** — `search --json` と MCP `search` は `truncation_context.char_counts` / `total_chars` を返し、truncated な highlight も `truncated_char_counts` を持つため、クライアントはスニペットマーカーを逆解析せずに小さな切り詰めと大きな省略を区別できます。
+- **SQL recursive CTE の参照を区別して索引するようになりました (#2098)** — `WITH RECURSIVE` の CTE 名を symbol として索引し、CTE 本体内の source 参照を `cte_body_reference` として記録するため、recursive self-reference が outer query scope に平坦化されなくなりました。
+- **インデックス時に行頭の zero-width space も剥がすようになりました (#2117)** — 行頭不可視文字の cleanup は `U+FEFF` に加えて `U+200B` も削除し、行中の出現と cleanup 不要ファイルの no-allocation 高速パスは維持します。
+- **推移的 impact の到達不能な depth ガードを削除しました (#2120)** — `GetTransitiveCallers` は enqueue 側の max-depth 制御に一本化し、到達しない dequeue 側分岐を持たないようになりました。
+- **impact の深さ上限の一貫性を固定しました (#2121)** — AnalyzeImpact の回帰テストを追加して caller chain で `maxDepth` が inclusive のまま維持されることを確認し、file dependency 集計には depth-bound traversal 契約がないことを明記しました。
+- **CSS の複合セレクタが class / ID 参照を出力するようになりました (#2127)** — `a.btn` や `button#main` のようなセレクタが `.btn` / `#main` の参照エッジを出力しつつ、属性値内のセレクタ風テキストは引き続き無視します。
+- **impact の file hint が C# event subscription を anchor として扱うようになりました (#2132)** — `impact` は `subscribe` / `unsubscribe` 参照行を強い file-level evidence として扱うため、structured type evidence や metadata bypass が無い event subscription site も落とさなくなりました。
+- **Suggestion record が GitHub 送信試行の診断情報を永続化するようになりました (#2134)** — ローカルの suggestion JSON と suggestion CLI export に最後の送信試行時刻、試行回数、最後の送信エラーを露出し、未試行・再試行可能・拒否済みの提案を運用者が区別できるようにしました。
+- **`suggest_improvement` の再試行冪等性が GitHub Search の index 反映だけに依存しなくなりました (#2135)** - `GitHubIssueReporter` は新しい upstream Issue を作成する前に、`ai-suggestion` Issue を直接一覧取得して本文内の提案ハッシュを照合する fallback を使うようになり、作成直後の Issue が GitHub Search に未反映でも重複作成を防ぎます。
+- **`callers` / `callees --kind import` が non-call-graph 用の経路で拒否されるようになりました (#2138)** — `import` を構造的な dependency edge として説明し、CLI/MCP ともに単なる symbol kind であるかのような警告ではなく `references <name> --kind import` へ誘導します。
+- **MCP の exact flag alias が曖昧な組み合わせを拒否するようになりました (#2140)** — MCP tool は `exact`、`exactSubstring`、`exactName` の組み合わせ指定を即時エラーにし、競合する exact-match 意図を暗黙に OR 結合せず CLI guard と一致するようになりました。
+- **`cdidx symbols` が空白のみの positional query を拒否するようになりました (#2144)** — `symbols "   "` は他の query 系コマンドと同じく、`Error: symbols query cannot be empty or whitespace-only` の明確な blank-query 診断で早期に失敗するようになりました。
+- **MCP の必須文字列パラメータで未指定と空白のみの値を区別するようにしました (#2145)** — MCP tool call は引数が存在しない場合は `Missing required parameter: <name>` を維持し、引数が存在して空白のみの場合は `Parameter "<name>" cannot be empty or whitespace-only` を返します。
+- **walker 以外の DB / lock / config / metadata 確認でも Windows の長いパスを扱えるようになりました (#2189)** — DB 存在確認、lock metadata 読み取り、suggestion / config / report ファイル、Git metadata probe、MCP readiness 確認、exclude-file 読み取りで必要な filesystem API パスを `LongPath.EnsureWindowsPrefix(...)` 経由にし、indexer が見つけられる深い Windows workspace で後続処理がファイルを missing と誤判定しないようにしました。
+- **DbReader が C# 参照解決 lookup で prepared command を再利用するようになりました (#2208)** — 共有 `DbContext` から作成された reader は、タイトなループ内で同じ SQLite command を毎回作り直さず、C# の symbol/reference 解決クエリで cached prepared command を借用します。
+- **CLI 最上位のクラッシュが stderr に .NET stack trace を漏らさなくなりました (#2223)** — 未処理の command failure は、診断ログに詳細を残しつつ単一行の sanitized stderr を出して database-error の終了コードを返すようになりました。
+- **JSON index refresh が stderr に liveness を出すようになりました (#2234)** — `cdidx index ... --json` は最終 stdout JSON を汚さずに長時間の update phase を stderr へ通知するため、C# workspace 解析中でも外部 runner から無音の refresh と見なされにくくなりました。
+- **HTTP MCP transport テストが停止したリクエストを早く失敗させるようになりました (#2249)** — HTTP テストハーネスはリクエスト timeout を明示的に短くし、server loop がすでに失敗している場合は即座に表面化するため、既定の `HttpClient` timeout まで待たずに full suite の失敗を診断できます。
+- **フルテストスイートが trimmed self-contained publish output に `cdidx.dll` が必ず含まれると仮定しなくなりました (#2250)** — publish 済み CLI テストは、利用中の SDK/RID が生成する managed DLL entry point と native apphost のどちらでも実行します。
+- **hook command テストが Console 出力 capture を隔離するようになりました (#2269)** — hook の install/status/uninstall テストは共有 Console capture lock 経由でコマンド出力を扱うため、無関係な full suite 失敗が破棄済み `Console` writer への書き込みとして連鎖しにくくなりました。
+- **C# indexing が namespace、class 宣言、行コメントの文字列で停滞しなくなりました (#2300, #2303, #2318, #2328, #2331)** — C# symbol scanner は class 宣言収集を終端で止め、namespace/import/comment 行で member-header merge をスキップし、C# 属性 scanner は cross-line 属性 lookahead の前に `//` コメント末尾を無視するようになりました。full-scan の liveness output でも C# workspace pre-pass の処理ファイルを表示します。
+- **index の JSON liveness が C# workspace-symbol 事前処理を識別するようになりました (#2351)** — full scan は実際のファイル indexing 前に行う C# workspace-symbol 準備 phase を別途報告し、可能な場合は処理中ファイルも出すため、遅い事前処理が `0/N` files のまま無言で固まったように見えなくなりました。
+- **C# の差分 index refresh が static interface helper code で停滞しないようになりました (#2380)** — static interface contract の pre-pass は、interface 本体内に contract member らしい宣言があるファイルだけで symbol extraction を実行するようになり、`CSharpStaticInterface...` のような helper method 名や文字列リテラル由来の false positive を避けます。
+
+#### 非推奨
+
+- **impact の探索深さ指定を max hops として表現するようになりました (#2122)** — `cdidx impact` はより明確な `--max-hops` option を受け付け、MCP `impact_analysis` は `maxHops` を受け付けます。旧 `--depth` / `maxDepth` 名は deprecation 期間中も互換維持され、使用時に warning を返します。
+
+#### ドキュメント
+
+- **USER_GUIDE にコマンドリファレンス表を追加しました (#1856)** — 詳細例に入る前に、CLI コマンド群をカテゴリ別に確認し、対応する MCP ツール名も把握できるようになりました。
+- **CLI の既定値と drift 防止の扱いを明記しました (#1859)** — USER_GUIDE に canonical な既定値と、変更時に同期すべき箇所を明記しました。
+- **大規模リポジトリ向けの performance tuning ガイドを追加しました (#1862)** — USER_GUIDE に、まず測るべき項目、調整できる index/query knob、そして大規模リポジトリでの trade-off を追加しました。
+- **言語別 extraction matrix を追加しました (#1863)** — USER_GUIDE に、言語ファミリごとの symbol / graph coverage と、text search に戻るべき場面をまとめました。
+- **高度な analysis command の実行例を追加しました (#1867)** — USER_GUIDE に validate / unused / hotspots / impact の実用例、読み方、制限事項を追加しました。
+- **exact-match flag の互換性を文書化 (#2076)** — `--exact-substring` / `--exact-name` への `--exact` 移行表を追加し、MCP alias の扱いと現行の安定性メモも記載しました。
+- **インクリメンタル更新のフォールバック挙動を文書化しました (#2077)** — USER_GUIDE に、`--files` / `--commits` の部分更新がフルインクリメンタルスキャンへ昇格する条件、長い refresh 中に並行 reader が観測しうる状態、JSON 出力から実際の更新モードを確認する方法を追記しました。
+- **CLI JSON と MCP response の schema 境界を文書化しました (#2078)** — `INTEGRATION_POLICY.md` に、`search`、`references`、`callers`、`callees` が CLI `--json` 出力と MCP tool response でどう異なるかを明記し、グループ化行の summary kind、kind array、mixed-kind flag における CLI の snake_case field と MCP の camelCase field も説明しました。
+- **ユーザー向けドキュメントから `reference_kind` フィルタ対応表へリンクしました (#2116)** — README と USER_GUIDE の `callers` / `impact` / `deps` 説明から、件数差と metadata edge の照合方法を説明する対応表へ辿れるようにしました。
+- **sandbox 環境で shared compilation を使わない build 検証手順を文書化しました (#2133)** — sandbox 環境で共有 Roslyn compilation server を安定して利用できない場合に、precommit workflow が build / test コマンドへ `-p:UseSharedCompilation=false` を追加するよう案内します。
+
+#### 内部変更
+
+- **本番 reference extractor と Swift symbol extractor の回帰テストを追加しました (#1815)** — Swift、Objective-C、Gradle、Terraform、PowerShell、Batch の reference 抽出に focused test を追加し、Swift の symbol 抽出にも代表的な宣言種別のテストを追加しました。
+- **C# スコープ解決が同一 file/line の active scope 結果を再利用するようになりました (#2074)** — `DbReader` は C# の namespace、包含型、`using static` の active scope をファイル・行ごとにキャッシュし、batch reference 解決時の割り当て churn を減らします。
+- **参照検索 reader を `DbReader.cs` から分割しました (#2115)** — 参照検索と件数取得のヘルパーを専用の partial `DbReader` ファイルへ移し、クエリ挙動を変えずに reader 本体を小さくしました。
+- **EnsureColumn の競合回復テスト seam を DbContext から移しました (#2313)** — duplicate-column 回復ロジックをテストから直接駆動できる内部 helper に切り出し、`DbContext` から可変のテスト専用フックをなくしました。
+- **GitHub issue reporter のテストが二段階の重複確認リクエストフローと一致するようになりました (#2394)** — 作成失敗時の診断テストは、失敗する Issue 作成リクエストの前に実行される 2 つの事前確認リクエストを期待するようになりました。
+
 ### [1.22.3] - 2026-05-17
 
 #### 修正
@@ -4756,7 +5070,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.22.3...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.23.0...HEAD
+[1.23.0]: https://github.com/Widthdom/CodeIndex/compare/v1.22.3...v1.23.0
 [1.22.3]: https://github.com/Widthdom/CodeIndex/compare/v1.22.2...v1.22.3
 [1.22.2]: https://github.com/Widthdom/CodeIndex/compare/v1.22.1...v1.22.2
 [1.22.1]: https://github.com/Widthdom/CodeIndex/compare/v1.22.0...v1.22.1
