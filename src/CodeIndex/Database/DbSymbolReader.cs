@@ -119,6 +119,8 @@ public partial class DbReader
         }
 
         return expanded;
+    }
+
     private static string BuildSameFilePrivateUseExclusionSql(string symbolAlias, string fileAlias, string visibilitySql, string startLineSql, string endLineSql)
     {
         return $@"
