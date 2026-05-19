@@ -44,6 +44,30 @@ public class DiffCommandRunnerTests
     }
 
     [Fact]
+    public void Run_ReturnsSuccessForSeparatelyBuiltIdenticalDatabases_Issue1724()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_identical_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_identical_right");
+        try
+        {
+            var leftDb = SeedDb(leftRoot, includeExtraFile: false);
+            var rightDb = SeedDb(rightRoot, includeExtraFile: false);
+
+            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--summary-only"]);
+
+            Assert.Equal(0, exitCode);
+            using var document = JsonDocument.Parse(output);
+            Assert.Equal("identical", document.RootElement.GetProperty("status").GetString());
+            Assert.True(document.RootElement.GetProperty("identical").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
     public void Run_ReturnsSchemaMismatchExitCodeBeforeDriftExitCode_Issue1724()
     {
         var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_schema_left");

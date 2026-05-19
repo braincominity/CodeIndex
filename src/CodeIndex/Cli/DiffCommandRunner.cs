@@ -153,18 +153,14 @@ public static class DiffCommandRunner
                     lang,
                     size,
                     lines,
-                    checksum,
-                    modified,
-                    indexed_at
+                    checksum
                 FROM files
                 ORDER BY
                     path,
                     lang,
                     size,
                     lines,
-                    checksum,
-                    modified,
-                    indexed_at
+                    checksum
                 """),
             ReadRows(
                 connection,
@@ -213,17 +209,6 @@ public static class DiffCommandRunner
                     file_issues.kind,
                     file_issues.line,
                     file_issues.message
-                """),
-            ReadRows(
-                connection,
-                """
-                SELECT
-                    key,
-                    value
-                FROM codeindex_meta
-                ORDER BY
-                    key,
-                    value
                 """),
             ReadRows(
                 connection,
@@ -328,7 +313,6 @@ public static class DiffCommandRunner
             left.ChunkRows.SequenceEqual(right.ChunkRows, StringComparer.Ordinal) &&
             left.ReferenceLineRows.SequenceEqual(right.ReferenceLineRows, StringComparer.Ordinal) &&
             left.FileIssueRows.SequenceEqual(right.FileIssueRows, StringComparer.Ordinal) &&
-            left.MetaRows.SequenceEqual(right.MetaRows, StringComparer.Ordinal) &&
             left.SymbolRows.SequenceEqual(right.SymbolRows, StringComparer.Ordinal) &&
             left.ReferenceRows.SequenceEqual(right.ReferenceRows, StringComparer.Ordinal);
 
@@ -588,7 +572,6 @@ public static class DiffCommandRunner
         List<string> ChunkRows,
         List<string> ReferenceLineRows,
         List<string> FileIssueRows,
-        List<string> MetaRows,
         List<string> SymbolRows,
         List<string> ReferenceRows);
 
