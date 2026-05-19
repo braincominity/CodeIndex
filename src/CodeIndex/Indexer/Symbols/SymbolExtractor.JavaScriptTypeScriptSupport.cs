@@ -1964,13 +1964,15 @@ public static partial class SymbolExtractor
                     continue;
                 }
 
-                var kind = StartsJavaScriptTypeScriptFunctionAssignmentValue(classificationRhs)
+                var kind = StartsJavaScriptTypeScriptLambdaAssignmentValue(classificationRhs)
+                    ? "lambda"
+                    : StartsJavaScriptTypeScriptFunctionAssignmentValue(classificationRhs)
                     ? "function"
                     : "property";
 
                 int? bodyStartLine = null;
                 int? bodyEndLine = null;
-                if (kind == "function"
+                if (kind is "function" or "lambda"
                     && TryFindJavaScriptTypeScriptAssignedFunctionBodyOpenBrace(
                         lines,
                         rhsStartLineIndex,
@@ -3507,13 +3509,15 @@ public static partial class SymbolExtractor
                     continue;
                 }
 
-                var kind = StartsJavaScriptTypeScriptFunctionAssignmentValue(classificationRhs)
+                var kind = StartsJavaScriptTypeScriptLambdaAssignmentValue(classificationRhs)
+                    ? "lambda"
+                    : StartsJavaScriptTypeScriptFunctionAssignmentValue(classificationRhs)
                     ? "function"
                     : "property";
 
                 int? bodyStartLine = null;
                 int? bodyEndLine = null;
-                if (kind == "function")
+                if (kind is "function" or "lambda")
                 {
                     if (TryFindJavaScriptTypeScriptAssignedFunctionBodyOpenBrace(
                             rawLines,
@@ -3648,7 +3652,7 @@ public static partial class SymbolExtractor
                     new SymbolRecord
                     {
                         FileId = fileId,
-                        Kind = "function",
+                        Kind = "lambda",
                         Name = "default",
                         Line = i + 1,
                         StartLine = i + 1,
@@ -3769,7 +3773,7 @@ public static partial class SymbolExtractor
                     new SymbolRecord
                     {
                         FileId = fileId,
-                        Kind = "function",
+                        Kind = StartsJavaScriptTypeScriptLambdaAssignmentValue(classificationRhs) ? "lambda" : "function",
                         Name = "default",
                         Line = i + 1,
                         StartLine = i + 1,
@@ -5138,6 +5142,26 @@ public static partial class SymbolExtractor
         return false;
     }
 
+    private static bool StartsJavaScriptTypeScriptLambdaAssignmentValue(string rhs)
+    {
+        rhs = rhs.TrimStart();
+        while (rhs.Length > 0)
+        {
+            if (StartsJavaScriptTypeScriptArrowFunctionAssignmentValue(rhs)
+                || StartsJavaScriptTypeScriptAnonymousFunctionAssignmentValue(rhs))
+            {
+                return true;
+            }
+
+            if (rhs[0] != '(')
+                return false;
+
+            rhs = rhs[1..].TrimStart();
+        }
+
+        return false;
+    }
+
     private static bool StartsJavaScriptTypeScriptClassAssignmentValue(string rhs)
     {
         rhs = rhs.TrimStart();
@@ -5153,6 +5177,22 @@ public static partial class SymbolExtractor
         }
 
         return false;
+    }
+
+    private static bool StartsJavaScriptTypeScriptAnonymousFunctionAssignmentValue(string rhs)
+    {
+        rhs = rhs.TrimStart();
+        if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "async"))
+            rhs = rhs["async".Length..].TrimStart();
+
+        if (!IsJavaScriptTypeScriptKeywordAt(rhs, 0, "function"))
+            return false;
+
+        rhs = rhs["function".Length..].TrimStart();
+        if (rhs.StartsWith('*'))
+            rhs = rhs[1..].TrimStart();
+
+        return rhs.StartsWith('(');
     }
 
     private static bool StartsJavaScriptTypeScriptAsyncFunctionAssignmentValue(string rhs)

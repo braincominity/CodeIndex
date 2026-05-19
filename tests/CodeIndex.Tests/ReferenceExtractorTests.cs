@@ -161,14 +161,14 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, language, content, symbols);
 
         Assert.Contains(symbols, symbol =>
-            symbol.Kind == "function"
+            symbol.Kind == "lambda"
             && symbol.Name == "default"
             && symbol.BodyStartLine == 2
             && symbol.BodyEndLine == 4);
         Assert.Contains(references, reference =>
             reference.SymbolName == "findById"
             && reference.ReferenceKind == "call"
-            && reference.ContainerKind == "function"
+            && reference.ContainerKind == "lambda"
             && reference.ContainerName == "default");
     }
 
