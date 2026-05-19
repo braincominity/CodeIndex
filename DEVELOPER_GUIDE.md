@@ -919,8 +919,9 @@ The file name is `stderr-YYYYMMDD.log`, and the logger keeps only the newest
 30 daily files. Repository-local development runs from `src/CodeIndex/bin/...`
 and `tests/.../bin/...` are excluded by default so ordinary build/test cycles
 do not accumulate persistent logs. Set `CDIDX_DISABLE_PERSISTENT_LOG=1` to opt
-out entirely, or `CDIDX_GLOBAL_TOOL_LOG_DIR` to redirect the log directory
-during testing or packaging.
+out entirely; the toggle accepts `1`, `true`, `yes`, or `on`
+case-insensitively. Use `CDIDX_GLOBAL_TOOL_LOG_DIR` to redirect the log
+directory during testing or packaging.
 
 ### The moving parts
 
