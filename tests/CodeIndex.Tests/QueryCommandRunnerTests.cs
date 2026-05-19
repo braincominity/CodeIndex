@@ -966,6 +966,80 @@ jobs:
     }
 
     [Fact]
+    public void RunSearch_RawFtsTooLongQueryReturnsUsageError()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_too_long");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
+            var query = new string('a', DbReader.MaxRawFtsQueryLength + 1);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [query, "--db", dbPath, "--fts"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("raw FTS5 query is too long", stderr);
+            Assert.Contains("literal-safe search", stderr);
+            Assert.DoesNotContain("database error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RawFtsTooManyNearOperatorsReturnsUsageError()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_too_many_near");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
+            var query = string.Join(" OR ", Enumerable.Repeat("NEAR(spawn app, 5)", DbReader.MaxRawFtsNearOperators + 1));
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [query, "--db", dbPath, "--fts", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("raw FTS5 query is too complex", stderr);
+            Assert.Contains("NEAR operators", stderr);
+            Assert.DoesNotContain("database error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RawFtsLowercaseOperatorWordsAreTerms()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_lowercase_terms");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "and or not near");
+            var query = string.Join(" ", Enumerable.Repeat("and", DbReader.MaxRawFtsBooleanOperators + 1));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [query, "--db", dbPath, "--fts", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.DoesNotContain("too complex", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_TrailingWildcardActsAsPrefixShorthand()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_prefix_shorthand");
@@ -2205,7 +2279,7 @@ jobs:
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Contains("Error [E001_DB_NOT_FOUND]: --db", stderr);
             Assert.Contains("does not point to an existing database file", stderr);
-            Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+            Assert.Contains("Hint: create or refresh the index with `cdidx index <projectPath>`", stderr);
             Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("search")}", stderr);
         }
         finally
@@ -2388,6 +2462,55 @@ jobs:
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("Error: --db requires a value.", stderr);
         Assert.Contains("Hint: pass a path to a CodeIndex SQLite database", stderr);
+    }
+
+    [Fact]
+    public void WithDb_InvalidSqliteFileSurfacesSqliteCategory_Issue2072()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2072_invalid_sqlite");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "not-a-codeindex.db");
+            File.WriteAllText(dbPath, "this is not a sqlite database");
+            var dbUri = new Uri(dbPath).AbsoluteUri + "?mode=ro&immutable=1;Pooling=False";
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbUri],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains($"Error [{CommandErrorCodes.DbError}]: SQLite database error", stderr);
+            Assert.Contains("Hint: check `--db`, verify the index was written by a compatible cdidx version", stderr);
+            Assert.DoesNotContain("database error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void WithDb_SqliteCantOpenSurfacesAccessOpenCategory_Issue2072()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2072_cantopen");
+        try
+        {
+            var missingParent = Path.Combine(projectRoot, "missing-parent");
+            var dbUri = new Uri(Path.Combine(missingParent, "codeindex.db")).AbsoluteUri + "?mode=ro";
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbUri],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains($"Error [{CommandErrorCodes.DbError}]: database access/open denied:", stderr);
+            Assert.Contains("verify parent directory permissions", stderr);
+            Assert.DoesNotContain("SQLite database error", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Theory]
@@ -12334,6 +12457,58 @@ jobs:
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Theory]
+    [InlineData("definition")]
+    [InlineData("symbols")]
+    [InlineData("unused")]
+    [InlineData("hotspots")]
+    public void SymbolKindCommands_InvalidKindFailsWithValidKindList(string command)
+    {
+        var args = command switch
+        {
+            "definition" => new[] { "Target", "--kind", "badkind" },
+            "symbols" => ["Target", "--kind", "badkind"],
+            "unused" => ["--kind", "badkind"],
+            "hotspots" => ["--kind", "badkind"],
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+        {
+            "definition" => QueryCommandRunner.RunDefinition(args, _jsonOptions),
+            "symbols" => QueryCommandRunner.RunSymbols(args, _jsonOptions),
+            "unused" => QueryCommandRunner.RunUnused(args, _jsonOptions),
+            "hotspots" => QueryCommandRunner.RunHotspots(args, _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        });
+
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("invalid --kind value `badkind`", stderr);
+        Assert.Contains("Hint: use one of:", stderr);
+        Assert.Contains("function", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+    }
+
+    [Theory]
+    [InlineData("references")]
+    [InlineData("callers")]
+    [InlineData("callees")]
+    public void GraphCommands_InvalidReferenceKindFailsWithScopedValidKindList(string command)
+    {
+        var args = new[] { "Target", "--kind", "badkind" };
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(command, args, _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("invalid --kind value `badkind`", stderr);
+        Assert.Contains("Hint: use one of:", stderr);
+        Assert.Contains("call", stderr);
+        Assert.Contains(command == "references" ? "type_reference" : "friend", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
     }
 
     [Fact]
@@ -27861,7 +28036,7 @@ jobs:
     }
 
     [Fact]
-    public void RunFind_ZeroResultHintDoesNotSuggestRemovingRequiredPath()
+    public void RunFind_ZeroResultHintDistinguishesPathMatchesFromQueryMiss_Issue1406()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_zero_hint");
         try
@@ -27880,8 +28055,38 @@ jobs:
 
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
             Assert.Contains("No matches found.", stderr);
-            Assert.Contains("broadening --path or adding another --path value", normalizedStderr);
+            Assert.Contains("--path matched 1 file, but the query did not match their contents", stderr);
+            Assert.Contains("try a broader query or check the query syntax", normalizedStderr);
+            Assert.DoesNotContain("broadening --path or adding another --path value", normalizedStderr);
             Assert.DoesNotContain("try removing --lang, --path", normalizedStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_ZeroResultHintStillSuggestsBroadeningUnmatchedPath_Issue1406()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_zero_path_hint");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "README.md",
+                "markdown",
+                "hello world\n");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["hello", "--db", dbPath, "--path", "src/**/*.cs"],
+                _jsonOptions));
+            var normalizedStderr = stderr.ToLowerInvariant();
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("broadening --path or adding another --path value", normalizedStderr);
+            Assert.DoesNotContain("query did not match", normalizedStderr);
         }
         finally
         {
@@ -30156,7 +30361,7 @@ jobs:
         // Verify full (absolute) path is shown, not just the basename / フルパス表示を検証
         Assert.Contains(Path.GetFullPath(missingDbPath), stderr);
         Assert.Contains("does not point to an existing database file", stderr);
-        Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+        Assert.Contains("Hint: create or refresh the index with `cdidx index <projectPath>`", stderr);
     }
 
     [Fact]

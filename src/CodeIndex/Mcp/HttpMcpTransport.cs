@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 
@@ -28,6 +29,7 @@ internal sealed class HttpMcpTransport : IMcpTransport
     private readonly HttpListener _listener;
     private readonly string _endpoint;
     private readonly Action<HttpRequestLogRecord>? _requestLogger;
+    private readonly object _requestLoggerGate = new();
     private readonly ConcurrentBag<Task> _sseStreams = new();
     private readonly CancellationTokenSource _acceptCts = new();
     private readonly Channel<PendingRequest> _requestQueue = Channel.CreateUnbounded<PendingRequest>();
@@ -69,6 +71,8 @@ internal sealed class HttpMcpTransport : IMcpTransport
     public string Endpoint => _endpoint;
 
     internal bool RequiresBearerToken => _bearerTokenHash is not null;
+
+    internal Func<string, string?>? OutOfBandFrameHandler { get; set; }
 
     /// <summary>
     /// Resolve a `host:port` listen spec into the corresponding HTTP prefix. Ephemeral ports
@@ -254,7 +258,61 @@ internal sealed class HttpMcpTransport : IMcpTransport
 
         request.Body = body;
         request.RequestId = TryExtractJsonRpcId(body);
+        if (TryHandleOutOfBandFrame(request, body))
+            return;
+
         await _requestQueue.Writer.WriteAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    private bool TryHandleOutOfBandFrame(PendingRequest request, string body)
+    {
+        if (OutOfBandFrameHandler is null || !IsCancellationNotification(body))
+            return false;
+
+        var context = request.Context;
+        try
+        {
+            var frame = OutOfBandFrameHandler(body);
+            if (frame is null)
+            {
+                context.Response.StatusCode = (int)HttpStatusCode.NoContent;
+                context.Response.Close();
+                LogRequest(request, (int)HttpStatusCode.NoContent);
+                return true;
+            }
+
+            var payload = Encoding.UTF8.GetBytes(frame);
+            context.Response.StatusCode = (int)HttpStatusCode.OK;
+            context.Response.ContentType = "application/json; charset=utf-8";
+            context.Response.ContentLength64 = payload.LongLength;
+            context.Response.OutputStream.Write(payload);
+            context.Response.OutputStream.Close();
+            LogRequest(request, (int)HttpStatusCode.OK);
+            return true;
+        }
+        catch
+        {
+            try { context.Response.Abort(); } catch { /* ignore */ }
+            LogRequest(request, 499);
+            return true;
+        }
+    }
+
+    private static bool IsCancellationNotification(string body)
+    {
+        try
+        {
+            var node = JsonNode.Parse(body);
+            if (node is not JsonObject obj)
+                return false;
+            var method = obj["method"]?.GetValue<string>();
+            return string.Equals(method, "$/cancelRequest", StringComparison.Ordinal)
+                || string.Equals(method, "notifications/cancelled", StringComparison.Ordinal);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public async Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
@@ -467,15 +525,19 @@ internal sealed class HttpMcpTransport : IMcpTransport
         request.Logged = true;
         try
         {
-            _requestLogger(new HttpRequestLogRecord(
-                request.CorrelationId,
-                request.RequestId,
-                request.RemotePeer,
-                request.Method,
-                request.Path,
-                statusCode,
-                request.Elapsed.TotalMilliseconds,
-                request.AuthOutcome));
+            var record = new HttpRequestLogRecord(
+                    request.CorrelationId,
+                    request.RequestId,
+                    request.RemotePeer,
+                    request.Method,
+                    request.Path,
+                    statusCode,
+                    request.Elapsed.TotalMilliseconds,
+                    request.AuthOutcome);
+            lock (_requestLoggerGate)
+            {
+                _requestLogger(record);
+            }
         }
         catch
         {

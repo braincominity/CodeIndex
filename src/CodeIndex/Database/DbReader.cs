@@ -559,22 +559,22 @@ public partial class DbReader
     private string ResolveHotspotFamilyDegradedReason(string lang)
     {
         if (!_symbolColumns.Contains("family_key") || !_symbolColumns.Contains("container_qualified_name"))
-            return "hotspot_family_support_not_indexed";
+            return DegradationReasonCodes.HotspotFamilySupportNotIndexed;
 
         var raw = TryGetMetaString(_conn, DbContext.GetHotspotFamilyVersionMetaKey(lang));
         var fingerprint = TryGetMetaString(_conn, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang));
         if (string.IsNullOrWhiteSpace(raw))
-            return "hotspot_family_support_not_indexed";
+            return DegradationReasonCodes.HotspotFamilySupportNotIndexed;
 
         if (!int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var version)
             || version != DbContext.HotspotFamilyVersion)
         {
-            return "hotspot_family_metadata_stale";
+            return DegradationReasonCodes.HotspotFamilyMetadataStale;
         }
 
         return string.IsNullOrWhiteSpace(fingerprint)
-            ? "hotspot_family_disabled_at_index_time"
-            : "hotspot_family_metadata_stale";
+            ? DegradationReasonCodes.HotspotFamilyDisabledAtIndexTime
+            : DegradationReasonCodes.HotspotFamilyMetadataStale;
     }
 
     private string GetHotspotFamilyRecoveryAction(IReadOnlyList<string> languages)
@@ -583,10 +583,10 @@ public partial class DbReader
             .Select(ResolveHotspotFamilyDegradedReason)
             .ToHashSet(StringComparer.Ordinal);
 
-        if (reasons.SetEquals(["hotspot_family_metadata_stale"]))
-            return "run `cdidx index <projectPath> --files <changedFiles>` or `cdidx index <projectPath>` to restamp authoritative hotspot families.";
+        if (reasons.SetEquals([DegradationReasonCodes.HotspotFamilyMetadataStale]))
+            return DegradationReasonCodes.GetMetadata(DegradationReasonCodes.HotspotFamilyMetadataStale).RecommendedAction;
 
-        return "run `cdidx index <projectPath>` to rebuild and stamp authoritative hotspot families.";
+        return DegradationReasonCodes.GetMetadata(DegradationReasonCodes.HotspotFamilySupportNotIndexed).RecommendedAction;
     }
 
     private HashSet<string> LoadIndexes(string tableName)
@@ -617,12 +617,12 @@ public partial class DbReader
         var storedVersion = ParseFoldVersion(_conn);
         var storedFingerprint = ParseFoldFingerprint(_conn);
         if (storedVersion < 0 || string.IsNullOrWhiteSpace(storedFingerprint))
-            return "missing_fold_backfill";
+            return DegradationReasonCodes.MissingFoldBackfill;
         if (storedVersion != NameFold.Version)
-            return "stale_fold_key_version";
+            return DegradationReasonCodes.StaleFoldKeyVersion;
         if (!string.Equals(storedFingerprint, NameFold.Fingerprint(), StringComparison.Ordinal))
-            return "stale_fold_key_fingerprint";
-        return "fold_rows_not_restamped";
+            return DegradationReasonCodes.StaleFoldKeyFingerprint;
+        return DegradationReasonCodes.FoldRowsNotRestamped;
     }
 
     private HashSet<string> LoadIndexedHotspotFamilyLanguages()
@@ -868,7 +868,7 @@ public partial class DbReader
         return new SqlGraphContractSignal(
             Ready: false,
             Relevant: true,
-            DegradedReason: "sql_graph_contract_ready=false (SQL graph rows may still use a stale call-column / qualified-name contract; rerun `cdidx index <projectPath>` before trusting SQL graph/dependency results)");
+            DegradedReason: DegradationReasonCodes.BuildSqlGraphContractDegradedReason());
     }
 
     private static ExactQuerySignal CombineExactSignals(params ExactQuerySignal?[] signals)

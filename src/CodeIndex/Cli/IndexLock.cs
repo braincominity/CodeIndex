@@ -102,7 +102,7 @@ internal sealed class IndexLock : IDisposable
                 ProjectPath: Path.GetFullPath(projectPath));
             File.WriteAllText(infoPath, SerializeInfo(info), Encoding.UTF8);
         }
-        catch
+        catch (Exception)
         {
             stream.Dispose();
             throw;
@@ -140,7 +140,7 @@ internal sealed class IndexLock : IDisposable
                 return null;
             return ParseInfo(text);
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             return null;
         }
@@ -156,7 +156,7 @@ internal sealed class IndexLock : IDisposable
         {
             File.Delete(_infoPath);
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Best-effort. / ベストエフォート。
         }
@@ -165,7 +165,7 @@ internal sealed class IndexLock : IDisposable
         {
             _stream.Dispose();
         }
-        catch
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
         {
             // Best-effort. / ベストエフォート。
         }
@@ -174,7 +174,7 @@ internal sealed class IndexLock : IDisposable
         {
             File.Delete(_lockPath);
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Best-effort cleanup; a leftover empty lockfile does not block future
             // acquires because the next Acquire opens it with OpenOrCreate.
