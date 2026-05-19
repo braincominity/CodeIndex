@@ -423,6 +423,10 @@ Default locations are `%LOCALAPPDATA%\cdidx\logs\` on Windows,
 `~/.local/state/cdidx/logs/`) on Linux. Logs rotate daily and keep the newest
 30 files. Set `CDIDX_DISABLE_PERSISTENT_LOG=1` to opt out. The opt-out
 toggle accepts `1`, `true`, `yes`, or `on` case-insensitively.
+Developer and packaging smoke tests can force this lifecycle log on with
+`CDIDX_FORCE_GLOBAL_TOOL_LOG=1` even from repository-local build paths; use it
+only for troubleshooting and keep `CDIDX_DISABLE_PERSISTENT_LOG` as the higher
+priority opt-out.
 
 #### Upgrade
 

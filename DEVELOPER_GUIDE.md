@@ -922,6 +922,10 @@ do not accumulate persistent logs. Set `CDIDX_DISABLE_PERSISTENT_LOG=1` to opt
 out entirely; the toggle accepts `1`, `true`, `yes`, or `on`
 case-insensitively. Use `CDIDX_GLOBAL_TOOL_LOG_DIR` to redirect the log
 directory during testing or packaging.
+Set `CDIDX_FORCE_GLOBAL_TOOL_LOG=1` to force lifecycle logging for local
+package smoke tests or launcher diagnostics even when the executable path looks
+like a development build; `CDIDX_DISABLE_PERSISTENT_LOG` still wins when both
+are set.
 
 ### The moving parts
 
