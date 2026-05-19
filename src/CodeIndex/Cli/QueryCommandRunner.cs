@@ -4252,8 +4252,7 @@ public static class QueryCommandRunner
                 }
             }
 
-            Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: database error: {ex.Message}");
-            Console.Error.WriteLine("Hint: check `--db`, or rebuild the index with `cdidx index <projectPath>` if the DB may be stale or corrupted.");
+            WriteDatabaseOpenFailure(ex, dbPath);
             Database.DbDebug.DumpToStderr(ex);
             return CommandExitCodes.DatabaseError;
         }
@@ -4264,6 +4263,76 @@ public static class QueryCommandRunner
                 Database.DbDebug.EndProfile();
             Database.DbDebug.ResetContext();
         }
+    }
+
+    private static void WriteDatabaseOpenFailure(Exception ex, string dbPath)
+    {
+        GlobalToolLog.Error($"database_open_failed db={FormatLogValue(dbPath)} exception={FormatLogValue(ex.ToString())}");
+
+        var unauthorized = FindException<UnauthorizedAccessException>(ex);
+        if (unauthorized != null)
+        {
+            Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: database access denied: {unauthorized.Message}");
+            Console.Error.WriteLine("Hint: check the permissions for `--db`, move the index to a writable location, or use a SQLite `file:` URI with `immutable=1` for read-only mounts.");
+            return;
+        }
+
+        var io = FindException<IOException>(ex);
+        if (io != null)
+        {
+            Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: database I/O error: {io.Message}");
+            Console.Error.WriteLine("Hint: check that the `--db` path and its WAL/SHM sidecar files are readable, then refresh the index if the files were moved or removed.");
+            return;
+        }
+
+        var sqlite = FindException<SqliteException>(ex);
+        if (sqlite != null)
+        {
+            if (sqlite.SqliteErrorCode == 14)
+            {
+                Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: database access/open denied: {sqlite.Message}");
+                Console.Error.WriteLine("Hint: check that `--db` points to a readable SQLite file, verify parent directory permissions, or use a SQLite `file:` URI with `immutable=1` for read-only mounts.");
+                return;
+            }
+
+            if (sqlite.SqliteErrorCode == 11)
+            {
+                Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: SQLite reported database corruption: {sqlite.Message}");
+                Console.Error.WriteLine("Hint: rebuild the index with `cdidx index <projectPath> --rebuild`, or delete the broken `.cdidx/codeindex.db*` files and run `cdidx index <projectPath>` again.");
+                return;
+            }
+
+            Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: SQLite database error ({sqlite.SqliteErrorCode}): {sqlite.Message}");
+            Console.Error.WriteLine("Hint: check `--db`, verify the index was written by a compatible cdidx version, or rebuild it with `cdidx index <projectPath> --rebuild`.");
+            return;
+        }
+
+        Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: database error: {ex.Message}");
+        Console.Error.WriteLine("Hint: check `--db`, or rebuild the index with `cdidx index <projectPath>` if the DB may be stale or corrupted.");
+    }
+
+    private static T? FindException<T>(Exception ex)
+        where T : Exception
+    {
+        for (Exception? current = ex; current != null; current = current.InnerException)
+        {
+            if (current is T typed)
+                return typed;
+        }
+
+        return null;
+    }
+
+    private static string FormatLogValue(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return "<empty>";
+
+        return value
+            .Replace("\\", "/", StringComparison.Ordinal)
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Replace("\t", " ", StringComparison.Ordinal);
     }
 
     private static void WriteProfilePayload(IReadOnlyList<QueryProfileEntry> entries, JsonSerializerOptions jsonOptions)

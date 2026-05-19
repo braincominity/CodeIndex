@@ -966,6 +966,80 @@ jobs:
     }
 
     [Fact]
+    public void RunSearch_RawFtsTooLongQueryReturnsUsageError()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_too_long");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
+            var query = new string('a', DbReader.MaxRawFtsQueryLength + 1);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [query, "--db", dbPath, "--fts"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("raw FTS5 query is too long", stderr);
+            Assert.Contains("literal-safe search", stderr);
+            Assert.DoesNotContain("database error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RawFtsTooManyNearOperatorsReturnsUsageError()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_too_many_near");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
+            var query = string.Join(" OR ", Enumerable.Repeat("NEAR(spawn app, 5)", DbReader.MaxRawFtsNearOperators + 1));
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [query, "--db", dbPath, "--fts", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("raw FTS5 query is too complex", stderr);
+            Assert.Contains("NEAR operators", stderr);
+            Assert.DoesNotContain("database error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RawFtsLowercaseOperatorWordsAreTerms()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_lowercase_terms");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "and or not near");
+            var query = string.Join(" ", Enumerable.Repeat("and", DbReader.MaxRawFtsBooleanOperators + 1));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [query, "--db", dbPath, "--fts", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.DoesNotContain("too complex", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_TrailingWildcardActsAsPrefixShorthand()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_prefix_shorthand");
@@ -2388,6 +2462,55 @@ jobs:
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("Error: --db requires a value.", stderr);
         Assert.Contains("Hint: pass a path to a CodeIndex SQLite database", stderr);
+    }
+
+    [Fact]
+    public void WithDb_InvalidSqliteFileSurfacesSqliteCategory_Issue2072()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2072_invalid_sqlite");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "not-a-codeindex.db");
+            File.WriteAllText(dbPath, "this is not a sqlite database");
+            var dbUri = new Uri(dbPath).AbsoluteUri + "?mode=ro&immutable=1;Pooling=False";
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbUri],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains($"Error [{CommandErrorCodes.DbError}]: SQLite database error", stderr);
+            Assert.Contains("Hint: check `--db`, verify the index was written by a compatible cdidx version", stderr);
+            Assert.DoesNotContain("database error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void WithDb_SqliteCantOpenSurfacesAccessOpenCategory_Issue2072()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2072_cantopen");
+        try
+        {
+            var missingParent = Path.Combine(projectRoot, "missing-parent");
+            var dbUri = new Uri(Path.Combine(missingParent, "codeindex.db")).AbsoluteUri + "?mode=ro";
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbUri],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains($"Error [{CommandErrorCodes.DbError}]: database access/open denied:", stderr);
+            Assert.Contains("verify parent directory permissions", stderr);
+            Assert.DoesNotContain("SQLite database error", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Theory]
@@ -6205,10 +6328,10 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(["Hidden", "InternalOnly", "UserDto", "FullName"], symbols.EnumerateArray().Select(symbol => symbol.GetProperty("name").GetString()).ToArray());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("likely_unused_private").GetInt32());
+            Assert.Equal(["InternalOnly", "UserDto", "FullName", "Run"], symbols.EnumerateArray().Select(symbol => symbol.GetProperty("name").GetString()).ToArray());
+            Assert.False(json.GetProperty("returned_bucket_counts").TryGetProperty("likely_unused_private", out _));
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
-            Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
+            Assert.Equal(2, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
         }
         finally
@@ -10774,7 +10897,7 @@ jobs:
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
             Assert.True(json.GetProperty("degraded").GetBoolean());
-            Assert.Contains("csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
+            Assert.Contains("hotspot_family_support_not_indexed=csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
             Assert.True(json.GetProperty("graph_table_available").GetBoolean());
         }
         finally
@@ -10819,7 +10942,7 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
             Assert.True(json.GetProperty("degraded").GetBoolean());
-            Assert.Contains("csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
+            Assert.Contains("hotspot_family_support_not_indexed=csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
         }
         finally
         {
@@ -11917,7 +12040,40 @@ jobs:
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
             Assert.True(json.GetProperty("degraded").GetBoolean());
-            Assert.Contains("csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
+            Assert.Contains("hotspot_family_disabled_at_index_time=csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_ZeroJson_ReportsStaleHotspotFamilyMetadata()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_family_stale_zero_json");
+        try
+        {
+            var dbPath = CreateHotspotFamilyFixtureDb(projectRoot, markHotspotFamilyReady: true);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), "1");
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.True(json.GetProperty("degraded").GetBoolean());
+            Assert.Contains("hotspot_family_metadata_stale=csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
         }
         finally
         {

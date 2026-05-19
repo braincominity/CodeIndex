@@ -45,6 +45,7 @@ public class ConsoleUiTests
         Assert.Contains("--snippet-focus <mode>     search only: long-line focus mode (leftmost|quality|proximity, default: quality)", output);
         Assert.Contains("--max-line-width <n>       search/references/find/excerpt/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: 512)", output);
         Assert.Contains("cdidx find <query> --path <glob>", output);
+        Assert.Contains("--fts                      Use raw FTS5 query syntax for search (max 2000 chars, 64 boolean ops, 16 NEAR ops", output);
         Assert.Contains("--exact-substring          Search only: case-sensitive exact substring (no FTS5)", output);
         Assert.Contains("--exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match", output);
         Assert.Contains("--kind <kind>              definition/symbols/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind", output);
@@ -52,7 +53,7 @@ public class ConsoleUiTests
         Assert.Contains("--commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)", output);
         Assert.Contains("--files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed", output);
         Assert.Contains("--duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms", output);
-        Assert.Contains("--ascii                    Use ASCII progress glyphs", output);
+        Assert.Contains("--ascii                    Use ASCII spinner/progress glyphs", output);
         Assert.Contains("cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json]", output);
         Assert.Contains("--focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)", output);
         Assert.Contains("--focus-line <line>        excerpt: line whose focused column should stay visible", output);
@@ -136,9 +137,39 @@ public class ConsoleUiTests
     [Fact]
     public void GetSpinnerFrames_Default_UsesRotatingBrailleSequence()
     {
-        var frames = ConsoleUi.GetSpinnerFrames(null);
+        WithUnicodeEnvironment(cdidxAscii: null, lang: "en_US.UTF-8", () =>
+        {
+            var frames = ConsoleUi.GetSpinnerFrames(null);
 
-        Assert.Equal(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], frames);
+            Assert.Equal(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], frames);
+        });
+    }
+
+    [Fact]
+    public void GetSpinnerFrames_CdidxAsciiEnvVar_UsesAsciiSequence()
+    {
+        WithUnicodeEnvironment(cdidxAscii: "1", lang: "en_US.UTF-8", () =>
+        {
+            Assert.Equal(["|", "/", "-", "\\"], ConsoleUi.GetSpinnerFrames(null));
+        });
+    }
+
+    [Fact]
+    public void GetSpinnerFrames_PosixLang_UsesAsciiSequence()
+    {
+        WithUnicodeEnvironment(cdidxAscii: null, lang: "C", () =>
+        {
+            Assert.Equal(["|", "/", "-", "\\"], ConsoleUi.GetSpinnerFrames(null));
+        });
+    }
+
+    [Fact]
+    public void GetSpinnerFrames_AsciiOverrideWinsOverThemedSpinner()
+    {
+        WithUnicodeEnvironment(cdidxAscii: "1", lang: "en_US.UTF-8", () =>
+        {
+            Assert.Equal(["|", "/", "-", "\\"], ConsoleUi.GetSpinnerFrames("--sushi"));
+        });
     }
 
     [Fact]
@@ -172,6 +203,28 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void GetWindowWidth_ColumnsEnvVarSet_UsesColumnsValue()
+    {
+        WithColumnsEnvironment("200", () =>
+        {
+            Assert.Equal(200, ConsoleUi.GetWindowWidth());
+        });
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("wide")]
+    public void GetWindowWidth_InvalidColumnsEnvVar_FallsBackToConsoleOrDefault(string? columns)
+    {
+        WithColumnsEnvironment(columns, () =>
+        {
+            Assert.True(ConsoleUi.GetWindowWidth() > 0);
+        });
+    }
+
+    [Fact]
     public void ShouldUseUnicodeGlyphs_CdidxAsciiEnvVarDisablesUnicode()
     {
         WithUnicodeEnvironment(cdidxAscii: "1", lang: "en_US.UTF-8", () =>
@@ -184,6 +237,42 @@ public class ConsoleUiTests
     public void ShouldUseUnicodeGlyphs_PosixLangDisablesUnicode()
     {
         WithUnicodeEnvironment(cdidxAscii: null, lang: "C", () =>
+        {
+            Assert.False(ConsoleUi.ShouldUseUnicodeGlyphs());
+        });
+    }
+
+    [Fact]
+    public void ShouldUseUnicodeGlyphs_NonUtf8LangDisablesUnicode()
+    {
+        WithUnicodeEnvironment(cdidxAscii: null, lang: "en_US", () =>
+        {
+            Assert.False(ConsoleUi.ShouldUseUnicodeGlyphs());
+        });
+    }
+
+    [Fact]
+    public void ShouldUseUnicodeGlyphs_DumbTerminalDisablesUnicode()
+    {
+        WithUnicodeEnvironment(cdidxAscii: null, lang: "en_US.UTF-8", term: "dumb", action: () =>
+        {
+            Assert.False(ConsoleUi.ShouldUseUnicodeGlyphs());
+        });
+    }
+
+    [Fact]
+    public void ShouldUseUnicodeGlyphs_NoUnicodeEnvVarDisablesUnicode()
+    {
+        WithUnicodeEnvironment(cdidxAscii: null, lang: "en_US.UTF-8", noUnicode: "1", action: () =>
+        {
+            Assert.False(ConsoleUi.ShouldUseUnicodeGlyphs());
+        });
+    }
+
+    [Fact]
+    public void ShouldUseUnicodeGlyphs_AccessibilityEnvVarDisablesUnicode()
+    {
+        WithUnicodeEnvironment(cdidxAscii: null, lang: "en_US.UTF-8", accessibilityEnabled: "1", action: () =>
         {
             Assert.False(ConsoleUi.ShouldUseUnicodeGlyphs());
         });
@@ -843,7 +932,14 @@ public class ConsoleUiTests
         }
     }
 
-    private static void WithUnicodeEnvironment(string? cdidxAscii, string? lang, Action action)
+    private static void WithUnicodeEnvironment(
+        string? cdidxAscii,
+        string? lang,
+        Action action,
+        string? term = null,
+        string? noUnicode = null,
+        string? atBridgeType = null,
+        string? accessibilityEnabled = null)
     {
         lock (TestConsoleLock.Gate)
         {
@@ -851,12 +947,22 @@ public class ConsoleUiTests
             var originalLang = Environment.GetEnvironmentVariable("LANG");
             var originalLcAll = Environment.GetEnvironmentVariable("LC_ALL");
             var originalLcCType = Environment.GetEnvironmentVariable("LC_CTYPE");
+            var originalTerm = Environment.GetEnvironmentVariable("TERM");
+            var originalNoUnicode = Environment.GetEnvironmentVariable("NO_UNICODE");
+            var originalAtBridgeType = Environment.GetEnvironmentVariable("AT_BRIDGE_TYPE");
+            var originalAccessibilityEnabled = Environment.GetEnvironmentVariable("ACCESSIBILITY_ENABLED");
+            var originalOutputEncoding = Console.OutputEncoding;
             try
             {
+                Console.OutputEncoding = Encoding.UTF8;
                 Environment.SetEnvironmentVariable("CDIDX_ASCII", cdidxAscii);
                 Environment.SetEnvironmentVariable("LANG", lang);
                 Environment.SetEnvironmentVariable("LC_ALL", null);
                 Environment.SetEnvironmentVariable("LC_CTYPE", null);
+                Environment.SetEnvironmentVariable("TERM", term);
+                Environment.SetEnvironmentVariable("NO_UNICODE", noUnicode);
+                Environment.SetEnvironmentVariable("AT_BRIDGE_TYPE", atBridgeType);
+                Environment.SetEnvironmentVariable("ACCESSIBILITY_ENABLED", accessibilityEnabled);
                 action();
             }
             finally
@@ -865,6 +971,28 @@ public class ConsoleUiTests
                 Environment.SetEnvironmentVariable("LANG", originalLang);
                 Environment.SetEnvironmentVariable("LC_ALL", originalLcAll);
                 Environment.SetEnvironmentVariable("LC_CTYPE", originalLcCType);
+                Environment.SetEnvironmentVariable("TERM", originalTerm);
+                Environment.SetEnvironmentVariable("NO_UNICODE", originalNoUnicode);
+                Environment.SetEnvironmentVariable("AT_BRIDGE_TYPE", originalAtBridgeType);
+                Environment.SetEnvironmentVariable("ACCESSIBILITY_ENABLED", originalAccessibilityEnabled);
+                Console.OutputEncoding = originalOutputEncoding;
+            }
+        }
+    }
+
+    private static void WithColumnsEnvironment(string? columns, Action action)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalColumns = Environment.GetEnvironmentVariable("COLUMNS");
+            try
+            {
+                Environment.SetEnvironmentVariable("COLUMNS", columns);
+                action();
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("COLUMNS", originalColumns);
             }
         }
     }

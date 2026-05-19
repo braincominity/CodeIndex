@@ -573,7 +573,7 @@ public static partial class ReferenceExtractor
             return;
 
         int column = startInLine + 1; // 1-based / 1始まり
-        var dedupeKey = $"{lineNumber}:{column}:type_reference:{segment}";
+        var dedupeKey = BuildReferenceDedupeKey(fileId, language, lineNumber, column, "type_reference", segment);
         if (!seen.Add(dedupeKey))
             return;
 
@@ -1790,7 +1790,7 @@ public static partial class ReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        var dedupeKey = $"{lineNumber}:{column}:{referenceKind}:{name}";
+        var dedupeKey = BuildReferenceDedupeKey(fileId, null, lineNumber, column, referenceKind, name);
         if (!seen.Add(dedupeKey))
             return;
 

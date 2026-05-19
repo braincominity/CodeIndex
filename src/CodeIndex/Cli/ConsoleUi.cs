@@ -101,6 +101,7 @@ public static class ConsoleUi
         "⠋", "⠙", "⠹", "⠸", "⠼",
         "⠴", "⠦", "⠧", "⠇", "⠏",
     ];
+    private static readonly string[] AsciiSpinnerFrames = ["|", "/", "-", "\\"];
 
     internal static string Counted(int count, string singular, string? plural = null, string? format = null)
     {
@@ -225,8 +226,13 @@ public static class ConsoleUi
     /// Get spinner frames based on easter egg flag.
     /// イースターエッグフラグに基づくスピナーフレームを取得。
     /// </summary>
-    public static string[] GetSpinnerFrames(string? easterEgg) => easterEgg switch
+    public static string[] GetSpinnerFrames(string? easterEgg)
     {
+        if (!ShouldUseUnicodeGlyphs())
+            return AsciiSpinnerFrames;
+
+        return easterEgg switch
+        {
         "--sushi" =>
         [
             "\U0001f363 Slicing       ", "\U0001f363 Slicing.      ", "\U0001f363 Slicing..     ", "\U0001f363 Slicing...    ",
@@ -276,8 +282,9 @@ public static class ConsoleUi
             "\U0001f943 Slainte!      ",
         ],
         // Default: Braille spinner / デフォルト: ブレイルスピナー
-        _ => DefaultBrailleSpinnerFrames,
-    };
+            _ => DefaultBrailleSpinnerFrames,
+        };
+    }
 
     // --- Progress bar / プログレスバー ---
 
@@ -601,7 +608,7 @@ public static class ConsoleUi
         Console.WriteLine("  --debounce <ms>            Watch only: coalesce bursts of file events into one update after <ms> of quiet (default: 500)");
         Console.WriteLine("  --color <when>             Color output: `auto` (default), `always`, or `never`; flag wins over `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR` env vars, which win over TTY auto-detect");
         Console.WriteLine("  --palette <name>           ANSI palette: `basic` (8-color, default fallback), `256`, or `truecolor`; flag wins over `CDIDX_COLOR_PALETTE` env var, which wins over `COLORTERM` / `TERM` auto-detect");
-        Console.WriteLine("  --ascii                    Use ASCII progress glyphs (`#` / `-`) instead of Unicode block glyphs (also honors CDIDX_ASCII=1 and LANG=C/POSIX)");
+        Console.WriteLine("  --ascii                    Use ASCII spinner/progress glyphs instead of Unicode glyphs (also honors CDIDX_ASCII=1, NO_UNICODE, TERM=dumb, accessibility env hints, and non-UTF-8 locales)");
         Console.WriteLine("  --metrics <path>           Append one JSONL record per CLI command / MCP tool call to <path> (also honors CDIDX_METRICS=<path>)");
         Console.WriteLine("  --help, -h                 Show this help message");
         Console.WriteLine("  --version, -V              Show version information");
@@ -630,7 +637,7 @@ public static class ConsoleUi
         Console.WriteLine("  --focus-line <line>        excerpt: line whose focused column should stay visible (requires --focus-column)");
         Console.WriteLine("  --focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)");
         Console.WriteLine("  --focus-length <n>         excerpt: width of the focused span (default: 1, requires --focus-column)");
-        Console.WriteLine("  --fts                      Use raw FTS5 query syntax for search (trailing * is a prefix shorthand in literal-safe mode)");
+        Console.WriteLine($"  --fts                      Use raw FTS5 query syntax for search (max {DbReader.MaxRawFtsQueryLength} chars, {DbReader.MaxRawFtsBooleanOperators} boolean ops, {DbReader.MaxRawFtsNearOperators} NEAR ops; trailing * is a prefix shorthand in literal-safe mode)");
         Console.WriteLine("  --exact                    Backward-compatible shorthand. Prefer --exact-substring for search, keep --exact for find, and prefer --exact-name for symbols/definition/references/callers/callees/inspect. Pass at most one of --exact, --exact-substring, --exact-name; combining two or more is rejected.");
         Console.WriteLine("  --exact-substring          Search only: case-sensitive exact substring (no FTS5)");
         Console.WriteLine("  --exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match (legacy/stale-fold DBs fall back to ASCII NOCASE; use `cdidx backfill-fold` or check `status --json` fold_ready)");
@@ -1512,6 +1519,13 @@ public static class ConsoleUi
         if (IsAsciiOutputRequested())
             return false;
 
+        if (IsDumbTerminal())
+            return false;
+
+        var locale = FirstNonEmptyEnvironmentVariable("LC_ALL", "LC_CTYPE", "LANG");
+        if (locale != null && !IsUnicodeLocale(locale))
+            return false;
+
         return Console.OutputEncoding.CodePage == Encoding.UTF8.CodePage
             || Console.OutputEncoding.CodePage == Encoding.Unicode.CodePage;
     }
@@ -1525,15 +1539,46 @@ public static class ConsoleUi
         if (!string.IsNullOrEmpty(ascii) && ascii != "0")
             return true;
 
+        var noUnicode = Environment.GetEnvironmentVariable("NO_UNICODE");
+        if (!string.IsNullOrEmpty(noUnicode) && noUnicode != "0")
+            return true;
+
+        var atBridgeType = Environment.GetEnvironmentVariable("AT_BRIDGE_TYPE");
+        if (!string.IsNullOrEmpty(atBridgeType))
+            return true;
+
+        var accessibilityEnabled = Environment.GetEnvironmentVariable("ACCESSIBILITY_ENABLED");
+        if (!string.IsNullOrEmpty(accessibilityEnabled) && accessibilityEnabled != "0")
+            return true;
+
         return IsPosixLocale(Environment.GetEnvironmentVariable("LC_ALL"))
             || IsPosixLocale(Environment.GetEnvironmentVariable("LC_CTYPE"))
             || IsPosixLocale(Environment.GetEnvironmentVariable("LANG"));
     }
 
+    private static bool IsDumbTerminal()
+        => string.Equals(Environment.GetEnvironmentVariable("TERM"), "dumb", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsPosixLocale(string? locale)
         => locale != null
             && (locale.Equals("C", StringComparison.OrdinalIgnoreCase)
                 || locale.Equals("POSIX", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsUnicodeLocale(string locale)
+        => locale.Contains(".UTF-8", StringComparison.OrdinalIgnoreCase)
+            || locale.Contains(".UTF8", StringComparison.OrdinalIgnoreCase);
+
+    private static string? FirstNonEmptyEnvironmentVariable(params string[] names)
+    {
+        foreach (var name in names)
+        {
+            var value = Environment.GetEnvironmentVariable(name);
+            if (!string.IsNullOrEmpty(value))
+                return value;
+        }
+
+        return null;
+    }
 
     internal static void SetAsciiOutput(bool enabled) => _asciiOutputForced = enabled;
 
@@ -1543,8 +1588,11 @@ public static class ConsoleUi
     /// Get console window width safely (some environments throw IOException).
     /// コンソール幅を安全に取得する（一部環境ではIOExceptionが発生する）。
     /// </summary>
-    private static int GetWindowWidth()
+    internal static int GetWindowWidth()
     {
+        if (TryGetColumnsEnvironmentWidth(out var columnsWidth))
+            return columnsWidth;
+
         try
         {
             var w = Console.WindowWidth;
@@ -1554,5 +1602,15 @@ public static class ConsoleUi
         {
             return 80;
         }
+    }
+
+    private static bool TryGetColumnsEnvironmentWidth(out int width)
+    {
+        var columns = Environment.GetEnvironmentVariable("COLUMNS");
+        if (int.TryParse(columns, NumberStyles.Integer, CultureInfo.InvariantCulture, out width) && width > 0)
+            return true;
+
+        width = 0;
+        return false;
     }
 }

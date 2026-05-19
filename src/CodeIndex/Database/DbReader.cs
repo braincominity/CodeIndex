@@ -524,7 +524,7 @@ public partial class DbReader
                 Relevant: true,
                 DegradedReason: ready
                     ? null
-                    : DegradationReasonCodes.BuildHotspotFamilyLanguageDegradedReason(lang));
+                    : FormatHotspotFamilyDegradedReason([lang]));
         }
 
         var relevantLanguages = _indexedHotspotFamilyLanguages
@@ -542,7 +542,51 @@ public partial class DbReader
         return new HotspotFamilySignal(
             Ready: false,
             Relevant: true,
-            DegradedReason: DegradationReasonCodes.BuildHotspotFamilyLanguagesDegradedReason(unreadyLanguages));
+            DegradedReason: FormatHotspotFamilyDegradedReason(unreadyLanguages));
+    }
+
+    private string FormatHotspotFamilyDegradedReason(IReadOnlyList<string> languages)
+    {
+        var grouped = languages
+            .Select(language => (Language: language, Reason: ResolveHotspotFamilyDegradedReason(language)))
+            .GroupBy(item => item.Reason, item => item.Language, StringComparer.Ordinal)
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .Select(group => $"{group.Key}={string.Join(",", group.OrderBy(value => value, StringComparer.Ordinal))}");
+
+        return $"cross-file hotspot family grouping is degraded ({string.Join("; ", grouped)}); {GetHotspotFamilyRecoveryAction(languages)}";
+    }
+
+    private string ResolveHotspotFamilyDegradedReason(string lang)
+    {
+        if (!_symbolColumns.Contains("family_key") || !_symbolColumns.Contains("container_qualified_name"))
+            return DegradationReasonCodes.HotspotFamilySupportNotIndexed;
+
+        var raw = TryGetMetaString(_conn, DbContext.GetHotspotFamilyVersionMetaKey(lang));
+        var fingerprint = TryGetMetaString(_conn, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang));
+        if (string.IsNullOrWhiteSpace(raw))
+            return DegradationReasonCodes.HotspotFamilySupportNotIndexed;
+
+        if (!int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var version)
+            || version != DbContext.HotspotFamilyVersion)
+        {
+            return DegradationReasonCodes.HotspotFamilyMetadataStale;
+        }
+
+        return string.IsNullOrWhiteSpace(fingerprint)
+            ? DegradationReasonCodes.HotspotFamilyDisabledAtIndexTime
+            : DegradationReasonCodes.HotspotFamilyMetadataStale;
+    }
+
+    private string GetHotspotFamilyRecoveryAction(IReadOnlyList<string> languages)
+    {
+        var reasons = languages
+            .Select(ResolveHotspotFamilyDegradedReason)
+            .ToHashSet(StringComparer.Ordinal);
+
+        if (reasons.SetEquals([DegradationReasonCodes.HotspotFamilyMetadataStale]))
+            return DegradationReasonCodes.GetMetadata(DegradationReasonCodes.HotspotFamilyMetadataStale).RecommendedAction;
+
+        return DegradationReasonCodes.GetMetadata(DegradationReasonCodes.HotspotFamilySupportNotIndexed).RecommendedAction;
     }
 
     private HashSet<string> LoadIndexes(string tableName)

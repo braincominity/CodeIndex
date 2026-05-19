@@ -5797,7 +5797,7 @@ public class IndexCommandRunnerTests
             var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--files", "src/Caller.cs", "--json"]);
             Assert.Equal(CommandExitCodes.Success, updateExitCode);
             Assert.False(updateJson.GetProperty("hotspot_family_ready").GetBoolean());
-            Assert.Contains("csharp", updateJson.GetProperty("hotspot_family_degraded_reason").GetString());
+            Assert.Contains("hotspot_family_support_not_indexed=csharp", updateJson.GetProperty("hotspot_family_degraded_reason").GetString());
 
             File.WriteAllText(callerPath, "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); api.Run(); api.Run(1); } }");
             File.SetLastWriteTimeUtc(callerPath, DateTime.UtcNow.AddSeconds(4));

@@ -2221,7 +2221,7 @@ public static partial class ReferenceExtractor
                     // `instantiate` が同様の扱いをしているため、括弧あり/なしで挙動を揃える。
                     var initContainer = ResolveContainerForCall(nameIndex);
                     var name = language == "csharp" ? NormalizeCSharpIdentifier(rawName) : rawName;
-                    AddReference(references, seen, fileId, name, nameIndex, "instantiate", context, lineNumber, initContainer);
+                    AddReference(references, seen, fileId, name, nameIndex, "instantiate", context, lineNumber, initContainer, language);
                 }
 
                 // The initializer regex has the same one-level generic ceiling as CallRegex,
@@ -2250,7 +2250,8 @@ public static partial class ReferenceExtractor
                             "instantiate",
                             context,
                             lineNumber,
-                            initContainer);
+                            initContainer,
+                            language);
                     }
                 }
 
@@ -2507,13 +2508,13 @@ public static partial class ReferenceExtractor
                 var callContainer = ResolveContainerForCall(callIndex);
                 if (IsConstructorCallName(language, preparedLine, callIndex))
                 {
-                    AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
+                    AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer, language);
                     return true;
                 }
                 if (language == "rust"
                     && RustReferenceExtractor.IsLikelyInstantiationCallName(name, normalizedName, preparedLine, callIndex))
                 {
-                    AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
+                    AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer, language);
                     return true;
                 }
                 if (IsIgnoredCallName(language, name))
@@ -2533,7 +2534,7 @@ public static partial class ReferenceExtractor
                 var metadataKind = TryClassifyMetadataReference(language, preparedLine, callIndex, insideCSharpAttributeRange);
                 if (metadataKind != null)
                 {
-                    AddReference(references, seen, fileId, normalizedName, callIndex, metadataKind, context, lineNumber, callContainer);
+                    AddReference(references, seen, fileId, normalizedName, callIndex, metadataKind, context, lineNumber, callContainer, language);
                     if (language == "csharp"
                         && metadataKind == "attribute"
                         && CSharpReferenceExtractor.TryGetCallerInfoAttributeTypeName(name, preparedLine, callIndex) is { } callerInfoAttributeTypeName)
@@ -2547,7 +2548,8 @@ public static partial class ReferenceExtractor
                             "type_reference",
                             context,
                             lineNumber,
-                            callContainer);
+                            callContainer,
+                            language);
                     }
                     return true;
                 }
@@ -2729,7 +2731,7 @@ public static partial class ReferenceExtractor
                     {
                         var normalizedName = NormalizeAtPrefixedIdentifier(name);
                         var callContainer = ResolveContainerForCall(callIndex);
-                        AddReference(references, seen, fileId, normalizedName, callIndex, "call", context, lineNumber, callContainer);
+                        AddReference(references, seen, fileId, normalizedName, callIndex, "call", context, lineNumber, callContainer, language);
                     }
 
                     GradleReferenceExtractor.EmitDslCallReferences(
@@ -2950,7 +2952,7 @@ public static partial class ReferenceExtractor
                         continue;
                     if (definitionNames != null && definitionNames.Contains(name))
                         continue;
-                    AddReference(references, seen, fileId, name, nameIndex, "attribute", context, lineNumber, container);
+                    AddReference(references, seen, fileId, name, nameIndex, "attribute", context, lineNumber, container, language);
                     var genericStart = nameIndex + rawName.Length;
                     while (genericStart < preparedLine.Length && char.IsWhiteSpace(preparedLine[genericStart]))
                         genericStart++;
@@ -3419,6 +3421,7 @@ public static partial class ReferenceExtractor
                 fileId);
         }
 
+        MarkMutualRecursionReferences(references);
         return references;
     }
 
@@ -3430,7 +3433,8 @@ public static partial class ReferenceExtractor
         string referenceKind,
         string context,
         int lineNumber,
-        SymbolRecord? container)
+        SymbolRecord? container,
+        string? language = null)
     {
         AddReference(
             references,
@@ -3441,7 +3445,8 @@ public static partial class ReferenceExtractor
             referenceKind,
             context,
             lineNumber,
-            container);
+            container,
+            language);
     }
 
     internal static void AddReference(
@@ -3453,10 +3458,11 @@ public static partial class ReferenceExtractor
         string referenceKind,
         string context,
         int lineNumber,
-        SymbolRecord? container)
+        SymbolRecord? container,
+        string? language = null)
     {
         var column = nameIndex + 1;
-        var dedupeKey = $"{lineNumber}:{column}:{referenceKind}:{name}";
+        var dedupeKey = BuildReferenceDedupeKey(fileId, language, lineNumber, column, referenceKind, name);
         if (!seen.Add(dedupeKey))
             return;
 
@@ -3470,7 +3476,73 @@ public static partial class ReferenceExtractor
             Context = context,
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
+            IsSelfReference = IsSameReferenceName(container?.Name, name),
         });
+    }
+
+    internal static string BuildReferenceDedupeKey(
+        long fileId,
+        string? language,
+        int lineNumber,
+        int column,
+        string referenceKind,
+        string name)
+    {
+        var languageSegment = string.IsNullOrWhiteSpace(language) ? "-" : language;
+        return $"{fileId}:{languageSegment}:{lineNumber}:{column}:{referenceKind}:{name}";
+    }
+
+    private static void MarkMutualRecursionReferences(List<ReferenceRecord> references)
+    {
+        var edges = new HashSet<(string Caller, string Callee)>();
+        foreach (var reference in references)
+        {
+            if (!IsCallGraphLikeReferenceKind(reference.ReferenceKind)
+                || string.IsNullOrWhiteSpace(reference.ContainerName)
+                || string.IsNullOrWhiteSpace(reference.SymbolName)
+                || reference.IsSelfReference)
+            {
+                continue;
+            }
+
+            edges.Add((NormalizeReferenceCycleName(reference.ContainerName), NormalizeReferenceCycleName(reference.SymbolName)));
+        }
+
+        if (edges.Count == 0)
+            return;
+
+        foreach (var reference in references)
+        {
+            if (!IsCallGraphLikeReferenceKind(reference.ReferenceKind)
+                || string.IsNullOrWhiteSpace(reference.ContainerName)
+                || string.IsNullOrWhiteSpace(reference.SymbolName)
+                || reference.IsSelfReference)
+            {
+                continue;
+            }
+
+            var caller = NormalizeReferenceCycleName(reference.ContainerName);
+            var callee = NormalizeReferenceCycleName(reference.SymbolName);
+            if (edges.Contains((callee, caller)))
+                reference.IsMutualRecursion = true;
+        }
+    }
+
+    private static bool IsCallGraphLikeReferenceKind(string referenceKind)
+        => referenceKind is "call" or "instantiate" or "subscribe" or "unsubscribe" or "razor_event_binding";
+
+    private static bool IsSameReferenceName(string? left, string right)
+        => !string.IsNullOrWhiteSpace(left)
+            && string.Equals(NormalizeReferenceCycleName(left), NormalizeReferenceCycleName(right), StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeReferenceCycleName(string name)
+    {
+        var trimmed = name.Trim();
+        var dot = trimmed.LastIndexOf('.');
+        if (dot >= 0 && dot + 1 < trimmed.Length)
+            return trimmed[(dot + 1)..];
+        var colon = trimmed.LastIndexOf("::", StringComparison.Ordinal);
+        return colon >= 0 && colon + 2 < trimmed.Length ? trimmed[(colon + 2)..] : trimmed;
     }
 
     private readonly record struct PythonLogicalHeaderReferenceLine(string Text, int[] PhysicalLines, int[] PhysicalColumns);
@@ -3707,7 +3779,7 @@ public static partial class ReferenceExtractor
             if (!IsIgnoredTypeReferenceSegment(language, normalizedSegment, isEscapedCSharpIdentifier))
             {
                 int column = argStartInLine + offset + 1; // 1-based / 1始まり
-                var dedupeKey = $"{lineNumber}:{column}:type_reference:{normalizedSegment}";
+                var dedupeKey = BuildReferenceDedupeKey(fileId, language, lineNumber, column, "type_reference", normalizedSegment);
                 if (seen.Add(dedupeKey))
                 {
                     references.Add(new ReferenceRecord
@@ -3917,7 +3989,7 @@ public static partial class ReferenceExtractor
             if (!IsValidCSharpReflectionSymbolName(symbolName))
                 continue;
 
-            AddReference(references, seen, fileId, symbolName, nameIndex, "type_reference", context, lineNumber, container);
+            AddReference(references, seen, fileId, symbolName, nameIndex, "type_reference", context, lineNumber, container, "csharp");
         }
     }
 

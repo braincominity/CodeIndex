@@ -252,6 +252,8 @@ files 1──N symbol_references
 
 `symbol_references.reference_kind` stores raw extractor labels. Default call-graph surfaces (`callers`, `callees`, inspect/analyze caller and callee bundles, and their JSON/MCP fields) expose logical labels so downstream grouping does not mix collapsed and raw event kinds. Use `--raw-kinds` on `callers` / `callees`, or `references --kind <raw-kind>`, when debugging raw extractor output.
 
+Reference extraction deduplicates only within the same indexed file and language context. When adding extractor paths, include the file id and language hint in shared `seen` keys so same line/column/name edges from polyglot workspaces do not collapse across Java, Rust, C#, SQL, or other language-specific normalization contexts.
+
 | Raw kind | Logical graph kind | Notes |
 |---|---|---|
 | `call`, `instantiate` | `invoke` | Executable invocation edges. |
@@ -344,6 +346,8 @@ For the current use case — a local CLI tool that indexes a single project for 
 [FTS5](https://www.sqlite.org/fts5.html) (Full-Text Search 5) is a SQLite extension that provides an **inverted index** for full-text search: it maps each token (word) to a list of documents containing it, enabling O(1) lookups by keyword rather than scanning every row.
 
 FTS5 works through a **virtual table** — a table that looks and behaves like a normal SQLite table but stores its data in a specialized format optimized for text search.
+
+Search result ordering must remain deterministic for identical inputs and an unchanged index. Ranking `ORDER BY` clauses should finish with stable persisted keys after user-visible relevance keys, so ties in FTS rank, file timestamp, and path never fall through to SQLite's implementation-defined row order. The chunk search `ORDER BY` ends with `f.path, c.id ASC` for this reason (#1731).
 
 ### What is an inverted index?
 
@@ -586,6 +590,8 @@ Every top-level CLI/MCP JSON DTO (`StatusResult`, `RepoMapResult`, `SymbolAnalys
 The documented `status --json` trust contract spans `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`, `unknown_extension_file_count`, `path_case_sensitive`, `stale_after_seconds`, `index_age_seconds`, plus the fold-only remediation fields `degraded_reason`, `recommended_action`, and `alternative_action`. Keep this list synchronized with `README.md` and `AGENT_GUIDE.md`; `DocumentationStatusContractTests` fails when any required field is missing from one of those docs.
 
 `references` already prefixes each human-readable row with `reference_kind`, and `callers` does the same for its grouped caller rows. When one grouped container mixes kinds (for example `call` and `subscribe` on the same event member), the human-readable label joins the distinct kinds with `+` (for example `call+subscribe`) instead of collapsing to a single preferred label, and the reference-kind column widens dynamically to fit the longest label in the batch so mixed rows do not overrun the neighbouring column. JSON output for `callers` and `callees` keeps the scalar `reference_kind` for back-compat (it reports the preferred summary kind `instantiate` > `subscribe` > `MIN(call)`) and adds a sorted `reference_kinds` array plus a `has_mixed_reference_kinds` bool so consumers can detect mixed containers without trusting a single collapsed label. This lets terminal users distinguish `call` / `instantiate` / `subscribe` / mixed without re-running the command with `--json` and lets AI clients answer mixed-kind questions without chasing a second `--exact` query.
+
+`ReferenceResult` includes `is_self_reference` and `is_mutual_recursion`; `CallerResult` includes `has_self_reference` and `has_mutual_recursion`. These fields identify self-recursive edges and direct two-symbol cycles without removing valid recursive calls from default graph results. Reader APIs that need a non-recursive view can opt into self-reference exclusion.
 
 MCP tool calls return structured JSON in `structuredContent` plus a short summary in `content`, so clients can consume typed data directly.
 
@@ -978,13 +984,14 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 What `install.sh` does, in order (see `install.sh`):
 
 1. **Detect platform.** `uname -s` / `uname -m` are normalized to the
-   `<os>-<arch>` RID the release workflow publishes (`linux-x64`,
-   `linux-arm64`, `osx-arm64`, `win-x64`; see
-   [Platform Support](docs/platform-support.md)). Alpine / musl is
-   rejected up front with an actionable error because the self-contained
-   binary links against glibc. `osx-x64` is rejected because the release
-   matrix does not ship that RID, with NuGet global-tool and source-build
-   alternatives in the error text.
+   `<os>-<arch>` RID and validates it against the release workflow's
+   published asset list (`linux-x64`, `linux-arm64`, `osx-arm64`,
+   `win-x64`, `win-arm64`; see [Platform Support](docs/platform-support.md))
+   before any release-asset download. Alpine / musl is rejected up front
+   with an actionable error because the self-contained binary links against
+   glibc. Unsupported RIDs such as `osx-x64` fail with the detected RID,
+   supported list, NuGet global-tool and source-build alternatives, and the
+   issue link for requesting official platform support.
 2. **Detect existing install first.** If `INSTALL_DIR/cdidx` already
    exists, the installer caches its parsed `--version` output before any
    network work so later version-selection and repair decisions can
@@ -2077,6 +2084,8 @@ CLI/MCP のトップレベル JSON DTO（`StatusResult`、`RepoMapResult`、`Sym
 
 `references` は以前から人間向け出力の各行先頭に `reference_kind` を表示しており、`callers` も grouped caller 行に対して同じタグを出す。1 つの grouped container で kind が混在する場合（例: 同じ event メンバに対する `call` と `subscribe`）は、単一 preferred label へ潰さずに `call+subscribe` のように distinct kind を `+` で連結して表示する。reference-kind 列の幅はバッチ内で最も長いラベルに合わせて動的に広がるため、mixed 行が隣接列を押し出さない。`callers` / `callees` の JSON 出力では、後方互換のため scalar な `reference_kind`（preferred 順 `instantiate` > `subscribe` > `MIN(call)` の要約 kind）を残しつつ、ソート済みの `reference_kinds` 配列と `has_mixed_reference_kinds` bool も追加した。これにより consumer は単一 summary label に騙されずに mixed container を検出できる。端末上でも `call` / `instantiate` / `subscribe` / mixed を `--json` なしで見分けられ、AI クライアントも `--exact` を改めて投げ直さずに mixed-kind の問いに答えられる。
 
+`ReferenceResult` は `is_self_reference` と `is_mutual_recursion` を含み、`CallerResult` は `has_self_reference` と `has_mutual_recursion` を含む。これらのフィールドは、正当な再帰呼び出しを既定の graph 結果から削除せずに、自己再帰エッジと直接の2シンボル循環を識別する。非再帰 view が必要な reader API は自己参照除外を opt-in で使える。
+
 MCPツール呼び出しは `structuredContent` に構造化JSON、`content` に短い要約を返すため、クライアントは型付きデータを直接利用できます。
 
 exact-match flag の互換性は [USER_GUIDE.md](USER_GUIDE.md#フラグ互換性と移行) に記載しています。MCP schema はこの表と同期してください。`search.exact` は `exactSubstring` の legacy alias、name-based tools の `exact` は `exactName` の legacy alias です。新しい exact-match alias を追加する場合は、compatibility table、CLI help、MCP description、changelog fragment を同じ変更で更新してください。
@@ -2382,7 +2391,7 @@ curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh 
 
 `install.sh` が順に行うこと（`install.sh` 参照）:
 
-1. **プラットフォーム検出。** `uname -s` / `uname -m` をリリースワークフローが publish する `<os>-<arch>` RID（`linux-x64`、`linux-arm64`、`osx-arm64`、`win-x64`。詳細は [プラットフォームサポート](docs/platform-support.md#プラットフォームサポート)）に正規化。自己完結型バイナリは glibc にリンクされているため、Alpine / musl は先頭で明示的に拒否する。リリース行列が `osx-x64` を出していないため、こちらも拒否し、エラー文で NuGet global tool と source build の代替手段を案内する。
+1. **プラットフォーム検出。** `uname -s` / `uname -m` を `<os>-<arch>` RID に正規化し、release asset の download 前にリリースワークフローが publish する一覧（`linux-x64`、`linux-arm64`、`osx-arm64`、`win-x64`、`win-arm64`。詳細は [プラットフォームサポート](docs/platform-support.md#プラットフォームサポート)）と照合する。自己完結型バイナリは glibc にリンクされているため、Alpine / musl は先頭で明示的に拒否する。`osx-x64` などの未対応 RID は、検出 RID、対応一覧、NuGet global tool / source build の代替手段、公式 platform support をリクエストする issue link を含むエラーで拒否する。
 2. **既存インストールを先に検出。** `INSTALL_DIR/cdidx` が既にある場合は、ネットワークへ行く前に `--version` を解釈して保持する。これにより、後続のバージョン選択や repair 判定で「健全な一致」なのか「古い/不完全な install」なのかを区別できる。
 3. **バージョン解決。** 明示引数がある場合は `v` プレフィックス付き・無しの両方を受け付ける（`v1.8.0` / `1.8.0`）。引数なしでも GitHub API（`/repos/Widthdom/CodeIndex/releases/latest`）を叩いて latest tag を解決し、`jq` があれば `tag_name` 取得に使い、無ければ portability のため従来どおり `grep` + `sed` にフォールバックする。そのうえで健全な既存 install がその latest tag と一致している場合だけ download を skip する。壊れた `v0.0.0` install や必須隣接資産欠落 install は再インストール対象として扱う。HTTP 失敗も `403` rate limit / `404` / `5xx` / 実際の curl network error を分けて案内する。
 4. **明示バージョン指定時は再インストールまたは切り替えに進む。** 引数なし再実行も latest release を対象にするが、明示ターゲット版では、同版でも必ず再インストールへ進み、別版なら切り替えへ進む。壊れた `v0.0.0` install や、同版でも必須資産が欠けている install も置き換え対象として扱う — これは意図した挙動。

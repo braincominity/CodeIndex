@@ -58,10 +58,11 @@ with `--files`, `--commits`, or `--changed-between <old-ref> <new-ref>` instead
 of rebuilding; see
 [Quick Start](USER_GUIDE.md#quick-start) and
 [Incremental update reliability](USER_GUIDE.md#incremental-update-reliability).
-Terminals that request ASCII-only output with `--ascii`, `CDIDX_ASCII=1`, or a
-`LANG=C` / `POSIX` locale render progress with `#` / `-` bars instead of
-Unicode block glyphs. Very narrow Unicode-capable terminals show a
-percentage-only progress line so the display does not wrap.
+Terminals that request ASCII-only output with `--ascii`, `CDIDX_ASCII=1`,
+`NO_UNICODE`, `TERM=dumb`, accessibility env hints, or a non-UTF-8 locale render
+spinner frames as `|` / `/` / `-` / `\` and progress bars with `#` / `-` instead
+of Unicode glyphs. Very narrow Unicode-capable terminals show a percentage-only
+progress line so the display does not wrap.
 
 Use `cdidx` when a repository will be searched repeatedly from terminals,
 scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
@@ -104,6 +105,12 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
   `path_case_sensitive`, `db_pragma_settings`, `stale_after_seconds`,
   `index_age_seconds`, `degraded_reason`, `recommended_action`, and `alternative_action`; keep this
   list synchronized with `DEVELOPER_GUIDE.md` and `AGENT_GUIDE.md`.
+  `hotspot_family_degraded_reason` distinguishes legacy DBs without hotspot-family
+  support (`hotspot_family_support_not_indexed`), stale metadata
+  (`hotspot_family_metadata_stale`), and indexes written while marker fingerprints
+  were unavailable (`hotspot_family_disabled_at_index_time`); hotspot-family
+  readiness is tracked by per-language `hotspot_family_version_<lang>` metadata
+  introduced with hotspot-family contract version 2.
 - Local-first storage in `.cdidx/codeindex.db`.
 - 78 detected languages, with symbol and graph support where available.
 - MCP `tools/list` descriptions include a `Language support:` clause sourced
@@ -218,10 +225,10 @@ cdidx mcp
 [クイックスタート](USER_GUIDE.md#クイックスタート) と
 [インクリメンタル更新の信頼性](USER_GUIDE.md#インクリメンタル更新の信頼性)
 を参照してください。
-`--ascii`、`CDIDX_ASCII=1`、または `LANG=C` / `POSIX` locale により ASCII-only
-出力が要求されている端末では、進捗バーは Unicode のブロック文字ではなく
-`#` / `-` で描画されます。Unicode を利用できる端末でも幅が非常に狭い場合は、
-折り返しを避けるため percentage-only の進捗行を表示します。
+`--ascii`、`CDIDX_ASCII=1`、`NO_UNICODE`、`TERM=dumb`、accessibility 系の環境変数、
+または非 UTF-8 locale により ASCII-only 出力が要求されている端末では、スピナーは
+`|` / `/` / `-` / `\`、進捗バーは `#` / `-` で描画されます。Unicode を利用できる端末でも
+幅が非常に狭い場合は、折り返しを避けるため percentage-only の進捗行を表示します。
 
 ターミナル、スクリプト、CI、AI ツールから同じリポジトリを繰り返し検索する
 場合は `cdidx` が向いています。1回限りのテキスト検索には `rg` が向いています。
@@ -262,6 +269,12 @@ cdidx mcp
   `path_case_sensitive`、`db_pragma_settings`、`stale_after_seconds`、
   `index_age_seconds`、`degraded_reason`、`recommended_action`、`alternative_action` を対象にします。
   この一覧は `DEVELOPER_GUIDE.md` と `AGENT_GUIDE.md` に同期してください。
+  `hotspot_family_degraded_reason` は、hotspot-family 未対応の legacy DB
+  (`hotspot_family_support_not_indexed`)、古い metadata
+  (`hotspot_family_metadata_stale`)、marker fingerprint が利用できない状態で書かれた index
+  (`hotspot_family_disabled_at_index_time`) を区別します。hotspot-family readiness は
+  hotspot-family contract version 2 で導入された言語別
+  `hotspot_family_version_<lang>` metadata で追跡されます。
 - `.cdidx/codeindex.db` に保存するローカルファースト設計。
 - 78 言語を検出し、対応言語ではシンボルとグラフも利用可能。
 - MCP の `tools/list` 説明には、`cdidx languages` と同じ言語レジストリから
