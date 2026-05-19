@@ -210,10 +210,22 @@ public class QueryCommandRunnerTests
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["Authenticate", "--db", dbPath, "--json", "--profile", "--slow-query-ms", "0"],
                 _jsonOptions));
-            var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var rawLines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var lines = stdout
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(line =>
+                {
+                    using var document = JsonDocument.Parse(line);
+                    return !IsJsonStreamDoneSentinel(document.RootElement);
+                })
+                .ToArray();
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
+            using (var doneDocument = JsonDocument.Parse(rawLines[^1]))
+            {
+                Assert.True(IsJsonStreamDoneSentinel(doneDocument.RootElement));
+            }
             Assert.Equal(2, lines.Length);
 
             using var resultDocument = JsonDocument.Parse(lines[0]);
@@ -267,13 +279,13 @@ public class QueryCommandRunnerTests
             var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
                 input,
                 () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
-            var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var lines = ParseJsonLines(stdout);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(2, lines.Length);
-            using var searchDocument = JsonDocument.Parse(lines[0]);
-            using var symbolDocument = JsonDocument.Parse(lines[1]);
+            Assert.Equal(2, lines.Count);
+            using var searchDocument = lines[0];
+            using var symbolDocument = lines[1];
             Assert.Equal("src/auth.cs", searchDocument.RootElement.GetProperty("path").GetString());
             Assert.Equal("AuthFixture", symbolDocument.RootElement.GetProperty("name").GetString());
         }
@@ -31043,7 +31055,11 @@ jobs:
     {
         var jsonLine = stdout
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Last();
+            .Last(line =>
+            {
+                using var document = JsonDocument.Parse(line);
+                return !IsJsonStreamDoneSentinel(document.RootElement);
+            });
         return JsonDocument.Parse(jsonLine);
     }
 
@@ -31175,8 +31191,16 @@ jobs:
         return stdout
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(line => JsonDocument.Parse(line))
+            .Where(document => !IsJsonStreamDoneSentinel(document.RootElement))
             .ToList();
     }
+
+    private static bool IsJsonStreamDoneSentinel(JsonElement element)
+        => element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty("done", out var done)
+            && done.ValueKind is JsonValueKind.True
+            && element.TryGetProperty("interrupted", out _)
+            && element.TryGetProperty("count", out _);
 
     private static (string ProjectRoot, string DbPath) CreateUnusedFixtureDb()
     {

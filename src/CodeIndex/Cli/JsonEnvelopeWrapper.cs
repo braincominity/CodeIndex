@@ -183,11 +183,25 @@ internal static class JsonEnvelopeWrapper
 
             if (node is null)
                 continue;
+            if (IsJsonStreamDoneSentinel(node))
+                continue;
 
             array.Add(node);
         }
 
         return array;
+    }
+
+    private static bool IsJsonStreamDoneSentinel(JsonNode node)
+    {
+        if (node is not JsonObject obj)
+            return false;
+        return obj.TryGetPropertyValue("done", out var doneNode)
+            && doneNode is JsonValue doneValue
+            && doneValue.TryGetValue<bool>(out var done)
+            && done
+            && obj.TryGetPropertyValue("interrupted", out _)
+            && obj.TryGetPropertyValue("count", out _);
     }
 
     // Mirrors the value-taking options in QueryCommandRunner.ParseArgs so we can locate the
