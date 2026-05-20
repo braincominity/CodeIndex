@@ -728,10 +728,14 @@ public partial class McpServer : IDisposable
             "initialize" => HandleInitialize(id, request["params"]),
             "tools/list" => HandleToolsList(id),
             "tools/call" => HandleToolsCall(id, request["params"]),
+            "resources/list" => HandleResourcesList(id, request["params"]),
+            "resources/read" => HandleResourcesRead(id, request["params"]),
+            "prompts/list" => HandlePromptsList(id),
+            "prompts/get" => HandlePromptsGet(id, request["params"]),
             "ping" => CreateSuccessResponse(hasId, id, new JsonObject()),
             _ => CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Method not found: {method}",
                 category: McpErrorEnvelope.CategoryMethodNotFound,
-                suggestion: "Supported methods: initialize, tools/list, tools/call, ping, notifications/initialized, notifications/cancelled, notifications/shutdown.",
+                suggestion: "Supported methods: initialize, tools/list, tools/call, resources/list, resources/read, prompts/list, prompts/get, ping, notifications/initialized, notifications/cancelled, notifications/shutdown.",
                 retrySafe: false),
         });
     }
@@ -911,6 +915,15 @@ public partial class McpServer : IDisposable
                 ["tools"] = new JsonObject
                 {
                     ["listChanged"] = false
+                },
+                ["resources"] = new JsonObject
+                {
+                    ["subscribe"] = false,
+                    ["listChanged"] = false
+                },
+                ["prompts"] = new JsonObject
+                {
+                    ["listChanged"] = false
                 }
             },
             ["serverInfo"] = new JsonObject
@@ -974,6 +987,204 @@ public partial class McpServer : IDisposable
             return s;
         return null;
     }
+
+    private JsonNode HandleResourcesList(JsonNode? id, JsonNode? listParams)
+    {
+        const int pageSize = 200;
+        var offset = 0;
+        if (listParams?["cursor"] is JsonValue cursorValue
+            && cursorValue.TryGetValue<string>(out var cursor)
+            && int.TryParse(cursor, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+            && parsed > 0)
+        {
+            offset = parsed;
+        }
+
+        return WithDbReader(id, reader =>
+        {
+            var files = reader.ListFiles(limit: offset + pageSize + 1);
+            var page = files.Skip(offset).Take(pageSize).ToArray();
+            var resources = new JsonArray();
+            foreach (var file in page)
+            {
+                resources.Add(new JsonObject
+                {
+                    ["uri"] = BuildResourceUri(file.Path),
+                    ["name"] = file.Path,
+                    ["description"] = $"{file.Path} ({file.Lang ?? "unknown"}, {file.Lines} lines)",
+                    ["mimeType"] = GetResourceMimeType(file.Lang),
+                });
+            }
+
+            var result = new JsonObject
+            {
+                ["resources"] = resources,
+            };
+            if (offset + pageSize < files.Count)
+                result["nextCursor"] = (offset + pageSize).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return CreateSuccessResponse(true, id, result);
+        });
+    }
+
+    private JsonNode HandleResourcesRead(JsonNode? id, JsonNode? readParams)
+    {
+        var uri = TryReadStringValue(readParams?["uri"]);
+        if (string.IsNullOrWhiteSpace(uri))
+            return CreateErrorResponse(hasId: true, id: id, code: -32602, message: "Missing resource uri",
+                category: McpErrorEnvelope.CategoryMissingParameter,
+                suggestion: "resources/read requires `params.uri` from resources/list, such as `cdidx://file/src/app.cs`.",
+                retrySafe: false);
+
+        if (!TryParseResourceUri(uri, out var path))
+            return CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Invalid resource uri: {uri}",
+                category: McpErrorEnvelope.CategoryInvalidArgument,
+                suggestion: "Use a cdidx file resource URI returned by resources/list (`cdidx://file/<indexed-path>`).",
+                retrySafe: false);
+
+        return WithDbReader(id, reader =>
+        {
+            var files = reader.ListFiles(query: path, limit: 2);
+            var file = files.FirstOrDefault(f => string.Equals(f.Path, path, StringComparison.Ordinal));
+            if (file == null)
+                return CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Resource not found: {uri}",
+                    category: McpErrorEnvelope.CategoryInvalidArgument,
+                    suggestion: "Call resources/list again and retry with one of the returned resource URIs.",
+                    retrySafe: true);
+
+            var excerpt = reader.GetExcerpt(file.Path, 1, Math.Max(1, file.Lines));
+            var contents = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["uri"] = BuildResourceUri(file.Path),
+                    ["mimeType"] = GetResourceMimeType(file.Lang),
+                    ["text"] = excerpt?.Content ?? string.Empty,
+                }
+            };
+            return CreateSuccessResponse(true, id, new JsonObject { ["contents"] = contents });
+        });
+    }
+
+    private JsonNode HandlePromptsList(JsonNode? id)
+    {
+        var prompts = new JsonArray
+        {
+            CreatePromptDefinition("summarize_file", "Summarize the API surface and responsibilities of an indexed file.", "path", "Indexed file path to summarize."),
+            CreatePromptDefinition("find_unused", "Find likely unused symbols in an optional language or path scope.", "scope", "Optional language, module, or path scope."),
+            CreatePromptDefinition("impact_of_changing", "Plan impact analysis for changing a symbol.", "symbol", "Symbol name to analyze."),
+        };
+        return CreateSuccessResponse(true, id, new JsonObject { ["prompts"] = prompts });
+    }
+
+    private JsonNode HandlePromptsGet(JsonNode? id, JsonNode? getParams)
+    {
+        var name = TryReadStringValue(getParams?["name"]);
+        if (string.IsNullOrWhiteSpace(name))
+            return CreateErrorResponse(hasId: true, id: id, code: -32602, message: "Missing prompt name",
+                category: McpErrorEnvelope.CategoryMissingParameter,
+                suggestion: "prompts/get requires `params.name`; call prompts/list to enumerate available names.",
+                retrySafe: false);
+
+        var args = getParams?["arguments"] as JsonObject;
+        string? ReadArg(string key)
+            => args != null && args.TryGetPropertyValue(key, out var node) && node is JsonValue value && value.TryGetValue<string>(out var s)
+                ? s
+                : null;
+
+        var text = name switch
+        {
+            "summarize_file" => $"Use the `outline` tool for `{ReadArg("path") ?? "<path>"}`, then use `excerpt` only for the ranges needed to summarize public API, key symbols, and responsibilities.",
+            "find_unused" => $"Use `unused_symbols` with the requested scope `{ReadArg("scope") ?? "<scope>"}`. Cross-check surprising results with `references` or `callers` before recommending deletions.",
+            "impact_of_changing" => $"Use `impact_analysis` for `{ReadArg("symbol") ?? "<symbol>"}`. Summarize direct callers, transitive callers, and files that likely need tests.",
+            _ => null,
+        };
+        if (text == null)
+            return CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown prompt: {name}",
+                category: McpErrorEnvelope.CategoryInvalidArgument,
+                suggestion: "Call prompts/list and request one of the advertised prompt names.",
+                retrySafe: false);
+
+        var messages = new JsonArray
+        {
+            new JsonObject
+            {
+                ["role"] = "user",
+                ["content"] = new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = text,
+                },
+            },
+        };
+        return CreateSuccessResponse(true, id, new JsonObject
+        {
+            ["description"] = name,
+            ["messages"] = messages,
+        });
+    }
+
+    private static JsonObject CreatePromptDefinition(string name, string description, string argumentName, string argumentDescription)
+        => new()
+        {
+            ["name"] = name,
+            ["description"] = description,
+            ["arguments"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["name"] = argumentName,
+                    ["description"] = argumentDescription,
+                    ["required"] = false,
+                },
+            },
+        };
+
+    private static string BuildResourceUri(string path)
+        => "cdidx://file/" + string.Join('/', path.Split('/').Select(Uri.EscapeDataString));
+
+    private static bool TryParseResourceUri(string uri, out string path)
+    {
+        path = string.Empty;
+        if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsed)
+            || !string.Equals(parsed.Scheme, "cdidx", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(parsed.Host, "file", StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrWhiteSpace(parsed.AbsolutePath))
+        {
+            return false;
+        }
+
+        var decoded = Uri.UnescapeDataString(parsed.AbsolutePath.TrimStart('/'));
+        if (decoded.Length == 0
+            || Path.IsPathRooted(decoded)
+            || decoded.Split('/').Any(segment => segment.Length == 0 || segment is "." or ".."))
+        {
+            return false;
+        }
+        path = decoded;
+        return true;
+    }
+
+    private static string? TryReadStringValue(JsonNode? node)
+        => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
+    private static string GetResourceMimeType(string? lang)
+        => lang?.ToLowerInvariant() switch
+        {
+            "csharp" => "text/x-csharp",
+            "fsharp" => "text/x-fsharp",
+            "vb" => "text/x-vb",
+            "javascript" => "text/javascript",
+            "typescript" => "text/typescript",
+            "json" => "application/json",
+            "markdown" => "text/markdown",
+            "python" => "text/x-python",
+            "rust" => "text/x-rust",
+            "shell" => "text/x-shellscript",
+            "sql" => "application/sql",
+            "yaml" => "application/yaml",
+            "xml" => "application/xml",
+            _ => "text/plain",
+        };
 
     /// <summary>
     /// Resolve the caller identity used by the per-(tool, caller) rate limiter from an

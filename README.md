@@ -80,7 +80,8 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 - `.sln` / `.csproj`-aware `--project <name|path>` filters for indexing and
   query commands, with `--solution <path>` when a workspace has multiple
   solution files.
-- MCP server for AI clients such as Claude Code, Cursor, and Windsurf.
+- MCP server for AI clients such as Claude Code, Cursor, and Windsurf,
+  including tools, indexed-file resources, and canned analysis prompts.
 - Local suggestion history can be listed, inspected, and exported with
   `cdidx suggestions`.
 - Parallel full-scan extraction with configurable `--parallelism`, incremental refreshes
@@ -118,6 +119,10 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 - 78 detected languages, with symbol and graph support where available.
 - MCP `tools/list` descriptions include a `Language support:` clause sourced
   from the same language registries as `cdidx languages`.
+- MCP `resources/list` exposes indexed files as `cdidx://file/<path>` resources,
+  `resources/read` returns indexed file text, and `prompts/list` advertises
+  starter prompts such as `summarize_file`, `find_unused`, and
+  `impact_of_changing`.
 
 ## Documentation
 
@@ -250,6 +255,7 @@ cdidx mcp
   index と query コマンドを特定の .NET project 配下へ絞り込めます。
   workspace に solution が複数ある場合は `--solution <path>` を指定します。
 - Claude Code、Cursor、Windsurf などの AI クライアント向け MCP サーバー。
+  tools、インデックス済みファイル resources、定型分析 prompts を提供します。
 - `cdidx suggestions` でローカルの提案履歴を一覧表示、詳細表示、エクスポート可能。
 - `--files` と `--commits` による差分更新、および `--watch` による継続更新モード。
 - `status --check` による DB と作業ツリーの完全一致確認。`--stale-after` /
@@ -285,6 +291,10 @@ cdidx mcp
 - 78 言語を検出し、対応言語ではシンボルとグラフも利用可能。
 - MCP の `tools/list` 説明には、`cdidx languages` と同じ言語レジストリから
   生成した `Language support:` 句を含めます。
+- MCP の `resources/list` はインデックス済みファイルを `cdidx://file/<path>`
+  resources として公開し、`resources/read` はファイル本文を返します。
+  `prompts/list` は `summarize_file`、`find_unused`、`impact_of_changing`
+  などの starter prompt を公開します。
 
 ## ドキュメント
 
