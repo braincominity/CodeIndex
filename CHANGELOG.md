@@ -11,6 +11,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.23.1] - 2026-05-20
+
+#### Fixed
+
+- **Aligned human status and index summary labels** — `cdidx index` and `cdidx status` now pad label/value rows from a shared formatter so labels such as `SQL graph` no longer shift the colon out of column.
+- **`CDIDX_DEBUG` now parses standard boolean values explicitly (#1473)** — `yes` and `on` enable redacted debug output, `0`, `false`, `no`, and `off` disable it, and unrecognized non-empty values emit a one-shot warning before falling back to off.
+- **`CDIDX_DISABLE_PERSISTENT_LOG` now accepts standard boolean values (#1474)** — persistent logging can now be disabled with `1`, `true`, `yes`, or `on` case-insensitively instead of only the literal `1`.
+- **MCP now advertises built-in prompts (#1682)** — `initialize` advertises prompts, `prompts/list` exposes starter analysis prompts, and `prompts/get` returns message templates for common cdidx workflows.
+- **MCP indexed files are exposed as resources (#1683)** — `initialize` advertises resources, `resources/list` returns indexed files as `cdidx://file/<path>` URIs, and `resources/read` returns indexed file text.
+- **MCP capability discovery now covers resources and prompts (#1784)** — method-not-found guidance, docs, and regression coverage now reflect the supported `resources/*` and `prompts/*` surfaces.
+- **Git commit-diff helpers are covered against large stderr pipe deadlocks (#1936)** — `GitHelper.GetChangedFilesFromCommit` now has a regression test that exercises a fake `git diff-tree` emitting more than a pipe buffer of stderr while still returning changed files.
+
+#### Security
+
+- **`CDIDX_DEBUG` redaction no longer emits stable cross-run fingerprints for paths (#1681)** — redacted string hashes are now salted per process, and path-named parameters or columns emit only a segment-count shape instead of a deterministic hash.
+
+#### Documentation
+
+- **Documented `CDIDX_FORCE_GLOBAL_TOOL_LOG` (#1475)** — the guide now describes the developer troubleshooting knob that forces lifecycle logging from local build paths and clarifies that `CDIDX_DISABLE_PERSISTENT_LOG` remains the higher-priority opt-out.
+
 ### [1.23.0] - 2026-05-19
 
 #### Added
@@ -2546,6 +2566,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.23.1] - 2026-05-20
+
+#### 修正
+
+- **human status / index summary のラベル位置を揃えました** — `cdidx index` と `cdidx status` は共通 formatter で label/value 行を padding するようになり、`SQL graph` などの長いラベルでもコロン位置がずれなくなりました。
+- **`CDIDX_DEBUG` が標準的な真偽値を明示的に解釈するようになりました (#1473)** — `yes` と `on` は redacted debug 出力を有効化し、`0`、`false`、`no`、`off` は無効化します。認識できない非空値は一度だけ警告して off にフォールバックします。
+- **`CDIDX_DISABLE_PERSISTENT_LOG` が標準的な真偽値を受け付けるようになりました (#1474)** — 永続ログの無効化は literal の `1` だけでなく、`1`、`true`、`yes`、`on` を大小文字非依存で指定できるようになりました。
+- **MCP が組み込み prompts を advertise します (#1682)** — `initialize` は prompts を advertise し、`prompts/list` は starter analysis prompt を公開し、`prompts/get` は cdidx の一般的な workflow 向け message template を返します。
+- **MCP がインデックス済みファイルを resources として公開します (#1683)** — `initialize` は resources を advertise し、`resources/list` はインデックス済みファイルを `cdidx://file/<path>` URI として返し、`resources/read` はファイル本文を返します。
+- **MCP capability discovery が resources と prompts を含むようになりました (#1784)** — method-not-found guidance、docs、回帰テストが、対応済みの `resources/*` と `prompts/*` surface を反映するようになりました。
+- **Git commit diff helper が大量 stderr pipe で deadlock しないことを回帰テストで固定しました (#1936)** — `GitHelper.GetChangedFilesFromCommit` に、fake `git diff-tree` が pipe buffer を超える stderr を出しながら変更ファイルを返すケースの回帰テストを追加しました。
+
+#### セキュリティ
+
+- **`CDIDX_DEBUG` の伏字化が path の安定した cross-run fingerprint を出さないようになりました (#1681)** — redacted string hash はプロセスごとの salt 付きになり、path 名のパラメーターや列は deterministic hash ではなく segment 数だけの shape を出力します。
+
+#### ドキュメント
+
+- **`CDIDX_FORCE_GLOBAL_TOOL_LOG` を文書化しました (#1475)** — ローカル build path からでもライフサイクルログを強制する開発者向け調査用 knob を guide に記載し、`CDIDX_DISABLE_PERSISTENT_LOG` が引き続き優先度の高い opt-out であることを明確化しました。
+
 ### [1.23.0] - 2026-05-19
 
 #### 追加
@@ -5070,7 +5110,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.23.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.23.1...HEAD
+[1.23.1]: https://github.com/Widthdom/CodeIndex/compare/v1.23.0...v1.23.1
 [1.23.0]: https://github.com/Widthdom/CodeIndex/compare/v1.22.3...v1.23.0
 [1.22.3]: https://github.com/Widthdom/CodeIndex/compare/v1.22.2...v1.22.3
 [1.22.2]: https://github.com/Widthdom/CodeIndex/compare/v1.22.1...v1.22.2
