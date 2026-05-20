@@ -169,6 +169,44 @@ public class ProgramRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("true")]
+    [InlineData("TRUE")]
+    [InlineData("yes")]
+    [InlineData("on")]
+    [InlineData("1")]
+    public void Run_ForcedGlobalToolLogging_DisableEnvAcceptsTruthyValues(string disabledValue)
+    {
+        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_disabled_bool_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(logDir);
+        var originalForce = Environment.GetEnvironmentVariable("CDIDX_FORCE_GLOBAL_TOOL_LOG");
+        var originalDisable = Environment.GetEnvironmentVariable("CDIDX_DISABLE_PERSISTENT_LOG");
+        var originalLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+
+        try
+        {
+            Environment.SetEnvironmentVariable("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+            Environment.SetEnvironmentVariable("CDIDX_DISABLE_PERSISTENT_LOG", disabledValue);
+            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["definitely-not-a-command"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("Unknown command: definitely-not-a-command", stderr);
+            Assert.Empty(Directory.GetFiles(logDir, "stderr-*.log", SearchOption.TopDirectoryOnly));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_FORCE_GLOBAL_TOOL_LOG", originalForce);
+            Environment.SetEnvironmentVariable("CDIDX_DISABLE_PERSISTENT_LOG", originalDisable);
+            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", originalLogDir);
+            TestProjectHelper.DeleteDirectory(logDir);
+        }
+    }
+
     [Fact]
     public void Run_StatusJson_UsesSourceGeneratedSerializerWhenReflectionResolverFails()
     {

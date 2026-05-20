@@ -52,15 +52,40 @@ internal static class GlobalToolLog
     private static bool ShouldEnable()
     {
         var disabled = Environment.GetEnvironmentVariable("CDIDX_DISABLE_PERSISTENT_LOG");
-        if (string.Equals(disabled, "1", StringComparison.Ordinal))
+        if (TryParseEnvBool(disabled, out var disabledValue) && disabledValue)
             return false;
 
         var forced = Environment.GetEnvironmentVariable("CDIDX_FORCE_GLOBAL_TOOL_LOG");
-        if (string.Equals(forced, "1", StringComparison.Ordinal))
+        if (TryParseEnvBool(forced, out var forcedValue) && forcedValue)
             return true;
 
         return !LooksLikeDevelopmentExecution(AppContext.BaseDirectory)
             && !LooksLikeDevelopmentExecution(Environment.ProcessPath);
+    }
+
+    internal static bool TryParseEnvBool(string? raw, out bool value)
+    {
+        value = false;
+        if (string.IsNullOrWhiteSpace(raw))
+            return false;
+
+        switch (raw.Trim().ToLowerInvariant())
+        {
+            case "1":
+            case "true":
+            case "yes":
+            case "on":
+                value = true;
+                return true;
+            case "0":
+            case "false":
+            case "no":
+            case "off":
+                value = false;
+                return true;
+            default:
+                return false;
+        }
     }
 
     private static bool LooksLikeDevelopmentExecution(string? path)

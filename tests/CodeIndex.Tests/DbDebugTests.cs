@@ -31,6 +31,71 @@ public class DbDebugTests
         Assert.Empty(output);
     }
 
+    [Theory]
+    [InlineData("1")]
+    [InlineData("true")]
+    [InlineData("TRUE")]
+    [InlineData("yes")]
+    [InlineData("on")]
+    public void IsEnabled_AcceptsTruthyDebugValues(string value)
+    {
+        Environment.SetEnvironmentVariable("CDIDX_DEBUG", value);
+        try
+        {
+            DbDebug.ResetForTesting();
+            var output = CaptureStderr(() => Assert.True(DbDebug.IsEnabled));
+            Assert.Empty(output);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_DEBUG", null);
+            DbDebug.ResetForTesting();
+        }
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("false")]
+    [InlineData("FALSE")]
+    [InlineData("no")]
+    [InlineData("off")]
+    public void IsEnabled_AcceptsFalsyDebugValues(string value)
+    {
+        Environment.SetEnvironmentVariable("CDIDX_DEBUG", value);
+        try
+        {
+            DbDebug.ResetForTesting();
+            var output = CaptureStderr(() => Assert.False(DbDebug.IsEnabled));
+            Assert.Empty(output);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_DEBUG", null);
+            DbDebug.ResetForTesting();
+        }
+    }
+
+    [Fact]
+    public void IsEnabled_InvalidDebugValue_WarnsOnceAndFallsBackToOff()
+    {
+        Environment.SetEnvironmentVariable("CDIDX_DEBUG", "maybe");
+        try
+        {
+            DbDebug.ResetForTesting();
+            var first = CaptureStderr(() => Assert.False(DbDebug.IsEnabled));
+            var second = CaptureStderr(() => Assert.False(DbDebug.IsEnabled));
+
+            Assert.Contains("CDIDX_DEBUG value 'maybe' is not recognized", first);
+            Assert.Contains("Falling back to off", first);
+            Assert.Empty(second);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_DEBUG", null);
+            DbDebug.ResetForTesting();
+        }
+    }
+
     [Fact]
     public void DumpToStderr_RedactsTextByDefault()
     {
@@ -67,6 +132,43 @@ public class DbDebugTests
             Assert.Contains("@min", output);
             Assert.Contains("[content] = <NULL>", output);
             // Row 1's string content must NOT leak verbatim in redacted mode.
+            Assert.DoesNotContain("SECRET_SOURCE_CODE_TOKEN", output);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_DEBUG", null);
+            DbDebug.ResetContext();
+        }
+    }
+
+    [Fact]
+    public void DumpToStderr_RedactedMode_UsesPathShapeForPathValues()
+    {
+        Environment.SetEnvironmentVariable("CDIDX_DEBUG", "1");
+        try
+        {
+            DbDebug.ResetContext();
+            using var conn = new SqliteConnection("Data Source=:memory:");
+            conn.Open();
+            using (var init = conn.CreateCommand())
+            {
+                init.CommandText = "CREATE TABLE t (file_path TEXT, content TEXT); INSERT INTO t VALUES ('/home/user/private/src/secret_module.cs', 'SECRET_SOURCE_CODE_TOKEN');";
+                init.ExecuteNonQuery();
+            }
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT file_path, content FROM t WHERE file_path = @path";
+            cmd.Parameters.AddWithValue("@path", "/home/user/private/src/secret_module.cs");
+            using (var reader = cmd.ExecuteTrackedReader())
+            {
+                while (reader.TrackedRead()) { }
+            }
+
+            var output = CaptureStderr(() => DbDebug.DumpToStderr(new InvalidOperationException("boom")));
+            Assert.Contains("@path = <path segments=5>", output);
+            Assert.Contains("[file_path] = <path segments=5>", output);
+            Assert.Contains("[content] = <str len=24 sha256=", output);
+            Assert.DoesNotContain("/home/user/private/src/secret_module.cs", output);
             Assert.DoesNotContain("SECRET_SOURCE_CODE_TOKEN", output);
         }
         finally

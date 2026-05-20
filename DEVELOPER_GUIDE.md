@@ -919,8 +919,13 @@ The file name is `stderr-YYYYMMDD.log`, and the logger keeps only the newest
 30 daily files. Repository-local development runs from `src/CodeIndex/bin/...`
 and `tests/.../bin/...` are excluded by default so ordinary build/test cycles
 do not accumulate persistent logs. Set `CDIDX_DISABLE_PERSISTENT_LOG=1` to opt
-out entirely, or `CDIDX_GLOBAL_TOOL_LOG_DIR` to redirect the log directory
-during testing or packaging.
+out entirely; the toggle accepts `1`, `true`, `yes`, or `on`
+case-insensitively. Use `CDIDX_GLOBAL_TOOL_LOG_DIR` to redirect the log
+directory during testing or packaging.
+Set `CDIDX_FORCE_GLOBAL_TOOL_LOG=1` to force lifecycle logging for local
+package smoke tests or launcher diagnostics even when the executable path looks
+like a development build; `CDIDX_DISABLE_PERSISTENT_LOG` still wins when both
+are set.
 
 ### The moving parts
 
@@ -1553,7 +1558,7 @@ The flag parser (`ProgramRunner.TryConsumeAuditLogFlags`) is run before `QueryCo
 `Database/DbDebug.cs` captures the last SQL command, parameter list, and per-row state for `ExecuteTrackedReader` / `TrackedRead` calls so that a `SqliteException` raised mid-loop can be dumped to stderr with enough context to reproduce the failure. The dump is gated to keep indexed source bytes from leaking through unrelated channels:
 
 - **Off by default.** Setting `CDIDX_DEBUG=` (unset) makes `DbDebug.DumpToStderr` a no-op.
-- **`CDIDX_DEBUG=1` (or any non-`unsafe` value)** turns on **redacted** mode: SQL text and parameter names appear verbatim, but each row column shows kind / length / SHA-256 prefix instead of the raw payload. Use this in CI, shared logs, and bug reports.
+- **`CDIDX_DEBUG=1` / `true` / `yes` / `on`** turns on **redacted** mode: SQL text and parameter names appear verbatim, but string payloads use length plus a process-salted SHA-256 prefix instead of raw content. Values whose parameter or column name contains `path` are reduced to a segment-count shape such as `<path segments=4>` instead of a hash, avoiding stable cross-run path fingerprints. Use this in CI, shared logs, and bug reports. `0` / `false` / `no` / `off` explicitly keep debug off; unrecognized non-empty values warn once and fall back to off.
 - **Raw text dumps require two opt-ins.** `CDIDX_DEBUG=unsafe` alone now downgrades to redacted mode and emits a one-shot stderr warning (`CDIDX_DEBUG=unsafe was ignored: pass --debug-unsafe on the command line ...`). The unsafe path only activates when the same process *also* receives the `--debug-unsafe` CLI flag, which `ProgramRunner.TryConsumeDebugUnsafeFlag` strips from `args` before normal parsing (the flag respects the `--` query-escape sentinel). This prevents stale shell-profile / CI environment variables from silently dumping indexed source bytes to stderr.
 - Tests reset the per-process gate via `DbDebug.ResetForTesting()`; production code uses `DbDebug.EnableUnsafeForProcess()` exclusively from the CLI flag handler.
 
