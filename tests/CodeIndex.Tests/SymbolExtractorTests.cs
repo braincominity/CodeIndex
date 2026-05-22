@@ -20369,6 +20369,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Scala_WrappedBracelessConstructorDoesNotContainCompanion()
+    {
+        var content = """
+            class Config(
+              value: String
+            )
+            object Config {
+              def load(): Config = Config("default")
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config" && s.SubKind == "has_companion_object" && s.StartLine == 1 && s.EndLine == 3 && s.BodyStartLine == null && s.BodyEndLine == null);
+        Assert.Contains(symbols, s => s.Kind == "object" && s.Name == "Config" && s.SubKind == "companion_object" && s.ContainerKind == null && s.ContainerName == null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "load" && s.ContainerKind == "object" && s.ContainerName == "Config");
+    }
+
+    [Fact]
     public void Extract_Dart_DetectsClassFunctionAndMixin()
     {
         // Dart: class, mixin, function / Dart: クラス、mixin、関数

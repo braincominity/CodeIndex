@@ -2758,14 +2758,15 @@ public static partial class SymbolExtractor
                     var rangeLines = lang == "css" && cssScannerLines != null
                         ? cssScannerLines
                         : structuralLines;
+                    var scalaBracelessClassEndLine = lang == "scala" && pattern.Kind == "class"
+                        ? TryFindScalaBracelessClassEndLine(lines, i, absoluteStartColumn)
+                        : null;
                     var (endLine, bodyStartLine, bodyEndLine) = lang is "kotlin" or "scala"
                         && pattern.Kind == "function"
                         && TryFindKotlinScalaExpressionBodyEndLine(line, absoluteStartColumn)
                             ? (i + 1, null, null)
-                            : lang == "scala"
-                                && pattern.Kind == "class"
-                                && TryFindScalaBracelessClassEndLine(lines, i, absoluteStartColumn)
-                                    ? (i + 1, null, null)
+                            : scalaBracelessClassEndLine.HasValue
+                                    ? (scalaBracelessClassEndLine.Value + 1, null, null)
                                     : ResolveRange(rangeLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
                     if (fortranContinuationCandidate != null)
                         endLine = Math.Max(endLine, fortranContinuationCandidate.Value.LastConsumedLineIndex + 1);

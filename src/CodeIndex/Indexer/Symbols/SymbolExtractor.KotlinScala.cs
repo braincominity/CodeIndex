@@ -194,132 +194,156 @@ public static partial class SymbolExtractor
         return false;
     }
 
-    private static bool TryFindScalaBracelessClassEndLine(string[] lines, int startIndex, int startColumn)
+    private static int? TryFindScalaBracelessClassEndLine(string[] lines, int startIndex, int startColumn)
     {
-        var line = lines[startIndex];
         var parenDepth = 0;
         var bracketDepth = 0;
         var inBlockComment = false;
         var inString = false;
         var inChar = false;
 
-        for (var i = Math.Max(0, startColumn); i < line.Length; i++)
+        for (var lineIndex = startIndex; lineIndex < lines.Length; lineIndex++)
         {
-            var c = line[i];
+            var line = lines[lineIndex];
+            var scanStart = lineIndex == startIndex ? Math.Max(0, startColumn) : 0;
 
-            if (inBlockComment)
+            for (var i = scanStart; i < line.Length; i++)
             {
-                if (c == '*' && i + 1 < line.Length && line[i + 1] == '/')
-                {
-                    inBlockComment = false;
-                    i++;
-                }
-                continue;
-            }
+                var c = line[i];
 
-            if (inString)
-            {
-                if (c == '\\' && i + 1 < line.Length)
+                if (inBlockComment)
                 {
-                    i++;
+                    if (c == '*' && i + 1 < line.Length && line[i + 1] == '/')
+                    {
+                        inBlockComment = false;
+                        i++;
+                    }
                     continue;
                 }
 
-                if (c == '"')
-                    inString = false;
-                continue;
-            }
-
-            if (inChar)
-            {
-                if (c == '\\' && i + 1 < line.Length)
+                if (inString)
                 {
-                    i++;
+                    if (c == '\\' && i + 1 < line.Length)
+                    {
+                        i++;
+                        continue;
+                    }
+
+                    if (c == '"')
+                        inString = false;
+                    continue;
+                }
+
+                if (inChar)
+                {
+                    if (c == '\\' && i + 1 < line.Length)
+                    {
+                        i++;
+                        continue;
+                    }
+
+                    if (c == '\'')
+                        inChar = false;
+                    continue;
+                }
+
+                if (c == '/' && i + 1 < line.Length)
+                {
+                    if (line[i + 1] == '/')
+                        break;
+
+                    if (line[i + 1] == '*')
+                    {
+                        inBlockComment = true;
+                        i++;
+                        continue;
+                    }
+                }
+
+                if (c == '"')
+                {
+                    inString = true;
                     continue;
                 }
 
                 if (c == '\'')
-                    inChar = false;
-                continue;
-            }
-
-            if (c == '/' && i + 1 < line.Length)
-            {
-                if (line[i + 1] == '/')
-                    break;
-
-                if (line[i + 1] == '*')
                 {
-                    inBlockComment = true;
-                    i++;
+                    inChar = true;
                     continue;
                 }
+
+                if (c == '(')
+                {
+                    parenDepth++;
+                    continue;
+                }
+
+                if (c == ')' && parenDepth > 0)
+                {
+                    parenDepth--;
+                    continue;
+                }
+
+                if (c == '[')
+                {
+                    bracketDepth++;
+                    continue;
+                }
+
+                if (c == ']' && bracketDepth > 0)
+                {
+                    bracketDepth--;
+                    continue;
+                }
+
+                if (c == '{' && parenDepth == 0 && bracketDepth == 0)
+                    return null;
             }
 
-            if (c == '"')
+            if (parenDepth != 0 || bracketDepth != 0 || inBlockComment || inString || inChar)
+                continue;
+
+            var trimmed = line.TrimEnd();
+            if (trimmed.EndsWith("extends", StringComparison.Ordinal)
+                || trimmed.EndsWith("with", StringComparison.Ordinal)
+                || trimmed.EndsWith("derives", StringComparison.Ordinal)
+                || trimmed.EndsWith(':'))
             {
-                inString = true;
                 continue;
             }
 
-            if (c == '\'')
+            var nextLine = TryGetNextScalaHeaderLine(lines, lineIndex + 1);
+            if (nextLine is null)
+                return lineIndex;
+
+            if (nextLine.StartsWith("extends ", StringComparison.Ordinal)
+                || nextLine.StartsWith("with ", StringComparison.Ordinal)
+                || nextLine.StartsWith("derives ", StringComparison.Ordinal))
             {
-                inChar = true;
                 continue;
             }
 
-            if (c == '(')
-            {
-                parenDepth++;
-                continue;
-            }
+            if (nextLine.StartsWith('{'))
+                return null;
 
-            if (c == ')' && parenDepth > 0)
-            {
-                parenDepth--;
-                continue;
-            }
-
-            if (c == '[')
-            {
-                bracketDepth++;
-                continue;
-            }
-
-            if (c == ']' && bracketDepth > 0)
-            {
-                bracketDepth--;
-                continue;
-            }
-
-            if (c == '{' && parenDepth == 0 && bracketDepth == 0)
-                return false;
+            return lineIndex;
         }
 
-        if (parenDepth != 0 || bracketDepth != 0 || inBlockComment || inString || inChar)
-            return false;
+        return null;
+    }
 
-        var trimmed = line.TrimEnd();
-        if (trimmed.EndsWith("extends", StringComparison.Ordinal)
-            || trimmed.EndsWith("with", StringComparison.Ordinal)
-            || trimmed.EndsWith("derives", StringComparison.Ordinal)
-            || trimmed.EndsWith(':'))
+    private static string? TryGetNextScalaHeaderLine(string[] lines, int startIndex)
+    {
+        for (var i = startIndex; i < lines.Length; i++)
         {
-            return false;
-        }
-
-        for (var nextIndex = startIndex + 1; nextIndex < lines.Length; nextIndex++)
-        {
-            var nextLine = lines[nextIndex].TrimStart();
+            var nextLine = lines[i].TrimStart();
             if (nextLine.Length == 0 || nextLine.StartsWith("//", StringComparison.Ordinal))
                 continue;
 
-            return !(nextLine.StartsWith("extends ", StringComparison.Ordinal)
-                || nextLine.StartsWith("with ", StringComparison.Ordinal)
-                || nextLine.StartsWith("derives ", StringComparison.Ordinal));
+            return nextLine;
         }
 
-        return true;
+        return null;
     }
 
 }
