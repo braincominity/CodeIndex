@@ -194,4 +194,108 @@ public static partial class SymbolExtractor
         return false;
     }
 
+    private static bool TryFindScalaBracelessClassEndLine(string line, int startColumn)
+    {
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var inBlockComment = false;
+        var inString = false;
+        var inChar = false;
+
+        for (var i = Math.Max(0, startColumn); i < line.Length; i++)
+        {
+            var c = line[i];
+
+            if (inBlockComment)
+            {
+                if (c == '*' && i + 1 < line.Length && line[i + 1] == '/')
+                {
+                    inBlockComment = false;
+                    i++;
+                }
+                continue;
+            }
+
+            if (inString)
+            {
+                if (c == '\\' && i + 1 < line.Length)
+                {
+                    i++;
+                    continue;
+                }
+
+                if (c == '"')
+                    inString = false;
+                continue;
+            }
+
+            if (inChar)
+            {
+                if (c == '\\' && i + 1 < line.Length)
+                {
+                    i++;
+                    continue;
+                }
+
+                if (c == '\'')
+                    inChar = false;
+                continue;
+            }
+
+            if (c == '/' && i + 1 < line.Length)
+            {
+                if (line[i + 1] == '/')
+                    break;
+
+                if (line[i + 1] == '*')
+                {
+                    inBlockComment = true;
+                    i++;
+                    continue;
+                }
+            }
+
+            if (c == '"')
+            {
+                inString = true;
+                continue;
+            }
+
+            if (c == '\'')
+            {
+                inChar = true;
+                continue;
+            }
+
+            if (c == '(')
+            {
+                parenDepth++;
+                continue;
+            }
+
+            if (c == ')' && parenDepth > 0)
+            {
+                parenDepth--;
+                continue;
+            }
+
+            if (c == '[')
+            {
+                bracketDepth++;
+                continue;
+            }
+
+            if (c == ']' && bracketDepth > 0)
+            {
+                bracketDepth--;
+                continue;
+            }
+
+            if (c == '{' && parenDepth == 0 && bracketDepth == 0)
+                return false;
+        }
+
+        return parenDepth == 0 && bracketDepth == 0 && !inBlockComment && !inString && !inChar;
+    }
+
 }

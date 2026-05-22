@@ -20329,7 +20329,7 @@ public class SymbolExtractorTests
         var content = """
             package example
 
-            class Config(value: String) {}
+            class Config(value: String)
             object Config extends App {
               def load(): Config = Config("default")
             }
@@ -20344,8 +20344,8 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "scala", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config" && s.SubKind == "has_companion_object");
-        Assert.Contains(symbols, s => s.Kind == "object" && s.Name == "Config" && s.SubKind == "companion_object");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config" && s.SubKind == "has_companion_object" && s.StartLine == 3 && s.EndLine == 3 && s.BodyStartLine == null && s.BodyEndLine == null);
+        Assert.Contains(symbols, s => s.Kind == "object" && s.Name == "Config" && s.SubKind == "companion_object" && s.ContainerKind == null && s.ContainerName == null);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "load" && s.ContainerKind == "object" && s.ContainerName == "Config");
         Assert.Contains(symbols, s => s.Kind == "object" && s.Name == "PackageRegistry");
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Status");

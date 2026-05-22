@@ -2762,7 +2762,11 @@ public static partial class SymbolExtractor
                         && pattern.Kind == "function"
                         && TryFindKotlinScalaExpressionBodyEndLine(line, absoluteStartColumn)
                             ? (i + 1, null, null)
-                            : ResolveRange(rangeLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
+                            : lang == "scala"
+                                && pattern.Kind == "class"
+                                && TryFindScalaBracelessClassEndLine(line, absoluteStartColumn)
+                                    ? (i + 1, null, null)
+                                    : ResolveRange(rangeLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
                     if (fortranContinuationCandidate != null)
                         endLine = Math.Max(endLine, fortranContinuationCandidate.Value.LastConsumedLineIndex + 1);
                     var startLine = i + 1;
