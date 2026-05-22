@@ -194,8 +194,9 @@ public static partial class SymbolExtractor
         return false;
     }
 
-    private static bool TryFindScalaBracelessClassEndLine(string line, int startColumn)
+    private static bool TryFindScalaBracelessClassEndLine(string[] lines, int startIndex, int startColumn)
     {
+        var line = lines[startIndex];
         var parenDepth = 0;
         var bracketDepth = 0;
         var inBlockComment = false;
@@ -295,7 +296,30 @@ public static partial class SymbolExtractor
                 return false;
         }
 
-        return parenDepth == 0 && bracketDepth == 0 && !inBlockComment && !inString && !inChar;
+        if (parenDepth != 0 || bracketDepth != 0 || inBlockComment || inString || inChar)
+            return false;
+
+        var trimmed = line.TrimEnd();
+        if (trimmed.EndsWith("extends", StringComparison.Ordinal)
+            || trimmed.EndsWith("with", StringComparison.Ordinal)
+            || trimmed.EndsWith("derives", StringComparison.Ordinal)
+            || trimmed.EndsWith(':'))
+        {
+            return false;
+        }
+
+        for (var nextIndex = startIndex + 1; nextIndex < lines.Length; nextIndex++)
+        {
+            var nextLine = lines[nextIndex].TrimStart();
+            if (nextLine.Length == 0 || nextLine.StartsWith("//", StringComparison.Ordinal))
+                continue;
+
+            return !(nextLine.StartsWith("extends ", StringComparison.Ordinal)
+                || nextLine.StartsWith("with ", StringComparison.Ordinal)
+                || nextLine.StartsWith("derives ", StringComparison.Ordinal));
+        }
+
+        return true;
     }
 
 }

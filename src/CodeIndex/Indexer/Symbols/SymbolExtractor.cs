@@ -2764,7 +2764,7 @@ public static partial class SymbolExtractor
                             ? (i + 1, null, null)
                             : lang == "scala"
                                 && pattern.Kind == "class"
-                                && TryFindScalaBracelessClassEndLine(line, absoluteStartColumn)
+                                && TryFindScalaBracelessClassEndLine(lines, i, absoluteStartColumn)
                                     ? (i + 1, null, null)
                                     : ResolveRange(rangeLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
                     if (fortranContinuationCandidate != null)

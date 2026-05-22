@@ -20354,6 +20354,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Scala_WrappedClassHeaderKeepsBodyRange()
+    {
+        var content = """
+            class Service
+              extends Base {
+              def run(): Int = 1
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service" && s.StartLine == 1 && s.EndLine == 4 && s.BodyStartLine == 2 && s.BodyEndLine == 4);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerKind == "class" && s.ContainerName == "Service");
+    }
+
+    [Fact]
     public void Extract_Dart_DetectsClassFunctionAndMixin()
     {
         // Dart: class, mixin, function / Dart: クラス、mixin、関数
