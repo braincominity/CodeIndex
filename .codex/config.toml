@@ -16,19 +16,19 @@ exclude_slash_tmp = true
 exclude_tmpdir_env_var = true
 
 [permissions.codeindex_workspace.filesystem]
-glob_scan_max_depth = 6
+glob_scan_max_depth = 3
 
-[permissions.codeindex_workspace.filesystem.":project_roots"]
+[permissions.codeindex_workspace.filesystem.":workspace_roots"]
 "." = "write"
-"**/.env" = "none"
-"**/.env.*" = "none"
-"**/*.pem" = "none"
-"**/*.key" = "none"
-"**/id_rsa" = "none"
-"**/id_ed25519" = "none"
-"**/*credentials*" = "none"
-"**/*secret*" = "none"
-"**/*secrets*" = "none"
+"**/.env" = "deny"
+"**/.env.*" = "deny"
+"**/*.pem" = "deny"
+"**/*.key" = "deny"
+"**/id_rsa" = "deny"
+"**/id_ed25519" = "deny"
+"**/*credentials*" = "deny"
+"**/*secret*" = "deny"
+"**/*secrets*" = "deny"
 
 [permissions.codeindex_workspace.network]
 enabled = false
