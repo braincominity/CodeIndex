@@ -141,21 +141,9 @@ public class UiI18nTests
         // Console.Out swap against other console-touching tests.
         // 言語注入フックを使い、プロセス環境を書き換えずに検証する。
         // Console.Out の差し替えだけは他のコンソール系テストと衝突しないよう
-        // TestConsoleLock.Gate で直列化する。
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            using var writer = new StringWriter();
-            try
-            {
-                Console.SetOut(writer);
-                ConsoleUi.PrintEasterEggMessage(flag, languageOverride);
-                return writer.ToString();
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-            }
-        }
+        // ConsoleCapture で直列化する。
+        using var capture = ConsoleCapture.Start(captureOut: true);
+        ConsoleUi.PrintEasterEggMessage(flag, languageOverride);
+        return capture.Out!.ToString()!;
     }
 }
