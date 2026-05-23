@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.Versioning;
+using System.Text;
 using System.Threading.Tasks;
 using CodeIndex.Database;
 using CodeIndex.Cli;
@@ -918,6 +919,82 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_SkipsControlCharacterFileNamesWithWarning()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "ok.cs"), "class Ok { }\n");
+            File.WriteAllText(Path.Combine(tempDir, "bad\nname.cs"), "class Bad { }\n");
+
+            var result = new FileIndexer(tempDir).ScanFilesDetailed();
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["ok.cs"], files);
+            Assert.Contains(result.NonIndexablePaths, path => path == "bad\\u000Aname.cs");
+            var warning = Assert.Single(result.Errors, error => error.Severity == FileIndexer.ScanIssueSeverity.Warning);
+            Assert.Equal("bad\\u000Aname.cs", warning.Path);
+            Assert.Contains("control characters", warning.Message);
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecordWithRawBytes_RejectsControlCharacterPathBeforeIo()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var indexer = new FileIndexer(tempDir);
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => indexer.BuildRecordWithRawBytes(Path.Combine(tempDir, "bad\0name.cs")));
+
+            Assert.Contains("control characters", ex.Message);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void EvaluatePathFilter_RejectsControlCharacterPathBeforeNormalization()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var indexer = new FileIndexer(tempDir);
+
+            var filter = indexer.EvaluatePathFilter(Path.Combine(tempDir, "bad\0name.cs"));
+
+            Assert.Equal(FileIndexer.PathFilterKind.ExcludedByDefaultFile, filter.FilterKind);
+            Assert.True(filter.ShouldDeleteExisting);
+            var warning = Assert.Single(filter.Errors);
+            Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
+            Assert.Contains("control characters", warning.Message);
+            Assert.Contains("\\u0000", warning.Path);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_SkipsAppleDoubleResourceForks()
     {
         // AppleDouble (`._*`) files masquerade as the real file's language (e.g. `._app.js`
@@ -1279,6 +1356,35 @@ public class FileIndexerTests
                 .ToList();
 
             Assert.Equal(["app.js", "src/.gitignore", "src/Service.cs"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_ReadsGitignoreAndCdidxignoreAsUtf8()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(Path.Combine(tempDir, "資料"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "cafe"));
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "資料/\n", Encoding.UTF8);
+            File.WriteAllText(Path.Combine(tempDir, ".cdidxignore"), "cafe/éclair.py\n", Encoding.UTF8);
+            File.WriteAllText(Path.Combine(tempDir, "資料", "ignored.py"), "print('ignored')");
+            File.WriteAllText(Path.Combine(tempDir, "cafe", "éclair.py"), "print('ignored')");
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('kept')");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "keep.py"], files);
         }
         finally
         {
@@ -1952,6 +2058,39 @@ public class FileIndexerTests
                 .ToList();
 
             Assert.Equal([".gitignore", "].cs"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsGitignoreBracketNegationPrefixesAndLiteralCaret()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "[!a].js\n[^a].py\n[a^b].cs\n[\\^a].rb\n");
+            File.WriteAllText(Path.Combine(tempDir, "a.js"), "export const kept = true;");
+            File.WriteAllText(Path.Combine(tempDir, "b.js"), "export const ignored = true;");
+            File.WriteAllText(Path.Combine(tempDir, "a.py"), "print('kept')");
+            File.WriteAllText(Path.Combine(tempDir, "b.py"), "print('ignored')");
+            File.WriteAllText(Path.Combine(tempDir, "a.cs"), "class IgnoredA { }");
+            File.WriteAllText(Path.Combine(tempDir, "^.cs"), "class IgnoredCaret { }");
+            File.WriteAllText(Path.Combine(tempDir, "c.cs"), "class Kept { }");
+            File.WriteAllText(Path.Combine(tempDir, "a.rb"), "puts 'ignored'");
+            File.WriteAllText(Path.Combine(tempDir, "^.rb"), "puts 'ignored'");
+            File.WriteAllText(Path.Combine(tempDir, "b.rb"), "puts 'kept'");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "a.js", "a.py", "b.rb", "c.cs"], files);
         }
         finally
         {
@@ -3658,5 +3797,26 @@ public class FileIndexerTests
         var oversize = string.Concat(Enumerable.Repeat("foo();bar();", ChunkSplitter.MaxLineLength / 12 + 1));
         var refs = ReferenceExtractor.Extract(fileId: 1, lang: "javascript", content: oversize, symbols: Array.Empty<CodeIndex.Models.SymbolRecord>(), path: "bundle.min.js");
         Assert.Empty(refs);
+    }
+
+    [Theory]
+    [InlineData("Foo.Designer.cs", "class Foo { }")]
+    [InlineData("foo_pb.go", "package foo")]
+    [InlineData("foo_pb2.py", "class Foo: pass")]
+    [InlineData("model.g.dart", "class Model {}")]
+    [InlineData("api.generated.ts", "export const x = 1;")]
+    [InlineData("handwritten.cs", "// <auto-generated>\nclass Foo { }")]
+    [InlineData("handwritten.go", "// Code generated by protoc. DO NOT EDIT.\npackage foo")]
+    [InlineData("handwritten.py", "# @generated\nclass Foo: pass")]
+    public void IsGeneratedCodeFile_MarkersAndNames_ReturnsTrue(string path, string content)
+    {
+        Assert.True(FileIndexer.IsGeneratedCodeFile(path, content));
+    }
+
+    [Fact]
+    public void IsGeneratedCodeFile_HandwrittenFile_ReturnsFalse()
+    {
+        Assert.False(FileIndexer.IsGeneratedCodeFile("src/Foo.cs", "class Foo { }\n"));
+        Assert.False(FileIndexer.IsGeneratedCodeFile("src/Foo.cs", "// This file is not auto-generated.\nclass Foo { }\n"));
     }
 }

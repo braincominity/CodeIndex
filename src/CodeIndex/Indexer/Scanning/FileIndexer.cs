@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -694,7 +695,7 @@ public class FileIndexer
             }
             else if (pattern[index + 1] is { Value: '^', Escaped: false })
             {
-                builder.Append(@"\^");
+                builder.Append('^');
             }
 
             if (allowLeadingRightBracket)
@@ -1456,6 +1457,15 @@ public class FileIndexer
     internal PathFilterResult EvaluatePathFilter(string absolutePath, bool isDirectory = false)
     {
         var errors = new List<ScanError>();
+        if (!IsFilePathSyntaxIndexable(absolutePath))
+        {
+            errors.Add(new ScanError(
+                FormatPathForScanIssue(absolutePath),
+                "Skipped file because its path contains NUL or control characters.",
+                ScanIssueSeverity.Warning));
+            return new PathFilterResult(PathFilterKind.ExcludedByDefaultFile, errors);
+        }
+
         var fullPath = Path.GetFullPath(absolutePath);
         if (!IsPathEqualOrParent(_projectRoot, fullPath))
             return new PathFilterResult(PathFilterKind.OutsideProjectRoot, errors);
@@ -1654,6 +1664,16 @@ public class FileIndexer
                     // \\?\ 接頭辞付きの long-path ディレクトリを渡したとき EnumerateFiles も接頭辞付きで
                     // 返すため、_projectRoot（接頭辞なし）と突き合わせる相対パス計算が崩れないよう剥がす。
                     var file = LongPath.RemoveWindowsPrefix(enumeratedFile);
+                    if (!IsFilePathSyntaxIndexable(file))
+                    {
+                        errors.Add(new ScanError(
+                            FormatPathForScanIssue(file),
+                            "Skipped file because its path contains NUL or control characters.",
+                            ScanIssueSeverity.Warning));
+                        nonIndexablePaths.Add(FormatPathForScanIssue(file));
+                        continue;
+                    }
+
                     var fileName = Path.GetFileName(file);
 
                     // Skip excluded file names / 除外ファイル名をスキップ
@@ -2018,7 +2038,7 @@ public class FileIndexer
             try
             {
                 var lineNumber = 0;
-                foreach (var line in File.ReadLines(prefixedIgnorePath))
+                foreach (var line in File.ReadLines(prefixedIgnorePath, Encoding.UTF8))
                 {
                     lineNumber++;
                     if (IgnoreRule.TryParse(dir, line, _ignoreCase, out var rule, out var errorMessage) && rule != null)
@@ -2247,6 +2267,9 @@ public class FileIndexer
     /// </summary>
     public (FileRecord record, string content, byte[] rawBytes, string? warning) BuildRecordWithRawBytes(string absolutePath)
     {
+        if (!IsFilePathSyntaxIndexable(absolutePath))
+            throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
+
         var indexability = GetFileIndexability(absolutePath);
         if (indexability != FileProbeStatus.Supported)
             throw new InvalidOperationException("Only regular files can be indexed");
@@ -2409,9 +2432,104 @@ public class FileIndexer
             Lines = lineCount,
             Checksum = checksum,
             Modified = modifiedUtc,
+            Generated = IsGeneratedCodeFile(NormalizePathSeparators(relativePath), content),
         };
 
         return (record, content, bytes, warning);
+    }
+
+    internal static bool IsFilePathSyntaxIndexable(string path)
+    {
+        foreach (var c in path)
+        {
+            if (c < ' ')
+                return false;
+        }
+
+        return true;
+    }
+
+    private string FormatPathForScanIssue(string absolutePath)
+    {
+        var displayPath = absolutePath;
+        try
+        {
+            displayPath = Path.GetRelativePath(_projectRoot, absolutePath);
+        }
+        catch (ArgumentException)
+        {
+        }
+
+        return EscapeControlCharacters(NormalizePathSeparators(displayPath));
+    }
+
+    private static string EscapeControlCharacters(string value)
+    {
+        var firstControl = -1;
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (value[i] < ' ')
+            {
+                firstControl = i;
+                break;
+            }
+        }
+
+        if (firstControl < 0)
+            return value;
+
+        var builder = new StringBuilder(value.Length + 8);
+        if (firstControl > 0)
+            builder.Append(value, 0, firstControl);
+        for (var i = firstControl; i < value.Length; i++)
+        {
+            var c = value[i];
+            if (c < ' ')
+                builder.Append(CultureInfo.InvariantCulture, $"\\u{(int)c:X4}");
+            else
+                builder.Append(c);
+        }
+
+        return builder.ToString();
+    }
+
+    internal static bool IsGeneratedCodeFile(string relativePath, string content)
+        => HasGeneratedCodeFileName(relativePath) || HasGeneratedCodeHeader(content);
+
+    private static bool HasGeneratedCodeFileName(string relativePath)
+    {
+        var fileName = Path.GetFileName(relativePath);
+        return fileName.EndsWith(".Designer.cs", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".g.dart", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".gen.go", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".generated.ts", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith("_pb.go", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith("_pb2.py", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasGeneratedCodeHeader(string content)
+    {
+        var lineStart = 0;
+        for (var lineNumber = 0; lineNumber < 20 && lineStart <= content.Length; lineNumber++)
+        {
+            var lineEnd = content.IndexOf('\n', lineStart);
+            if (lineEnd < 0)
+                lineEnd = content.Length;
+
+            var line = content[lineStart..lineEnd].Trim();
+            if (line.Contains("<auto-generated", StringComparison.OrdinalIgnoreCase)
+                || line.Contains("@generated", StringComparison.OrdinalIgnoreCase)
+                || (line.Contains("generated by", StringComparison.OrdinalIgnoreCase)
+                    && line.Contains("DO NOT EDIT", StringComparison.OrdinalIgnoreCase)))
+                return true;
+
+            if (lineEnd == content.Length)
+                break;
+            lineStart = lineEnd + 1;
+        }
+
+        return false;
     }
 
     internal static string NormalizeLineEndings(string content)
