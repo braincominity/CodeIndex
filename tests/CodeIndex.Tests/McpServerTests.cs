@@ -1308,6 +1308,30 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_InvalidUtf8DecodeFailure_WaitsForPriorStdioResponse()
+    {
+        var transport = new InvalidUtf8ReadTransport(
+            "stdio",
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""");
+        using var firstResponseStarted = new ManualResetEventSlim(false);
+        using var server = new McpServer(_dbPath, "test", false, response =>
+        {
+            firstResponseStarted.Set();
+            Thread.Sleep(200);
+            return response.ToJsonString();
+        });
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        Assert.True(firstResponseStarted.IsSet);
+        Assert.Equal(2, transport.WrittenFrames.Count);
+        using var first = JsonDocument.Parse(transport.WrittenFrames[0]!);
+        using var second = JsonDocument.Parse(transport.WrittenFrames[1]!);
+        Assert.Equal(1, first.RootElement.GetProperty("id").GetInt32());
+        Assert.Equal(-32700, second.RootElement.GetProperty("error").GetProperty("code").GetInt32());
+    }
+
+    [Fact]
     public async Task StdioTransport_Utf16BomInput_ThrowsDecodeFailure()
     {
         var utf16Json = Encoding.Unicode.GetPreamble()
@@ -1425,23 +1449,32 @@ public class McpServerTests : IDisposable
 
     private sealed class InvalidUtf8ReadTransport : IMcpTransport
     {
-        public InvalidUtf8ReadTransport(string name)
+        private readonly Queue<string> _frames;
+
+        public InvalidUtf8ReadTransport(string name, params string[] frames)
         {
             Name = name;
+            _frames = new Queue<string>(frames);
         }
 
         public string Name { get; }
         public string Endpoint => "invalid-utf8";
         public int WriteCount { get; private set; }
         public string? LastWritten { get; private set; }
+        public List<string?> WrittenFrames { get; } = [];
 
         public Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
-            => throw new DecoderFallbackException("Unable to translate bytes [ED][A0][80] at index 0 from specified code page to Unicode.");
+        {
+            if (_frames.Count > 0)
+                return Task.FromResult<string?>(_frames.Dequeue());
+            throw new DecoderFallbackException("Unable to translate bytes [ED][A0][80] at index 0 from specified code page to Unicode.");
+        }
 
         public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
         {
             WriteCount++;
             LastWritten = frame;
+            WrittenFrames.Add(frame);
             return Task.CompletedTask;
         }
 

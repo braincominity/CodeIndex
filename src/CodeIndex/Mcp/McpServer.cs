@@ -490,6 +490,7 @@ public partial class McpServer : IDisposable
             }
             catch (DecoderFallbackException ex)
             {
+                await Task.WhenAll(tasks).ConfigureAwait(false);
                 await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
                 try
                 {
