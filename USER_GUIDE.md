@@ -1105,6 +1105,19 @@ Over-quota tool calls receive a structured JSON-RPC `-32000` error:
 
 Inside `batch_query`, each inner slot is also checked against the inner tool's bucket. Over-quota slots surface `error_category: "rate_limited"` and `retry_after_ms` directly in the per-slot result without failing the rest of the batch.
 
+### Logs
+
+Persistent lifecycle logs are written to the first available directory in this order:
+
+1. `CDIDX_GLOBAL_TOOL_LOG_DIR` (`~`, `~/...`, `$HOME/...`, and `${HOME}/...` are expanded)
+2. Windows: `%LOCALAPPDATA%\cdidx\logs`
+3. macOS: `~/Library/Logs/cdidx`
+4. Linux and other Unix-like systems: `$XDG_STATE_HOME/cdidx/logs`
+5. Linux and other Unix-like systems without `XDG_STATE_HOME`: `~/.local/state/cdidx/logs`
+6. fallback: the OS local-app-data directory, then the temp directory under `cdidx/logs`
+
+Run `cdidx status --log-path` to print the active log directory without opening the index database. Add `--json` to receive `{"log_path":"..."}`. Set `CDIDX_DISABLE_PERSISTENT_LOG=1` to disable persistent lifecycle logs.
+
 ### Project-local configuration file (`.cdidxrc.json`)
 
 You can check a `.cdidxrc.json` file into a repository to set per-project defaults instead of relying on shell-profile or CI env vars (#1571). On startup `cdidx` walks upward from the current working directory looking for the first `.cdidxrc.json`, validates its schema, and materializes recognized keys as process environment variables — so every existing env-var consumer picks them up without further changes.
@@ -2851,6 +2864,19 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 ```
 
 `batch_query` の内側スロットも各内側ツールのバケットで判定されます。超過したスロットはバッチ全体を失敗させずに、スロット結果に `error_category: "rate_limited"` と `retry_after_ms` を含めて返します。
+
+### ログ
+
+永続 lifecycle log は、利用可能な最初のディレクトリに書き込まれます。解決順は次のとおりです。
+
+1. `CDIDX_GLOBAL_TOOL_LOG_DIR`（`~`、`~/...`、`$HOME/...`、`${HOME}/...` は展開されます）
+2. Windows: `%LOCALAPPDATA%\cdidx\logs`
+3. macOS: `~/Library/Logs/cdidx`
+4. Linux などの Unix 系: `$XDG_STATE_HOME/cdidx/logs`
+5. `XDG_STATE_HOME` がない Linux などの Unix 系: `~/.local/state/cdidx/logs`
+6. fallback: OS の local-app-data ディレクトリ、それも無い場合は temp 配下の `cdidx/logs`
+
+有効なログディレクトリだけを確認したい場合は `cdidx status --log-path` を実行してください。このコマンドは index database を開きません。`--json` を付けると `{"log_path":"..."}` を返します。永続 lifecycle log を無効化するには `CDIDX_DISABLE_PERSISTENT_LOG=1` を設定します。
 
 ### プロジェクト固有の設定ファイル (`.cdidxrc.json`)
 

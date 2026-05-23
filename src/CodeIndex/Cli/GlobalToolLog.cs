@@ -108,11 +108,13 @@ internal static class GlobalToolLog
     /// </summary>
     internal static string ResolveLogDirectoryForReport() => ResolveLogDirectory();
 
+    internal static string ResolveLogDirectoryForStatus() => ResolveLogDirectory();
+
     private static string ResolveLogDirectory()
     {
         var overrideDirectory = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
         if (!string.IsNullOrWhiteSpace(overrideDirectory))
-            return Path.GetFullPath(overrideDirectory);
+            return Path.GetFullPath(ExpandUserLogDirectory(overrideDirectory));
 
         if (OperatingSystem.IsWindows())
         {
@@ -137,6 +139,42 @@ internal static class GlobalToolLog
             return Path.Combine(fallback, "cdidx", "logs");
 
         return Path.Combine(Path.GetTempPath(), "cdidx", "logs");
+    }
+
+    private static string ExpandUserLogDirectory(string directory)
+    {
+        var trimmed = directory.Trim();
+        if (trimmed == "~")
+            return GetHomeDirectoryOrOriginal(trimmed);
+
+        if (trimmed.StartsWith("~/", StringComparison.Ordinal) || trimmed.StartsWith("~\\", StringComparison.Ordinal))
+        {
+            var home = GetHomeDirectoryOrOriginal("~");
+            return home == "~" ? trimmed : Path.Combine(home, trimmed[2..]);
+        }
+
+        if (trimmed == "$HOME" || trimmed == "${HOME}")
+            return GetHomeDirectoryOrOriginal(trimmed);
+
+        if (trimmed.StartsWith("$HOME/", StringComparison.Ordinal) || trimmed.StartsWith("$HOME\\", StringComparison.Ordinal))
+        {
+            var home = GetHomeDirectoryOrOriginal("$HOME");
+            return home == "$HOME" ? trimmed : Path.Combine(home, trimmed[6..]);
+        }
+
+        if (trimmed.StartsWith("${HOME}/", StringComparison.Ordinal) || trimmed.StartsWith("${HOME}\\", StringComparison.Ordinal))
+        {
+            var home = GetHomeDirectoryOrOriginal("${HOME}");
+            return home == "${HOME}" ? trimmed : Path.Combine(home, trimmed[8..]);
+        }
+
+        return trimmed;
+    }
+
+    private static string GetHomeDirectoryOrOriginal(string original)
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return string.IsNullOrWhiteSpace(home) ? original : home;
     }
 
     private static void PruneOldLogs(string logDirectory)
