@@ -1112,24 +1112,25 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void Search_DeduplicatesOverlappingChunks()
+    public void Search_DeduplicatesFullyCoveredChunk()
     {
-        // Create two overlapping chunks in the same file that both match
-        // 同じファイル内でオーバーラップし、両方マッチする2チャンクを作成
+        // Create two chunks in the same file where the lower-ranked match is fully covered.
+        // 同じファイル内で低順位のマッチが完全包含される2チャンクを作成。
         var overlapFileId = _writer.UpsertFile(new FileRecord
         {
             Path = "src/overlap.py", Lang = "python", Size = 2000, Lines = 100,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
+        var duplicateContent = "# overlap_marker\ndef func_a():\n    pass\n" + string.Concat(Enumerable.Repeat("# filler\n", 76));
         _writer.InsertChunks([
-            new ChunkRecord { FileId = overlapFileId, ChunkIndex = 0, StartLine = 1, EndLine = 80, Content = "# overlap_marker\ndef func_a():\n    pass\n" + string.Concat(Enumerable.Repeat("# filler\n", 76)) },
-            new ChunkRecord { FileId = overlapFileId, ChunkIndex = 1, StartLine = 71, EndLine = 150, Content = "# overlap_marker\ndef func_b():\n    pass\n" + string.Concat(Enumerable.Repeat("# filler\n", 76)) },
+            new ChunkRecord { FileId = overlapFileId, ChunkIndex = 0, StartLine = 1, EndLine = 80, Content = duplicateContent },
+            new ChunkRecord { FileId = overlapFileId, ChunkIndex = 1, StartLine = 71, EndLine = 80, Content = duplicateContent },
         ]);
 
         var results = _reader.Search("overlap_marker", limit: 10);
 
-        // Should deduplicate: only 1 result from overlap.py (higher ranked chunk kept)
-        // 重複排除: overlap.py からは1件のみ（上位ランクのチャンクを保持）
+        // Should deduplicate: only 1 result from overlap.py because the second range is covered.
+        // 重複排除: 2件目の範囲は包含済みなので overlap.py からは1件のみ。
         var overlapResults = results.Where(r => r.Path == "src/overlap.py").ToList();
         Assert.Single(overlapResults);
     }
@@ -1192,6 +1193,54 @@ public class DbReaderTests : IDisposable
     {
         var results = _reader.Search("nonexistent_term_xyz");
         Assert.Empty(results);
+    }
+
+    [Fact]
+    public void Search_DeduplicationKeepsOverlappingChunkWithNewCoverage()
+    {
+        var content = string.Join('\n', Enumerable.Range(1, 30).Select(i => i switch
+        {
+            5 => "needle first hit",
+            25 => "needle second hit",
+            _ => $"line {i}",
+        }));
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/overlapping_chunks.py",
+            Lang = "python",
+            Size = content.Length,
+            Lines = 30,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var lines = content.Split('\n');
+        _writer.InsertChunks([
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 20,
+                Content = string.Join('\n', lines.Take(20)),
+            },
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 1,
+                StartLine = 11,
+                EndLine = 30,
+                Content = string.Join('\n', lines.Skip(10)),
+            },
+        ]);
+
+        var results = _reader.Search("needle")
+            .Where(r => r.Path == "src/overlapping_chunks.py")
+            .ToList();
+
+        Assert.Equal([1, 11], results.Select(r => r.StartLine).OrderBy(line => line));
+
+        var count = _reader.CountSearchResults("needle");
+        Assert.Equal(2, count.Count);
+        Assert.Equal(1, count.FileCount);
     }
 
     [Fact]
