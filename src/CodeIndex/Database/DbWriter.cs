@@ -18,6 +18,7 @@ public class DbWriter
     internal static Action<string>? BatchRowSkipWarningForTesting { get; set; }
     private const int BatchSize = 500;
     private const int MaxSqlVariables = 999;
+    private const int SqliteConstraintErrorCode = 19;
     private int _rowSkipSavepointCounter;
     private long _batchRowsSkipped;
     private int _transactionDepth;
@@ -710,7 +711,7 @@ public class DbWriter
                 InsertChunkBatch(chunks, i, end);
                 transaction?.Commit();
             }
-            catch (SqliteException batchException)
+            catch (SqliteException batchException) when (IsRowSkippableSqliteException(batchException))
             {
                 InsertChunksWithRowSkip(chunks, i, end, batchException);
             }
@@ -740,7 +741,7 @@ public class DbWriter
                 InsertSymbolBatch(symbols, i, end, foldedNameCache);
                 transaction?.Commit();
             }
-            catch (SqliteException batchException)
+            catch (SqliteException batchException) when (IsRowSkippableSqliteException(batchException))
             {
                 InsertSymbolsWithRowSkip(symbols, i, end, batchException);
             }
@@ -789,9 +790,15 @@ public class DbWriter
         {
             Execute($"ROLLBACK TO SAVEPOINT {savepointName}");
             Execute($"RELEASE SAVEPOINT {savepointName}");
-            onSkip(ex);
+            if (IsRowSkippableSqliteException((SqliteException)ex))
+                onSkip(ex);
+            else
+                throw;
         }
     }
+
+    private static bool IsRowSkippableSqliteException(SqliteException ex)
+        => ex.SqliteErrorCode == SqliteConstraintErrorCode;
 
     private void WarnSkippedBatchRow(string rowIdentifier, Exception batchException, Exception rowException)
     {
