@@ -1328,15 +1328,16 @@ public partial class McpServer
         var estimatedResponseBytes = EstimateBatchResponseBytes(id, "Executed 0 queries.", successCount, failureCount,
             responseByteLimit, resultsArray, truncated: false, truncatedQueries);
 
-        bool TryAppendResult(JsonObject entry, string? toolName, JsonNode? toolArgs, bool successfulSlot = false)
+        bool TryAppendResult(JsonObject entry, string? toolName, JsonNode? toolArgs, bool successfulSlot = false, bool failedSlot = false)
         {
             var candidateResults = CloneJsonArray(resultsArray);
             candidateResults.Add(entry.DeepClone());
             var candidateSuccessCount = successCount + (successfulSlot ? 1 : 0);
-            var candidateSummary = failureCount == 0
+            var candidateFailureCount = failureCount + (failedSlot ? 1 : 0);
+            var candidateSummary = candidateFailureCount == 0
                 ? $"Executed {candidateResults.Count} queries in 0 ms (all succeeded)."
-                : $"Executed {candidateResults.Count} queries in 0 ms ({candidateSuccessCount} succeeded, {failureCount} failed).";
-            var candidateBytes = EstimateBatchResponseBytes(id, candidateSummary, candidateSuccessCount, failureCount,
+                : $"Executed {candidateResults.Count} queries in 0 ms ({candidateSuccessCount} succeeded, {candidateFailureCount} failed).";
+            var candidateBytes = EstimateBatchResponseBytes(id, candidateSummary, candidateSuccessCount, candidateFailureCount,
                 responseByteLimit, candidateResults, truncated: false, truncatedQueries);
             if (candidateBytes > responseByteLimit)
             {
@@ -1359,7 +1360,6 @@ public partial class McpServer
             int? code = null, string? category = null, string? suggestion = null, bool? retrySafe = null)
         {
             slotStopwatch.Stop();
-            failureCount++;
             var entry = new JsonObject
             {
                 ["tool"] = toolName,
@@ -1380,7 +1380,8 @@ public partial class McpServer
                 entry["suggestion"] = suggestion;
             if (retrySafe.HasValue)
                 entry["retry_safe"] = retrySafe.Value;
-            TryAppendResult(entry, toolName, toolArgs);
+            if (TryAppendResult(entry, toolName, toolArgs, failedSlot: true))
+                failureCount++;
         }
 
         // Rate-limited slot error variant. Mirrors the shape of `AppendSlotError` so existing
@@ -1397,7 +1398,6 @@ public partial class McpServer
         void AppendRateLimitedSlot(string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, long retryAfterMs)
         {
             slotStopwatch.Stop();
-            failureCount++;
             // #1581: emit the canonical envelope (`category`, `suggestion`, `retry_safe`)
             // next to the legacy #1560 fields so clients have a single decision shape across
             // top-level and slot-level rate-limit errors.
@@ -1416,7 +1416,8 @@ public partial class McpServer
                 ["suggestion"] = $"Back off for at least {retryAfterMs} ms before retrying this tool.",
                 ["retry_safe"] = true,
             };
-            TryAppendResult(entry, toolName, toolArgs);
+            if (TryAppendResult(entry, toolName, toolArgs, failedSlot: true))
+                failureCount++;
         }
 
         foreach (var q in queries)
@@ -1605,7 +1606,7 @@ public partial class McpServer
 
         totalStopwatch.Stop();
         var totalElapsedMs = totalStopwatch.ElapsedMilliseconds;
-        var payload = new JsonObject
+        JsonObject BuildPayload() => new()
         {
             ["count"] = resultsArray.Count,
             ["metadata"] = new JsonObject
@@ -1614,26 +1615,55 @@ public partial class McpServer
                 ["success_count"] = successCount,
                 ["failure_count"] = failureCount,
                 ["response_byte_limit"] = responseByteLimit,
-                ["estimated_response_bytes"] = estimatedResponseBytes,
+                ["estimated_response_bytes"] = responseByteLimit,
             },
-            ["results"] = resultsArray,
+            ["results"] = resultsArray.DeepClone(),
         };
-        if (truncated)
+
+        string BuildSummary()
         {
-            payload["truncated"] = true;
-            payload["truncated_queries"] = truncatedQueries;
+            var baseSummary = failureCount == 0
+                ? $"Executed {resultsArray.Count} queries in {totalElapsedMs} ms (all succeeded)."
+                : $"Executed {resultsArray.Count} queries in {totalElapsedMs} ms ({successCount} succeeded, {failureCount} failed).";
+            return truncated
+                ? baseSummary + $" Response truncated at {responseByteLimit} bytes; split the batch or lower per-slot limits."
+                : baseSummary;
         }
-        var summary = failureCount == 0
-            ? $"Executed {resultsArray.Count} queries in {totalElapsedMs} ms (all succeeded)."
-            : $"Executed {resultsArray.Count} queries in {totalElapsedMs} ms ({successCount} succeeded, {failureCount} failed).";
-        if (truncated)
-            summary += $" Response truncated at {responseByteLimit} bytes; split the batch or lower per-slot limits.";
-        var metadata = (JsonObject)payload["metadata"]!;
-        for (var i = 0; i < 3; i++)
+
+        JsonObject payload;
+        string summary;
+        while (true)
         {
+            payload = BuildPayload();
+            if (truncated)
+            {
+                payload["truncated"] = true;
+                payload["truncated_queries"] = truncatedQueries.DeepClone();
+            }
+
+            summary = BuildSummary();
             estimatedResponseBytes = EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload.DeepClone()));
-            metadata["estimated_response_bytes"] = estimatedResponseBytes;
+            if (estimatedResponseBytes <= responseByteLimit)
+                break;
+            if (resultsArray.Count > 0)
+            {
+                var removed = resultsArray[resultsArray.Count - 1];
+                if (removed?["error"] != null)
+                    failureCount = Math.Max(0, failureCount - 1);
+                else
+                    successCount = Math.Max(0, successCount - 1);
+                resultsArray.RemoveAt(resultsArray.Count - 1);
+                continue;
+            }
+            if (truncatedQueries.Count > 1)
+            {
+                truncatedQueries.RemoveAt(truncatedQueries.Count - 1);
+                continue;
+            }
+            break;
         }
+
+        ((JsonObject)payload["metadata"]!)["estimated_response_bytes"] = estimatedResponseBytes;
         return CreateToolResult(id, summary, payload);
     }
 
@@ -1660,7 +1690,7 @@ public partial class McpServer
                 ["success_count"] = successCount,
                 ["failure_count"] = failureCount,
                 ["response_byte_limit"] = responseByteLimit,
-                ["estimated_response_bytes"] = 0,
+                ["estimated_response_bytes"] = responseByteLimit,
             },
             ["results"] = resultsArray.DeepClone(),
         };

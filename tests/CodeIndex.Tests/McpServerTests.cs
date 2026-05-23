@@ -5050,7 +5050,7 @@ public class McpServerTests : IDisposable
         try
         {
             InsertIndexedFile("src/large.cs", "csharp", "// " + new string('x', 5000));
-            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"excerpt","arguments":{"path":"src/large.cs","startLine":1,"endLine":1,"maxLineWidth":0}}]}}}""")!;
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"ping"},{"tool":"excerpt","arguments":{"path":"src/large.cs","startLine":1,"endLine":1,"maxLineWidth":0}}]}}}""")!;
             var response = _server.HandleMessage(request)!;
 
             var structured = response["result"]!["structuredContent"]!;
