@@ -469,13 +469,25 @@ public static class IndexCommandRunner
         return $"PID {holder.Pid.ToString(System.Globalization.CultureInfo.InvariantCulture)}, started {startedLocal.ToString("yyyy-MM-dd HH:mm:ss zzz", System.Globalization.CultureInfo.InvariantCulture)}";
     }
 
-    public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions) =>
+        RunBackfillFold(cmdArgs, jsonOptions, cancellationForTesting: null);
+
+    internal static int RunBackfillFold(
+        string[] cmdArgs,
+        JsonSerializerOptions jsonOptions,
+        CancellationTokenSource? cancellationForTesting)
     {
         var options = ParseBackfillFoldArgs(cmdArgs);
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
-        using var backfillCancellation = new CancellationTokenSource();
-        using var cancelKeyPressRegistration = RegisterIndexCancelKeyPress(backfillCancellation);
-        using var terminateSignalRegistration = RegisterIndexTerminateSignal(backfillCancellation);
+        using var ownedCancellation = cancellationForTesting == null ? new CancellationTokenSource() : null;
+        var backfillCancellation = cancellationForTesting ?? ownedCancellation!;
+        using var cancelKeyPressRegistration = cancellationForTesting == null
+            ? RegisterIndexCancelKeyPress(backfillCancellation)
+            : NullDisposable.Instance;
+        using var terminateSignalRegistration = cancellationForTesting == null
+            ? RegisterIndexTerminateSignal(backfillCancellation)
+            : NullDisposable.Instance;
+
         if (options.ShowHelp)
         {
             ConsoleUi.PrintUsage();
@@ -519,12 +531,13 @@ public static class IndexCommandRunner
             var rewriteAll = storedFoldVersion != currentFoldVersion
                 || storedFoldFingerprint != currentFoldFingerprint;
 
-            var (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll, backfillCancellation.Token);
+            var (symbols, symbolReferences) = writer.BackfillFoldedColumns(
+                rewriteAll,
+                backfillCancellation.Token);
             // MarkFoldReady re-verifies inside a BEGIN IMMEDIATE so a concurrent writer cannot
             // insert NULL-folded rows between the verify and the stamp. Issue #1535.
             // MarkFoldReady は BEGIN IMMEDIATE 内で再検証するため、concurrent writer による
             // NULL 行差し込みで fold_ready が嘘になるのを防ぐ。Issue #1535。
-            backfillCancellation.Token.ThrowIfCancellationRequested();
             var verified = writer.MarkFoldReady();
             if (!verified)
             {
@@ -565,7 +578,13 @@ public static class IndexCommandRunner
         }
         catch (OperationCanceledException)
         {
-            return WriteBackfillInterruptedResult(options.Json, jsonOptions);
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "folded-name backfill cancelled before it could complete.",
+                CommandExitCodes.CancelledBySignal,
+                "Rerun `cdidx backfill-fold` when you are ready to resume; the cancelled transaction was rolled back.",
+                CommandErrorCodes.Interrupted);
         }
         catch (Exception ex)
         {
@@ -2238,15 +2257,6 @@ public static class IndexCommandRunner
             "Rerun `cdidx index` to finish refreshing the index. Press Ctrl-C again during a future run to force-exit.",
             CommandErrorCodes.Interrupted);
     }
-
-    private static int WriteBackfillInterruptedResult(bool json, JsonSerializerOptions jsonOptions) =>
-        WriteCommandError(
-            json,
-            jsonOptions,
-            "Interrupted; folded-name backfill was cancelled before it could complete.",
-            CommandExitCodes.Interrupted,
-            "Rerun `cdidx backfill-fold` to finish refreshing folded-name columns. Press Ctrl-C again during a future run to force-exit.",
-            CommandErrorCodes.Interrupted);
 
     internal static bool HandleIndexCancelKeyPress(CancellationTokenSource cancellation, ref bool firstCancelHandled)
     {

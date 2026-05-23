@@ -13,6 +13,7 @@ public class DbWriter
 {
     private readonly SqliteConnection _conn;
     private readonly PreparedCommandCache? _commandCache;
+    internal static Action? FoldBackfillRowUpdatedForTesting { get; set; }
     private const int BatchSize = 500;
     private const int MaxSqlVariables = 999;
     private int _transactionDepth;
@@ -2611,33 +2612,18 @@ public class DbWriter
     /// <returns>Counts of symbol rows and reference rows rewritten.</returns>
     public (int Symbols, int SymbolReferences) BackfillFoldedColumns(
         bool rewriteAll = false,
-        CancellationToken cancellationToken = default) =>
-        BackfillFoldedColumnsCore(rewriteAll, cancellationToken, rowUpdatedForTesting: null);
-
-    internal (int Symbols, int SymbolReferences) BackfillFoldedColumnsForTesting(
-        bool rewriteAll,
-        CancellationToken cancellationToken,
-        Action rowUpdatedForTesting) =>
-        BackfillFoldedColumnsCore(rewriteAll, cancellationToken, rowUpdatedForTesting);
-
-    private (int Symbols, int SymbolReferences) BackfillFoldedColumnsCore(
-        bool rewriteAll,
-        CancellationToken cancellationToken,
-        Action? rowUpdatedForTesting)
+        CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var txn = !IsInTransaction() ? BeginTransaction() : null;
-        var symbols = BackfillSymbolFoldedRows(rewriteAll, cancellationToken, rowUpdatedForTesting);
-        var symbolReferences = BackfillReferenceFoldedRows(rewriteAll, cancellationToken, rowUpdatedForTesting);
+        var symbols = BackfillSymbolFoldedRows(rewriteAll, cancellationToken);
+        var symbolReferences = BackfillReferenceFoldedRows(rewriteAll, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         txn?.Commit();
         return (symbols, symbolReferences);
     }
 
-    private int BackfillSymbolFoldedRows(
-        bool rewriteAll,
-        CancellationToken cancellationToken,
-        Action? rowUpdatedForTesting)
+    private int BackfillSymbolFoldedRows(bool rewriteAll, CancellationToken cancellationToken)
     {
         var rows = new List<(long Id, string Name)>();
         using (var cmd = _conn.CreateCommand())
@@ -2668,16 +2654,13 @@ public class DbWriter
             pFolded.Value = (object?)NameFold.Fold(row.Name) ?? DBNull.Value;
             pId.Value = row.Id;
             update.ExecuteNonQuery();
-            rowUpdatedForTesting?.Invoke();
+            FoldBackfillRowUpdatedForTesting?.Invoke();
         }
 
         return rows.Count;
     }
 
-    private int BackfillReferenceFoldedRows(
-        bool rewriteAll,
-        CancellationToken cancellationToken,
-        Action? rowUpdatedForTesting)
+    private int BackfillReferenceFoldedRows(bool rewriteAll, CancellationToken cancellationToken)
     {
         var rows = new List<(long Id, string? SymbolName, string? ContainerName)>();
         using (var cmd = _conn.CreateCommand())
@@ -2719,7 +2702,7 @@ public class DbWriter
             pContainerNameFolded.Value = (object?)NameFold.Fold(row.ContainerName) ?? DBNull.Value;
             pId.Value = row.Id;
             update.ExecuteNonQuery();
-            rowUpdatedForTesting?.Invoke();
+            FoldBackfillRowUpdatedForTesting?.Invoke();
         }
 
         return rows.Count;
