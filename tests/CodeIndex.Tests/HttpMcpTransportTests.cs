@@ -109,7 +109,9 @@ public class HttpMcpTransportTests : IDisposable
         // Issue #2434: the successful POST response can reach the client before its
         // best-effort request log callback runs, so assert after the async sink catches up.
         var snapshot = await WaitForRequestLogRecordsAsync(records, 3);
+        Assert.Equal(3, snapshot.Length);
 
+        // Request logging can be observed from independently handled HTTP requests in any order.
         var missingPost = Assert.Single(snapshot, record =>
             record.AuthOutcome == "missing" &&
             record.StatusCode == (int)HttpStatusCode.Unauthorized &&
@@ -128,6 +130,8 @@ public class HttpMcpTransportTests : IDisposable
         var okPost = Assert.Single(snapshot, record =>
             record.AuthOutcome == "ok" &&
             record.RequestId == "7");
+        Assert.Equal("POST", okPost.Method);
+        Assert.Equal("/", okPost.Path);
         Assert.Equal((int)HttpStatusCode.OK, okPost.StatusCode);
     }
 
