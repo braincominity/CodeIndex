@@ -333,6 +333,22 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void GetUnchangedFileId_ReturnsNullWhenTimestampMatchesButChecksumDiffers()
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var file = new FileRecord
+        {
+            Path = "src/coarse-time.py", Lang = "python", Size = 50, Lines = 5,
+            Modified = modified, Checksum = "first_checksum",
+        };
+        _writer.UpsertFile(file);
+
+        var id = _writer.GetUnchangedFileId("src/coarse-time.py", modified, "second_checksum");
+
+        Assert.Null(id);
+    }
+
+    [Fact]
     public void PurgeStaleFilesSharingChecksum_RemovesDeletedRenameRowsOnly()
     {
         var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_checksum_purge_{Guid.NewGuid():N}");

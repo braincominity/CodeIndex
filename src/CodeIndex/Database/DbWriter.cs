@@ -270,8 +270,8 @@ public class DbWriter
               END
               WHERE path = @path
                 AND (
-                    modified = @modified
-                    OR (@checksum IS NOT NULL AND checksum = @checksum)
+                    (@checksum IS NOT NULL AND checksum = @checksum)
+                    OR (@checksum IS NULL AND modified = @modified)
                 )
               RETURNING id",
             static c =>
