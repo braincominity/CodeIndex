@@ -1,6 +1,7 @@
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
+using System.Globalization;
 
 namespace CodeIndex.Database;
 
@@ -213,6 +214,7 @@ public class DbContext : IDisposable
             ApplyConnectionPerformancePragmas();
             RegisterConnectionFunctionsWithRetry(_connection);
             EnsureWritableUserVersionSupported(dbPath);
+            ConfigureAutoVacuumForEmptyDatabase();
             Execute($"PRAGMA application_id={ApplicationId}");
 
             // Enable WAL mode and verify it was applied / WALモードを有効にし適用を確認
@@ -280,6 +282,61 @@ public class DbContext : IDisposable
     {
         var value = Environment.GetEnvironmentVariable(name);
         return long.TryParse(value, out var parsed) && parsed >= 0 ? parsed : fallback;
+    }
+
+    private void ConfigureAutoVacuumForEmptyDatabase()
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'";
+        var objectCount = Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+        if (objectCount == 0)
+            Execute("PRAGMA auto_vacuum=INCREMENTAL");
+    }
+
+    public VacuumResult RunIncrementalVacuum()
+    {
+        if (_isReadOnly)
+        {
+            throw new CodeIndexException(
+                code: CommandErrorCodes.DbNotWritable,
+                category: CodeIndexExceptionCategory.Database,
+                message: "database must be writable for vacuum",
+                path: _connection.DataSource,
+                hint: "Copy the database to writable storage or rerun cdidx without a read-only --db URI.");
+        }
+
+        var before = ReadVacuumMetrics();
+        if (ReadAutoVacuumMode() == 2)
+        {
+            Execute($"PRAGMA incremental_vacuum({before.FreelistCount})");
+        }
+        else
+        {
+            Execute("PRAGMA auto_vacuum=INCREMENTAL");
+            Execute("VACUUM");
+        }
+        var after = ReadVacuumMetrics();
+        return new VacuumResult(
+            Status: "ok",
+            PageSize: after.PageSize,
+            PageCountBefore: before.PageCount,
+            FreelistCountBefore: before.FreelistCount,
+            PageCountAfter: after.PageCount,
+            FreelistCountAfter: after.FreelistCount,
+            PagesReclaimed: Math.Max(0, before.PageCount - after.PageCount),
+            BytesReclaimed: Math.Max(0, before.PageCount - after.PageCount) * after.PageSize);
+    }
+
+    private (long PageCount, long FreelistCount, long PageSize) ReadVacuumMetrics()
+        => (ReadPragmaLong("page_count"), ReadPragmaLong("freelist_count"), ReadPragmaLong("page_size"));
+
+    private long ReadAutoVacuumMode() => ReadPragmaLong("auto_vacuum");
+
+    private long ReadPragmaLong(string name)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $"PRAGMA {name}";
+        return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
     private void EnsureWritableUserVersionSupported(string dbPath)

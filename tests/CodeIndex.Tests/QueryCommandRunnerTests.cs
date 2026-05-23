@@ -152,6 +152,37 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatusJson_ReportsSqlitePageMetrics_Issue1631()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_page_metrics");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App { }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var settings = document.RootElement.GetProperty("db_pragma_settings");
+            Assert.True(settings.GetProperty("page_count").GetInt64() > 0);
+            Assert.True(settings.GetProperty("page_size").GetInt64() > 0);
+            Assert.True(settings.GetProperty("freelist_count").GetInt64() >= 0);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_EmitsVisibilityInJsonAndHumanOutput_Issue1868()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_visibility_output");

@@ -110,6 +110,10 @@ file completion.
   `suggestion_dedup_threshold` controlling the score cutoff.
 - Parallel full-scan extraction with configurable `--parallelism`, incremental refreshes
   with `--files` and `--commits`, plus continuous `--watch` mode.
+- New index databases use SQLite incremental auto-vacuum, `cdidx vacuum` reclaims
+  free pages from existing DBs (including a one-time full `VACUUM` conversion for
+  legacy no-autovacuum DBs), and `status --json` reports page/free-list metrics
+  under `db_pragma_settings`.
 - Post-extraction hooks from `~/.config/cdidx/hooks/*.dll` (or `CDIDX_HOOKS_DIR`)
   can enrich symbols and references before persistence.
 - Exact DB/worktree freshness checks with `status --check`, including an
@@ -312,6 +316,10 @@ script / CI では `--yes`（または `--force`）が必要です。
   MCP 提案は GitHub 送信前に近似重複排除され、しきい値は
   `cdidx mcp --suggestion-dedup-threshold`、`CDIDX_SUGGESTION_DEDUP_THRESHOLD`、
   または `.cdidxrc.json` の `suggestion_dedup_threshold` で調整できます。
+- 新規 index DB は SQLite incremental auto-vacuum を使い、既存 DB は
+  `cdidx vacuum` で free page を回収できます（legacy no-autovacuum DB は
+  初回だけ full `VACUUM` で変換）。`status --json` は `db_pragma_settings`
+  配下に page / freelist metrics を出力します。
 - `--files` と `--commits` による差分更新、および `--watch` による継続更新モード。
 - `~/.config/cdidx/hooks/*.dll`（または `CDIDX_HOOKS_DIR`）の post-extraction hook で、
   永続化前のシンボルと参照を拡張できます。
