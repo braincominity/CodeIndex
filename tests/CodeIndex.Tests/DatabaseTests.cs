@@ -141,6 +141,51 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void Constructor_WritableOpenRejectsNewerUserVersion()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_newer_schema_test_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = $"PRAGMA user_version = {DbContext.CurrentSchemaVersion + 1}";
+                cmd.ExecuteNonQuery();
+            }
+
+            var ex = Assert.Throws<CodeIndexException>(() => new DbContext(dbPath));
+
+            Assert.Equal(CodeIndex.Cli.CommandErrorCodes.SchemaTooNew, ex.Code);
+            Assert.Equal(CodeIndexExceptionCategory.Database, ex.Category);
+            Assert.Equal(dbPath, ex.Path);
+            Assert.Contains("newer cdidx", ex.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("rebuild the index", ex.Hint, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+            {
+                try
+                {
+                    File.Delete(dbPath);
+                }
+                catch (IOException) when (OperatingSystem.IsWindows())
+                {
+                    SqliteConnection.ClearAllPools();
+                    File.Delete(dbPath);
+                }
+                catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
+                {
+                    SqliteConnection.ClearAllPools();
+                    File.Delete(dbPath);
+                }
+            }
+        }
+    }
+
+    [Fact]
     public void TryMigrateForRead_EnforcesForeignKeysAfterAddingReferenceLineColumn()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_legacy_fk_test_{Guid.NewGuid():N}.db");

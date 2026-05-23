@@ -117,6 +117,8 @@ Current stable codes and triggers:
 
 `DbContext` opens writable indexes in WAL mode, sets `PRAGMA synchronous=NORMAL`, and pins `PRAGMA wal_autocheckpoint=1000`. Under WAL, `NORMAL` avoids per-commit fsync pressure during 500-row indexing batches while preserving database consistency after crashes; a crash can lose the last uncheckpointed transaction, but it must not corrupt committed database structure. `DbWriter` also runs `PRAGMA wal_checkpoint(PASSIVE)` after each outer transaction commit so batch boundaries give SQLite a chance to checkpoint without blocking active readers. `status --json` exposes these resolved connection values under `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`) for automation and support diagnostics.
 
+Writable opens also reject databases whose `PRAGMA user_version` contains readiness bits outside the current binary's `CurrentSchemaVersion` mask. Read-only status/query paths may still surface `index_newer_than_reader=true` as a degraded audit signal, but write-capable paths must fail with `E003_SCHEMA_TOO_NEW` so an older cdidx cannot silently rewrite a DB stamped by a newer one.
+
 ## Database schema
 
 ### Tables

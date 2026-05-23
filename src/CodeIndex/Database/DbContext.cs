@@ -218,8 +218,25 @@ public class DbContext : IDisposable
 
         if (!_isReadOnly)
         {
+            EnsureWritableUserVersionSupported(dbPath);
             EnsureForeignKeysEnabled();
         }
+    }
+
+    private void EnsureWritableUserVersionSupported(string dbPath)
+    {
+        var userVersion = GetUserVersion();
+        var unknownBits = userVersion & ~CurrentSchemaVersion;
+        if (unknownBits == 0)
+            return;
+
+        _connection.Dispose();
+        throw new CodeIndexException(
+            code: CommandErrorCodes.SchemaTooNew,
+            category: CodeIndexExceptionCategory.Database,
+            message: $"This DB was written by a newer cdidx schema stamp (user_version {userVersion}); this binary supports up to {CurrentSchemaVersion}.",
+            path: dbPath,
+            hint: "Run with a current cdidx binary or rebuild the index with this version before writing to the database.");
     }
 
     internal static void ExecuteSynchronousPragmaWithFallback(Action<string> execute)
