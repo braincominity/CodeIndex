@@ -16,22 +16,25 @@ public class PostExtractionHookTests
             Directory.CreateDirectory(hooksDir);
             File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
 
-            var runner = PostExtractionHookRunner.Discover(hooksDir);
-            var context = new FileContext(projectRoot, "src/App.cs", Path.Combine(projectRoot, "src", "App.cs"), "csharp");
-            var symbols = new List<SymbolRecord>
             {
-                new() { FileId = 10, Kind = "class", Name = "App", Line = 1, StartLine = 1, EndLine = 1 },
-            };
-            var references = new List<ReferenceRecord>();
+                using var runner = PostExtractionHookRunner.Discover(hooksDir);
+                var context = new FileContext(projectRoot, "src/App.cs", Path.Combine(projectRoot, "src", "App.cs"), "csharp");
+                var symbols = new List<SymbolRecord>
+                {
+                    new() { FileId = 10, Kind = "class", Name = "App", Line = 1, StartLine = 1, EndLine = 1 },
+                };
+                var references = new List<ReferenceRecord>();
 
-            runner.OnSymbolsExtracted(context, symbols);
-            runner.OnReferencesExtracted(context, references);
+                runner.OnSymbolsExtracted(context, symbols);
+                runner.OnReferencesExtracted(context, references);
 
-            Assert.Contains(runner.Hooks, hook => hook.TypeName == typeof(SamplePostExtractionHook).FullName);
-            var synthetic = Assert.Single(symbols, symbol => symbol.Name == "AppDomainTag");
-            Assert.Equal(10, synthetic.FileId);
-            var reference = Assert.Single(references, item => item.SymbolName == "AppDomainTag");
-            Assert.Equal(10, reference.FileId);
+                Assert.Contains(runner.Hooks, hook => hook.TypeName == typeof(SamplePostExtractionHook).FullName);
+                var synthetic = Assert.Single(symbols, symbol => symbol.Name == "AppDomainTag");
+                Assert.Equal(10, synthetic.FileId);
+                var reference = Assert.Single(references, item => item.SymbolName == "AppDomainTag");
+                Assert.Equal(10, reference.FileId);
+            }
+            CollectUnloadedHookAssemblies();
         }
         finally
         {
@@ -49,19 +52,29 @@ public class PostExtractionHookTests
             Directory.CreateDirectory(hooksDir);
             File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
 
-            var runner = PostExtractionHookRunner.Discover(hooksDir);
-            var context = new FileContext(projectRoot, "src/App.cs", Path.Combine(projectRoot, "src", "App.cs"), "csharp");
-            var symbols = new List<SymbolRecord>();
+            {
+                using var runner = PostExtractionHookRunner.Discover(hooksDir);
+                var context = new FileContext(projectRoot, "src/App.cs", Path.Combine(projectRoot, "src", "App.cs"), "csharp");
+                var symbols = new List<SymbolRecord>();
 
-            runner.OnSymbolsExtracted(context, symbols);
+                runner.OnSymbolsExtracted(context, symbols);
 
-            Assert.Contains(symbols, symbol => symbol.Name == "AppDomainTag");
-            Assert.Contains(runner.Diagnostics, diagnostic => diagnostic.TypeName == typeof(ThrowingPostExtractionHook).FullName);
+                Assert.Contains(symbols, symbol => symbol.Name == "AppDomainTag");
+                Assert.Contains(runner.Diagnostics, diagnostic => diagnostic.TypeName == typeof(ThrowingPostExtractionHook).FullName);
+            }
+            CollectUnloadedHookAssemblies();
         }
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    private static void CollectUnloadedHookAssemblies()
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
     }
 }
 

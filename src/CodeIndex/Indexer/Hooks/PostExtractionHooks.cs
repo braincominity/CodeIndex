@@ -18,10 +18,11 @@ public sealed record PostExtractionHookInfo(string Name, string AssemblyPath, st
 
 public sealed record PostExtractionHookDiagnostic(string AssemblyPath, string? TypeName, string Message);
 
-public sealed class PostExtractionHookRunner
+public sealed class PostExtractionHookRunner : IDisposable
 {
     private readonly List<LoadedPostExtractionHook> hooks;
     private readonly ConcurrentQueue<PostExtractionHookDiagnostic> diagnostics = new();
+    private bool disposed;
 
     private PostExtractionHookRunner(List<LoadedPostExtractionHook> hooks)
     {
@@ -44,7 +45,7 @@ public sealed class PostExtractionHookRunner
             Assembly assembly;
             try
             {
-                var loadContext = new AssemblyLoadContext($"cdidx-hook:{Path.GetFileNameWithoutExtension(dllPath)}", isCollectible: false);
+                var loadContext = new AssemblyLoadContext($"cdidx-hook:{Path.GetFileNameWithoutExtension(dllPath)}", isCollectible: true);
                 assembly = loadContext.LoadFromAssemblyPath(Path.GetFullPath(dllPath));
             }
             catch (Exception ex)
@@ -76,7 +77,8 @@ public sealed class PostExtractionHookRunner
 
                     loaded.Add(new LoadedPostExtractionHook(
                         hook,
-                        new PostExtractionHookInfo(type.Name, Path.GetFullPath(dllPath), type.FullName ?? type.Name)));
+                        new PostExtractionHookInfo(type.Name, Path.GetFullPath(dllPath), type.FullName ?? type.Name),
+                        AssemblyLoadContext.GetLoadContext(type.Assembly)));
                 }
                 catch (Exception ex)
                 {
@@ -94,6 +96,8 @@ public sealed class PostExtractionHookRunner
 
     public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
+
         foreach (var hook in hooks)
         {
             try
@@ -110,6 +114,8 @@ public sealed class PostExtractionHookRunner
 
     public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
+
         foreach (var hook in hooks)
         {
             try
@@ -136,5 +142,27 @@ public sealed class PostExtractionHookRunner
             : Path.Combine(home, ".config", "cdidx", "hooks");
     }
 
-    private sealed record LoadedPostExtractionHook(IPostExtractionHook Instance, PostExtractionHookInfo Info);
+    public void Dispose()
+    {
+        if (disposed)
+            return;
+
+        disposed = true;
+        var loadContexts = hooks
+            .Select(hook => hook.LoadContext)
+            .Where(loadContext => loadContext is { IsCollectible: true })
+            .Distinct()
+            .ToList();
+        hooks.Clear();
+
+        foreach (var loadContext in loadContexts)
+        {
+            loadContext!.Unload();
+        }
+    }
+
+    private sealed record LoadedPostExtractionHook(
+        IPostExtractionHook Instance,
+        PostExtractionHookInfo Info,
+        AssemblyLoadContext? LoadContext);
 }
