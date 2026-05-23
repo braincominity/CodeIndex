@@ -1876,6 +1876,36 @@ public static class IndexCommandRunner
             }
             catch (Exception ex)
             {
+                if (ex is FileIndexer.BinaryFileSkippedException)
+                {
+                    warnings++;
+                    warningList.Add(new CliJsonMessage(relPath, ex.Message));
+                    if (!options.Json && !options.Quiet)
+                    {
+                        PauseUpdateSpinnerForConsoleWrite();
+                        ConsoleUi.PrintWarning(ex.Message);
+                        ResumeUpdateSpinnerAfterConsoleWrite();
+                    }
+
+                    if (writer.HasFileAtPath(relPath))
+                    {
+                        DemoteReadinessOnce();
+                        using var deleteTxn = writer.BeginTransaction();
+                        if (writer.DeleteFileByPath(relPath))
+                        {
+                            WriteProjectRootOnce();
+                            deleteTxn.Commit();
+                            removed++;
+                            ftsMutated = true;
+                        }
+                    }
+                    else
+                    {
+                        skipped++;
+                    }
+                    continue;
+                }
+
                 DemoteReadinessOnce();
 
                 errors++;
@@ -3105,6 +3135,10 @@ public static class IndexCommandRunner
                         {
                             throw;
                         }
+                        catch (FileIndexer.BinaryFileSkippedException ex)
+                        {
+                            extractionResults.Add(FullScanFileWorkItem.Skipped(filePath, ex.Message), cancellationToken);
+                        }
                         catch (Exception ex)
                         {
                             extractionResults.Add(FullScanFileWorkItem.Failure(filePath, ex), cancellationToken);
@@ -3134,6 +3168,43 @@ public static class IndexCommandRunner
                 {
                     if (item.Exception != null)
                         throw item.Exception;
+
+                    if (item.Record == null)
+                    {
+                        warnings++;
+                        warningList.Add(new CliJsonMessage(currentJsonIndexFile, item.Warning ?? "File skipped"));
+                        if (!options.Json && !options.Quiet && item.Warning != null)
+                        {
+                            PauseIndexSpinnerForConsoleWrite();
+                            ConsoleUi.PrintWarning(item.Warning);
+                            ResumeIndexSpinnerAfterConsoleWrite();
+                        }
+
+                        if (!options.Rebuild && writer.HasFileAtPath(currentJsonIndexFile))
+                        {
+                            using var deleteTxn = writer.BeginTransaction();
+                            if (writer.DeleteFileByPath(currentJsonIndexFile))
+                            {
+                                WriteProjectRootOnce();
+                                deleteTxn.Commit();
+                            }
+                        }
+                        else
+                        {
+                            skipped++;
+                        }
+                        processed++;
+                        currentJsonIndexFile = null;
+                        ThrowIfFullScanCancelled(processed, files.Count);
+                        ReportJsonIndexProgressIfNeeded();
+                        if (!options.Json && !options.Quiet)
+                        {
+                            PauseIndexSpinnerForConsoleWrite();
+                            ConsoleUi.PrintProgress(processed, files.Count);
+                            ResumeIndexSpinnerAfterConsoleWrite();
+                        }
+                        continue;
+                    }
 
                     var record = item.Record!;
                     if (item.Warning != null && !options.Json && !options.Quiet)
@@ -4123,6 +4194,9 @@ public static class IndexCommandRunner
 
         public static FullScanFileWorkItem Failure(string filePath, Exception exception)
             => new(filePath, null, null, null, null, null, null, null, null, exception);
+
+        public static FullScanFileWorkItem Skipped(string filePath, string warning)
+            => new(filePath, null, null, null, warning, null, null, null, null, null);
     }
 
     private sealed record FoldOnlyRemediation(

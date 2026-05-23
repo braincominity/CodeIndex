@@ -30,6 +30,38 @@ public class IndexCommandRunnerTests
         Assert.Null(options.ProjectPath);
     }
 
+    [Fact]
+    public void Run_NullByteFile_SkipsWithoutPersistingPartialRows()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var filePath = Path.Combine(projectRoot, "binary.cs");
+            var bytes = new byte[(3 * 1024 * 1024) + 1];
+            var prefix = System.Text.Encoding.UTF8.GetBytes("public class Polluted { public void Run() { } }\n");
+            Array.Copy(prefix, bytes, prefix.Length);
+            bytes[^1] = 0;
+            File.WriteAllBytes(filePath, bytes);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(0, CountRows(dbPath, "files"));
+            Assert.Equal(0, CountRows(dbPath, "chunks"));
+            Assert.Equal(0, CountRows(dbPath, "symbols"));
+            Assert.Equal(0, CountRows(dbPath, "symbol_references"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
     // `cdidx index . --rebild` should not just say "unknown option"; surface the closest accepted
     // flag (`--rebuild`) so MCP callers can self-correct without re-reading docs (#1582).
     // `cdidx index . --rebild` のような単純なミスタイプから `--rebuild` を提案できることを確認する (#1582)。
@@ -7205,6 +7237,15 @@ public class IndexCommandRunnerTests
                 Console.SetOut(originalOut);
             }
         }
+    }
+
+    private static int CountRows(string dbPath, string tableName)
+    {
+        using var connection = new SqliteConnection($"Data Source={dbPath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT COUNT(*) FROM {tableName}";
+        return Convert.ToInt32(command.ExecuteScalar());
     }
 
     private (int ExitCode, JsonElement Json, string Stderr) RunAndCaptureJsonWithStderr(string[] args)
