@@ -1714,13 +1714,24 @@ public static class IndexCommandRunner
                         && (record.Lang != "sql" || sqlGraphContractMatchesCurrent));
                 if (existingId != null)
                 {
-                    writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
-                    writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path);
+                    using var purgeTxn = writer.BeginTransaction();
+                    var purged = writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum)
+                        + writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path);
+                    if (purged > 0)
+                    {
+                        DemoteReadinessOnce();
+                        WriteProjectRootOnce();
+                        purgeTxn.Commit();
+                        removed += purged;
+                        ftsMutated = true;
+                    }
                     skipped++;
                     if (options.Verbose && !options.Json && !options.Quiet)
                     {
                         PauseUpdateSpinnerForConsoleWrite();
-                        Console.WriteLine($"  [SKIP] {relPath} (unchanged)");
+                        Console.WriteLine(purged > 0
+                            ? $"  [SKIP] {relPath} (unchanged; purged {purged:N0} stale renamed path(s))"
+                            : $"  [SKIP] {relPath} (unchanged)");
                         ResumeUpdateSpinnerAfterConsoleWrite();
                     }
                     continue;
