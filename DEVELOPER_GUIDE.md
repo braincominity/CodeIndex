@@ -62,6 +62,8 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
 
 Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
 
+Ignore file parsing intentionally follows Git-compatible glob behavior for bracket expressions: both `[!a]` and `[^a]` are treated as negated character classes when `!` or `^` appears immediately after `[`. A caret elsewhere in the class is literal (`[a^b]`), and a literal leading caret must be escaped (`[\^a]`).
+
 ### CLI recoverable error format
 
 Recoverable command errors in human output use the canonical line shape below. Include only non-null lines, but every error must include a recovery hint:
@@ -1640,6 +1642,8 @@ CI で `NU1004 The packages lock file is inconsistent with the project dependenc
 ```
 
 `--files` / `--commits` の部分更新も、フルスキャンと同じパスフィルタを再利用する。commit 単位更新に `.gitignore` または `.cdidxignore` の変更が含まれる場合、`IndexCommandRunner` は newly ignored file を安全に purge するため自動でフルスキャンへフォールバックする。malformed な ignore 行は走査エラーとして報告し、その行だけをスキップして index 全体は継続する。Windows では Hidden または System 属性が付いたファイルとディレクトリを言語検出前に拒否する。プロジェクト所有のソースを索引したい場合、ignore ルールでは再包含できないため先にそれらの属性を外す。
+
+ignore file parsing は bracket expression について Git 互換の glob 挙動に合わせる。`!` または `^` が `[` の直後にある場合、`[!a]` と `[^a]` はどちらも negated character class として扱う。class の途中にある caret は literal（`[a^b]`）で、先頭 caret を literal にしたい場合は escape する（`[\^a]`）。
 
 ### C# / .NET integration
 
