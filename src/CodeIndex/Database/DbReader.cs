@@ -102,6 +102,7 @@ public partial class DbReader
     // true。true なら reader は legacy ヒューリスティックではなく列を使う。false の DB では
     // 従来どおり `signature LIKE '%: %'` にフォールバックする。
     internal readonly bool _csharpMetadataTargetReady;
+    internal readonly string? _csharpMetadataTargetDegradedReason;
     internal readonly bool _sqlGraphContractCurrent;
     // Tracks which languages have authoritative cross-file hotspot family semantics.
     // Mixed legacy/update states can therefore degrade only the affected language instead of
@@ -428,11 +429,18 @@ public partial class DbReader
             TryGetMetaString(_conn, DbContext.CSharpSymbolNameContractVersionMetaKey),
             DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
             StringComparison.Ordinal);
-        _csharpMetadataTargetReady = _symbolColumns.Contains("is_metadata_target")
-            && string.Equals(
-                TryGetMetaString(_conn, DbContext.GetMetadataTargetVersionMetaKey("csharp")),
-                DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                StringComparison.Ordinal);
+        var hasMetadataTargetColumn = _symbolColumns.Contains("is_metadata_target");
+        var metadataTargetStampCurrent = string.Equals(
+            TryGetMetaString(_conn, DbContext.GetMetadataTargetVersionMetaKey("csharp")),
+            DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            StringComparison.Ordinal);
+        _csharpMetadataTargetReady = hasMetadataTargetColumn
+            && metadataTargetStampCurrent;
+        _csharpMetadataTargetDegradedReason = _csharpMetadataTargetReady
+            ? null
+            : !hasMetadataTargetColumn
+                ? DegradationReasonCodes.CSharpMetadataTargetMissingColumn
+                : DegradationReasonCodes.CSharpMetadataTargetStampOutdated;
         _sqlGraphContractCurrent = string.Equals(
             TryGetMetaString(_conn, DbContext.SqlGraphContractVersionMetaKey),
             DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
