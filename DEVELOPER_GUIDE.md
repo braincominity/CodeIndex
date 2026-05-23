@@ -22,6 +22,8 @@ For test suite structure, shared helpers, and test-writing conventions, see [TES
 
 CI (`.github/workflows/dotnet.yml`, `release.yml`, `codeql.yml`) restores the solution with `--locked-mode`, so any drift between the committed lock files and the resolution graph fails the build instead of slipping into artifacts. Local development restores normally; the lock file is only enforced in CI.
 
+The normal build/test workflow also runs `dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive --no-restore` after locked restore and fails on any High or Critical NuGet advisory in direct or transitive runtime packages. Dependabot is configured for weekly NuGet and GitHub Actions update PRs in `.github/dependabot.yml`, so security fixes and routine dependency/action bumps are proposed before they become release surprises.
+
 The release `dotnet publish` (per-RID) and `dotnet pack` (NuGet packaging) steps intentionally do **not** set `RestoreLockedMode=true`. Those steps run runtime-specific restores that legitimately add lock entries that did not exist at solution-restore time (e.g. `net8.0/<rid>` runtime sections, `Microsoft.NET.ILLink.Tasks` for trimming). They still consume locked versions because `RestorePackagesWithLockFile=true` from `Directory.Build.props` forces every restore on the machine to resolve through the lock file. The supply-chain guarantee for `Microsoft.Data.Sqlite` and its `SQLitePCLRaw.*` graph is enforced by the solution-level locked restore that runs first.
 
 When you intentionally update a dependency (or add a new direct `PackageReference`), regenerate the lock files locally and commit the diff in the same change:
