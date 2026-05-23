@@ -442,7 +442,7 @@ public partial class McpServer : IDisposable
                         _concurrencyGate.Release();
                     }
 
-                    await transport.WriteFrameAsync(response, loopToken).ConfigureAwait(false);
+                    await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
 
                     // `notifications/shutdown` flips `_running` inside `HandleMessage`; exit the loop
                     // immediately so a subsequent slow `ReadFrameAsync` does not extend the lifetime
@@ -492,7 +492,7 @@ public partial class McpServer : IDisposable
                 await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
                 try
                 {
-                    await transport.WriteFrameAsync(response, loopToken).ConfigureAwait(false);
+                    await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -522,7 +522,7 @@ public partial class McpServer : IDisposable
                     await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
                     try
                     {
-                        await transport.WriteFrameAsync(response, loopToken).ConfigureAwait(false);
+                        await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -561,6 +561,22 @@ public partial class McpServer : IDisposable
             {
                 Console.Error.WriteLine(BuildResponseWriteErrorLog(ex.Message));
             }
+        }
+    }
+
+    private static async Task WriteFrameSafelyAsync(IMcpTransport transport, string? response, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await transport.WriteFrameAsync(response, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            Console.Error.WriteLine(BuildResponseWriteErrorLog("write operation was canceled"));
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            Console.Error.WriteLine(BuildResponseWriteErrorLog(ex.Message));
         }
     }
 

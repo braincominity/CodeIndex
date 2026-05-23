@@ -1382,6 +1382,62 @@ public class McpServerTests : IDisposable
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
+    private sealed class ThrowingWriteTransport : IMcpTransport
+    {
+        private readonly Queue<string?> _frames;
+
+        public ThrowingWriteTransport(string name, params string?[] frames)
+        {
+            Name = name;
+            _frames = new Queue<string?>(frames);
+            _frames.Enqueue(null);
+        }
+
+        public string Name { get; }
+        public string Endpoint => "throwing-write";
+        public int WriteCount { get; private set; }
+
+        public Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(_frames.Count == 0 ? null : _frames.Dequeue());
+        }
+
+        public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
+        {
+            WriteCount++;
+            throw new IOException("pipe closed");
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    [Fact]
+    public async Task RunAsync_SequentialTransportWriteFailure_DoesNotThrow()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        var transport = new ThrowingWriteTransport(
+            "throwing-sequential",
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""");
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        Assert.Equal(1, transport.WriteCount);
+    }
+
+    [Fact]
+    public async Task RunAsync_StdioTransportWriteFailure_DoesNotThrow()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        var transport = new ThrowingWriteTransport(
+            "stdio",
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""");
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        Assert.Equal(1, transport.WriteCount);
+    }
+
     [Fact]
     public void Ping_ReturnsEmptyResult()
     {
