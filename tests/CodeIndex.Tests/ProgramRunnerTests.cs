@@ -55,15 +55,16 @@ public class ProgramRunnerTests
     {
         var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_{Guid.NewGuid():N}");
         Directory.CreateDirectory(logDir);
-        var originalForce = Environment.GetEnvironmentVariable("CDIDX_FORCE_GLOBAL_TOOL_LOG");
-        var originalDisable = Environment.GetEnvironmentVariable("CDIDX_DISABLE_PERSISTENT_LOG");
-        var originalLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+            "CDIDX_DISABLE_PERSISTENT_LOG",
+            "CDIDX_GLOBAL_TOOL_LOG_DIR");
 
         try
         {
-            Environment.SetEnvironmentVariable("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
-            Environment.SetEnvironmentVariable("CDIDX_DISABLE_PERSISTENT_LOG", null);
-            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+            env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
                 ["definitely-not-a-command"],
@@ -82,9 +83,6 @@ public class ProgramRunnerTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CDIDX_FORCE_GLOBAL_TOOL_LOG", originalForce);
-            Environment.SetEnvironmentVariable("CDIDX_DISABLE_PERSISTENT_LOG", originalDisable);
-            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", originalLogDir);
             TestProjectHelper.DeleteDirectory(logDir);
         }
     }
@@ -94,9 +92,10 @@ public class ProgramRunnerTests
     {
         var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_prune_{Guid.NewGuid():N}");
         Directory.CreateDirectory(logDir);
-        var originalForce = Environment.GetEnvironmentVariable("CDIDX_FORCE_GLOBAL_TOOL_LOG");
-        var originalDisable = Environment.GetEnvironmentVariable("CDIDX_DISABLE_PERSISTENT_LOG");
-        var originalLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+            "CDIDX_DISABLE_PERSISTENT_LOG",
+            "CDIDX_GLOBAL_TOOL_LOG_DIR");
 
         try
         {
@@ -106,9 +105,9 @@ public class ProgramRunnerTests
                 File.WriteAllText(Path.Combine(logDir, $"stderr-{date:yyyyMMdd}.log"), $"old {i}");
             }
 
-            Environment.SetEnvironmentVariable("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
-            Environment.SetEnvironmentVariable("CDIDX_DISABLE_PERSISTENT_LOG", null);
-            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+            env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
 
             var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
                 ["definitely-not-a-command"],
@@ -129,9 +128,6 @@ public class ProgramRunnerTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CDIDX_FORCE_GLOBAL_TOOL_LOG", originalForce);
-            Environment.SetEnvironmentVariable("CDIDX_DISABLE_PERSISTENT_LOG", originalDisable);
-            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", originalLogDir);
             TestProjectHelper.DeleteDirectory(logDir);
         }
     }
@@ -141,15 +137,16 @@ public class ProgramRunnerTests
     {
         var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_disabled_{Guid.NewGuid():N}");
         Directory.CreateDirectory(logDir);
-        var originalForce = Environment.GetEnvironmentVariable("CDIDX_FORCE_GLOBAL_TOOL_LOG");
-        var originalDisable = Environment.GetEnvironmentVariable("CDIDX_DISABLE_PERSISTENT_LOG");
-        var originalLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+            "CDIDX_DISABLE_PERSISTENT_LOG",
+            "CDIDX_GLOBAL_TOOL_LOG_DIR");
 
         try
         {
-            Environment.SetEnvironmentVariable("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
-            Environment.SetEnvironmentVariable("CDIDX_DISABLE_PERSISTENT_LOG", "1");
-            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+            env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", "1");
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
                 ["definitely-not-a-command"],
@@ -162,9 +159,6 @@ public class ProgramRunnerTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CDIDX_FORCE_GLOBAL_TOOL_LOG", originalForce);
-            Environment.SetEnvironmentVariable("CDIDX_DISABLE_PERSISTENT_LOG", originalDisable);
-            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", originalLogDir);
             TestProjectHelper.DeleteDirectory(logDir);
         }
     }
@@ -179,15 +173,16 @@ public class ProgramRunnerTests
     {
         var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_disabled_bool_{Guid.NewGuid():N}");
         Directory.CreateDirectory(logDir);
-        var originalForce = Environment.GetEnvironmentVariable("CDIDX_FORCE_GLOBAL_TOOL_LOG");
-        var originalDisable = Environment.GetEnvironmentVariable("CDIDX_DISABLE_PERSISTENT_LOG");
-        var originalLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+            "CDIDX_DISABLE_PERSISTENT_LOG",
+            "CDIDX_GLOBAL_TOOL_LOG_DIR");
 
         try
         {
-            Environment.SetEnvironmentVariable("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
-            Environment.SetEnvironmentVariable("CDIDX_DISABLE_PERSISTENT_LOG", disabledValue);
-            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+            env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", disabledValue);
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
                 ["definitely-not-a-command"],
@@ -200,9 +195,6 @@ public class ProgramRunnerTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CDIDX_FORCE_GLOBAL_TOOL_LOG", originalForce);
-            Environment.SetEnvironmentVariable("CDIDX_DISABLE_PERSISTENT_LOG", originalDisable);
-            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", originalLogDir);
             TestProjectHelper.DeleteDirectory(logDir);
         }
     }
