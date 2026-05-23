@@ -93,6 +93,6 @@ public class DbRecoveryTests : IDisposable
 
         _disposed = true;
         _sqlitePoolOwner.Dispose();
-        TestProjectHelper.DeleteFile(_dbPath);
+        try { TestProjectHelper.DeleteFile(_dbPath); } catch { }
     }
 }

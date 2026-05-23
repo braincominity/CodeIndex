@@ -548,6 +548,6 @@ public class ConcurrencyTests : IDisposable
         _disposed = true;
         _db.Dispose();
         _sqlitePoolOwner.Dispose();
-        TestProjectHelper.DeleteFile(_dbPath);
+        try { TestProjectHelper.DeleteFile(_dbPath); } catch { }
     }
 }
