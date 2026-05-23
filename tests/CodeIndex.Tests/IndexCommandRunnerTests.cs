@@ -1645,6 +1645,64 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateFiles_RemovesOldPathWhenExtensionChanges()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var oldPath = Path.Combine(projectRoot, "foo.py");
+            var newPath = Path.Combine(projectRoot, "foo.md");
+            File.WriteAllText(oldPath, "# Title\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--files", "foo.py", "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(IndexedFileExists(projectRoot, "foo.py"));
+
+            File.Move(oldPath, newPath);
+            File.AppendAllText(newPath, "Updated during rename\n");
+            File.SetLastWriteTimeUtc(newPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (updateExitCode, _) = RunAndCaptureJson([projectRoot, "--files", "foo.md", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.True(IndexedFileExists(projectRoot, "foo.md"));
+            Assert.False(IndexedFileExists(projectRoot, "foo.py"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_RemovesOldPathWhenExtensionChangesToUnsupported()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var oldPath = Path.Combine(projectRoot, "foo.py");
+            var newPath = Path.Combine(projectRoot, "foo.bin");
+            File.WriteAllText(oldPath, "print('hello')\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--files", "foo.py", "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(IndexedFileExists(projectRoot, "foo.py"));
+
+            File.Move(oldPath, newPath);
+
+            var (updateExitCode, _) = RunAndCaptureJson([projectRoot, "--files", "foo.bin", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.False(IndexedFileExists(projectRoot, "foo.py"));
+            Assert.False(IndexedFileExists(projectRoot, "foo.bin"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_FailedFirstMutation_DemotesReadinessBeforeRollback()
     {
         var projectRoot = CreateTempProject();
@@ -7505,6 +7563,16 @@ public class IndexCommandRunnerTests
               AND r.reference_kind = 'implicit_implementation'
               AND rl.context = 'public static Money Parse(string s) => new();'";
         return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    private static bool IndexedFileExists(string projectRoot, string relativePath)
+    {
+        using var conn = OpenNonPoolingConnection(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM files WHERE path = @path LIMIT 1";
+        cmd.Parameters.AddWithValue("@path", relativePath);
+        return cmd.ExecuteScalar() != null;
     }
 
     private static void DeleteIndexedProjectRootMetadata(string dbPath)

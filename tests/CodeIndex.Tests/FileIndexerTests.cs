@@ -1490,6 +1490,36 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_HandlesGitIgnoreWhitespaceLikeGit()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(
+                Path.Combine(tempDir, ".gitignore"),
+                "  #*.py\n  *.py\n*.cs\t\n");
+            File.WriteAllText(Path.Combine(tempDir, "  #x.py"), "print('ignored because leading-space # is literal')");
+            File.WriteAllText(Path.Combine(tempDir, "a.py"), "print('kept because leading spaces are literal')");
+            File.WriteAllText(Path.Combine(tempDir, "  a.py"), "print('ignored by leading-space pattern')");
+            File.WriteAllText(Path.Combine(tempDir, "a.cs"), "public class IgnoredAfterTrailingTabTrim { }");
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('kept')");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "a.py", "keep.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_RespectsGlobstarMiddlePatternWithZeroOrMoreDirectories()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");

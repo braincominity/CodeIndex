@@ -13,6 +13,7 @@ public class DbWriter
 {
     private readonly SqliteConnection _conn;
     private readonly PreparedCommandCache? _commandCache;
+    private readonly Action? _markWriteWork;
     internal static Action? FoldBackfillRowUpdatedForTesting { get; set; }
     private const int BatchSize = 500;
     private const int MaxSqlVariables = 999;
@@ -34,7 +35,7 @@ public class DbWriter
     internal SqliteConnection Connection => _conn;
 
     public DbWriter(SqliteConnection connection)
-        : this(connection, commandCache: null)
+        : this(connection, commandCache: null, markWriteWork: null)
     {
     }
 
@@ -50,14 +51,16 @@ public class DbWriter
     public DbWriter(DbContext context)
         : this(
             (context ?? throw new ArgumentNullException(nameof(context))).Connection,
-            context.IsReadOnly ? null : context.PreparedCommands)
+            context.IsReadOnly ? null : context.PreparedCommands,
+            context.MarkWriteWork)
     {
     }
 
-    internal DbWriter(SqliteConnection connection, PreparedCommandCache? commandCache)
+    internal DbWriter(SqliteConnection connection, PreparedCommandCache? commandCache, Action? markWriteWork)
     {
         _conn = connection;
         _commandCache = commandCache;
+        _markWriteWork = markWriteWork;
     }
 
     /// <summary>
@@ -160,10 +163,14 @@ public class DbWriter
             if (_transaction != null)
             {
                 _transaction.Commit();
+                _writer._markWriteWork?.Invoke();
                 _writer.RunPassiveWalCheckpoint();
             }
             else
+            {
                 ExecuteSql($"RELEASE SAVEPOINT {_savepointName}");
+                _writer._markWriteWork?.Invoke();
+            }
             // Set _committed after success so Dispose() will rollback if Commit/Release throws
             // コミット/リリース成功後にフラグを立て、失敗時はDispose()でロールバックされるようにする
             _committed = true;
@@ -227,6 +234,7 @@ public class DbWriter
             using var cmd = _conn!.CreateCommand();
             cmd.CommandText = sql;
             cmd.ExecuteNonQuery();
+            _writer._markWriteWork?.Invoke();
         }
     }
 
@@ -271,8 +279,8 @@ public class DbWriter
               END
               WHERE path = @path
                 AND (
-                    (modified = @modified AND (@size IS NULL OR size = @size))
-                    OR (@checksum IS NOT NULL AND checksum = @checksum)
+                    (@checksum IS NOT NULL AND checksum = @checksum)
+                    OR (@checksum IS NULL AND modified = @modified AND (@size IS NULL OR size = @size))
                 )
               RETURNING id",
             static c =>
@@ -404,6 +412,78 @@ public class DbWriter
         txn?.Commit();
 
         return staleIds.Count;
+    }
+
+    /// <summary>
+    /// Purge stale DB rows that look like an extension-changing rename in the same directory.
+    /// 同一ディレクトリ・同一stemの拡張子変更リネームに見える古いDB行を削除する。
+    /// </summary>
+    public int PurgeStaleFilesSharingDirectoryAndStem(string projectRoot, string retainedRelativePath)
+    {
+        var retainedDirectory = GetRelativeDirectory(retainedRelativePath);
+        var retainedStem = GetRelativeFileStem(retainedRelativePath);
+        if (retainedStem.Length == 0)
+            return 0;
+
+        var staleIds = new List<long>();
+        using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT id, path FROM files WHERE path <> @path";
+            cmd.Parameters.AddWithValue("@path", retainedRelativePath);
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var id = reader.GetInt64(0);
+                var relativePath = reader.GetString(1);
+                if (!string.Equals(GetRelativeDirectory(relativePath), retainedDirectory, StringComparison.Ordinal)
+                    || !string.Equals(GetRelativeFileStem(relativePath), retainedStem, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var absolutePath = Path.Combine(projectRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                if (!File.Exists(LongPath.EnsureWindowsPrefix(absolutePath)))
+                    staleIds.Add(id);
+            }
+        }
+
+        return DeleteStaleFileIds(staleIds);
+    }
+
+    private int DeleteStaleFileIds(IReadOnlyCollection<long> staleIds)
+    {
+        if (staleIds.Count == 0)
+            return 0;
+
+        using var txn = !IsInTransaction() ? BeginTransaction() : null;
+        using var deleteCmd = _conn.CreateCommand();
+        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
+        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
+        deleteCmd.Prepare();
+        foreach (var id in staleIds)
+        {
+            pId.Value = id;
+            deleteCmd.ExecuteNonQuery();
+        }
+        txn?.Commit();
+
+        return staleIds.Count;
+    }
+
+    private static string GetRelativeDirectory(string relativePath)
+    {
+        var normalized = relativePath.Replace('\\', '/');
+        var slashIndex = normalized.LastIndexOf('/');
+        return slashIndex < 0 ? string.Empty : normalized[..slashIndex];
+    }
+
+    private static string GetRelativeFileStem(string relativePath)
+    {
+        var normalized = relativePath.Replace('\\', '/');
+        var slashIndex = normalized.LastIndexOf('/');
+        var fileName = slashIndex < 0 ? normalized : normalized[(slashIndex + 1)..];
+        var dotIndex = fileName.LastIndexOf('.');
+        return dotIndex <= 0 ? fileName : fileName[..dotIndex];
     }
 
     /// <summary>

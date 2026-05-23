@@ -10,6 +10,10 @@ dotnet test
 dotnet run --project src/CodeIndex -- <command> [options]
 ```
 
+Development, CI, and NuGet tool packaging target `net8.0`. Use a .NET 8.x SDK
+for supported and tested builds; newer major .NET releases are outside the
+supported/tested matrix until CI covers them.
+
 For test suite structure, shared helpers, and test-writing conventions, see [TESTING_GUIDE.md](TESTING_GUIDE.md).
 
 ### NuGet lock files
@@ -62,7 +66,11 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
 
 Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. Within each directory, `FileIndexer` loads `.gitignore` before `.cdidxignore`, appends both rule sets in that order, and honors later `!` patterns as re-includes. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
 
-Ignore file parsing intentionally follows Git-compatible glob behavior for bracket expressions: both `[!a]` and `[^a]` are treated as negated character classes when `!` or `^` appears immediately after `[`. A caret elsewhere in the class is literal (`[a^b]`), and a literal leading caret must be escaped (`[\^a]`).
+### Ignore file parsing
+
+`.gitignore` and `.cdidxignore` parsing follows Git's whitespace rules for pattern lines: leading spaces and tabs are literal pattern characters, `#` starts a comment only when it is the first unescaped character, and unescaped trailing spaces or tabs are trimmed. Escape a trailing space or tab with `\` when the whitespace is part of the filename pattern.
+
+Bracket expressions follow Git-compatible glob behavior: both `[!a]` and `[^a]` are treated as negated character classes when `!` or `^` appears immediately after `[`. A caret elsewhere in the class is literal (`[a^b]`), and a literal leading caret must be escaped (`[\^a]`).
 
 ### CLI recoverable error format
 
@@ -1590,6 +1598,10 @@ dotnet test
 dotnet run --project src/CodeIndex -- <command> [options]
 ```
 
+開発、CI、NuGet ツールのパッケージングは `net8.0` を対象にしています。
+サポート済みかつテスト済みのビルドには .NET 8.x SDK を使ってください。
+CI で対象になるまでは、より新しいメジャー .NET リリースはサポート・テスト対象外です。
+
 テストスイートの構成、共有ヘルパー、テスト作法については [TESTING_GUIDE.md#テストガイド](TESTING_GUIDE.md#テストガイド) を参照してください。
 
 ### NuGet lock ファイル
@@ -1645,7 +1657,11 @@ CI で `NU1004 The packages lock file is inconsistent with the project dependenc
 
 `--files` / `--commits` の部分更新も、フルスキャンと同じパスフィルタを再利用する。各ディレクトリでは `FileIndexer` が `.gitignore` を `.cdidxignore` より先に読み、この順序でルールを追加し、後続の `!` パターンを再包含として扱う。commit 単位更新に `.gitignore` または `.cdidxignore` の変更が含まれる場合、`IndexCommandRunner` は newly ignored file を安全に purge するため自動でフルスキャンへフォールバックする。malformed な ignore 行は走査エラーとして報告し、その行だけをスキップして index 全体は継続する。Windows では Hidden または System 属性が付いたファイルとディレクトリを言語検出前に拒否する。プロジェクト所有のソースを索引したい場合、ignore ルールでは再包含できないため先にそれらの属性を外す。
 
-ignore file parsing は bracket expression について Git 互換の glob 挙動に合わせる。`!` または `^` が `[` の直後にある場合、`[!a]` と `[^a]` はどちらも negated character class として扱う。class の途中にある caret は literal（`[a^b]`）で、先頭 caret を literal にしたい場合は escape する（`[\^a]`）。
+### ignore ファイルの解析
+
+`.gitignore` と `.cdidxignore` の pattern 行は Git の空白規則に合わせて解析する。行頭の space / tab は pattern の literal 文字として扱い、`#` は unescaped な先頭文字のときだけ comment を開始する。未エスケープの末尾 space / tab は削除するため、ファイル名 pattern の一部として末尾空白を含めたい場合は `\` で escape する。
+
+bracket expression は Git 互換の glob 挙動に合わせる。`!` または `^` が `[` の直後にある場合、`[!a]` と `[^a]` はどちらも negated character class として扱う。class の途中にある caret は literal（`[a^b]`）で、先頭 caret を literal にしたい場合は escape する（`[\^a]`）。
 
 ### C# / .NET integration
 
