@@ -123,7 +123,7 @@ file completion.
   `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`,
   `index_writer_version`, `index_newer_than_reader`,
   `index_newer_than_reader_reason`, `unknown_extension_file_count`,
-  `path_case_sensitive`, `db_pragma_settings`, `hooks`, `stale_after_seconds`,
+  `path_case_sensitive`, `mac_profile`, `db_pragma_settings`, `hooks`, `stale_after_seconds`,
   `index_age_seconds`, `degraded_reason`, `recommended_action`, and `alternative_action`; keep this
   list synchronized with `DEVELOPER_GUIDE.md` and `AGENT_GUIDE.md`.
   `hotspot_family_degraded_reason` distinguishes legacy DBs without hotspot-family
@@ -310,7 +310,7 @@ script / CI では `--yes`（または `--force`）が必要です。
   `indexed_head_branch`、`indexed_head_timestamp`、`commits_ahead_of_indexed_head`、
   `index_writer_version`、`index_newer_than_reader`、
   `index_newer_than_reader_reason`、`unknown_extension_file_count`、
-  `path_case_sensitive`、`db_pragma_settings`、`hooks`、`stale_after_seconds`、
+  `path_case_sensitive`、`mac_profile`、`db_pragma_settings`、`hooks`、`stale_after_seconds`、
   `index_age_seconds`、`degraded_reason`、`recommended_action`、`alternative_action` を対象にします。
   この一覧は `DEVELOPER_GUIDE.md` と `AGENT_GUIDE.md` に同期してください。
   `hotspot_family_degraded_reason` は、hotspot-family 未対応の legacy DB
