@@ -333,6 +333,51 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void Constructor_ConfiguresConnectionPerformancePragmas()
+    {
+        Assert.Equal(-DbContext.DefaultCacheSizeKb, ExecuteScalarLong("PRAGMA cache_size"));
+        Assert.Equal(2L, ExecuteScalarLong("PRAGMA temp_store"));
+        if (Environment.Is64BitProcess)
+            Assert.Equal(DbContext.DefaultMmapSizeBytes, ExecuteScalarLong("PRAGMA mmap_size"));
+    }
+
+    [Fact]
+    public void Constructor_UsesSqlitePerformanceEnvironmentOverrides()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_perf_pragmas_{Guid.NewGuid():N}.db");
+            var previousCacheSize = Environment.GetEnvironmentVariable(DbContext.CacheSizeEnvironmentVariable);
+            var previousMmapSize = Environment.GetEnvironmentVariable(DbContext.MmapSizeEnvironmentVariable);
+            try
+            {
+                Environment.SetEnvironmentVariable(DbContext.CacheSizeEnvironmentVariable, "4096");
+                Environment.SetEnvironmentVariable(DbContext.MmapSizeEnvironmentVariable, "1048576");
+
+                using var db = new DbContext(dbPath);
+
+                Assert.Equal(-4096L, ExecuteScalarLong(db.Connection, "PRAGMA cache_size"));
+                if (Environment.Is64BitProcess)
+                    Assert.Equal(1048576L, ExecuteScalarLong(db.Connection, "PRAGMA mmap_size"));
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(DbContext.CacheSizeEnvironmentVariable, previousCacheSize);
+                Environment.SetEnvironmentVariable(DbContext.MmapSizeEnvironmentVariable, previousMmapSize);
+                SqliteConnection.ClearAllPools();
+                if (File.Exists(dbPath))
+                    File.Delete(dbPath);
+            }
+        }
+    }
+
+    [Fact]
+    public void Constructor_SetsCodeIndexApplicationId()
+    {
+        Assert.Equal(DbContext.ApplicationId, ExecuteScalarLong("PRAGMA application_id"));
+    }
+
+    [Fact]
     public void UpsertFile_InsertsAndReturnsId()
     {
         var file = new FileRecord
@@ -451,6 +496,30 @@ public class DatabaseTests : IDisposable
         // タイムスタンプもチェックサムも異なるならnullを返す
         var id2 = _writer.GetUnchangedFileId("src/checksum.py", newModified.AddHours(1), "different_checksum");
         Assert.Null(id2);
+    }
+
+    [Fact]
+    public void GetUnchangedFileId_UpdatesGeneratedMarkerOnReusableRows()
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var checksum = "generated-checksum";
+        _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/generated.g.cs",
+            Lang = "csharp",
+            Size = 50,
+            Lines = 2,
+            Modified = modified,
+            Checksum = checksum,
+            Generated = false,
+        });
+
+        var id = _writer.GetUnchangedFileId("src/generated.g.cs", modified, checksum, language: "csharp", generated: true);
+
+        Assert.NotNull(id);
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT generated FROM files WHERE path = 'src/generated.g.cs'";
+        Assert.Equal(1L, cmd.ExecuteScalar());
     }
 
     [Fact]
@@ -1253,8 +1322,11 @@ public class DatabaseTests : IDisposable
     }
 
     private long ExecuteScalarLong(string sql)
+        => ExecuteScalarLong(_db.Connection, sql);
+
+    private static long ExecuteScalarLong(SqliteConnection connection, string sql)
     {
-        using var cmd = _db.Connection.CreateCommand();
+        using var cmd = connection.CreateCommand();
         cmd.CommandText = sql;
         return Convert.ToInt64(cmd.ExecuteScalar());
     }

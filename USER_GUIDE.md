@@ -876,6 +876,7 @@ cdidx report --output report.tgz --json
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | Pass a query literal explicitly, useful when the query starts with `-`. Query commands except `find` also accept `-- <query>` as a one-token query escape while continuing to parse later options. |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude glob-style path patterns. `*` and `?` are wildcards (repeatable) |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude likely test files and prefer production code |
+| `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots` | Include files detected as generated code; generated files are excluded from query results by default |
 | `--snippet-lines <n>` | `search` | Search snippet length for human-readable output and JSON/MCP snippets (default: 8, max: 20) |
 | `--snippet-focus <leftmost\|quality\|proximity>` | `search` | Choose how long search-result lines pick the visible focus when clamped. `quality` (default) prefers full-query matches and strong tokens; `proximity` favors dense multi-token clusters; `leftmost` keeps legacy earliest-match behavior. |
 | `--max-line-width <n>` | `search`, `references`, `find`, `excerpt`, `inspect` | Clamp very long single-line snippet/reference/excerpt payloads around the relevant match (`0` disables clamping; default: 512, max: 4096) |
@@ -1423,8 +1424,8 @@ If the checkout changed because of `git reset`, `git rebase`, `git commit --amen
 - Use `languages` as the source of truth for canonical `--lang` values and current symbol / graph support. Avoid relying on memorized per-language extraction details in prompts or agent instructions; support changes over time and the CLI reports `graph_supported`, `graph_support_reason`, and related trust metadata where it matters.
 - When you have a likely symbol name, run `symbols` first to resolve candidates. Add `--exact-name` once the intended symbol is known. Use `outline` for a single file's structure and `inspect` when you want bundled definition, reference, caller, and callee context in one request.
 - Use `definition --body` for implementation text, then `references`, `callers`, `callees`, or `impact` for graph questions in supported languages. Prefer `--exact` after a candidate has been resolved so names such as `Run` do not expand to `RunAsync` or `RunImpact`. Treat graph fallback and degraded metadata as guidance about confidence, not as decoration.
-- Use `search` for raw text, comments, strings, option names, generated code, or languages where the current `languages` output says structured graph support is unavailable. Use `--exact-substring` for punctuation-heavy literals and `--fts` only when you intentionally want raw FTS5 syntax such as `NEAR` or `OR`.
-- Scope broad searches early with `--path <text>`, repeatable `--exclude-path <text>`, and `--exclude-tests` unless tests are the target. For noisy generated, minified, or transpiled files, reduce payload size with `--snippet-lines <n>` and `--max-line-width <n>`.
+- Use `search` for raw text, comments, strings, option names, generated code, or languages where the current `languages` output says structured graph support is unavailable. Use `--include-generated` when generated code is the target. Use `--exact-substring` for punctuation-heavy literals and `--fts` only when you intentionally want raw FTS5 syntax such as `NEAR` or `OR`.
+- Scope broad searches early with `--path <text>`, repeatable `--exclude-path <text>`, and `--exclude-tests` unless tests are the target. Generated files are hidden from query results by default; pass `--include-generated` when needed. For noisy minified or transpiled files, reduce payload size with `--snippet-lines <n>` and `--max-line-width <n>`.
 - Use `files` to discover candidate paths, `find` to re-locate exact text within known files, and `excerpt` to fetch only the needed lines instead of opening entire files.
 - Use `deps --reverse` for file-level impact, `impact` for callable symbol ripple checks, `unused` for potentially dead definitions, and `hotspots` for central symbols. These commands are only as strong as the current graph support and freshness metadata, so keep `languages` and `status --check --json` in the loop.
 - `unused` treats indexed references as authoritative suppression signals. C# `nameof(...)`, `typeof(...)`, and direct reflection member-name literals such as `GetMethod("Foo")` or literal concatenations like `GetProperty("Display" + "Name")` are indexed, but dynamically constructed reflection names may still require manual review.
@@ -1730,8 +1731,16 @@ This section catalogs the failure modes you are most likely to hit while running
 
 4. **Database is not writable** (`E004_DB_NOT_WRITABLE`)
    - Symptom: `Error [E004_DB_NOT_WRITABLE]: ...` on `cdidx index`, often paired with SQLite `CANTOPEN(14)` on read-only filesystems (e.g. read-only bind mounts, container layers).
-   - Cause: the DB path is on a read-only filesystem, or filesystem permissions block writes by the current user. WAL mode requires write access even for some read paths.
-   - Recovery: relocate the DB with `--db <writable-path>`, fix filesystem permissions, or remount writable. Read-only queries against a writable mount work normally.
+   - Cause: the DB path is on a read-only filesystem, filesystem permissions block writes by the current user, or Linux mandatory access control blocks SQLite WAL/SHM sidecar creation under AppArmor / SELinux. WAL mode requires write access even for some read paths.
+   - Recovery: relocate the DB with `--db <writable-path>`, fix filesystem permissions, or remount writable. On AppArmor / SELinux systems, check the reported `mac_profile` from `cdidx status --json`, then inspect `aa-status` / snap or flatpak permissions / audit logs for AppArmor, or `getenforce`, `ausearch`, and `audit2why` for SELinux. Read-only queries can use a SQLite URI such as `--db 'file:///abs/path/codeindex.db?immutable=1'` when policy allows reading the DB file but blocks sidecar writes.
+
+#### Sandbox diagnostics
+
+When SQLite returns permission-style errors such as `SQLITE_AUTH`, `SQLITE_PERM`, `SQLITE_IOERR`, or `SQLITE_CANTOPEN`, `cdidx` adds a confinement-aware hint on Linux if `/proc/self/attr/current` or `/proc/self/attr/exec` exposes an AppArmor or SELinux profile. `status --json` also includes `mac_profile` for the same best-effort signal, for example `apparmor:snap.cdidx.cdidx` or `selinux:user_u:user_r:user_t:s0`.
+
+- Snap / AppArmor: run `aa-status`, inspect snap interface grants, and check audit logs for denied `codeindex.db-wal` or `codeindex.db-shm` creation.
+- Flatpak: check filesystem portal permissions and AppArmor/audit logs when the host policy confines the app.
+- SELinux: run `getenforce`, inspect denials with `ausearch -m avc -ts recent`, and explain them with `audit2why`.
 
 5. **Database disk image malformed / integrity failure** (`E005_DB_INTEGRITY_FAILED`)
    - Symptom: queries crash with `database disk image is malformed`, or `cdidx db --integrity-check` exits `3` and lists `PRAGMA integrity_check` failures with `Error [E005_DB_INTEGRITY_FAILED]: ...`.
