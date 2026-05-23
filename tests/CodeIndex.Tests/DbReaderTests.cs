@@ -11720,6 +11720,20 @@ public class DbReaderTests : IDisposable
         var status = freshReader.GetStatus();
 
         Assert.False(status.CSharpMetadataTargetReady);
+        Assert.Equal(DegradationReasonCodes.CSharpMetadataTargetStampOutdated, status.CSharpMetadataTargetDegradedReason);
+    }
+
+    [Fact]
+    public void GetStatus_DistinguishesCSharpMetadataTargetMissingColumn()
+    {
+        InsertIndexedFile("src/Legacy.cs", "csharp", "public class Legacy { }\n");
+        RecreateSymbolsTableWithoutMetadataTargetColumn();
+        var freshReader = new DbReader(_db.Connection);
+
+        var status = freshReader.GetStatus();
+
+        Assert.False(status.CSharpMetadataTargetReady);
+        Assert.Equal(DegradationReasonCodes.CSharpMetadataTargetMissingColumn, status.CSharpMetadataTargetDegradedReason);
     }
 
     [Fact]
@@ -11838,6 +11852,51 @@ public class DbReaderTests : IDisposable
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
         cmd.Parameters.AddWithValue("@key", key);
+        cmd.ExecuteNonQuery();
+    }
+
+    private void RecreateSymbolsTableWithoutMetadataTargetColumn()
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = """
+            PRAGMA foreign_keys = OFF;
+            ALTER TABLE symbols RENAME TO symbols_old;
+            CREATE TABLE symbols (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                kind            TEXT,
+                sub_kind        TEXT,
+                name            TEXT,
+                name_folded     TEXT,
+                line            INTEGER,
+                start_line      INTEGER,
+                start_column    INTEGER,
+                end_line        INTEGER,
+                body_start_line INTEGER,
+                body_end_line   INTEGER,
+                signature       TEXT,
+                container_kind  TEXT,
+                container_name  TEXT,
+                container_qualified_name TEXT,
+                family_key      TEXT,
+                visibility      TEXT,
+                return_type     TEXT
+            );
+            INSERT INTO symbols (
+                id, file_id, kind, sub_kind, name, name_folded, line, start_line,
+                start_column, end_line, body_start_line,
+                body_end_line, signature, container_kind, container_name,
+                container_qualified_name, family_key, visibility, return_type
+            )
+            SELECT
+                id, file_id, kind, sub_kind, name, name_folded, line, start_line,
+                start_column, end_line, body_start_line,
+                body_end_line, signature, container_kind, container_name,
+                container_qualified_name, family_key, visibility, return_type
+            FROM symbols_old;
+            DROP TABLE symbols_old;
+            PRAGMA foreign_keys = ON;
+            """;
         cmd.ExecuteNonQuery();
     }
 

@@ -108,6 +108,7 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
   `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`,
   `hotspot_family_ready`, `hotspot_family_degraded_reason`,
   `csharp_symbol_name_ready`, `csharp_metadata_target_ready`,
+  `csharp_metadata_target_degraded_reason`,
   `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`,
   `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`,
   `index_writer_version`, `index_newer_than_reader`,
@@ -285,6 +286,7 @@ script / CI では `--yes`（または `--force`）が必要です。
   `sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`、
   `hotspot_family_ready`、`hotspot_family_degraded_reason`、
   `csharp_symbol_name_ready`、`csharp_metadata_target_ready`、
+  `csharp_metadata_target_degraded_reason`、
   `indexed_head_commit`、`worktree_head_changed`、`indexed_head_sha`、
   `indexed_head_branch`、`indexed_head_timestamp`、`commits_ahead_of_indexed_head`、
   `index_writer_version`、`index_newer_than_reader`、
