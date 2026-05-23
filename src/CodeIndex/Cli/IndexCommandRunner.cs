@@ -484,10 +484,25 @@ public static class IndexCommandRunner
         return $"PID {holder.Pid.ToString(System.Globalization.CultureInfo.InvariantCulture)}, started {startedLocal.ToString("yyyy-MM-dd HH:mm:ss zzz", System.Globalization.CultureInfo.InvariantCulture)}";
     }
 
-    public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions) =>
+        RunBackfillFold(cmdArgs, jsonOptions, cancellationForTesting: null);
+
+    internal static int RunBackfillFold(
+        string[] cmdArgs,
+        JsonSerializerOptions jsonOptions,
+        CancellationTokenSource? cancellationForTesting)
     {
         var options = ParseBackfillFoldArgs(cmdArgs);
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
+        using var ownedCancellation = cancellationForTesting == null ? new CancellationTokenSource() : null;
+        var backfillCancellation = cancellationForTesting ?? ownedCancellation!;
+        using var cancelKeyPressRegistration = cancellationForTesting == null
+            ? RegisterIndexCancelKeyPress(backfillCancellation)
+            : NullDisposable.Instance;
+        using var terminateSignalRegistration = cancellationForTesting == null
+            ? RegisterIndexTerminateSignal(backfillCancellation)
+            : NullDisposable.Instance;
+
         if (options.ShowHelp)
         {
             ConsoleUi.PrintUsage();
@@ -531,7 +546,9 @@ public static class IndexCommandRunner
             var rewriteAll = storedFoldVersion != currentFoldVersion
                 || storedFoldFingerprint != currentFoldFingerprint;
 
-            var (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
+            var (symbols, symbolReferences) = writer.BackfillFoldedColumns(
+                rewriteAll,
+                backfillCancellation.Token);
             // MarkFoldReady re-verifies inside a BEGIN IMMEDIATE so a concurrent writer cannot
             // insert NULL-folded rows between the verify and the stamp. Issue #1535.
             // MarkFoldReady は BEGIN IMMEDIATE 内で再検証するため、concurrent writer による
@@ -573,6 +590,16 @@ public static class IndexCommandRunner
             }
 
             return CommandExitCodes.Success;
+        }
+        catch (OperationCanceledException)
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "folded-name backfill cancelled before it could complete.",
+                CommandExitCodes.CancelledBySignal,
+                "Rerun `cdidx backfill-fold` when you are ready to resume; the cancelled transaction was rolled back.",
+                CommandErrorCodes.Interrupted);
         }
         catch (Exception ex)
         {

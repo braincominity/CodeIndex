@@ -2248,6 +2248,165 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void BackfillFoldedColumns_CancelledDuringSymbolLoop_RollsBackTransaction()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_cancel_symbols_{Guid.NewGuid():N}.db");
+        var cts = new CancellationTokenSource();
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "first", Line = 1, StartLine = 1, EndLine = 1 },
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "second", Line = 2, StartLine = 2, EndLine = 2 },
+                ]);
+
+                using (var clear = db.Connection.CreateCommand())
+                {
+                    clear.CommandText = "UPDATE symbols SET name_folded = NULL";
+                    clear.ExecuteNonQuery();
+                }
+
+                DbWriter.FoldBackfillRowUpdatedForTesting = cts.Cancel;
+
+                Assert.Throws<OperationCanceledException>(() => writer.BackfillFoldedColumns(rewriteAll: false, cts.Token));
+
+                using var count = db.Connection.CreateCommand();
+                count.CommandText = "SELECT COUNT(*) FROM symbols WHERE name_folded IS NOT NULL";
+                Assert.Equal(0L, (long)count.ExecuteScalar()!);
+            }
+        }
+        finally
+        {
+            DbWriter.FoldBackfillRowUpdatedForTesting = null;
+            cts.Dispose();
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void BackfillFoldedColumns_CancelledDuringReferenceLoop_RollsBackTransaction()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_cancel_refs_{Guid.NewGuid():N}.db");
+        var cts = new CancellationTokenSource();
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertReferences([
+                    new ReferenceRecord { FileId = fileId, SymbolName = "first", ReferenceKind = "call", Line = 1, Column = 1, Context = "first()" },
+                    new ReferenceRecord { FileId = fileId, SymbolName = "second", ReferenceKind = "call", Line = 2, Column = 1, Context = "second()" },
+                ]);
+
+                using (var clear = db.Connection.CreateCommand())
+                {
+                    clear.CommandText = "UPDATE symbol_references SET symbol_name_folded = NULL, container_name_folded = NULL";
+                    clear.ExecuteNonQuery();
+                }
+
+                DbWriter.FoldBackfillRowUpdatedForTesting = cts.Cancel;
+
+                Assert.Throws<OperationCanceledException>(() => writer.BackfillFoldedColumns(rewriteAll: false, cts.Token));
+
+                using var count = db.Connection.CreateCommand();
+                count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE symbol_name_folded IS NOT NULL OR container_name_folded IS NOT NULL";
+                Assert.Equal(0L, (long)count.ExecuteScalar()!);
+            }
+        }
+        finally
+        {
+            DbWriter.FoldBackfillRowUpdatedForTesting = null;
+            cts.Dispose();
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void RunBackfillFold_Cancelled_ReturnsInterruptedErrorCode()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_cancel_cli_{Guid.NewGuid():N}.db");
+        using var cts = new CancellationTokenSource();
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 64,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "cancel_me", Line = 1, StartLine = 1, EndLine = 1 },
+                ]);
+
+                using var clear = db.Connection.CreateCommand();
+                clear.CommandText = "UPDATE symbols SET name_folded = NULL";
+                clear.ExecuteNonQuery();
+            }
+
+            cts.Cancel();
+
+            JsonElement json;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var writer = new StringWriter();
+                try
+                {
+                    Console.SetOut(writer);
+                    exitCode = IndexCommandRunner.RunBackfillFold(["--db", dbPath, "--json"], _jsonOptions, cts);
+                    using var document = JsonDocument.Parse(writer.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.Interrupted, json.GetProperty("error_code").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_BlankFile_ReturnsDatabaseError()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_blank_{Guid.NewGuid():N}.db");
