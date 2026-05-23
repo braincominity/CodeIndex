@@ -3648,5 +3648,6 @@ public class FileIndexerTests
     public void IsGeneratedCodeFile_HandwrittenFile_ReturnsFalse()
     {
         Assert.False(FileIndexer.IsGeneratedCodeFile("src/Foo.cs", "class Foo { }\n"));
+        Assert.False(FileIndexer.IsGeneratedCodeFile("src/Foo.cs", "// This file is not auto-generated.\nclass Foo { }\n"));
     }
 }
