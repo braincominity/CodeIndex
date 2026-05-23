@@ -7,6 +7,7 @@
   "indexed_at": "\u003CTIMESTAMP\u003E",
   "latest_modified": "\u003CTIMESTAMP\u003E",
   "project_root": "\u003CPROJECT_ROOT\u003E",
+  "data_dir_mode": "\u003CFILE_MODE\u003E",
   "git_head": null,
   "git_is_dirty": null,
   "languages": {

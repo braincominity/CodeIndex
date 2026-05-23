@@ -386,7 +386,7 @@ public static class IndexCommandRunner
         {
             var dbDir = Path.GetDirectoryName(dbPath);
             if (!string.IsNullOrEmpty(dbDir))
-                Directory.CreateDirectory(dbDir);
+                DataDirectorySecurity.CreatePrivateDirectory(dbDir);
 
             // Acquire a process-exclusive lock so concurrent `cdidx index` runs against the
             // same DB cannot interleave schema/data writes and corrupt the database.

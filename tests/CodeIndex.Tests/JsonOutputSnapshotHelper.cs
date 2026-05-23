@@ -54,6 +54,11 @@ internal static class JsonOutputSnapshotHelper
         "score",
     };
 
+    private static readonly HashSet<string> FileModeKeys = new(StringComparer.Ordinal)
+    {
+        "data_dir_mode",
+    };
+
     public static void AssertMatches(
         string goldenName,
         string actualJson,
@@ -138,6 +143,8 @@ internal static class JsonOutputSnapshotHelper
                         obj[key] = "<PROJECT_ROOT>";
                     else if (ScoreKeys.Contains(key) && value is JsonValue scoreValue && scoreValue.TryGetValue(out double score))
                         obj[key] = "<SCORE>"; // BM25 scores are SQLite-FTS5-implementation-sensitive; pin only the field's presence.
+                    else if (FileModeKeys.Contains(key))
+                        obj[key] = "<FILE_MODE>";
                     else
                         Normalize(value);
                 }

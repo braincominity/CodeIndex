@@ -1996,6 +1996,7 @@ public static class QueryCommandRunner
 
             var status = reader.GetStatus();
             WorkspaceMetadataEnricher.Enrich(status, options.DbPath, options.DbPathExplicit);
+            status.DataDirMode = DataDirectorySecurity.GetUnixModeString(GetDataDirectoryPath(options.DbPath));
             if (options.CheckWorkspace)
             {
                 status.WorkspaceCheck = IndexFreshnessChecker.Check(reader, status.ProjectRoot);
@@ -4313,6 +4314,17 @@ public static class QueryCommandRunner
                 Database.DbDebug.EndProfile();
             Database.DbDebug.ResetContext();
         }
+    }
+
+    private static string? GetDataDirectoryPath(string? dbPath)
+    {
+        if (string.IsNullOrWhiteSpace(dbPath) ||
+            dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return Path.GetDirectoryName(Path.GetFullPath(dbPath));
     }
 
     private static void WriteDatabaseOpenFailure(Exception ex, string dbPath)

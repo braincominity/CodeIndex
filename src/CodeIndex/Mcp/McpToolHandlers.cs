@@ -2643,7 +2643,7 @@ public partial class McpServer
         var cdidxDir = Path.GetDirectoryName(_dbPath);
         if (string.IsNullOrEmpty(cdidxDir))
             cdidxDir = Path.Combine(Path.GetFullPath("."), ".cdidx");
-        Directory.CreateDirectory(cdidxDir);
+        DataDirectorySecurity.CreatePrivateDirectory(cdidxDir);
 
         // 6. Store locally and attempt GitHub submission atomically.
         //    TryAddAndSubmit runs the entire sequence under a single file lock:
