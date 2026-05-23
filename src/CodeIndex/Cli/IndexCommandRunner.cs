@@ -15,6 +15,14 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class IndexCommandRunner
 {
+    private const int ScanCheckpointVersion = 1;
+    private const string ScanCheckpointFileName = "scan-checkpoint.json";
+
+    private sealed record ScanCheckpoint(
+        int Version,
+        string? GitHead,
+        IReadOnlyList<string> Directories);
+
     internal static Action? FullScanWritePhaseStartedForTesting { get; set; }
 
     public static int Run(string[] indexArgs, JsonSerializerOptions jsonOptions) =>
@@ -2292,6 +2300,79 @@ public static class IndexCommandRunner
         || ex is IOException
         || ex is SqliteException { SqliteErrorCode: 5 or 6 or 8 or 10 or 14 };
 
+    private static IReadOnlySet<string> LoadScanCheckpoint(string path, string? currentHead)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(currentHead) || !File.Exists(path))
+                return new HashSet<string>(StringComparer.Ordinal);
+
+            var checkpoint = JsonSerializer.Deserialize<ScanCheckpoint>(File.ReadAllText(path));
+            if (checkpoint is not { Version: ScanCheckpointVersion }
+                || !string.Equals(checkpoint.GitHead, currentHead, StringComparison.Ordinal)
+                || checkpoint.Directories is not { Count: > 0 })
+            {
+                return new HashSet<string>(StringComparer.Ordinal);
+            }
+
+            return checkpoint.Directories
+                .Where(directory => directory.Length > 0)
+                .ToHashSet(StringComparer.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return new HashSet<string>(StringComparer.Ordinal);
+        }
+        catch (IOException)
+        {
+            return new HashSet<string>(StringComparer.Ordinal);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new HashSet<string>(StringComparer.Ordinal);
+        }
+    }
+
+    private static void SaveScanCheckpoint(string path, string? currentHead, IReadOnlySet<string> directories)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(currentHead))
+                return;
+
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var checkpoint = new ScanCheckpoint(
+                ScanCheckpointVersion,
+                currentHead,
+                directories
+                    .Where(directory => directory.Length > 0)
+                    .OrderBy(directory => directory, StringComparer.Ordinal)
+                    .ToList());
+            File.WriteAllText(path, JsonSerializer.Serialize(checkpoint, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static void DeleteScanCheckpoint(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
     private static int RunFullScan(
         DbWriter writer,
         FileIndexer indexer,
@@ -2434,13 +2515,16 @@ public static class IndexCommandRunner
             throw new IndexInterruptedException(filesProcessed, filesTotal);
         }
 
+        var currentHeadForCheckpoint = GitHelper.TryGetHeadCommit(projectRoot);
+        var scanCheckpointPath = Path.Combine(projectRoot, ".cdidx", ScanCheckpointFileName);
+        var checkpointedDirectories = LoadScanCheckpoint(scanCheckpointPath, currentHeadForCheckpoint);
         WriteJsonLiveness("scanning files...");
         var scanHeartbeat = StartJsonPhaseHeartbeat("scanning files");
         FileIndexer.ScanFilesResult scanResult;
         try
         {
             ThrowIfFullScanCancelled(0, null);
-            scanResult = indexer.ScanFilesDetailed();
+            scanResult = indexer.ScanFilesDetailed(checkpointedDirectories, continueOnError: true);
             ThrowIfFullScanCancelled(0, null);
         }
         finally
@@ -2492,6 +2576,7 @@ public static class IndexCommandRunner
             .ToHashSet(StringComparer.Ordinal);
         if (scanResult.HadErrors)
         {
+            SaveScanCheckpoint(scanCheckpointPath, currentHeadForCheckpoint, scanResult.CheckpointedDirectories);
             retainedPaths.UnionWith(scanResult.ProbeFailedFilePaths);
 
             foreach (var relPath in scanResult.NonIndexablePaths)
@@ -2511,7 +2596,19 @@ public static class IndexCommandRunner
         }
         else
         {
-            purged = writer.PurgeFilesOutsideRetainedSet(retainedPaths);
+            if (checkpointedDirectories.Count > 0)
+            {
+                var authoritativeDirectories = scanResult.ListedDirectories
+                    .ToHashSet(StringComparer.Ordinal);
+                var attributePrunedDirectories = scanResult.AttributePrunedDirectories
+                    .ToHashSet(StringComparer.Ordinal);
+                purged = writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, attributePrunedDirectories);
+            }
+            else
+            {
+                purged = writer.PurgeFilesOutsideRetainedSet(retainedPaths);
+            }
+            DeleteScanCheckpoint(scanCheckpointPath);
         }
         if (purged > 0)
             WriteProjectRootOnce();

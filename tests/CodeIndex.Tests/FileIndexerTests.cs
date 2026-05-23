@@ -1401,6 +1401,37 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFilesDetailed_CheckpointedDirectories_AreSkippedAndCarriedForward()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, "cached"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "fresh"));
+            File.WriteAllText(Path.Combine(tempDir, "cached", "old.py"), "print('old')");
+            File.WriteAllText(Path.Combine(tempDir, "fresh", "new.py"), "print('new')");
+
+            var result = new FileIndexer(tempDir).ScanFilesDetailed(
+                new HashSet<string>(StringComparer.Ordinal) { "cached" });
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["fresh/new.py"], files);
+            Assert.Contains("cached", result.CheckpointedDirectories);
+            Assert.Contains("fresh", result.CheckpointedDirectories);
+            Assert.DoesNotContain("cached", result.ListedDirectories);
+            Assert.DoesNotContain("cached", result.FullyScannedDirectories);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_RespectsRootAnchoredGitignorePatterns()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
