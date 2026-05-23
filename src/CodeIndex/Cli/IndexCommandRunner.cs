@@ -1615,6 +1615,7 @@ public static class IndexCommandRunner
                     record.Modified,
                     record.Checksum,
                     language: record.Lang,
+                    generated: record.Generated,
                     allowReuse: record.Lang is not ("javascript" or "typescript")
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                         && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
@@ -2914,6 +2915,7 @@ public static class IndexCommandRunner
                             record.Modified,
                             record.Checksum,
                             language: record.Lang,
+                            generated: record.Generated,
                             allowReuse: record.Lang is not ("javascript" or "typescript")
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                                 && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)

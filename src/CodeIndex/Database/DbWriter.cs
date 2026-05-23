@@ -253,7 +253,7 @@ public class DbWriter
     /// 変更なしなら既存ファイルIDを返し、インデックスが必要ならnullを返す。
     /// タイムスタンプが異なってもチェックサムが一致すればDB側を更新しIDを返す。
     /// </summary>
-    public long? GetUnchangedFileId(string relativePath, DateTime modified, string? checksum = null, bool allowReuse = true, string? language = null)
+    public long? GetUnchangedFileId(string relativePath, DateTime modified, string? checksum = null, bool allowReuse = true, string? language = null, bool? generated = null)
     {
         if (!allowReuse)
             return null;
@@ -268,6 +268,10 @@ public class DbWriter
                        AND checksum = @checksum
                   THEN @modified
                   ELSE modified
+              END,
+                  generated = CASE
+                  WHEN @generated IS NOT NULL THEN @generated
+                  ELSE generated
               END
               WHERE path = @path
                 AND (
@@ -280,12 +284,14 @@ public class DbWriter
                 c.Parameters.Add("@path", SqliteType.Text);
                 c.Parameters.Add("@modified", SqliteType.Text);
                 c.Parameters.Add("@checksum", SqliteType.Text);
+                c.Parameters.Add("@generated", SqliteType.Integer);
             });
         try
         {
             cmd.Parameters["@path"].Value = relativePath;
             cmd.Parameters["@modified"].Value = modified;
             cmd.Parameters["@checksum"].Value = checksum is null ? DBNull.Value : checksum;
+            cmd.Parameters["@generated"].Value = generated.HasValue ? (generated.Value ? 1 : 0) : DBNull.Value;
             var raw = cmd.ExecuteScalar();
             return raw is long id ? id : null;
         }
