@@ -155,6 +155,7 @@ files (
     lines       INTEGER,                    -- line count
     checksum    TEXT,                       -- SHA256 over file bytes with CRLF/CR collapsed to LF (BOM bytes preserved); cross-OS clones match while BOM add/remove still triggers re-index
     modified    DATETIME,                   -- file modification time (UTC)
+    generated   INTEGER NOT NULL DEFAULT 0, -- generated-code marker from filename/header detection
     indexed_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 )
 

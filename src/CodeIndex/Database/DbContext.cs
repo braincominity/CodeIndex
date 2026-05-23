@@ -1098,6 +1098,7 @@ public class DbContext : IDisposable
                 lines       INTEGER,
                 checksum    TEXT,
                 modified    DATETIME,
+                generated   INTEGER NOT NULL DEFAULT 0,
                 indexed_at  DATETIME DEFAULT CURRENT_TIMESTAMP
             )");
 
@@ -1185,6 +1186,7 @@ public class DbContext : IDisposable
         // Schema migrations for existing DBs / 既存DB向けスキーマ移行
         EnsureColumn("files", "checksum", "TEXT");
         EnsureColumn("files", "modified", "DATETIME");
+        EnsureColumn("files", "generated", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn("files", "indexed_at", "DATETIME");
         EnsureColumn("symbols", "start_line", "INTEGER");
         EnsureColumn("symbols", "sub_kind", "TEXT");
@@ -1215,6 +1217,7 @@ public class DbContext : IDisposable
         // Indexes / インデックス
         Execute("CREATE INDEX IF NOT EXISTS idx_files_lang     ON files(lang)");
         Execute("CREATE INDEX IF NOT EXISTS idx_files_modified ON files(modified)");
+        Execute("CREATE INDEX IF NOT EXISTS idx_files_generated ON files(generated)");
         // idx_files_path is not needed: the UNIQUE constraint on path already creates an implicit index
         // idx_files_path は不要: path の UNIQUE 制約が暗黙的にインデックスを作成済み
         Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file    ON chunks(file_id)");
