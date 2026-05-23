@@ -849,6 +849,26 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void BuildResponseSerializationErrorLog_IdentifiesResponseSerializationStage()
+    {
+        var message = McpServer.BuildResponseSerializationErrorLog("serializer failed");
+
+        Assert.Contains("Error serializing response", message);
+        Assert.Contains("serializer failed", message);
+        Assert.Contains("minimal JSON-RPC error response", message);
+    }
+
+    [Fact]
+    public void BuildResponseWriteErrorLog_IdentifiesResponseWriteStage()
+    {
+        var message = McpServer.BuildResponseWriteErrorLog("pipe closed");
+
+        Assert.Contains("Error writing response", message);
+        Assert.Contains("pipe closed", message);
+        Assert.Contains("client connection", message);
+    }
+
+    [Fact]
     public void BuildToolErrorLog_IsActionable()
     {
         var message = McpServer.BuildToolErrorLog("search", "bad db");
@@ -917,6 +937,60 @@ public class McpServerTests : IDisposable
         Assert.Contains("path='/var/cdidx/state.db'", message);
         Assert.Contains("hint='Close other cdidx invocations.'", message);
         Assert.Contains("server stderr", message);
+    }
+
+    [Fact]
+    public void ProcessFrame_ResponseSerializationFailure_ReturnsMinimalErrorWithRequestId()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            _ => throw new JsonException("serializer failed"));
+
+        var response = server.ProcessFrame("""{"jsonrpc":"2.0","id":42,"method":"tools/list"}""");
+
+        using var doc = JsonDocument.Parse(response!);
+        var root = doc.RootElement;
+        Assert.Equal("2.0", root.GetProperty("jsonrpc").GetString());
+        Assert.Equal(42, root.GetProperty("id").GetInt32());
+        Assert.Equal(-32603, root.GetProperty("error").GetProperty("code").GetInt32());
+        Assert.Contains("serializing MCP response", root.GetProperty("error").GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void ProcessFrame_ResponseSerializationFailureForNonObjectRequest_ReturnsErrorWithNullId()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            _ => throw new JsonException("serializer failed"));
+
+        var response = server.ProcessFrame("""["not","an","object"]""");
+
+        using var doc = JsonDocument.Parse(response!);
+        var root = doc.RootElement;
+        Assert.Equal(-32603, root.GetProperty("error").GetProperty("code").GetInt32());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("id").ValueKind);
+    }
+
+    [Fact]
+    public void ProcessFrame_ResponseSerializationFailureForInvalidRequestId_ReturnsErrorWithNullId()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            _ => throw new JsonException("serializer failed"));
+
+        var response = server.ProcessFrame("""{"jsonrpc":"2.0","id":false,"method":"tools/list"}""");
+
+        using var doc = JsonDocument.Parse(response!);
+        var root = doc.RootElement;
+        Assert.Equal(-32603, root.GetProperty("error").GetProperty("code").GetInt32());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("id").ValueKind);
+    }
+
+    [Fact]
+    public async Task ProcessLineAsync_ResponseWriteFailure_DoesNotThrow()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+
+        await server.ProcessLineAsync(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""",
+            new ThrowingTextWriter());
     }
 
     [Fact]
@@ -1306,6 +1380,62 @@ public class McpServerTests : IDisposable
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class ThrowingWriteTransport : IMcpTransport
+    {
+        private readonly Queue<string?> _frames;
+
+        public ThrowingWriteTransport(string name, params string?[] frames)
+        {
+            Name = name;
+            _frames = new Queue<string?>(frames);
+            _frames.Enqueue(null);
+        }
+
+        public string Name { get; }
+        public string Endpoint => "throwing-write";
+        public int WriteCount { get; private set; }
+
+        public Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(_frames.Count == 0 ? null : _frames.Dequeue());
+        }
+
+        public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
+        {
+            WriteCount++;
+            throw new IOException("pipe closed");
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    [Fact]
+    public async Task RunAsync_SequentialTransportWriteFailure_DoesNotThrow()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        var transport = new ThrowingWriteTransport(
+            "throwing-sequential",
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""");
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        Assert.Equal(1, transport.WriteCount);
+    }
+
+    [Fact]
+    public async Task RunAsync_StdioTransportWriteFailure_DoesNotThrow()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        var transport = new ThrowingWriteTransport(
+            "stdio",
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""");
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        Assert.Equal(1, transport.WriteCount);
     }
 
     [Fact]
@@ -8596,5 +8726,13 @@ public class McpServerTests : IDisposable
         Assert.NotNull(argsCtor);
         var args = (ConsoleCancelEventArgs)argsCtor!.Invoke(new object[] { ConsoleSpecialKey.ControlC });
         del!.Invoke(null!, args);
+    }
+
+    private sealed class ThrowingTextWriter : TextWriter
+    {
+        public override Encoding Encoding => Encoding.UTF8;
+
+        public override Task WriteLineAsync(string? value) =>
+            throw new IOException("pipe closed");
     }
 }
