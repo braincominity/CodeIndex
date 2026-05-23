@@ -3405,7 +3405,7 @@ public static class QueryCommandRunner
         {
             if (seenSingleValueOptions.Add(canonicalName))
                 return;
-            Console.Error.WriteLine($"Warning: {canonicalName} specified more than once; using the last value '{newValue}'.");
+            Console.Error.WriteLine($"Warning: {canonicalName} specified more than once; the rightmost CLI value '{newValue}' takes precedence over earlier CLI values and any environment/config default.");
         }
 
         for (int i = 0; i < args.Length; i++)
