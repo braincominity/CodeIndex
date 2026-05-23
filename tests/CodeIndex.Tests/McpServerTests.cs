@@ -1308,6 +1308,19 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task StdioTransport_Utf16BomInput_ThrowsDecodeFailure()
+    {
+        var utf16Json = Encoding.Unicode.GetPreamble()
+            .Concat(Encoding.Unicode.GetBytes("""{"jsonrpc":"2.0","id":1,"method":"ping"}""" + "\n"))
+            .ToArray();
+        await using var input = new MemoryStream(utf16Json);
+        await using var output = new MemoryStream();
+        await using var transport = new StdioMcpTransport(input, output, bufferSize: 1024);
+
+        await Assert.ThrowsAsync<DecoderFallbackException>(() => transport.ReadFrameAsync(CancellationToken.None));
+    }
+
+    [Fact]
     public async Task RunAsync_StdioCancellationNotification_CancelsActiveRequest()
     {
         using var cancelWritten = new ManualResetEventSlim(false);
