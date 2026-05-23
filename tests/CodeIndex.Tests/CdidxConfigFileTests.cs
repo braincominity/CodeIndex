@@ -34,6 +34,10 @@ public class CdidxConfigFileTests
                   "disable_persistent_log": true,
                   "global_tool_log_dir": "/tmp/logs",
                   "stale_after": "2h",
+                  "indexing": {
+                    "includeKinds": ["class"],
+                    "excludeKinds": ["test_method", "generated_parser"]
+                  },
                   "mcp": {
                     "tools": { "allow": ["search", "definition"], "deny": ["index"] },
                     "rate_limit": { "rps": 5, "burst": 10 }
@@ -51,6 +55,8 @@ public class CdidxConfigFileTests
             Assert.Equal("1", env.Writes["CDIDX_DISABLE_PERSISTENT_LOG"]);
             Assert.Equal("/tmp/logs", env.Writes["CDIDX_GLOBAL_TOOL_LOG_DIR"]);
             Assert.Equal("2h", env.Writes["CDIDX_STALE_AFTER"]);
+            Assert.Equal("class", env.Writes["CDIDX_INDEX_INCLUDE_SYMBOL_KINDS"]);
+            Assert.Equal("test_method,generated_parser", env.Writes["CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS"]);
             Assert.Equal("search,definition", env.Writes["CDIDX_MCP_TOOLS_ALLOW"]);
             Assert.Equal("index", env.Writes["CDIDX_MCP_TOOLS_DENY"]);
             Assert.Equal("5", env.Writes["CDIDX_MCP_RATE_LIMIT_RPS"]);

@@ -6,7 +6,7 @@
 [![CodeQL](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml)
 [![Release](https://github.com/Widthdom/CodeIndex/actions/workflows/release.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/release.yml)
 
-![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white)
+![.NET 8.x](https://img.shields.io/badge/.NET-8.x-512BD4?logo=dotnet&logoColor=white)
 ![C#](https://img.shields.io/badge/C%23-12-239120?logo=csharp&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![License](https://img.shields.io/badge/License-FSL--1.1--ALv2-orange)
@@ -108,6 +108,7 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
   `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`,
   `hotspot_family_ready`, `hotspot_family_degraded_reason`,
   `csharp_symbol_name_ready`, `csharp_metadata_target_ready`,
+  `csharp_metadata_target_degraded_reason`,
   `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`,
   `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`,
   `index_writer_version`, `index_newer_than_reader`,
@@ -187,7 +188,7 @@ details.
 [![CodeQL](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml)
 [![Release](https://github.com/Widthdom/CodeIndex/actions/workflows/release.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/release.yml)
 
-![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white)
+![.NET 8.x](https://img.shields.io/badge/.NET-8.x-512BD4?logo=dotnet&logoColor=white)
 ![C#](https://img.shields.io/badge/C%23-12-239120?logo=csharp&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![License](https://img.shields.io/badge/License-FSL--1.1--ALv2-orange)
@@ -285,6 +286,7 @@ script / CI では `--yes`（または `--force`）が必要です。
   `sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`、
   `hotspot_family_ready`、`hotspot_family_degraded_reason`、
   `csharp_symbol_name_ready`、`csharp_metadata_target_ready`、
+  `csharp_metadata_target_degraded_reason`、
   `indexed_head_commit`、`worktree_head_changed`、`indexed_head_sha`、
   `indexed_head_branch`、`indexed_head_timestamp`、`commits_ahead_of_indexed_head`、
   `index_writer_version`、`index_newer_than_reader`、

@@ -33,9 +33,11 @@ internal static class CdidxConfigFile
         "disable_persistent_log",
         "global_tool_log_dir",
         "stale_after",
+        "indexing",
         "mcp",
     };
 
+    private static readonly IReadOnlyList<string> KnownIndexingKeys = new[] { "includeKinds", "excludeKinds" };
     private static readonly IReadOnlyList<string> KnownMcpKeys = new[] { "tools", "rate_limit" };
     private static readonly IReadOnlyList<string> KnownMcpToolsKeys = new[] { "allow", "deny" };
     private static readonly IReadOnlyList<string> KnownMcpRateLimitKeys = new[] { "rps", "burst" };
@@ -136,6 +138,30 @@ internal static class CdidxConfigFile
                 if (!TryReadString(staleAfter, "stale_after", path, out var value, out var err))
                     return new LoadResult(Path: path, Error: err);
                 pending.Add((QueryCommandRunner.StaleAfterEnvironmentVariable, value!));
+            }
+
+            if (root.TryGetProperty("indexing", out var indexing))
+            {
+                if (indexing.ValueKind != JsonValueKind.Object)
+                    return new LoadResult(Path: path, Error: $"[cdidx] {path}: `indexing` must be a JSON object.");
+                if (TryFindUnknownKey(indexing, KnownIndexingKeys, out var unknownIndexingKey))
+                    return new LoadResult(Path: path, Error: $"[cdidx] {path}: unknown key `indexing.{unknownIndexingKey}`. Supported keys: {string.Join(", ", KnownIndexingKeys)}.");
+
+                if (indexing.TryGetProperty("includeKinds", out var includeKinds))
+                {
+                    if (!TryReadStringArray(includeKinds, "indexing.includeKinds", path, out var value, out var err))
+                        return new LoadResult(Path: path, Error: err);
+                    if (value!.Length > 0)
+                        pending.Add((IndexCommandRunner.IncludeSymbolKindsEnvironmentVariable, string.Join(",", value)));
+                }
+
+                if (indexing.TryGetProperty("excludeKinds", out var excludeKinds))
+                {
+                    if (!TryReadStringArray(excludeKinds, "indexing.excludeKinds", path, out var value, out var err))
+                        return new LoadResult(Path: path, Error: err);
+                    if (value!.Length > 0)
+                        pending.Add((IndexCommandRunner.ExcludeSymbolKindsEnvironmentVariable, string.Join(",", value)));
+                }
             }
 
             if (root.TryGetProperty("mcp", out var mcp))
