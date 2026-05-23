@@ -44,6 +44,7 @@ internal static class TestProjectHelper
     {
         var normalized = content.Replace("\r\n", "\n");
         var lines = normalized.Split('\n');
+        var lineCount = FileIndexer.CountPhysicalLines(content);
 
         using var db = new DbContext(dbPath);
         db.InitializeSchema();
@@ -54,7 +55,7 @@ internal static class TestProjectHelper
             Path = path,
             Lang = lang,
             Size = normalized.Length,
-            Lines = lines.Length,
+            Lines = lineCount,
             Modified = modified ?? new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             Checksum = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant(),
         });
