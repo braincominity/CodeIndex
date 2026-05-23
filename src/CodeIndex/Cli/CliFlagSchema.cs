@@ -161,6 +161,8 @@ internal static class CliFlagSchema
         "impact", "unused", "hotspots",
     ];
 
+    private static readonly string[] VerboseQueryCommands = ProfileCommands;
+
     public static IReadOnlyList<CliFlag> All { get; } = BuildAll();
 
     private static IReadOnlyList<CliFlag> BuildAll()
@@ -170,6 +172,7 @@ internal static class CliFlagSchema
             new() { Name = "--db", ValuePlaceholder = "<path>", Description = "Database path", Commands = Set(DbPathCommands) },
             new() { Name = "--json", Description = "JSON output", Commands = Set(JsonCommands) },
             new() { Name = "--profile", Description = "Emit SQL timing and EXPLAIN QUERY PLAN profile JSON after the normal result", Commands = Set(ProfileCommands) },
+            new() { Name = "--verbose", Description = "Emit query debug diagnostics to stderr, or _debug JSON when combined with --json", Commands = Set(VerboseQueryCommands.Concat(new[] { "index" }).ToArray()) },
             new() { Name = "--slow-query-ms", ValuePlaceholder = "<n>", Description = "Log profiled SQL statements at or above this millisecond threshold", Commands = Set(ProfileCommands) },
             new() { Name = "--limit", ValuePlaceholder = "<n>", Description = "Max results", Commands = Set(LimitCapableCommands) },
             new() { Name = "--top", ValuePlaceholder = "<n>", Description = "Max results", Commands = Set(LimitCapableCommands) },
@@ -220,7 +223,6 @@ internal static class CliFlagSchema
             new() { Name = "--log-path", Description = "Print the active persistent log directory", Commands = Set("status") },
             new() { Name = "--integrity-check", Description = "Run PRAGMA integrity_check on the database", Commands = Set("db") },
             new() { Name = "--rebuild", Description = "Delete existing DB and rebuild from scratch", Commands = Set("index") },
-            new() { Name = "--verbose", Description = "Show per-file status", Commands = Set("index") },
             new() { Name = "--dry-run", Description = "Scan files without writing", Commands = Set("index") },
             new() { Name = "--force", Description = "Bypass the per-database index lock", Commands = Set("index") },
             new() { Name = "--duration-format", ValuePlaceholder = "<auto|seconds|hms>", Description = "Index elapsed time display format", Commands = Set("index") },

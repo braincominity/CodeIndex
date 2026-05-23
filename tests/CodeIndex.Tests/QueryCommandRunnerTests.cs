@@ -45,6 +45,7 @@ public class QueryCommandRunnerTests
             "--snippet-focus", "proximity",
             "--max-line-width", "77",
             "--profile",
+            "--verbose",
             "--slow-query-ms", "500",
             "--no-visibility-rank",
         ], jsonDefault: true);
@@ -71,6 +72,7 @@ public class QueryCommandRunnerTests
         Assert.Equal(SearchSnippetFocusMode.Proximity, options.SnippetFocus);
         Assert.Equal(77, options.MaxLineWidth);
         Assert.True(options.Profile);
+        Assert.True(options.Verbose);
         Assert.Equal(500, options.SlowQueryMs);
         Assert.True(options.NoVisibilityRank);
     }
@@ -246,6 +248,84 @@ public class QueryCommandRunnerTests
             Assert.False(string.IsNullOrWhiteSpace(queryPlan[0].GetProperty("detail").GetString()));
             Assert.Contains(queries.EnumerateArray(), query =>
                 query.GetProperty("sql").GetString()?.Contains("SELECT", StringComparison.OrdinalIgnoreCase) == true);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_VerboseEmitsDebugToStderrOnly_Issue1899()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_verbose");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/auth.cs",
+                "csharp",
+                """
+                public class AuthFixture
+                {
+                    public void Authenticate() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Authenticate", "--db", dbPath, "--verbose"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("src/auth.cs", stdout);
+            Assert.Contains("DEBUG query: sql_statements=", stderr);
+            Assert.Contains("rows_scanned=", stderr);
+            Assert.DoesNotContain("\"_debug\"", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_VerboseJsonAppendsDebugObjectAndKeepsStderrClean_Issue1899()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_verbose_json");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/auth.cs",
+                "csharp",
+                """
+                public class AuthFixture
+                {
+                    public void Authenticate() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Authenticate", "--db", dbPath, "--json", "--verbose"],
+                _jsonOptions));
+            var lines = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, lines.Count);
+            using var resultDocument = lines[0];
+            using var debugDocument = lines[1];
+            Assert.Equal("src/auth.cs", resultDocument.RootElement.GetProperty("path").GetString());
+            var debug = debugDocument.RootElement.GetProperty("_debug");
+            Assert.True(debug.GetProperty("sql_statement_count").GetInt32() > 0);
+            Assert.True(debug.GetProperty("elapsed_ms").GetDouble() >= 0);
+            Assert.True(debug.GetProperty("rows_scanned").GetInt32() >= 0);
+            Assert.Contains("omitted", debug.GetProperty("redaction").GetString());
+            Assert.DoesNotContain("SELECT", stdout, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(dbPath, stdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("StackTrace", stdout, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
