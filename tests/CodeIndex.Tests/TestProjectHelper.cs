@@ -4,7 +4,6 @@ using System.Text;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
-using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -125,15 +124,13 @@ internal static class TestProjectHelper
                 // handles may still need releasing, so escalate only on retry.
                 // 毎回の cleanup で SQLite pool を落とすと並列テスト全体へ波及するため、
                 // 通常経路では触らない。Windows で削除失敗したときだけ最終手段として解放する。
-                if (OperatingSystem.IsWindows())
-                    SqliteConnection.ClearAllPools();
+                SqlitePoolCleanup.ClearPoolsForWindowsFileRelease();
                 Thread.Sleep(100);
                 ClearAttributes(path);
             }
             catch (UnauthorizedAccessException) when (attempt < 4)
             {
-                if (OperatingSystem.IsWindows())
-                    SqliteConnection.ClearAllPools();
+                SqlitePoolCleanup.ClearPoolsForWindowsFileRelease();
                 Thread.Sleep(100);
                 ClearAttributes(path);
             }
@@ -149,20 +146,21 @@ internal static class TestProjectHelper
         {
             try
             {
+                if (attempt > 0)
+                    SqlitePoolCleanup.ClearPoolsForWindowsFileRelease();
+
                 File.SetAttributes(path, FileAttributes.Normal);
                 File.Delete(path);
                 return;
             }
             catch (IOException) when (attempt < 4)
             {
-                if (OperatingSystem.IsWindows())
-                    SqliteConnection.ClearAllPools();
+                SqlitePoolCleanup.ClearPoolsForWindowsFileRelease();
                 Thread.Sleep(100);
             }
             catch (UnauthorizedAccessException) when (attempt < 4)
             {
-                if (OperatingSystem.IsWindows())
-                    SqliteConnection.ClearAllPools();
+                SqlitePoolCleanup.ClearPoolsForWindowsFileRelease();
                 Thread.Sleep(100);
             }
         }
