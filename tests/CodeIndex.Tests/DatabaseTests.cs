@@ -292,6 +292,24 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void GetUnchangedFileId_WithNullChecksumUsesModifiedAndSize()
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var file = new FileRecord
+        {
+            Path = "src/size.py", Lang = "python", Size = 50, Lines = 5,
+            Modified = modified,
+        };
+        _writer.UpsertFile(file);
+
+        var id = _writer.GetUnchangedFileId("src/size.py", modified, checksum: null, size: 50);
+        Assert.NotNull(id);
+
+        var changedSizeId = _writer.GetUnchangedFileId("src/size.py", modified, checksum: null, size: 51);
+        Assert.Null(changedSizeId);
+    }
+
+    [Fact]
     public void GetUnchangedFileId_ReturnsNullWhenLanguageExtractorVersionIsStale()
     {
         var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
