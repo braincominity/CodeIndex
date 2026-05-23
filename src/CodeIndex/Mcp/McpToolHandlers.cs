@@ -1036,14 +1036,10 @@ public partial class McpServer
 
     private static bool IsPathWithinDirectory(string parentPath, string childPath)
     {
-        var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
         var parent = NormalizeDirectoryBoundaryPath(ResolveExistingDirectoryPath(parentPath));
         var child = NormalizeDirectoryBoundaryPath(ResolveExistingDirectoryPath(childPath));
 
-        return string.Equals(parent, child, comparison)
-            || child.StartsWith(parent + Path.DirectorySeparatorChar, comparison);
+        return PathCasing.IsPathEqualOrParent(parent, child);
     }
 
     private static string ResolveExistingDirectoryPath(string path)
