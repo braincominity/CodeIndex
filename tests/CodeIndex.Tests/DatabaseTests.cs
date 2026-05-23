@@ -454,6 +454,30 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void GetUnchangedFileId_UpdatesGeneratedMarkerOnReusableRows()
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var checksum = "generated-checksum";
+        _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/generated.g.cs",
+            Lang = "csharp",
+            Size = 50,
+            Lines = 2,
+            Modified = modified,
+            Checksum = checksum,
+            Generated = false,
+        });
+
+        var id = _writer.GetUnchangedFileId("src/generated.g.cs", modified, checksum, language: "csharp", generated: true);
+
+        Assert.NotNull(id);
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT generated FROM files WHERE path = 'src/generated.g.cs'";
+        Assert.Equal(1L, cmd.ExecuteScalar());
+    }
+
+    [Fact]
     public void GetUnchangedFileId_ReturnsNullWhenTimestampMatchesButChecksumDiffers()
     {
         var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
