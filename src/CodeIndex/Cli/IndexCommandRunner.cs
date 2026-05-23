@@ -1083,12 +1083,14 @@ public static class IndexCommandRunner
             priorSymbolKindFilterSignature,
             options.SymbolKindFilter.Signature,
             StringComparison.Ordinal);
-        if (options.SymbolKindFilter.IsActive && !symbolKindFilterMatchesPrior)
+        var scopedUpdateSymbolKindFilterMatchesPrior = symbolKindFilterMatchesPrior
+            || (priorSymbolKindFilterSignature == null && !options.SymbolKindFilter.IsActive);
+        if (!scopedUpdateSymbolKindFilterMatchesPrior)
         {
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
-                "symbol-kind filters cannot be introduced with a scoped update because existing files would keep symbols from the prior index policy",
+                "symbol-kind filter policy cannot change during a scoped update because existing files would keep symbols from the prior index policy",
                 CommandExitCodes.UsageError,
                 "Run a full index refresh without --files, --commits, or --changed-between when changing --include-symbol-kind or --exclude-symbol-kind.",
                 CommandErrorCodes.UsageError);
@@ -1862,8 +1864,7 @@ public static class IndexCommandRunner
                 foldReadyAfter = writer.MarkFoldReady();
             }
             writer.WriteCdidxWriterVersion(ConsoleUi.LoadVersion());
-            if (symbolKindFilterMatchesPrior)
-                writer.SetMeta(SymbolKindFilterMetaKey, options.SymbolKindFilter.Signature);
+            writer.SetMeta(SymbolKindFilterMetaKey, options.SymbolKindFilter.Signature);
         }
         if (errors == 0)
             StampIndexedHeadMetadata(writer, projectRoot);

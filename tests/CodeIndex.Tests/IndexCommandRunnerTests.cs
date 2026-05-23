@@ -231,6 +231,39 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_RejectsRemovedSymbolKindFilterPolicy()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.py");
+            File.WriteAllText(sourcePath, """
+                class App:
+                    pass
+
+                def helper():
+                    return App()
+                """);
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--exclude-symbol-kind", "function", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.AppendAllText(sourcePath, "\n# touched\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "app.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("symbol-kind filter policy cannot change", json.GetProperty("message").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_Help_IncludesSymbolKindFilterFlags()
     {
         var (exitCode, stdout, stderr) = RunAndCaptureStreams(["--help"]);
