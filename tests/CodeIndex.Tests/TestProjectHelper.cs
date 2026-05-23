@@ -146,18 +146,27 @@ internal static class TestProjectHelper
         {
             try
             {
+                if (attempt > 0)
+                    SqlitePoolCleanup.ClearPoolsForWindowsFileRelease();
+
                 File.SetAttributes(path, FileAttributes.Normal);
                 File.Delete(path);
                 return;
             }
-            catch (IOException) when (attempt < 4)
+            catch (IOException)
             {
                 SqlitePoolCleanup.ClearPoolsForWindowsFileRelease();
+                if (attempt == 4)
+                    return;
+
                 Thread.Sleep(100);
             }
-            catch (UnauthorizedAccessException) when (attempt < 4)
+            catch (UnauthorizedAccessException)
             {
                 SqlitePoolCleanup.ClearPoolsForWindowsFileRelease();
+                if (attempt == 4)
+                    return;
+
                 Thread.Sleep(100);
             }
         }
