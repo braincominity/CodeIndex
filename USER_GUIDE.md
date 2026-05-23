@@ -250,6 +250,11 @@ the release notes will announce the timeline before the alias stops working.
 MCP mirrors the same split: use `exactSubstring` on `search`, `exactName` on
 name-based tools, and keep `exact` only for backward-compatible clients.
 
+For single-value CLI flags, repeated occurrences keep the long-standing
+rightmost-wins behavior. `cdidx` prints a warning that names the winning value:
+the last CLI occurrence takes precedence over earlier CLI occurrences and over
+environment or `.cdidxrc.json` defaults.
+
 ## Documented defaults and drift guard
 
 `cdidx --help` and the source constants are the canonical defaults. This guide
@@ -2014,6 +2019,10 @@ name に対する NFKC + Unicode CaseFold の等価比較です。
 削除する予定はありません。削除する場合は、alias が使えなくなる前に release notes で
 timeline を告知します。MCP も同じ分割を反映します。`search` では `exactSubstring`、
 name-based tools では `exactName` を使い、`exact` は後方互換 client 向けに残します。
+
+単一値の CLI フラグを複数回指定した場合は、従来どおり右端の指定が採用されます。
+`cdidx` は採用される値を含む警告を出し、最後の CLI 指定がそれ以前の CLI 指定や
+環境変数 / `.cdidxrc.json` の既定値より優先されることを明示します。
 
 ## 既定値と drift 防止
 
