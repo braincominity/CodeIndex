@@ -10,6 +10,10 @@ dotnet test
 dotnet run --project src/CodeIndex -- <command> [options]
 ```
 
+Development, CI, and NuGet tool packaging target `net8.0`. Use a .NET 8.x SDK
+for supported and tested builds; newer major .NET releases are outside the
+supported/tested matrix until CI covers them.
+
 For test suite structure, shared helpers, and test-writing conventions, see [TESTING_GUIDE.md](TESTING_GUIDE.md).
 
 ### NuGet lock files
@@ -67,6 +71,10 @@ Scoped `--files` / `--commits` refreshes reuse the same path filter as full scan
 Out-of-tree post-extraction hooks can implement `CodeIndex.Indexer.Hooks.IPostExtractionHook` in a `.dll` placed under `~/.config/cdidx/hooks/` (or the directory named by `CDIDX_HOOKS_DIR`). Hook assemblies are discovered in path order. Each concrete hook type is instantiated with a public parameterless constructor, then called after built-in symbol extraction and again after built-in reference extraction, before rows are persisted. Hooks receive a `FileContext` plus mutable `IList<SymbolRecord>` / `IList<ReferenceRecord>` values, so they can annotate extracted records, add synthetic symbols, or add domain-specific references.
 
 Hook failures are isolated to that hook invocation: assembly load, construction, and callback exceptions are captured as diagnostics and indexing continues. `status --json` and MCP `status` expose loaded hooks under `hooks` with `name`, `assembly_path`, and `type_name` so users can confirm which extensions are active.
+
+### Ignore file parsing
+
+`.gitignore` and `.cdidxignore` parsing follows Git's whitespace rules for pattern lines: leading spaces and tabs are literal pattern characters, `#` starts a comment only when it is the first unescaped character, and unescaped trailing spaces or tabs are trimmed. Escape a trailing space or tab with `\` when the whitespace is part of the filename pattern.
 
 ### CLI recoverable error format
 
@@ -1594,6 +1602,10 @@ dotnet test
 dotnet run --project src/CodeIndex -- <command> [options]
 ```
 
+開発、CI、NuGet ツールのパッケージングは `net8.0` を対象にしています。
+サポート済みかつテスト済みのビルドには .NET 8.x SDK を使ってください。
+CI で対象になるまでは、より新しいメジャー .NET リリースはサポート・テスト対象外です。
+
 テストスイートの構成、共有ヘルパー、テスト作法については [TESTING_GUIDE.md#テストガイド](TESTING_GUIDE.md#テストガイド) を参照してください。
 
 ### NuGet lock ファイル
@@ -1648,6 +1660,10 @@ CI で `NU1004 The packages lock file is inconsistent with the project dependenc
 ```
 
 `--files` / `--commits` の部分更新も、フルスキャンと同じパスフィルタを再利用する。各ディレクトリでは `FileIndexer` が `.gitignore` を `.cdidxignore` より先に読み、この順序でルールを追加し、後続の `!` パターンを再包含として扱う。commit 単位更新に `.gitignore` または `.cdidxignore` の変更が含まれる場合、`IndexCommandRunner` は newly ignored file を安全に purge するため自動でフルスキャンへフォールバックする。malformed な ignore 行は走査エラーとして報告し、その行だけをスキップして index 全体は継続する。Windows では Hidden または System 属性が付いたファイルとディレクトリを言語検出前に拒否する。プロジェクト所有のソースを索引したい場合、ignore ルールでは再包含できないため先にそれらの属性を外す。
+
+### ignore ファイルの解析
+
+`.gitignore` と `.cdidxignore` の pattern 行は Git の空白規則に合わせて解析する。行頭の space / tab は pattern の literal 文字として扱い、`#` は unescaped な先頭文字のときだけ comment を開始する。未エスケープの末尾 space / tab は削除するため、ファイル名 pattern の一部として末尾空白を含めたい場合は `\` で escape する。
 
 ### C# / .NET integration
 
