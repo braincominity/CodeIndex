@@ -2007,6 +2007,14 @@ public static class QueryCommandRunner
                 status.RecommendedAction = BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit);
                 status.AlternativeAction = BuildFoldRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit);
             }
+            else if (IsCSharpMetadataTargetOnlyReadinessDegraded(status))
+            {
+                var metadata = DegradationReasonCodes.GetMetadata(
+                    status.CSharpMetadataTargetDegradedReason ?? DegradationReasonCodes.CSharpMetadataTargetNotReady);
+                status.DegradedReason = metadata.Code;
+                status.RecommendedAction = metadata.RecommendedAction;
+                status.AlternativeAction = metadata.AlternativeAction;
+            }
 
             var degraded = IsStatusDegraded(status)
                 ? ", DEGRADED"
@@ -5071,7 +5079,7 @@ public static class QueryCommandRunner
             "graph_table_available" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.GraphTableMissing).HumanText,
             "issues_table_available" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.IssuesTableMissing).HumanText,
             "csharp_symbol_name_ready" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.CSharpSymbolNameNotReady).HumanText,
-            "csharp_metadata_target_ready" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.CSharpMetadataTargetNotReady).HumanText,
+            "csharp_metadata_target_ready" => DegradationReasonCodes.GetMetadata(status.CSharpMetadataTargetDegradedReason ?? DegradationReasonCodes.CSharpMetadataTargetNotReady).HumanText,
             _ => fallback,
         };
 
@@ -5081,7 +5089,7 @@ public static class QueryCommandRunner
             "sql_graph_contract_ready" => $"Run `{BuildSqlGraphContractRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` before trusting SQL references/callers/deps/unused/hotspots.",
             "csharp_symbol_name_ready" => $"Run `{BuildCSharpCanonicalNameRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to upgrade canonical C# symbol names in place.",
             "fold_ready" => $"Run `{BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit)}` to restamp folded-name columns in place, or `{BuildFoldRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` for a full rebuild.",
-            "csharp_metadata_target_ready" => "Run `cdidx index .` to re-stamp authoritative is_metadata_target values.",
+            "csharp_metadata_target_ready" => DegradationReasonCodes.GetMetadata(status.CSharpMetadataTargetDegradedReason ?? DegradationReasonCodes.CSharpMetadataTargetNotReady).RecommendedAction,
             "index_newer_than_reader" => "Run status with a current cdidx binary, or rebuild the DB with the version you intend to use.",
             _ => fallback,
         };
@@ -5131,7 +5139,7 @@ public static class QueryCommandRunner
         if (Includes("csharp") && !status.CSharpSymbolNameReady)
             failures.Add(new StatusCheckFailure("csharp_symbol_name_ready", false, "[degraded] csharp_symbol_name_ready=false"));
         if (Includes("csharp") && !status.CSharpMetadataTargetReady)
-            failures.Add(new StatusCheckFailure("csharp_metadata_target_ready", false, "[degraded] csharp_metadata_target_ready=false"));
+            failures.Add(new StatusCheckFailure("csharp_metadata_target_ready", false, $"[degraded] csharp_metadata_target_ready=false reason={status.CSharpMetadataTargetDegradedReason ?? "unknown"}"));
         if (Includes("fold") && !status.FoldReady)
             failures.Add(new StatusCheckFailure("fold_ready", false, $"[degraded] fold_ready=false reason={status.FoldReadyReason ?? "unknown"}"));
         if (Includes("newer") && status.IndexNewerThanReader)
@@ -5167,6 +5175,16 @@ public static class QueryCommandRunner
            && status.HotspotFamilyReady
            && status.CSharpSymbolNameReady
            && status.CSharpMetadataTargetReady;
+
+    private static bool IsCSharpMetadataTargetOnlyReadinessDegraded(StatusResult status)
+        => !status.CSharpMetadataTargetReady
+           && status.GraphTableAvailable
+           && status.IssuesTableAvailable
+           && status.SqlGraphContractReady
+           && status.HotspotFamilyReady
+           && status.CSharpSymbolNameReady
+           && status.FoldReady
+           && !status.IndexNewerThanReader;
 
     private static string BuildFoldNotReadyExplanation(string? foldReadyReason)
         => DegradationReasonCodes.BuildFoldNotReadyExplanation(foldReadyReason);
