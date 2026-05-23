@@ -2311,6 +2311,7 @@ public partial class McpServer
                     record.Path,
                     record.Modified,
                     record.Checksum,
+                    size: record.Size,
                     language: record.Lang,
                     allowReuse: record.Lang is not ("javascript" or "typescript")
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)

@@ -519,6 +519,9 @@ public class StatusResult
     /// </summary>
     [JsonPropertyName("csharp_metadata_target_ready")]
     public bool CSharpMetadataTargetReady { get; set; } = true;
+    [JsonPropertyName("csharp_metadata_target_degraded_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CSharpMetadataTargetDegradedReason { get; set; }
     /// <summary>
     /// True when every indexed SQL graph row was written under the current stored call-column /
     /// qualified-name contract. False means SQL graph/dependency readers may still return false

@@ -79,6 +79,7 @@ LOCAL_MIRROR_DIR_CLEANUP=""
 LOCAL_MIRROR_PID=""
 SELF_TEST_INSTALL_DIR_CLEANUP=""
 REINSTALL_SCRATCH_CLEANUP=""
+INSTALL_LOCK_DIR_CLEANUP=""
 SELF_TEST_LOCAL_MIRROR=0
 # Only set via the --self-test-allow-overwrite CLI flag. We intentionally do
 # NOT inherit this from the environment so that a stale SELF_TEST_ALLOW_OVERWRITE=1
@@ -147,6 +148,9 @@ cleanup() {
     if [ -n "$REINSTALL_SCRATCH_CLEANUP" ]; then
         rm -rf "$REINSTALL_SCRATCH_CLEANUP"
     fi
+    if [ -n "$INSTALL_LOCK_DIR_CLEANUP" ]; then
+        rm -rf "$INSTALL_LOCK_DIR_CLEANUP"
+    fi
 }
 trap cleanup EXIT
 
@@ -167,6 +171,27 @@ need_cmd() {
     if ! command -v "$1" > /dev/null 2>&1; then
         error "Required command not found: $1"
     fi
+}
+
+acquire_install_lock() {
+    mkdir -p "$INSTALL_DIR"
+
+    local lock_path="${INSTALL_DIR}/.cdidx-install.lock"
+
+    if command -v flock > /dev/null 2>&1; then
+        exec 9>"$lock_path"
+        if ! flock -n 9; then
+            error "Another cdidx install is already running for ${INSTALL_DIR}. Retry after it finishes."
+        fi
+        return 0
+    fi
+
+    local lock_dir="${INSTALL_DIR}/.cdidx-install.lockdir"
+    if ! mkdir "$lock_dir" 2>/dev/null; then
+        error "Another cdidx install is already running for ${INSTALL_DIR}. Retry after it finishes."
+    fi
+    INSTALL_LOCK_DIR_CLEANUP="$lock_dir"
+    return 0
 }
 
 strip_version_prefix() {
@@ -1593,6 +1618,7 @@ main() {
     info "cdidx installer"
     detect_platform
     info "Detected platform: ${RID}"
+    acquire_install_lock
     detect_existing_install
     if ! resolve_version "${1:-}"; then
         exit 1

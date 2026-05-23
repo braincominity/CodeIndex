@@ -30496,6 +30496,33 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustConstGenericDeclarations_CaptureConstGenericReferences()
+    {
+        const string content = """
+            struct Array<const N: usize> {
+                values: [i32; N],
+            }
+
+            fn process<const N: usize>(arr: [i32; N]) where const N: usize {
+                consume(arr);
+            }
+
+            impl<const N: usize> Array<N> {
+                fn len(&self) -> usize { N }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "N" && r.ReferenceKind == "const_generic_reference");
+        Assert.Contains(references, r => r.SymbolName == "usize" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "Array" && r.ReferenceKind == "type_reference");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Array");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "process");
+    }
+
+    [Fact]
     public void Extract_RustRawIdentifierTypeReferences_NormalizesNames()
     {
         const string content = """

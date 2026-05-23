@@ -191,6 +191,7 @@ public class DbContext : IDisposable
                 dbPath: dbPath);
             Execute("PRAGMA busy_timeout=5000");
             RegisterConnectionFunctionsWithRetry(_connection);
+            EnsureWritableUserVersionSupported(dbPath);
 
             // Enable WAL mode and verify it was applied / WALモードを有効にし適用を確認
             var journalMode = ExecuteScalar("PRAGMA journal_mode=WAL");
@@ -220,6 +221,22 @@ public class DbContext : IDisposable
         {
             EnsureForeignKeysEnabled();
         }
+    }
+
+    private void EnsureWritableUserVersionSupported(string dbPath)
+    {
+        var userVersion = GetUserVersion();
+        var unknownBits = userVersion & ~CurrentSchemaVersion;
+        if (unknownBits == 0)
+            return;
+
+        _connection.Dispose();
+        throw new CodeIndexException(
+            code: CommandErrorCodes.SchemaTooNew,
+            category: CodeIndexExceptionCategory.Database,
+            message: $"This DB was written by a newer cdidx schema stamp (user_version {userVersion}); this binary supports up to {CurrentSchemaVersion}.",
+            path: dbPath,
+            hint: "Run with a current cdidx binary or rebuild the index with this version before writing to the database.");
     }
 
     internal static void ExecuteSynchronousPragmaWithFallback(Action<string> execute)
@@ -897,6 +914,7 @@ public class DbContext : IDisposable
     public const string IndexedHeadShaMetaKey = "indexed_head_sha";
     public const string IndexedHeadBranchMetaKey = "indexed_head_branch";
     public const string IndexedHeadTimestampMetaKey = "indexed_head_timestamp";
+    public const string LastFullScanElapsedMsMetaKey = "last_full_scan_elapsed_ms";
     // Issue #1585: count of files seen by the most recent successful full-repository scan
     // whose non-empty extension did not map to a known language. This is a scan coverage
     // signal, not an indexed-file count, and is omitted by readers until a current index pass

@@ -1,7 +1,9 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using CodeIndex.Models;
 
 namespace CodeIndex.Cli;
@@ -43,14 +45,24 @@ namespace CodeIndex.Cli;
 /// </summary>
 internal static class GitHubIssueReporter
 {
+    internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan DefaultRateLimitRetryDelay = TimeSpan.FromMinutes(1);
+
     // Static HttpClient singleton — .NET best practice for reuse.
     // 静的 HttpClient シングルトン — .NET の再利用ベストプラクティス。
     private static readonly HttpClient s_defaultHttpClient = CreateDefaultHttpClient();
 
     private static HttpClient CreateDefaultHttpClient()
     {
-        var client = new HttpClient
+        var handler = new HttpClientHandler
         {
+            UseProxy = true,
+            Proxy = HttpClient.DefaultProxy,
+            DefaultProxyCredentials = CredentialCache.DefaultCredentials,
+        };
+        var client = new HttpClient(handler)
+        {
+            Timeout = DefaultTimeout,
             DefaultRequestHeaders =
             {
                 { "User-Agent", "cdidx" },
@@ -78,10 +90,10 @@ internal static class GitHubIssueReporter
     /// <summary>
     /// Try to create a GitHub Issue for the given suggestion.
     /// Returns the issue URL on success, null if no token is set or on failure.
-    /// This method is best-effort — it never throws.
+    /// This method is best-effort, but preserves cooperative cancellation and fatal runtime failures.
     /// 指定された提案の GitHub Issue 作成を試みる。
     /// 成功時は Issue URL を返し、トークン未設定時や失敗時は null を返す。
-    /// ベストエフォート — 例外を投げない。
+    /// ベストエフォート。ただし協調キャンセルと致命的なランタイム障害は保持する。
     /// </summary>
     public static async Task<string?> TryCreateIssueAsync(SuggestionRecord record, string version)
     {
@@ -92,6 +104,8 @@ internal static class GitHubIssueReporter
     /// <summary>
     /// Try to create a GitHub Issue and return diagnostic state for persistence.
     /// GitHub Issue 作成を試み、永続化用の診断状態を返す。
+    /// Preserves cooperative cancellation and fatal runtime failures.
+    /// 協調キャンセルと致命的なランタイム障害は保持する。
     /// </summary>
     public static async Task<SuggestionStore.SubmitAttemptResult> TryCreateIssueDetailedAsync(SuggestionRecord record, string version)
     {
@@ -116,13 +130,35 @@ internal static class GitHubIssueReporter
 
             return await CreateIssueAsync(record, version, token);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ShouldTreatAsSubmissionFailure(ex))
         {
             // Best-effort: log to stderr but do not propagate.
             // ベストエフォート: stderr にログ出力するが伝播しない。
             Console.Error.WriteLine(BuildSubmissionFailureMessage(ex.Message));
             return SuggestionStore.SubmitAttemptResult.Failure($"{ex.GetType().Name}: {ex.Message}");
         }
+    }
+
+    private static bool ShouldTreatAsSubmissionFailure(Exception ex)
+    {
+        if (ex is OutOfMemoryException)
+            return false;
+
+        if (ex is TaskCanceledException taskCanceled)
+            return !taskCanceled.CancellationToken.IsCancellationRequested || IsTimeoutCancellation(taskCanceled);
+
+        return ex is not OperationCanceledException;
+    }
+
+    private static bool IsTimeoutCancellation(Exception ex)
+    {
+        for (var current = ex.InnerException; current != null; current = current.InnerException)
+        {
+            if (current is TimeoutException)
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -319,6 +355,15 @@ internal static class GitHubIssueReporter
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await response.Content.ReadAsStringAsync();
+            var rateLimitRetryAt = GetRateLimitRetryAt(response, DateTime.UtcNow);
+            if (rateLimitRetryAt != null)
+            {
+                Console.Error.WriteLine(BuildRateLimitFailureMessage((int)response.StatusCode, errorBody, rateLimitRetryAt.Value));
+                return SuggestionStore.SubmitAttemptResult.RetryAfter(
+                    BuildRateLimitErrorDetail((int)response.StatusCode, errorBody, rateLimitRetryAt.Value),
+                    rateLimitRetryAt.Value);
+            }
+
             Console.Error.WriteLine(BuildApiFailureMessage((int)response.StatusCode, errorBody));
             return SuggestionStore.SubmitAttemptResult.Failure(BuildApiErrorDetail((int)response.StatusCode, errorBody));
         }
@@ -333,13 +378,13 @@ internal static class GitHubIssueReporter
     }
 
     /// <summary>
-    /// Remove inline code spans (backtick-wrapped text) from a string before
-    /// external submission. Replaces `code` with [code example removed].
+    /// Remove fenced code blocks and inline code spans from a string before
+    /// external submission. Replaces code-shaped markdown with [code example removed].
     /// This is a stricter outbound policy than SourceCodeDetector's local policy:
     /// locally, inline code is useful for gap descriptions; externally, we strip
     /// it to prevent any code-like content from reaching GitHub.
-    /// 外部送信前にインラインコードスパン（バッククォートで囲まれたテキスト）を
-    /// 文字列から除去する。`code` を [code example removed] に置換する。
+    /// 外部送信前に fenced code block とインラインコードスパンを文字列から除去する。
+    /// コード形の Markdown を [code example removed] に置換する。
     /// これは SourceCodeDetector のローカルポリシーより厳格な送信ポリシーである:
     /// ローカルではインラインコードはギャップ記述に有用だが、外部には GitHub に
     /// コード的内容が到達しないよう除去する。
@@ -349,19 +394,28 @@ internal static class GitHubIssueReporter
         if (string.IsNullOrEmpty(text))
             return text;
 
-        // Replace backtick-wrapped spans: `anything here` → [code example removed]
-        // バッククォートで囲まれたスパンを置換: `任意の内容` → [code example removed]
-        return System.Text.RegularExpressions.Regex.Replace(
+        var scrubbed = Regex.Replace(
             text,
-            @"`[^`]+`",
+            @"(?s)```.*?```",
+            "[code example removed]");
+
+        // Replace single-backtick inline spans after fenced blocks so triple
+        // fences cannot leave stray backticks around a placeholder.
+        // fenced block を先に置換し、triple fence が placeholder 周辺に残らないようにする。
+        return Regex.Replace(
+            scrubbed,
+            @"(?<!`)`[^`\r\n]+`(?!`)",
             "[code example removed]");
     }
 
     internal static string BuildSubmissionFailureMessage(string detail) =>
-        $"[cdidx] GitHub issue creation failed: {detail}. The suggestion stays recorded locally; check `CDIDX_GITHUB_TOKEN` and network access, then retry `suggest_improvement` when ready.";
+        $"[cdidx] GitHub issue creation failed: {detail}. The suggestion stays recorded locally; check `CDIDX_GITHUB_TOKEN`, network access, and proxy environment variables (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`), then retry `suggest_improvement` when ready.";
 
     internal static string BuildApiFailureMessage(int statusCode, string errorBody) =>
         $"[cdidx] GitHub API responded {statusCode}: {errorBody}. GitHub submission was skipped; the suggestion stays local. Check `CDIDX_GITHUB_TOKEN`, repository permissions, or network access, then retry `suggest_improvement`.";
+
+    internal static string BuildRateLimitFailureMessage(int statusCode, string errorBody, DateTime nextRetryAt) =>
+        $"[cdidx] GitHub API rate limit response {statusCode}: {errorBody}. GitHub submission was paused until {nextRetryAt:O}; the suggestion stays local and will not be retried before then.";
 
     internal static string BuildApiErrorDetail(int statusCode, string errorBody)
     {
@@ -369,5 +423,35 @@ internal static class GitHubIssueReporter
         if (normalized.Length > 500)
             normalized = normalized[..500] + "...";
         return $"{statusCode}: {normalized}";
+    }
+
+    internal static string BuildRateLimitErrorDetail(int statusCode, string errorBody, DateTime nextRetryAt) =>
+        $"{BuildApiErrorDetail(statusCode, errorBody)}; next_retry_at={nextRetryAt:O}";
+
+    internal static DateTime? GetRateLimitRetryAt(HttpResponseMessage response, DateTime nowUtc)
+    {
+        var isRateLimited = response.StatusCode == (HttpStatusCode)429
+            || (response.StatusCode == HttpStatusCode.Forbidden
+                && response.Headers.TryGetValues("x-ratelimit-remaining", out var remainingValues)
+                && remainingValues.Any(value => string.Equals(value, "0", StringComparison.Ordinal)));
+        if (!isRateLimited)
+            return null;
+
+        if (response.Headers.RetryAfter?.Delta is { } delta)
+            return nowUtc.Add(delta).ToUniversalTime();
+
+        if (response.Headers.RetryAfter?.Date is { } retryDate)
+            return retryDate.UtcDateTime;
+
+        if (response.Headers.TryGetValues("x-ratelimit-reset", out var resetValues))
+        {
+            foreach (var value in resetValues)
+            {
+                if (long.TryParse(value, out var epochSeconds))
+                    return DateTimeOffset.FromUnixTimeSeconds(epochSeconds).UtcDateTime;
+            }
+        }
+
+        return nowUtc.Add(DefaultRateLimitRetryDelay);
     }
 }

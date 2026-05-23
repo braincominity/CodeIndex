@@ -22,6 +22,12 @@ internal static class RustReferenceExtractor
     private static readonly Regex ModuleDeclarationRegex = new(
         $@"^\s*(?:pub(?:\s*\([^\)]*\))?\s+)?mod\s+(?<name>{RustIdentifierPattern})\s*;",
         RegexOptions.Compiled);
+    private static readonly Regex ConstGenericParameterRegex = new(
+        $@"^\s*const\s+(?<name>{RustIdentifierPattern})\s*:\s*(?<type>.+?)\s*$",
+        RegexOptions.Compiled);
+    private static readonly Regex ConstGenericTypeHeadRegex = new(
+        $@"^\s*(?<name>{RustIdentifierPattern}(?:::{RustIdentifierPattern})*)",
+        RegexOptions.Compiled);
     private static readonly Regex UseStatementRegex = new(
         @"^\s*(?:pub(?:\s*\([^\)]*\))?\s+)?use\s+(?<body>.+);",
         RegexOptions.Compiled);
@@ -1440,6 +1446,25 @@ internal static class RustReferenceExtractor
         var genericOpenIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, '<');
         if (genericOpenIndex >= 0)
         {
+            var constGenericNames = EmitConstGenericParameterReferences(
+                preparedLine,
+                genericOpenIndex,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
+            EmitConstGenericUsageReferences(
+                preparedLine,
+                genericOpenIndex,
+                constGenericNames,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
             TypedLanguageReferenceExtractor.EmitGenericColonBoundReferences(
                 preparedLine,
                 genericOpenIndex,
@@ -1479,6 +1504,14 @@ internal static class RustReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn);
+        EmitWhereClauseConstGenericReferences(
+            preparedLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn);
         EmitWhereClauseFunctionTraitReturnTypeReferences(
             preparedLine,
             references,
@@ -1487,6 +1520,162 @@ internal static class RustReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn);
+    }
+
+    private static HashSet<string> EmitConstGenericParameterReferences(
+        string preparedLine,
+        int genericOpenIndex,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var constGenericNames = new HashSet<string>(StringComparer.Ordinal);
+        var genericCloseIndex = FindRustGenericClose(preparedLine, genericOpenIndex);
+        if (genericCloseIndex <= genericOpenIndex)
+            return constGenericNames;
+
+        var clause = preparedLine.Substring(genericOpenIndex + 1, genericCloseIndex - genericOpenIndex - 1);
+        EmitConstGenericSegments(
+            clause,
+            genericOpenIndex + 1,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn,
+            constGenericNames);
+        return constGenericNames;
+    }
+
+    private static void EmitConstGenericUsageReferences(
+        string preparedLine,
+        int genericOpenIndex,
+        HashSet<string> constGenericNames,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        if (constGenericNames.Count == 0)
+            return;
+
+        var genericCloseIndex = FindRustGenericClose(preparedLine, genericOpenIndex);
+        if (genericCloseIndex <= genericOpenIndex)
+            return;
+
+        for (var index = genericCloseIndex + 1; index < preparedLine.Length; index++)
+        {
+            if (!IsRustIdentifierStart(preparedLine[index]))
+                continue;
+
+            var end = index + 1;
+            while (end < preparedLine.Length && IsRustIdentifierPart(preparedLine[end]))
+                end++;
+
+            var name = preparedLine.Substring(index, end - index);
+            if (constGenericNames.Contains(name))
+            {
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    index,
+                    "const_generic_reference",
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(index));
+            }
+
+            index = end - 1;
+        }
+    }
+
+    private static void EmitWhereClauseConstGenericReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (var whereIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "where"))
+        {
+            var clauseStart = whereIndex + "where".Length;
+            var clauseEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, clauseStart, stopAtComma: false, stopAtArrow: false);
+            if (clauseEnd <= clauseStart)
+                clauseEnd = preparedLine.Length;
+
+            EmitConstGenericSegments(
+                preparedLine.Substring(clauseStart, clauseEnd - clauseStart),
+                clauseStart,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
+        }
+    }
+
+    private static void EmitConstGenericSegments(
+        string clause,
+        int clauseStart,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        HashSet<string>? constGenericNames = null)
+    {
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(clause))
+        {
+            var fragment = clause.Substring(segmentStart, segmentLength);
+            var match = ConstGenericParameterRegex.Match(fragment);
+            if (!match.Success)
+                continue;
+
+            var nameGroup = match.Groups["name"];
+            var name = NormalizeIdentifier(nameGroup.Value);
+            constGenericNames?.Add(name);
+            var absoluteNameStart = clauseStart + segmentStart + nameGroup.Index;
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                name,
+                absoluteNameStart,
+                "const_generic_reference",
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteNameStart));
+
+            var typeGroup = match.Groups["type"];
+            var typeMatch = ConstGenericTypeHeadRegex.Match(typeGroup.Value);
+            if (!typeMatch.Success)
+                continue;
+
+            var typeNameGroup = typeMatch.Groups["name"];
+            var absoluteTypeStart = clauseStart + segmentStart + typeGroup.Index + typeNameGroup.Index;
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                NormalizeIdentifier(typeNameGroup.Value),
+                absoluteTypeStart,
+                "annotation",
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteTypeStart));
+        }
     }
 
     private static void EmitGenericFunctionTraitReturnTypeReferences(
