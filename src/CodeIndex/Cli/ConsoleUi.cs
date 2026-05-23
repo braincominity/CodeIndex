@@ -66,27 +66,27 @@ public static class ConsoleUi
         ("index-commits", "cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-changed-between", "cdidx index <projectPath> --changed-between <old-ref> <new-ref> [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
-        ("search", "cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup] [--no-visibility-rank]"),
-        ("definition", "cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
-        ("references", "cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
-        ("callers", "cdidx callers <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--rank-by <weighted|count|kind>] [--raw-kinds] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count]"),
-        ("callees", "cdidx callees <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--rank-by <weighted|count|kind>] [--raw-kinds] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count]"),
-        ("symbols", "cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]"),
-        ("files", "cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]"),
-        ("find", "cdidx find <query> --path <glob> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]"),
-        ("excerpt", "cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json]"),
-        ("map", "cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes]"),
-        ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]"),
-        ("outline", "cdidx outline <path> [--db <path>] [--json]"),
-        ("status", "cdidx status [--db <path>] [--json] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--stale-after <duration>] [--explain <field>] [--log-path]"),
+        ("search", "cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup] [--no-visibility-rank]"),
+        ("definition", "cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
+        ("references", "cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
+        ("callers", "cdidx callers <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--kind <kind>] [--rank-by <weighted|count|kind>] [--raw-kinds] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count]"),
+        ("callees", "cdidx callees <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--kind <kind>] [--rank-by <weighted|count|kind>] [--raw-kinds] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count]"),
+        ("symbols", "cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]"),
+        ("files", "cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]"),
+        ("find", "cdidx find <query> --path <glob> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]"),
+        ("excerpt", "cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--verbose]"),
+        ("map", "cdidx map [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes]"),
+        ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]"),
+        ("outline", "cdidx outline <path> [--db <path>] [--json] [--verbose]"),
+        ("status", "cdidx status [--db <path>] [--json] [--verbose] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--stale-after <duration>] [--explain <field>] [--log-path]"),
         ("db", "cdidx db --integrity-check [--db <path>] [--json]"),
         ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n>]"),
         ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n>] [--no-log] [--include-args]"),
-        ("validate", "cdidx validate [--db <path>] [--json] [--kind <kind>] [--path <glob>]"),
-        ("impact", "cdidx impact <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--max-hops <n>] [--count] [--with-paths]"),
-        ("deps", "cdidx deps [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--reverse]"),
-        ("unused", "cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]"),
-        ("hotspots", "cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]"),
+        ("validate", "cdidx validate [--db <path>] [--json] [--verbose] [--kind <kind>] [--path <glob>]"),
+        ("impact", "cdidx impact <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--max-hops <n>] [--count] [--with-paths]"),
+        ("deps", "cdidx deps [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--reverse]"),
+        ("unused", "cdidx unused [--db <path>] [--json] [--verbose] [--limit <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]"),
+        ("hotspots", "cdidx hotspots [--db <path>] [--json] [--verbose] [--limit <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]"),
         ("suggestions", "cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--format <json|markdown>]"),
         ("languages", "cdidx languages [--json]"),
         ("batch", "cdidx batch [--db <path>]  # reads JSON string arrays from stdin, one query command per line"),
@@ -655,6 +655,7 @@ public static class ConsoleUi
         Console.WriteLine("Query options:");
         Console.WriteLine("  --db <path>                Database file path (default: .cdidx/codeindex.db in current directory)");
         Console.WriteLine("  --json                     Output as JSON (streaming hits use JSON lines; counts/summaries use one object)");
+        Console.WriteLine("  --verbose                  Query commands: emit debug diagnostics to stderr; with --json, append an _debug JSON object");
         Console.WriteLine("  --profile                  Read commands: append SQL timing, row-count, and EXPLAIN QUERY PLAN JSON after the normal result");
         Console.WriteLine("  --slow-query-ms <n>        Read commands: log profiled SQL statements that take at least <n> ms (use 0 to log every statement)");
         Console.WriteLine("  --limit <n>, --top <n>     Max results to return (default: 20)");
@@ -703,6 +704,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx search --query --path --path README.md   Search for a literal option token");
         Console.WriteLine("  cdidx search \"Run();\" --exact-substring        Case-sensitive exact substring search");
         Console.WriteLine("  cdidx search authenticate --profile            Append SQL profile JSON for slow-query debugging");
+        Console.WriteLine("  cdidx search authenticate --verbose            Emit query debug diagnostics on stderr");
         Console.WriteLine("  cdidx definition ResolveGitCommonDir --body   Show a symbol definition and body");
         Console.WriteLine("  cdidx references ResolveGitCommonDir          Find indexed references");
         Console.WriteLine("  cdidx references DbContext --kind instantiate Filter constructor sites by reference kind");
@@ -921,6 +923,19 @@ public static class ConsoleUi
             .Distinct()
             .OrderBy(l => l));
 
+    private static string GetCompletionKinds() =>
+        string.Join(" ", new[]
+        {
+            "accessor", "annotation", "associatedtype", "attribute", "augmentation",
+            "call", "class", "class_hook", "consumes_hook", "constant", "constructor",
+            "delegate", "enum", "event", "field", "friend", "function", "heading",
+            "hook", "impl", "import", "instantiate", "interface", "label", "lambda",
+            "method", "module", "namespace", "object", "operator", "procedure",
+            "property", "razor_event_binding", "record", "reference", "specialization",
+            "struct", "subscribe", "test.method", "trait", "type", "type_reference",
+            "typealias", "union", "unsubscribe", "variable",
+        }.OrderBy(k => k, StringComparer.Ordinal));
+
     // Commands that get their own per-command completion branch (bash/zsh). Order matters: the
     // `else` generic branch is the catch-all, and `search` must remain the last `elif` so the
     // tests `PrintCompletions_BashAndZshScopeMaxLineWidthToSearchBranch` can isolate it.
@@ -944,6 +959,7 @@ public static class ConsoleUi
     {
         var cmds = string.Join(" ", Commands);
         var langs = GetCompletionLangs();
+        var kinds = GetCompletionKinds();
         var sb = new StringBuilder();
         sb.Append("_cdidx() {\n");
         sb.Append("    local cur prev commands\n");
@@ -961,7 +977,7 @@ public static class ConsoleUi
         sb.Append("    case \"$prev\" in\n");
         sb.Append("        --db|--path|--exclude-path|--output|-o) COMPREPLY=($(compgen -f -- \"$cur\")) ;;\n");
         sb.Append($"        --lang) COMPREPLY=($(compgen -W \"{langs}\" -- \"$cur\")) ;;\n");
-        sb.Append("        --kind) COMPREPLY=($(compgen -W \"function lambda class struct interface enum property event delegate namespace import\" -- \"$cur\")) ;;\n");
+        sb.Append($"        --kind) COMPREPLY=($(compgen -W \"{kinds}\" -- \"$cur\")) ;;\n");
         sb.Append("        *)\n");
         for (var i = 0; i < EnumeratedCompletionCommands.Length; i++)
         {
@@ -1032,6 +1048,7 @@ public static class ConsoleUi
     {
         var cmds = string.Join(" ", Commands.Select(c => $"'{c}:{c} command'"));
         var langs = GetCompletionLangs();
+        var kinds = GetCompletionKinds();
         var sb = new StringBuilder();
         sb.Append("#compdef cdidx\n");
         sb.Append("_cdidx() {\n");
@@ -1054,10 +1071,10 @@ public static class ConsoleUi
             var command = EnumeratedCompletionCommands[i];
             var keyword = i == 0 ? "if" : "elif";
             sb.Append($"            {keyword} [[ $subcmd == {command} ]]; then\n");
-            AppendZshArguments(sb, BuildZshArgsForCommand(command, langs));
+            AppendZshArguments(sb, BuildZshArgsForCommand(command, langs, kinds));
         }
         sb.Append("            else\n");
-        AppendZshArguments(sb, BuildZshGenericArgs(langs));
+        AppendZshArguments(sb, BuildZshGenericArgs(langs, kinds));
         sb.Append("            fi\n");
         sb.Append("            ;;\n");
         sb.Append("    esac\n");
@@ -1066,11 +1083,11 @@ public static class ConsoleUi
         return sb.ToString();
     }
 
-    private static List<string> BuildZshArgsForCommand(string command, string langs)
+    private static List<string> BuildZshArgsForCommand(string command, string langs, string kinds)
     {
         var args = new List<string>();
         foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(command))
-            args.AddRange(FormatZshArguments(flag, langs));
+            args.AddRange(FormatZshArguments(flag, langs, kinds));
         // Append a trailing positional placeholder so zsh suggests path/query completion after
         // the flags — but only for commands that actually accept a positional argument. `status`,
         // `db`, `hotspots`, etc. would reject anything typed there, so emitting no placeholder
@@ -1087,7 +1104,7 @@ public static class ConsoleUi
         return args;
     }
 
-    private static List<string> BuildZshGenericArgs(string langs)
+    private static List<string> BuildZshGenericArgs(string langs, string kinds)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var args = new List<string>();
@@ -1098,21 +1115,21 @@ public static class ConsoleUi
                 if (IsEnumeratedBranchScopedFlag(flag.Name))
                     continue;
                 if (seen.Add(flag.Name))
-                    args.AddRange(FormatZshArguments(flag, langs));
+                    args.AddRange(FormatZshArguments(flag, langs, kinds));
             }
         }
         args.Add("'*:query'");
         return args;
     }
 
-    private static IEnumerable<string> FormatZshArguments(CliFlag flag, string langs)
+    private static IEnumerable<string> FormatZshArguments(CliFlag flag, string langs, string kinds)
     {
-        yield return FormatZshArgument(flag.Name, flag, langs);
+        yield return FormatZshArgument(flag.Name, flag, langs, kinds);
         if (flag.ShortName is not null)
-            yield return FormatZshArgument(flag.ShortName, flag, langs);
+            yield return FormatZshArgument(flag.ShortName, flag, langs, kinds);
     }
 
-    private static string FormatZshArgument(string name, CliFlag flag, string langs)
+    private static string FormatZshArgument(string name, CliFlag flag, string langs, string kinds)
     {
         var desc = flag.Description.Replace("'", "''");
         if (!flag.IsValueBearing)
@@ -1127,7 +1144,7 @@ public static class ConsoleUi
             "<id>" => "id",
             "<datetime>" => "datetime",
             "<lang>" => $"language:({langs})",
-            "<kind>" => "kind:(function lambda class struct interface enum property event delegate namespace import)",
+            "<kind>" => $"kind:({kinds})",
             "<query>" => "query",
             "<name>" => "name",
             "<host:port>" => "address",
@@ -1151,6 +1168,7 @@ public static class ConsoleUi
     private static string GetFishCompletions()
     {
         var langs = GetCompletionLangs();
+        var kinds = GetCompletionKinds();
         var lines = new List<string>
         {
             "# cdidx fish completions",
@@ -1186,7 +1204,7 @@ public static class ConsoleUi
             var argSpec = flag.ValuePlaceholder switch
             {
                 "<lang>" => $" -a '{langs}'",
-                "<kind>" => " -a 'function class struct interface enum property event delegate namespace import'",
+                "<kind>" => $" -a '{kinds}'",
                 "<stdio|http>" => " -a 'stdio http'",
                 _ => "",
             };

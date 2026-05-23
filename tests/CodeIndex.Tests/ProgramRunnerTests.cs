@@ -11,6 +11,35 @@ namespace CodeIndex.Tests;
 public class ProgramRunnerTests
 {
     [Fact]
+    public void TryConsumeSuggestionDedupThresholdFlag_SetsEnvironmentAndRemovesFlag()
+    {
+        using var env = EnvironmentVariableScope.Capture(SuggestionStore.DedupThresholdEnvironmentVariable);
+        env.Set(SuggestionStore.DedupThresholdEnvironmentVariable, null);
+        string[] args = ["--db", "index.db", "--suggestion-dedup-threshold", "0.7"];
+
+        var ok = ProgramRunner.TryConsumeSuggestionDedupThresholdFlag(ref args, out var error);
+
+        Assert.True(ok);
+        Assert.Empty(error);
+        Assert.Equal(["--db", "index.db"], args);
+        Assert.Equal("0.7", Environment.GetEnvironmentVariable(SuggestionStore.DedupThresholdEnvironmentVariable));
+    }
+
+    [Fact]
+    public void TryConsumeSuggestionDedupThresholdFlag_InvalidValue_ReturnsError()
+    {
+        using var env = EnvironmentVariableScope.Capture(SuggestionStore.DedupThresholdEnvironmentVariable);
+        env.Set(SuggestionStore.DedupThresholdEnvironmentVariable, null);
+        string[] args = ["--suggestion-dedup-threshold=1.5"];
+
+        var ok = ProgramRunner.TryConsumeSuggestionDedupThresholdFlag(ref args, out var error);
+
+        Assert.False(ok);
+        Assert.Contains("--suggestion-dedup-threshold", error);
+        Assert.Null(Environment.GetEnvironmentVariable(SuggestionStore.DedupThresholdEnvironmentVariable));
+    }
+
+    [Fact]
     public void Run_UnhandledException_ReturnsSanitizedSingleLineError()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
@@ -599,6 +628,8 @@ public class ProgramRunnerTests
         // #1550: --version 出力で開発ビルドとリリースを区別できるよう、コミット SHA /
         // ビルド日 / clean|dirty 情報を末尾に付与する。値は MSBuild が刻印するため
         // ここでは構造のみを検証する。
+        using var env = EnvironmentVariableScope.Capture(UpdateChecker.DisableEnvVar);
+        env.Set(UpdateChecker.DisableEnvVar, "1");
         var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
             ["--version"],
             appVersion: "1.10.0"));
@@ -623,6 +654,8 @@ public class ProgramRunnerTests
         // Issue #1550: `cdidx --version --json` is the machine-readable form
         // used by support tooling. All five keys must be present.
         // #1550: ツール連携用の --version --json 出力。5 キーが揃うことを検証。
+        using var env = EnvironmentVariableScope.Capture(UpdateChecker.DisableEnvVar);
+        env.Set(UpdateChecker.DisableEnvVar, "1");
         var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
             ["--version", "--json"],
             appVersion: "1.10.0"));
@@ -654,6 +687,59 @@ public class ProgramRunnerTests
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("--version does not accept '--bogus'", stderr);
         Assert.Contains("Hint:", stderr);
+    }
+
+    [Fact]
+    public void Run_Version_HumanOutput_AppendsCachedNewerReleaseHint()
+    {
+        var line = ProgramRunner.FormatVersionLine(
+            new ConsoleUi.BuildMetadata("1.10.0", "abc1234", "2026-05-23T00:00:00Z", "clean"),
+            "A newer release is available: v1.11.0");
+
+        Assert.Equal("cdidx v1.10.0 (commit abc1234, built 2026-05-23T00:00:00Z, clean) [A newer release is available: v1.11.0]", line);
+    }
+
+    [Fact]
+    public void UpdateChecker_FreshCache_ReturnsNewerReleaseWithoutFetching()
+    {
+        using var env = EnvironmentVariableScope.Capture(UpdateChecker.DisableEnvVar);
+        env.Set(UpdateChecker.DisableEnvVar, null);
+        var cacheDir = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}");
+        var cachePath = Path.Combine(cacheDir, "update-check.json");
+        Directory.CreateDirectory(cacheDir);
+        try
+        {
+            File.WriteAllText(cachePath, """
+                {"checked_at":"2026-05-23T00:00:00.0000000Z","latest_tag":"v1.11.0"}
+                """);
+
+            var hint = UpdateChecker.GetNewerReleaseHint(
+                "1.10.0",
+                cachePath,
+                DateTimeOffset.Parse("2026-05-23T01:00:00Z"),
+                _ => throw new InvalidOperationException("should not fetch"));
+
+            Assert.Equal("A newer release is available: v1.11.0", hint);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(cacheDir);
+        }
+    }
+
+    [Fact]
+    public void UpdateChecker_Disabled_ReturnsNullAndDoesNotFetch()
+    {
+        using var env = EnvironmentVariableScope.Capture(UpdateChecker.DisableEnvVar);
+        env.Set(UpdateChecker.DisableEnvVar, "1");
+
+        var hint = UpdateChecker.GetNewerReleaseHint(
+            "1.10.0",
+            Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json"),
+            DateTimeOffset.UtcNow,
+            _ => throw new InvalidOperationException("should not fetch"));
+
+        Assert.Null(hint);
     }
 
     [Fact]
@@ -737,26 +823,7 @@ public class ProgramRunnerTests
     };
 
     private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)
-    {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            var originalErr = Console.Error;
-            using var stdout = new StringWriter();
-            using var stderr = new StringWriter();
-            try
-            {
-                Console.SetOut(stdout);
-                Console.SetError(stderr);
-                return (action(), stdout.ToString(), stderr.ToString());
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-                Console.SetError(originalErr);
-            }
-        }
-    }
+        => ConsoleCapture.Capture(action);
 
     private static void AssertCanonicalCommandError(string stderr)
     {

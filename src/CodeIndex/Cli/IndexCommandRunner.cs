@@ -1798,6 +1798,29 @@ public static class IndexCommandRunner
                     continue;
                 }
 
+                var statReusableLanguage = TryDetectStatReusableLanguage(absPath);
+                var statMatchedId = TryGetUnchangedFileIdFromStat(
+                    writer,
+                    projectRoot,
+                    absPath,
+                    statReusableLanguage,
+                    allowReuse: symbolKindFilterMatchesPrior
+                        && statReusableLanguage is not ("javascript" or "typescript")
+                        && (statReusableLanguage != "csharp" || csharpSymbolNameContractMatchesCurrent)
+                        && (statReusableLanguage != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
+                        && (statReusableLanguage != "sql" || sqlGraphContractMatchesCurrent));
+                if (statMatchedId != null)
+                {
+                    skipped++;
+                    if (options.Verbose && !options.Json && !options.Quiet)
+                    {
+                        PauseUpdateSpinnerForConsoleWrite();
+                        Console.WriteLine($"  [SKIP] {relPath} (unchanged)");
+                        ResumeUpdateSpinnerAfterConsoleWrite();
+                    }
+                    continue;
+                }
+
                 var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(absPath);
 
                 if (warning != null && !options.Json && !options.Quiet)
@@ -1884,6 +1907,36 @@ public static class IndexCommandRunner
             }
             catch (Exception ex)
             {
+                if (ex is FileIndexer.BinaryFileSkippedException)
+                {
+                    warnings++;
+                    warningList.Add(new CliJsonMessage(relPath, ex.Message));
+                    if (!options.Json && !options.Quiet)
+                    {
+                        PauseUpdateSpinnerForConsoleWrite();
+                        ConsoleUi.PrintWarning(ex.Message);
+                        ResumeUpdateSpinnerAfterConsoleWrite();
+                    }
+
+                    if (writer.HasFileAtPath(relPath))
+                    {
+                        DemoteReadinessOnce();
+                        using var deleteTxn = writer.BeginTransaction();
+                        if (writer.DeleteFileByPath(relPath))
+                        {
+                            WriteProjectRootOnce();
+                            deleteTxn.Commit();
+                            removed++;
+                            ftsMutated = true;
+                        }
+                    }
+                    else
+                    {
+                        skipped++;
+                    }
+                    continue;
+                }
+
                 DemoteReadinessOnce();
                 GlobalToolLog.Error($"index_update_file_failed path={CollapseLineBreaks(relPath)}\n{GlobalToolLog.FormatExceptionChain(ex)}");
 
@@ -3128,6 +3181,10 @@ public static class IndexCommandRunner
                         {
                             throw;
                         }
+                        catch (FileIndexer.BinaryFileSkippedException ex)
+                        {
+                            extractionResults.Add(FullScanFileWorkItem.Skipped(filePath, ex.Message), cancellationToken);
+                        }
                         catch (Exception ex)
                         {
                             extractionResults.Add(FullScanFileWorkItem.Failure(filePath, ex), cancellationToken);
@@ -3157,6 +3214,43 @@ public static class IndexCommandRunner
                 {
                     if (item.Exception != null)
                         throw item.Exception;
+
+                    if (item.Record == null)
+                    {
+                        warnings++;
+                        warningList.Add(new CliJsonMessage(currentJsonIndexFile, item.Warning ?? "File skipped"));
+                        if (!options.Json && !options.Quiet && item.Warning != null)
+                        {
+                            PauseIndexSpinnerForConsoleWrite();
+                            ConsoleUi.PrintWarning(item.Warning);
+                            ResumeIndexSpinnerAfterConsoleWrite();
+                        }
+
+                        if (!options.Rebuild && writer.HasFileAtPath(currentJsonIndexFile))
+                        {
+                            using var deleteTxn = writer.BeginTransaction();
+                            if (writer.DeleteFileByPath(currentJsonIndexFile))
+                            {
+                                WriteProjectRootOnce();
+                                deleteTxn.Commit();
+                            }
+                        }
+                        else
+                        {
+                            skipped++;
+                        }
+                        processed++;
+                        currentJsonIndexFile = null;
+                        ThrowIfFullScanCancelled(processed, files.Count);
+                        ReportJsonIndexProgressIfNeeded();
+                        if (!options.Json && !options.Quiet)
+                        {
+                            PauseIndexSpinnerForConsoleWrite();
+                            ConsoleUi.PrintProgress(processed, files.Count);
+                            ResumeIndexSpinnerAfterConsoleWrite();
+                        }
+                        continue;
+                    }
 
                     var record = item.Record!;
                     if (item.Warning != null && !options.Json && !options.Quiet)
@@ -4144,6 +4238,51 @@ public static class IndexCommandRunner
     private static bool IsCSharpIdentifierPart(char ch)
         => char.IsLetterOrDigit(ch) || ch == '_';
 
+    private static string? TryDetectStatReusableLanguage(string absolutePath)
+    {
+        if (string.Equals(Path.GetExtension(absolutePath), ".h", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var detection = FileIndexer.TryDetectLanguage(absolutePath);
+        return detection.Status == FileIndexer.FileProbeStatus.Supported
+            ? detection.Language
+            : null;
+    }
+
+    private static long? TryGetUnchangedFileIdFromStat(
+        DbWriter writer,
+        string projectRoot,
+        string absolutePath,
+        string? language,
+        bool allowReuse)
+    {
+        if (!allowReuse || language == null)
+            return null;
+
+        try
+        {
+            var info = new FileInfo(absolutePath);
+            if (!info.Exists)
+                return null;
+
+            var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, absolutePath));
+            return writer.GetUnchangedFileId(
+                relativePath,
+                info.LastWriteTimeUtc,
+                checksum: null,
+                size: info.Length,
+                language: language);
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
     private sealed record CSharpStaticInterfaceWorkspaceSymbols(
         IReadOnlyList<SymbolRecord> Symbols,
         bool HasStaticInterfaceContracts);
@@ -4176,6 +4315,9 @@ public static class IndexCommandRunner
 
         public static FullScanFileWorkItem Failure(string filePath, Exception exception)
             => new(filePath, null, null, null, null, null, null, null, null, exception);
+
+        public static FullScanFileWorkItem Skipped(string filePath, string warning)
+            => new(filePath, null, null, null, warning, null, null, null, null, null);
     }
 
     private sealed record FoldOnlyRemediation(

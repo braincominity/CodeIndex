@@ -91,6 +91,47 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void TryAdd_FuzzyDuplicateSameCategoryAndLanguage_ReturnsFalse()
+    {
+        var record1 = MakeRecord("language_support", "javascript", "missing arrow function support");
+        var record2 = MakeRecord("language_support", "javascript", "arrow functions not supported");
+
+        Assert.True(_store.TryAdd(record1));
+        Assert.False(_store.TryAdd(record2));
+
+        var all = _store.LoadAll();
+        Assert.Single(all);
+        Assert.Equal(record1.Hash, all[0].Hash);
+    }
+
+    [Fact]
+    public void TryAdd_FuzzyDuplicateDifferentCategory_BothSucceed()
+    {
+        var record1 = MakeRecord("language_support", "javascript", "missing arrow function support");
+        var record2 = MakeRecord("reference_extraction", "javascript", "arrow functions not supported");
+
+        Assert.True(_store.TryAdd(record1));
+        Assert.True(_store.TryAdd(record2));
+
+        Assert.Equal(2, _store.LoadAll().Count);
+    }
+
+    [Fact]
+    public void TryAddAndSubmit_FuzzyDuplicate_ReturnsMatchedHashAndScore()
+    {
+        var record1 = MakeRecord("language_support", "javascript", "missing arrow function support");
+        var record2 = MakeRecord("language_support", "javascript", "arrow functions not supported");
+
+        var first = _store.TryAddAndSubmit(record1, null);
+        var second = _store.TryAddAndSubmit(record2, null);
+
+        Assert.True(first.IsNew);
+        Assert.False(second.IsNew);
+        Assert.Equal(record1.Hash, second.DuplicateOfHash);
+        Assert.True(second.DuplicateScore >= SuggestionStore.DefaultDedupThreshold);
+    }
+
+    [Fact]
     public void TryAdd_DifferentSuggestions_BothSucceed()
     {
         var record1 = MakeRecord("symbol_extraction", "csharp", "Missing record support");
@@ -220,6 +261,50 @@ public class SuggestionStoreTests : IDisposable
         Assert.Equal(1, stored.SubmitAttemptCount);
         Assert.NotNull(stored.LastSubmitAttempt);
         Assert.Equal("422: validation failed", stored.LastSubmitError);
+    }
+
+    [Fact]
+    public async Task TryAddAndSubmit_SlowSubmission_DoesNotHoldFileLock()
+    {
+        var record = MakeRecord("other", null, "Slow remote submission");
+        using var submissionStarted = new ManualResetEventSlim(false);
+        using var releaseSubmission = new ManualResetEventSlim(false);
+        using var callbackFinished = new ManualResetEventSlim(false);
+        Exception? callbackException = null;
+
+        var submitTask = Task.Run(() =>
+        {
+            try
+            {
+                return _store.TryAddAndSubmit(record, _ =>
+                {
+                    submissionStarted.Set();
+                    releaseSubmission.Wait(TimeSpan.FromSeconds(5));
+                    callbackFinished.Set();
+                    return SuggestionStore.SubmitAttemptResult.Failure("timeout");
+                });
+            }
+            catch (Exception ex)
+            {
+                callbackException = ex;
+                throw;
+            }
+        });
+
+        Assert.True(submissionStarted.Wait(TimeSpan.FromSeconds(5)));
+
+        var secondStore = new SuggestionStore(_tempDir);
+        var addedWhileRemoteSubmitWasBlocked = secondStore.TryAdd(
+            MakeRecord("other", null, "Independent suggestion while remote submit is blocked"));
+
+        releaseSubmission.Set();
+        var result = await submitTask;
+
+        Assert.True(addedWhileRemoteSubmitWasBlocked);
+        Assert.True(callbackFinished.IsSet);
+        Assert.Null(callbackException);
+        Assert.Null(result.UpstreamUrl);
+        Assert.Equal(2, _store.LoadAll().Count);
     }
 
     [Fact]

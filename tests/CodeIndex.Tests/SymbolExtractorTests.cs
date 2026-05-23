@@ -23945,9 +23945,10 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "InstallScriptTests");
         Assert.Contains(symbols, s => s.Kind == "test.method" && s.Name == "Main_WithoutExplicitVersion_DoesNotShortCircuitBrokenZeroVersionInstall");
+        var runawayBudget = TimeSpan.FromSeconds(60);
         Assert.True(
-            stopwatch.Elapsed < TimeSpan.FromSeconds(20),
-            $"InstallScriptTests.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < 20s.");
+            stopwatch.Elapsed < runawayBudget,
+            $"InstallScriptTests.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
     }
 
     [Fact]

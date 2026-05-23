@@ -34,6 +34,7 @@ internal static class CdidxConfigFile
         "global_tool_log_dir",
         "stale_after",
         "indexing",
+        "suggestion_dedup_threshold",
         "mcp",
     };
 
@@ -138,6 +139,20 @@ internal static class CdidxConfigFile
                 if (!TryReadString(staleAfter, "stale_after", path, out var value, out var err))
                     return new LoadResult(Path: path, Error: err);
                 pending.Add((QueryCommandRunner.StaleAfterEnvironmentVariable, value!));
+            }
+
+            if (root.TryGetProperty("suggestion_dedup_threshold", out var suggestionDedupThreshold))
+            {
+                if (!TryReadNumberAsString(suggestionDedupThreshold, "suggestion_dedup_threshold", path, out var value, out var err))
+                    return new LoadResult(Path: path, Error: err);
+                if (!double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var threshold)
+                    || threshold < 0
+                    || threshold > 1)
+                {
+                    return new LoadResult(Path: path, Error: $"[cdidx] {path}: `suggestion_dedup_threshold` must be between 0 and 1.");
+                }
+
+                pending.Add((SuggestionStore.DedupThresholdEnvironmentVariable, value!));
             }
 
             if (root.TryGetProperty("indexing", out var indexing))

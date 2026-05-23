@@ -248,11 +248,12 @@ public partial class DbReader
                     keptIntervals[path] = intervals;
                 }
 
-                if (!intervals.AddIfNoOverlap(startLine, endLine))
+                var hadCoverage = intervals.Count > 0;
+                if (!intervals.AddIfAddsCoverage(startLine, endLine))
                     continue;
 
                 count++;
-                if (intervals.Count == 1)
+                if (!hadCoverage)
                     fileCount++;
             }
         }
@@ -553,10 +554,11 @@ public partial class DbReader
            $"ELSE {valueSql} END";
 
     /// <summary>
-    /// Remove search results that overlap with a higher-ranked result in the same file.
-    /// Chunks use 10-line overlap, so adjacent chunks can produce duplicate matches.
-    /// 同じファイル内で上位の結果と行範囲が重なる結果を除去する。
-    /// チャンクは10行重複するため、隣接チャンクが重複マッチを生じうる。
+    /// Remove search results that are fully covered by higher-ranked results in the same file.
+    /// Chunks use 10-line overlap, so adjacent chunks can produce duplicate matches, but a
+    /// later chunk may still contain legitimate hits outside the overlap.
+    /// 同じファイル内で上位の結果に完全包含される結果を除去する。
+    /// チャンクは10行重複するが、後続チャンクは重複範囲外の正当なヒットを含みうる。
     /// </summary>
     private static List<SearchResult> DeduplicateOverlappingResults(List<SearchResult> results)
     {
@@ -573,7 +575,7 @@ public partial class DbReader
                 keptIntervals[r.Path] = intervals;
             }
 
-            if (!intervals.AddIfNoOverlap(r.StartLine, r.EndLine))
+            if (!intervals.AddIfAddsCoverage(r.StartLine, r.EndLine))
                 continue;
 
             deduped.Add(r);
@@ -587,18 +589,45 @@ public partial class DbReader
 
         public int Count => _intervals.Count;
 
-        public bool AddIfNoOverlap(int start, int end)
+        public bool AddIfAddsCoverage(int start, int end)
         {
             if (end < start)
                 (start, end) = (end, start);
 
             var insertIndex = FindInsertIndex(start);
-            if (insertIndex > 0 && Overlaps(_intervals[insertIndex - 1], start, end))
-                return false;
-            if (insertIndex < _intervals.Count && Overlaps(_intervals[insertIndex], start, end))
-                return false;
+            var mergeStart = start;
+            var mergeEnd = end;
+            var firstMergeIndex = insertIndex;
 
-            _intervals.Insert(insertIndex, (start, end));
+            if (insertIndex > 0 && OverlapsOrTouches(_intervals[insertIndex - 1], start, end))
+            {
+                var previous = _intervals[insertIndex - 1];
+                if (previous.Start <= start && previous.End >= end)
+                    return false;
+
+                firstMergeIndex = insertIndex - 1;
+                mergeStart = Math.Min(mergeStart, previous.Start);
+                mergeEnd = Math.Max(mergeEnd, previous.End);
+            }
+
+            var removeCount = 0;
+            var scanIndex = firstMergeIndex;
+            while (scanIndex < _intervals.Count && OverlapsOrTouches(_intervals[scanIndex], mergeStart, mergeEnd))
+            {
+                var current = _intervals[scanIndex];
+                if (current.Start <= start && current.End >= end)
+                    return false;
+
+                mergeStart = Math.Min(mergeStart, current.Start);
+                mergeEnd = Math.Max(mergeEnd, current.End);
+                removeCount++;
+                scanIndex++;
+            }
+
+            if (removeCount > 0)
+                _intervals.RemoveRange(firstMergeIndex, removeCount);
+
+            _intervals.Insert(firstMergeIndex, (mergeStart, mergeEnd));
             return true;
         }
 
@@ -618,9 +647,9 @@ public partial class DbReader
             return low;
         }
 
-        private static bool Overlaps((int Start, int End) interval, int start, int end)
+        private static bool OverlapsOrTouches((int Start, int End) interval, int start, int end)
         {
-            return interval.Start <= end && interval.End >= start;
+            return interval.Start <= end + 1 && interval.End + 1 >= start;
         }
     }
 

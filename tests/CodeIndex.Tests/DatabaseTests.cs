@@ -1304,6 +1304,83 @@ public class DatabaseTests : IDisposable
         Assert.Null(staleLines);
     }
 
+    [Fact]
+    public async Task TransactionScope_DisposeIsAtomicUnderConcurrentCalls()
+    {
+        var scope = _writer.BeginTransaction();
+        _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/rolled_back.py", Lang = "python", Size = 10, Lines = 1,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        var tasks = Enumerable.Range(0, 16)
+            .Select(_ => Task.Run(scope.Dispose))
+            .ToArray();
+
+        await Task.WhenAll(tasks);
+
+        var (rolledBackFiles, _, _, _) = _writer.GetCounts();
+        Assert.Equal(0, rolledBackFiles);
+
+        using var nextScope = _writer.BeginTransaction();
+        _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/next.py", Lang = "python", Size = 10, Lines = 1,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        nextScope.Commit();
+
+        var (committedFiles, _, _, _) = _writer.GetCounts();
+        Assert.Equal(1, committedFiles);
+    }
+
+    [Fact]
+    public async Task TransactionScope_CommitDisposeRaceDoesNotSurfaceDoubleRollbackSqliteError()
+    {
+        for (var i = 0; i < 25; i++)
+        {
+            var scope = _writer.BeginTransaction();
+            _writer.UpsertFile(new FileRecord
+            {
+                Path = $"src/race_{i}.py", Lang = "python", Size = 10, Lines = 1,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+
+            var exceptions = new List<Exception>();
+            var commitTask = Task.Run(() =>
+            {
+                try
+                {
+                    scope.Commit();
+                }
+                catch (InvalidOperationException)
+                {
+                    // Dispose may win the race; that is a clear lifecycle error, not a
+                    // low-level double-rollback SQLite failure.
+                }
+                catch (Exception ex)
+                {
+                    lock (exceptions)
+                        exceptions.Add(ex);
+                }
+            });
+            var disposeTask = Task.Run(scope.Dispose);
+
+            await Task.WhenAll(commitTask, disposeTask);
+
+            Assert.Empty(exceptions);
+        }
+
+        using var nextScope = _writer.BeginTransaction();
+        _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/after_race.py", Lang = "python", Size = 10, Lines = 1,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        nextScope.Commit();
+    }
+
     public void Dispose()
     {
         _db.Dispose();

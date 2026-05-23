@@ -564,6 +564,13 @@ internal static class ProgramRunner
             return CommandExitCodes.UsageError;
         }
 
+        if (!TryConsumeSuggestionDedupThresholdFlag(ref cmdArgs, out var thresholdError))
+        {
+            Console.Error.WriteLine(thresholdError);
+            PrintMcpUsage();
+            return CommandExitCodes.UsageError;
+        }
+
         if (!TryExtractMcpTransportFlags(cmdArgs, out var transportSpec, out var listenSpec, out var transportError))
         {
             Console.Error.WriteLine(transportError);
@@ -755,7 +762,65 @@ internal static class ProgramRunner
 
     private static void PrintMcpUsage()
     {
-        Console.Error.WriteLine("Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>]");
+        Console.Error.WriteLine("Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]");
+    }
+
+    internal static bool TryConsumeSuggestionDedupThresholdFlag(ref string[] args, out string error)
+    {
+        error = string.Empty;
+        if (args.Length == 0)
+            return true;
+
+        var kept = new List<string>(args.Length);
+        var passthrough = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (passthrough)
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--")
+            {
+                passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+
+            string? value = null;
+            if (arg == "--suggestion-dedup-threshold")
+            {
+                if (i + 1 >= args.Length)
+                {
+                    error = "Error: --suggestion-dedup-threshold requires a value between 0 and 1.";
+                    return false;
+                }
+                value = args[++i];
+            }
+            else if (arg.StartsWith("--suggestion-dedup-threshold=", StringComparison.Ordinal))
+            {
+                value = arg.Substring("--suggestion-dedup-threshold=".Length);
+            }
+            else
+            {
+                kept.Add(arg);
+                continue;
+            }
+
+            if (!double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var threshold)
+                || threshold < 0
+                || threshold > 1)
+            {
+                error = "Error: --suggestion-dedup-threshold must be a value between 0 and 1.";
+                return false;
+            }
+
+            Environment.SetEnvironmentVariable(SuggestionStore.DedupThresholdEnvironmentVariable, value);
+        }
+
+        args = kept.ToArray();
+        return true;
     }
 
     internal static bool TryExtractMcpTransportFlags(string[] cmdArgs, out string? transport, out string? listen, out string error)
@@ -988,15 +1053,17 @@ internal static class ProgramRunner
             return CommandExitCodes.Success;
         }
 
-        Console.WriteLine(FormatVersionLine(metadata));
+        var updateHint = UpdateChecker.GetNewerReleaseHint(metadata.Version);
+        Console.WriteLine(FormatVersionLine(metadata, updateHint));
         return CommandExitCodes.Success;
     }
 
-    internal static string FormatVersionLine(ConsoleUi.BuildMetadata metadata)
+    internal static string FormatVersionLine(ConsoleUi.BuildMetadata metadata, string? updateHint = null)
     {
         var commit = string.IsNullOrWhiteSpace(metadata.Commit) ? "unknown" : metadata.Commit;
         var buildDate = string.IsNullOrWhiteSpace(metadata.BuildDate) ? "unknown" : metadata.BuildDate;
         var dirty = string.IsNullOrWhiteSpace(metadata.Dirty) ? "unknown" : metadata.Dirty;
+        var suffix = string.IsNullOrWhiteSpace(updateHint) ? string.Empty : $" [{updateHint}]";
 
         // Suppress the metadata suffix only when every component is "unknown",
         // so legacy callers that depend on the exact `cdidx v<ver>` shape keep
@@ -1004,9 +1071,9 @@ internal static class ProgramRunner
         // 全項目が unknown のときだけ末尾メタデータを省略し、ビルド刻印が
         // 無い旧バイナリ／モックでも `cdidx v<ver>` 形式を保つ。
         if (commit == "unknown" && buildDate == "unknown" && dirty == "unknown")
-            return $"cdidx v{metadata.Version}";
+            return $"cdidx v{metadata.Version}{suffix}";
 
-        return $"cdidx v{metadata.Version} (commit {commit}, built {buildDate}, {dirty})";
+        return $"cdidx v{metadata.Version} (commit {commit}, built {buildDate}, {dirty}){suffix}";
     }
 
     private static int RunCompletions(string[] cmdArgs)

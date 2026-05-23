@@ -37,10 +37,10 @@ public class ConsoleUiTests
         Assert.Contains("cdidx references <query>|--query <query>|-- <query>", output);
         Assert.Contains("cdidx callers <query>|--query <query>|-- <query>", output);
         Assert.Contains("cdidx callees <query>|--query <query>|-- <query>", output);
-        Assert.Contains("cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup] [--no-visibility-rank]", output);
-        Assert.Contains("cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]", output);
-        Assert.Contains("cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--max-line-width <n>] [--exact|--exact-name] [--count]", output);
-        Assert.Contains("cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]", output);
+        Assert.Contains("cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup] [--no-visibility-rank]", output);
+        Assert.Contains("cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]", output);
+        Assert.Contains("cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--max-line-width <n>] [--exact|--exact-name] [--count]", output);
+        Assert.Contains("cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]", output);
         Assert.Contains("--snippet-lines <n>        Search snippet length (1-20, default: 8)", output);
         Assert.Contains("--snippet-focus <mode>     search only: long-line focus mode (leftmost|quality|proximity, default: quality)", output);
         Assert.Contains("--max-line-width <n>       search/references/find/excerpt/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: 512)", output);
@@ -54,17 +54,17 @@ public class ConsoleUiTests
         Assert.Contains("--files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed", output);
         Assert.Contains("--duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms", output);
         Assert.Contains("--ascii                    Use ASCII spinner/progress glyphs", output);
-        Assert.Contains("cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json]", output);
+        Assert.Contains("cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--verbose]", output);
         Assert.Contains("--focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)", output);
         Assert.Contains("--focus-line <line>        excerpt: line whose focused column should stay visible", output);
-        Assert.Contains("cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes]", output);
-        Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]", output);
-        Assert.Contains("cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]", output);
-        Assert.Contains("cdidx validate [--db <path>] [--json] [--kind <kind>] [--path <glob>]", output);
+        Assert.Contains("cdidx map [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes]", output);
+        Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]", output);
+        Assert.Contains("cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]", output);
+        Assert.Contains("cdidx validate [--db <path>] [--json] [--verbose] [--kind <kind>] [--path <glob>]", output);
         Assert.Contains("Note: if a query itself starts with '-', pass it with --query <query> or -- <query>", output);
         Assert.DoesNotContain("cdidx validate [--db <path>] [--json] [--limit <n>] [--lang <lang>]", output);
-        Assert.Contains("cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
-        Assert.Contains("cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]", output);
+        Assert.Contains("cdidx unused [--db <path>] [--json] [--verbose] [--limit <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
+        Assert.Contains("cdidx hotspots [--db <path>] [--json] [--verbose] [--limit <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]", output);
         Assert.Contains("--json                     Output as JSON (streaming hits use JSON lines; counts/summaries use one object)", output);
         Assert.Contains("--lang <lang>              Filter by language (aliases: bat, cmd, cshtml, razor, ts, tsx, cts, mts)", output);
         Assert.Contains("--bytes                    Show raw byte counts in human output for files/map instead of binary units; JSON always keeps raw integer bytes", output);
@@ -109,11 +109,11 @@ public class ConsoleUiTests
     {
         var output = CaptureUsageOutput(showBanner: false);
 
-        Assert.Contains("cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup] [--no-visibility-rank]", output);
-        Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]", output);
-        Assert.Contains("cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]", output);
-        Assert.Contains("cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
-        Assert.Contains("cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
+        Assert.Contains("cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup] [--no-visibility-rank]", output);
+        Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]", output);
+        Assert.Contains("cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]", output);
+        Assert.Contains("cdidx hotspots [--db <path>] [--json] [--verbose] [--limit <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
+        Assert.Contains("cdidx unused [--db <path>] [--json] [--verbose] [--limit <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]", output);
         Assert.Contains("cdidx license", output);
     }
 
@@ -205,29 +205,15 @@ public class ConsoleUiTests
     [Fact]
     public void PrintWarning_FlushesBothConsoleStreams()
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            var originalError = Console.Error;
-            using var output = new FlushCountingTextWriter();
-            using var error = new FlushCountingTextWriter();
-            try
-            {
-                Console.SetOut(output);
-                Console.SetError(error);
+        using var output = new FlushCountingTextWriter();
+        using var error = new FlushCountingTextWriter();
+        using var capture = ConsoleCapture.Start(output, error);
 
-                ConsoleUi.PrintWarning("watch out");
+        ConsoleUi.PrintWarning("watch out");
 
-                Assert.Contains("[WARN] watch out", error.ToString());
-                Assert.True(error.FlushCount > 0);
-                Assert.True(output.FlushCount > 0);
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-                Console.SetError(originalError);
-            }
-        }
+        Assert.Contains("[WARN] watch out", error.ToString());
+        Assert.True(error.FlushCount > 0);
+        Assert.True(output.FlushCount > 0);
     }
 
     [Fact]
@@ -346,53 +332,30 @@ public class ConsoleUiTests
     [Fact]
     public void PrintProgress_InitialRender_ShowsZeroPercent()
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            using var writer = new StringWriter();
-            try
-            {
-                Console.SetOut(writer);
+        using var capture = ConsoleCapture.Start(captureOut: true);
 
-                ConsoleUi.PrintProgress(0, 10);
+        ConsoleUi.PrintProgress(0, 10);
 
-                var output = writer.ToString();
+        var output = capture.Out!.ToString();
 
-                Assert.Contains("0.0%", output);
-                Assert.Contains("[0/10]", output);
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-            }
-        }
+        Assert.Contains("0.0%", output);
+        Assert.Contains("[0/10]", output);
     }
 
     [Fact]
     public void PrintLicenseSummary_DescribesFslAndCommercialRestriction()
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            using var writer = new StringWriter();
-            try
-            {
-                Console.SetOut(writer);
-                ConsoleUi.PrintLicenseSummary();
-                var output = writer.ToString();
+        using var capture = ConsoleCapture.Start(captureOut: true);
 
-                Assert.Contains("Functional Source License, Version 1.1, ALv2 Future License (FSL-1.1-ALv2)", output);
-                Assert.Contains("non-competing purposes", output);
-                Assert.Contains("Competing commercial products or services require a separate written agreement", output);
-                Assert.Contains("separate written agreement", output);
-                Assert.Contains("LICENSES/Apache-2.0.txt", output);
-                Assert.Contains("INTEGRATION_POLICY.md", output);
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-            }
-        }
+        ConsoleUi.PrintLicenseSummary();
+        var output = capture.Out!.ToString();
+
+        Assert.Contains("Functional Source License, Version 1.1, ALv2 Future License (FSL-1.1-ALv2)", output);
+        Assert.Contains("non-competing purposes", output);
+        Assert.Contains("Competing commercial products or services require a separate written agreement", output);
+        Assert.Contains("separate written agreement", output);
+        Assert.Contains("LICENSES/Apache-2.0.txt", output);
+        Assert.Contains("INTEGRATION_POLICY.md", output);
     }
 
     [Fact]
@@ -433,50 +396,68 @@ public class ConsoleUiTests
     [InlineData("fish")]
     public void PrintCompletions_KnownShell_ReturnsTrue(string shell)
     {
-        lock (TestConsoleLock.Gate)
+        using var capture = ConsoleCapture.Start(captureOut: true);
+        Assert.True(ConsoleUi.PrintCompletions(shell));
+        var output = capture.Out!.ToString();
+        var exactSubstringToken = shell == "fish" ? "exact-substring" : "--exact-substring";
+        var exactNameToken = shell == "fish" ? "exact-name" : "--exact-name";
+        var groupByNameToken = shell == "fish" ? "group-by-name" : "--group-by-name";
+        var licenseToken = shell == "fish" ? "-l license" : shell == "bash" ? "--license" : "license:license command";
+        // #1570: the schema-driven generators emit one canonical description per flag
+        // across every branch — the pre-refactor per-branch wording ("snippets" /
+        // "contexts" / "excerpts") collapses to a single "payloads" tooltip.
+        // #1570 後はスキーマ駆動なので、ブランチごとに違う旧文言ではなく統一の "payloads" 表記。
+        var maxLineWidthToken = shell == "fish"
+            ? "Clamp long single-line payloads (0 disables clamping)"
+            : shell == "bash"
+                ? "--max-line-width"
+                : "--max-line-width[Clamp long single-line payloads (0 disables clamping)]:number";
+        Assert.Contains(exactSubstringToken, output);
+        Assert.Contains(exactNameToken, output);
+        Assert.Contains(groupByNameToken, output);
+        Assert.Contains(licenseToken, output);
+        Assert.Contains(maxLineWidthToken, output);
+        Assert.Contains("cshtml", output);
+        Assert.Contains("razor", output);
+        if (shell is "bash" or "zsh")
         {
-            var originalOut = Console.Out;
-            using var writer = new StringWriter();
-            try
-            {
-                Console.SetOut(writer);
-                Assert.True(ConsoleUi.PrintCompletions(shell));
-                var output = writer.ToString();
-                var exactSubstringToken = shell == "fish" ? "exact-substring" : "--exact-substring";
-                var exactNameToken = shell == "fish" ? "exact-name" : "--exact-name";
-                var groupByNameToken = shell == "fish" ? "group-by-name" : "--group-by-name";
-                var licenseToken = shell == "fish" ? "-l license" : shell == "bash" ? "--license" : "license:license command";
-                // #1570: the schema-driven generators emit one canonical description per flag
-                // across every branch — the pre-refactor per-branch wording ("snippets" /
-                // "contexts" / "excerpts") collapses to a single "payloads" tooltip.
-                // #1570 後はスキーマ駆動なので、ブランチごとに違う旧文言ではなく統一の "payloads" 表記。
-                var maxLineWidthToken = shell == "fish"
-                    ? "Clamp long single-line payloads (0 disables clamping)"
-                    : shell == "bash"
-                        ? "--max-line-width"
-                        : "--max-line-width[Clamp long single-line payloads (0 disables clamping)]:number";
-                Assert.Contains(exactSubstringToken, output);
-                Assert.Contains(exactNameToken, output);
-                Assert.Contains(groupByNameToken, output);
-                Assert.Contains(licenseToken, output);
-                Assert.Contains(maxLineWidthToken, output);
-                Assert.Contains("cshtml", output);
-                Assert.Contains("razor", output);
-                if (shell is "bash" or "zsh")
-                {
-                    // Should contain dynamically generated languages, including newly added ones
-                    // 動的生成の言語リストに新しく追加した言語が含まれているか検証
-                    Assert.Contains("msbuild", output);
-                    Assert.Contains("elixir", output);
-                    Assert.Contains("graphql", output);
-                    Assert.Contains("protobuf", output);
-                }
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-            }
+            // Should contain dynamically generated languages, including newly added ones
+            // 動的生成の言語リストに新しく追加した言語が含まれているか検証
+            Assert.Contains("msbuild", output);
+            Assert.Contains("elixir", output);
+            Assert.Contains("graphql", output);
+            Assert.Contains("protobuf", output);
         }
+    }
+
+    [Fact]
+    public void PrintCompletions_BashCompletesFlagValues()
+    {
+        var output = ConsoleUi.GetCompletionScript("bash");
+
+        Assert.Contains("--db|--path|--exclude-path|--output|-o) COMPREPLY=($(compgen -f -- \"$cur\"))", output);
+        Assert.Contains("--lang) COMPREPLY=($(compgen -W \"", output);
+        Assert.Contains("csharp", output);
+        Assert.Contains("python", output);
+        Assert.Contains("--kind) COMPREPLY=($(compgen -W \"", output);
+        Assert.Contains("function", output);
+        Assert.Contains("type_reference", output);
+        Assert.Contains("razor_event_binding", output);
+    }
+
+    [Fact]
+    public void PrintCompletions_ZshAndFishCompleteKindValuesFromSharedSet()
+    {
+        var zsh = ConsoleUi.GetCompletionScript("zsh");
+        var fish = ConsoleUi.GetCompletionScript("fish");
+
+        Assert.Contains(":language:(", zsh);
+        Assert.Contains(":kind:(", zsh);
+        Assert.Contains("type_reference", zsh);
+        Assert.Contains("razor_event_binding", zsh);
+        Assert.Contains("-a '", fish);
+        Assert.Contains("type_reference", fish);
+        Assert.Contains("razor_event_binding", fish);
     }
 
     [Theory]
@@ -694,43 +675,22 @@ public class ConsoleUiTests
     [Fact]
     public void PrintUsage_ShowsWorkingFindDashedLiteralExample()
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            using var writer = new StringWriter();
-            try
-            {
-                Console.SetOut(writer);
-                ConsoleUi.PrintUsage();
-                var output = writer.ToString();
-                Assert.Contains("cdidx find --path README.md -- --path", output);
-                Assert.DoesNotContain("cdidx find -- --path --path README.md", output);
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-            }
-        }
+        using var capture = ConsoleCapture.Start(captureOut: true);
+
+        ConsoleUi.PrintUsage();
+        var output = capture.Out!.ToString();
+
+        Assert.Contains("cdidx find --path README.md -- --path", output);
+        Assert.DoesNotContain("cdidx find -- --path --path README.md", output);
     }
 
     [Fact]
     public void PrintCompletions_UnknownShell_ReturnsFalse()
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalErr = Console.Error;
-            using var writer = new StringWriter();
-            try
-            {
-                Console.SetError(writer);
-                Assert.False(ConsoleUi.PrintCompletions("powershell"));
-                Assert.Contains("Unknown shell", writer.ToString());
-            }
-            finally
-            {
-                Console.SetError(originalErr);
-            }
-        }
+        using var capture = ConsoleCapture.Start(captureError: true);
+
+        Assert.False(ConsoleUi.PrintCompletions("powershell"));
+        Assert.Contains("Unknown shell", capture.Error!.ToString());
     }
 
     [Fact]
@@ -1452,22 +1412,9 @@ public class ConsoleUiTests
 
     private static string CaptureUsageOutput(bool showBanner = true)
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            using var writer = new StringWriter();
-
-            try
-            {
-                Console.SetOut(writer);
-                ConsoleUi.PrintUsage(showBanner);
-                return writer.ToString();
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-            }
-        }
+        using var capture = ConsoleCapture.Start(captureOut: true);
+        ConsoleUi.PrintUsage(showBanner);
+        return capture.Out!.ToString()!;
     }
 
     private static string ExtractBetween(string text, string startMarker, string endMarker)

@@ -34,6 +34,7 @@ public class CdidxConfigFileTests
                   "disable_persistent_log": true,
                   "global_tool_log_dir": "/tmp/logs",
                   "stale_after": "2h",
+                  "suggestion_dedup_threshold": 0.75,
                   "indexing": {
                     "includeKinds": ["class"],
                     "excludeKinds": ["test_method", "generated_parser"]
@@ -55,6 +56,7 @@ public class CdidxConfigFileTests
             Assert.Equal("1", env.Writes["CDIDX_DISABLE_PERSISTENT_LOG"]);
             Assert.Equal("/tmp/logs", env.Writes["CDIDX_GLOBAL_TOOL_LOG_DIR"]);
             Assert.Equal("2h", env.Writes["CDIDX_STALE_AFTER"]);
+            Assert.Equal("0.75", env.Writes["CDIDX_SUGGESTION_DEDUP_THRESHOLD"]);
             Assert.Equal("class", env.Writes["CDIDX_INDEX_INCLUDE_SYMBOL_KINDS"]);
             Assert.Equal("test_method,generated_parser", env.Writes["CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS"]);
             Assert.Equal("search,definition", env.Writes["CDIDX_MCP_TOOLS_ALLOW"]);
@@ -220,6 +222,25 @@ public class CdidxConfigFileTests
     }
 
     [Fact]
+    public void LoadAndApply_InvalidSuggestionDedupThreshold_ReturnsError()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"),
+                """{ "suggestion_dedup_threshold": 1.5 }""");
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+
+            Assert.True(result.Failed);
+            Assert.Contains("suggestion_dedup_threshold", result.Error);
+            Assert.Empty(env.Writes);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
     public void LoadAndApply_AllowsSchemaKeyAndComments()
     {
         var dir = CreateTempDir();
@@ -294,26 +315,7 @@ public class CdidxConfigFileTests
     }
 
     private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)
-    {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            var originalErr = Console.Error;
-            using var stdout = new StringWriter();
-            using var stderr = new StringWriter();
-            try
-            {
-                Console.SetOut(stdout);
-                Console.SetError(stderr);
-                return (action(), stdout.ToString(), stderr.ToString());
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-                Console.SetError(originalErr);
-            }
-        }
-    }
+        => ConsoleCapture.Capture(action);
 
     private sealed class TestEnvironment
     {

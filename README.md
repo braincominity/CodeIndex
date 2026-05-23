@@ -73,9 +73,20 @@ progress line so the display does not wrap.
 Use `cdidx` when a repository will be searched repeatedly from terminals,
 scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 
+### Shell Completion
+
+Generate completion scripts with `cdidx --completions <bash|zsh|fish>`.
+The generated scripts complete subcommands, flags, and common flag values:
+`--lang` suggests supported languages, `--kind` suggests symbol/reference
+kinds, and path-like options such as `--db`, `--path`, and `--output` use shell
+file completion.
+
 ## Highlights
 
 - CLI-first search with human-readable and machine-oriented output.
+- `cdidx --version` checks GitHub releases at most once per day and appends a
+  newer-release hint when one is available; set `CDIDX_DISABLE_UPDATE_CHECK=1`
+  to suppress the check.
 - Search ranking prefers public/exported symbol matches ahead of protected,
   internal, and private matches; `--no-visibility-rank` keeps the legacy order.
 - `symbols`, `definition`, `unused`, and `hotspots` can include or exclude
@@ -89,7 +100,10 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 - MCP server for AI clients such as Claude Code, Cursor, and Windsurf,
   including tools, indexed-file resources, and canned analysis prompts.
 - Local suggestion history can be listed, inspected, and exported with
-  `cdidx suggestions`.
+  `cdidx suggestions`; near-duplicate MCP suggestions are fuzzy-deduped before
+  GitHub submission, with `cdidx mcp --suggestion-dedup-threshold`,
+  `CDIDX_SUGGESTION_DEDUP_THRESHOLD`, or `.cdidxrc.json`
+  `suggestion_dedup_threshold` controlling the score cutoff.
 - Parallel full-scan extraction with configurable `--parallelism`, incremental refreshes
   with `--files` and `--commits`, plus continuous `--watch` mode.
 - Post-extraction hooks from `~/.config/cdidx/hooks/*.dll` (or `CDIDX_HOOKS_DIR`)
@@ -255,9 +269,19 @@ script / CI では `--yes`（または `--force`）が必要です。
 ターミナル、スクリプト、CI、AI ツールから同じリポジトリを繰り返し検索する
 場合は `cdidx` が向いています。1回限りのテキスト検索には `rg` が向いています。
 
+### シェル補完
+
+`cdidx --completions <bash|zsh|fish>` で補完スクリプトを生成できます。
+生成されたスクリプトは subcommand、flag、よく使う flag 値を補完します。
+`--lang` は対応言語、`--kind` は symbol / reference kind を提示し、`--db`、
+`--path`、`--output` など path 系 option は shell の file completion を使います。
+
 ## 特長
 
 - CLI-first の検索。人間向け出力と機械処理向け出力に対応。
+- `cdidx --version` は GitHub releases を 1 日 1 回まで確認し、新しい
+  リリースがある場合にヒントを追記します。確認を抑止するには
+  `CDIDX_DISABLE_UPDATE_CHECK=1` を設定します。
 - 検索順位は public/exported なシンボル一致を protected、internal、private より優先します。
   従来順が必要な場合は `--no-visibility-rank` を使えます。
 - `symbols`、`definition`、`unused`、`hotspots` は `--visibility` と
@@ -271,6 +295,9 @@ script / CI では `--yes`（または `--force`）が必要です。
 - Claude Code、Cursor、Windsurf などの AI クライアント向け MCP サーバー。
   tools、インデックス済みファイル resources、定型分析 prompts を提供します。
 - `cdidx suggestions` でローカルの提案履歴を一覧表示、詳細表示、エクスポート可能。
+  MCP 提案は GitHub 送信前に近似重複排除され、しきい値は
+  `cdidx mcp --suggestion-dedup-threshold`、`CDIDX_SUGGESTION_DEDUP_THRESHOLD`、
+  または `.cdidxrc.json` の `suggestion_dedup_threshold` で調整できます。
 - `--files` と `--commits` による差分更新、および `--watch` による継続更新モード。
 - `~/.config/cdidx/hooks/*.dll`（または `CDIDX_HOOKS_DIR`）の post-extraction hook で、
   永続化前のシンボルと参照を拡張できます。

@@ -920,6 +920,82 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_SkipsControlCharacterFileNamesWithWarning()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "ok.cs"), "class Ok { }\n");
+            File.WriteAllText(Path.Combine(tempDir, "bad\nname.cs"), "class Bad { }\n");
+
+            var result = new FileIndexer(tempDir).ScanFilesDetailed();
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["ok.cs"], files);
+            Assert.Contains(result.NonIndexablePaths, path => path == "bad\\u000Aname.cs");
+            var warning = Assert.Single(result.Errors, error => error.Severity == FileIndexer.ScanIssueSeverity.Warning);
+            Assert.Equal("bad\\u000Aname.cs", warning.Path);
+            Assert.Contains("control characters", warning.Message);
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecordWithRawBytes_RejectsControlCharacterPathBeforeIo()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var indexer = new FileIndexer(tempDir);
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => indexer.BuildRecordWithRawBytes(Path.Combine(tempDir, "bad\0name.cs")));
+
+            Assert.Contains("control characters", ex.Message);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void EvaluatePathFilter_RejectsControlCharacterPathBeforeNormalization()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var indexer = new FileIndexer(tempDir);
+
+            var filter = indexer.EvaluatePathFilter(Path.Combine(tempDir, "bad\0name.cs"));
+
+            Assert.Equal(FileIndexer.PathFilterKind.ExcludedByDefaultFile, filter.FilterKind);
+            Assert.True(filter.ShouldDeleteExisting);
+            var warning = Assert.Single(filter.Errors);
+            Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
+            Assert.Contains("control characters", warning.Message);
+            Assert.Contains("\\u0000", warning.Path);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_SkipsAppleDoubleResourceForks()
     {
         // AppleDouble (`._*`) files masquerade as the real file's language (e.g. `._app.js`

@@ -30,6 +30,38 @@ public class IndexCommandRunnerTests
         Assert.Null(options.ProjectPath);
     }
 
+    [Fact]
+    public void Run_NullByteFile_SkipsWithoutPersistingPartialRows()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var filePath = Path.Combine(projectRoot, "binary.cs");
+            var bytes = new byte[(3 * 1024 * 1024) + 1];
+            var prefix = System.Text.Encoding.UTF8.GetBytes("public class Polluted { public void Run() { } }\n");
+            Array.Copy(prefix, bytes, prefix.Length);
+            bytes[^1] = 0;
+            File.WriteAllBytes(filePath, bytes);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(0, CountRows(dbPath, "files"));
+            Assert.Equal(0, CountRows(dbPath, "chunks"));
+            Assert.Equal(0, CountRows(dbPath, "symbols"));
+            Assert.Equal(0, CountRows(dbPath, "symbol_references"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
     // `cdidx index . --rebild` should not just say "unknown option"; surface the closest accepted
     // flag (`--rebuild`) so MCP callers can self-correct without re-reading docs (#1582).
     // `cdidx index . --rebild` のような単純なミスタイプから `--rebuild` を提案できることを確認する (#1582)。
@@ -1641,6 +1673,44 @@ public class IndexCommandRunnerTests
             DeleteDirectory(projectRoot);
             if (File.Exists(dbPath))
                 File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_UnchangedStatMatch_SkipsWithoutOpeningFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.py");
+            const string content = "def run():\n    return 1\n";
+            File.WriteAllText(sourcePath, content);
+            File.SetLastWriteTimeUtc(sourcePath, new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc));
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.SetUnixFileMode(sourcePath, UnixFileMode.None);
+            try
+            {
+                var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "app.py", "--json"]);
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("success", json.GetProperty("status").GetString());
+                Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+                Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
+            }
+            finally
+            {
+                File.SetUnixFileMode(sourcePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
         }
     }
 
@@ -7205,6 +7275,15 @@ public class IndexCommandRunnerTests
                 Console.SetOut(originalOut);
             }
         }
+    }
+
+    private static int CountRows(string dbPath, string tableName)
+    {
+        using var connection = new SqliteConnection($"Data Source={dbPath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT COUNT(*) FROM {tableName}";
+        return Convert.ToInt32(command.ExecuteScalar());
     }
 
     private (int ExitCode, JsonElement Json, string Stderr) RunAndCaptureJsonWithStderr(string[] args)

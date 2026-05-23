@@ -7,20 +7,7 @@ namespace CodeIndex.Tests;
 public class DbDebugTests
 {
     private static string CaptureStderr(Action action)
-    {
-        lock (TestConsoleLock.Gate)
-        {
-            var err = new StringWriter();
-            var prev = Console.Error;
-            try
-            {
-                Console.SetError(err);
-                action();
-            }
-            finally { Console.SetError(prev); }
-            return err.ToString();
-        }
-    }
+        => ConsoleCapture.CaptureError(action);
 
     [Fact]
     public void DumpToStderr_NoOp_WhenDisabled()
