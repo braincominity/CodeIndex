@@ -45,8 +45,9 @@ namespace CodeIndex.Cli;
 /// </summary>
 internal static class GitHubIssueReporter
 {
-    internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(15);
+    internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan DefaultRateLimitRetryDelay = TimeSpan.FromMinutes(1);
+    private const string TimeoutEnvironmentVariable = "CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS";
 
     // Static HttpClient singleton — .NET best practice for reuse.
     // 静的 HttpClient シングルトン — .NET の再利用ベストプラクティス。
@@ -62,7 +63,7 @@ internal static class GitHubIssueReporter
         };
         var client = new HttpClient(handler)
         {
-            Timeout = DefaultTimeout,
+            Timeout = Timeout.InfiniteTimeSpan,
             DefaultRequestHeaders =
             {
                 { "User-Agent", "cdidx" },
@@ -95,9 +96,9 @@ internal static class GitHubIssueReporter
     /// 成功時は Issue URL を返し、トークン未設定時や失敗時は null を返す。
     /// ベストエフォート。ただし協調キャンセルと致命的なランタイム障害は保持する。
     /// </summary>
-    public static async Task<string?> TryCreateIssueAsync(SuggestionRecord record, string version)
+    public static async Task<string?> TryCreateIssueAsync(SuggestionRecord record, string version, CancellationToken cancellationToken = default)
     {
-        var result = await TryCreateIssueDetailedAsync(record, version);
+        var result = await TryCreateIssueDetailedAsync(record, version, cancellationToken);
         return result.IssueUrl;
     }
 
@@ -107,11 +108,17 @@ internal static class GitHubIssueReporter
     /// Preserves cooperative cancellation and fatal runtime failures.
     /// 協調キャンセルと致命的なランタイム障害は保持する。
     /// </summary>
-    public static async Task<SuggestionStore.SubmitAttemptResult> TryCreateIssueDetailedAsync(SuggestionRecord record, string version)
+    public static async Task<SuggestionStore.SubmitAttemptResult> TryCreateIssueDetailedAsync(
+        SuggestionRecord record,
+        string version,
+        CancellationToken cancellationToken = default)
     {
         var token = ResolveToken();
         if (token == null)
             return SuggestionStore.SubmitAttemptResult.Skipped();
+
+        using var timeoutCts = CreateTimeoutCancellationSource();
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
         try
         {
@@ -124,11 +131,17 @@ internal static class GitHubIssueReporter
             // レスポンスが消失した場合、ローカルレコードでは SubmittedToGitHub=false の
             // ままになる。再試行で重複 Issue を作らないよう、新規 POST 前に
             // 当該提案ハッシュを含む既存 Issue を探す。
-            var existingUrl = await FindExistingIssueByHashAsync(record.Hash, token);
+            var existingUrl = await FindExistingIssueByHashAsync(record.Hash, token, linkedCts.Token);
             if (existingUrl != null)
                 return SuggestionStore.SubmitAttemptResult.Success(existingUrl);
 
-            return await CreateIssueAsync(record, version, token);
+            return await CreateIssueAsync(record, version, token, linkedCts.Token);
+        }
+        catch (OperationCanceledException ex) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            var detail = $"{ex.GetType().Name}: GitHub submission timed out after {ResolveSubmitTimeout().TotalSeconds:0} seconds";
+            Console.Error.WriteLine(BuildSubmissionFailureMessage(detail));
+            return SuggestionStore.SubmitAttemptResult.Failure(detail);
         }
         catch (Exception ex) when (ShouldTreatAsSubmissionFailure(ex))
         {
@@ -148,6 +161,25 @@ internal static class GitHubIssueReporter
             return !taskCanceled.CancellationToken.IsCancellationRequested || IsTimeoutCancellation(taskCanceled);
 
         return ex is not OperationCanceledException;
+    }
+
+    private static CancellationTokenSource CreateTimeoutCancellationSource()
+    {
+        var timeout = ResolveSubmitTimeout();
+        return timeout <= TimeSpan.Zero
+            ? new CancellationTokenSource()
+            : new CancellationTokenSource(timeout);
+    }
+
+    internal static TimeSpan ResolveSubmitTimeout()
+    {
+        var raw = Environment.GetEnvironmentVariable(TimeoutEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(raw))
+            return DefaultTimeout;
+
+        return int.TryParse(raw, out var seconds) && seconds > 0
+            ? TimeSpan.FromSeconds(seconds)
+            : DefaultTimeout;
     }
 
     private static bool IsTimeoutCancellation(Exception ex)
@@ -177,7 +209,7 @@ internal static class GitHubIssueReporter
     /// 検索に使えない形の場合は null。API 失敗時も null を返し、GitHub 側 lookup の
     /// 障害によって新規送信がブロックされないようにする。
     /// </summary>
-    internal static async Task<string?> FindExistingIssueByHashAsync(string hash, string token)
+    internal static async Task<string?> FindExistingIssueByHashAsync(string hash, string token, CancellationToken cancellationToken = default)
     {
         // Defensive: only search with hex-shaped hashes to avoid accidentally
         // injecting search operators if the field ever held arbitrary text.
@@ -185,14 +217,14 @@ internal static class GitHubIssueReporter
         if (string.IsNullOrEmpty(hash) || !IsHexHash(hash))
             return null;
 
-        var searchUrl = await SearchExistingIssueByHashAsync(hash, token);
+        var searchUrl = await SearchExistingIssueByHashAsync(hash, token, cancellationToken);
         if (searchUrl != null)
             return searchUrl;
 
-        return await ListExistingSuggestionIssueByHashAsync(hash, token);
+        return await ListExistingSuggestionIssueByHashAsync(hash, token, cancellationToken);
     }
 
-    private static async Task<string?> SearchExistingIssueByHashAsync(string hash, string token)
+    private static async Task<string?> SearchExistingIssueByHashAsync(string hash, string token, CancellationToken cancellationToken)
     {
         var query = Uri.EscapeDataString($"repo:{RepoOwner}/{RepoName} \"{hash}\" in:body");
         var url = $"{ApiBase}/search/issues?q={query}&per_page=1";
@@ -200,11 +232,11 @@ internal static class GitHubIssueReporter
         using var requestMessage = new HttpRequestMessage(HttpMethod.Get, url);
         requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        var response = await HttpClient.SendAsync(requestMessage);
+        var response = await HttpClient.SendAsync(requestMessage, cancellationToken);
         if (!response.IsSuccessStatusCode)
             return null;
 
-        var responseJson = await response.Content.ReadAsStringAsync();
+        var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
         var node = JsonNode.Parse(responseJson);
         var items = node?["items"] as JsonArray;
         if (items == null || items.Count == 0)
@@ -213,7 +245,7 @@ internal static class GitHubIssueReporter
         return items[0]?["html_url"]?.GetValue<string>();
     }
 
-    private static async Task<string?> ListExistingSuggestionIssueByHashAsync(string hash, string token)
+    private static async Task<string?> ListExistingSuggestionIssueByHashAsync(string hash, string token, CancellationToken cancellationToken)
     {
         for (var page = 1; ; page++)
         {
@@ -223,11 +255,11 @@ internal static class GitHubIssueReporter
             using var requestMessage = new HttpRequestMessage(HttpMethod.Get, url);
             requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-            var response = await HttpClient.SendAsync(requestMessage);
+            var response = await HttpClient.SendAsync(requestMessage, cancellationToken);
             if (!response.IsSuccessStatusCode)
                 return null;
 
-            var responseJson = await response.Content.ReadAsStringAsync();
+            var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
             var items = JsonNode.Parse(responseJson) as JsonArray;
             if (items == null || items.Count == 0)
                 return null;
@@ -279,7 +311,11 @@ internal static class GitHubIssueReporter
     /// Create the GitHub Issue via the REST API.
     /// REST API 経由で GitHub Issue を作成する。
     /// </summary>
-    private static async Task<SuggestionStore.SubmitAttemptResult> CreateIssueAsync(SuggestionRecord record, string version, string token)
+    private static async Task<SuggestionStore.SubmitAttemptResult> CreateIssueAsync(
+        SuggestionRecord record,
+        string version,
+        string token,
+        CancellationToken cancellationToken)
     {
         var url = $"{ApiBase}/repos/{RepoOwner}/{RepoName}/issues";
 
@@ -350,11 +386,11 @@ internal static class GitHubIssueReporter
         };
         requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        var response = await HttpClient.SendAsync(requestMessage);
+        var response = await HttpClient.SendAsync(requestMessage, cancellationToken);
 
         if (!response.IsSuccessStatusCode)
         {
-            var errorBody = await response.Content.ReadAsStringAsync();
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
             var rateLimitRetryAt = GetRateLimitRetryAt(response, DateTime.UtcNow);
             if (rateLimitRetryAt != null)
             {
@@ -369,7 +405,7 @@ internal static class GitHubIssueReporter
         }
 
         // Parse response to extract the issue URL / レスポンスを解析して Issue URL を抽出
-        var responseJson = await response.Content.ReadAsStringAsync();
+        var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
         var responseNode = JsonNode.Parse(responseJson);
         var issueUrl = responseNode?["html_url"]?.GetValue<string>();
         return issueUrl != null

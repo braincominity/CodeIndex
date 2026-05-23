@@ -921,6 +921,19 @@ public static class ConsoleUi
             .Distinct()
             .OrderBy(l => l));
 
+    private static string GetCompletionKinds() =>
+        string.Join(" ", new[]
+        {
+            "accessor", "annotation", "associatedtype", "attribute", "augmentation",
+            "call", "class", "class_hook", "consumes_hook", "constant", "constructor",
+            "delegate", "enum", "event", "field", "friend", "function", "heading",
+            "hook", "impl", "import", "instantiate", "interface", "label", "lambda",
+            "method", "module", "namespace", "object", "operator", "procedure",
+            "property", "razor_event_binding", "record", "reference", "specialization",
+            "struct", "subscribe", "test.method", "trait", "type", "type_reference",
+            "typealias", "union", "unsubscribe", "variable",
+        }.OrderBy(k => k, StringComparer.Ordinal));
+
     // Commands that get their own per-command completion branch (bash/zsh). Order matters: the
     // `else` generic branch is the catch-all, and `search` must remain the last `elif` so the
     // tests `PrintCompletions_BashAndZshScopeMaxLineWidthToSearchBranch` can isolate it.
@@ -944,6 +957,7 @@ public static class ConsoleUi
     {
         var cmds = string.Join(" ", Commands);
         var langs = GetCompletionLangs();
+        var kinds = GetCompletionKinds();
         var sb = new StringBuilder();
         sb.Append("_cdidx() {\n");
         sb.Append("    local cur prev commands\n");
@@ -961,7 +975,7 @@ public static class ConsoleUi
         sb.Append("    case \"$prev\" in\n");
         sb.Append("        --db|--path|--exclude-path|--output|-o) COMPREPLY=($(compgen -f -- \"$cur\")) ;;\n");
         sb.Append($"        --lang) COMPREPLY=($(compgen -W \"{langs}\" -- \"$cur\")) ;;\n");
-        sb.Append("        --kind) COMPREPLY=($(compgen -W \"function lambda class struct interface enum property event delegate namespace import\" -- \"$cur\")) ;;\n");
+        sb.Append($"        --kind) COMPREPLY=($(compgen -W \"{kinds}\" -- \"$cur\")) ;;\n");
         sb.Append("        *)\n");
         for (var i = 0; i < EnumeratedCompletionCommands.Length; i++)
         {
@@ -1032,6 +1046,7 @@ public static class ConsoleUi
     {
         var cmds = string.Join(" ", Commands.Select(c => $"'{c}:{c} command'"));
         var langs = GetCompletionLangs();
+        var kinds = GetCompletionKinds();
         var sb = new StringBuilder();
         sb.Append("#compdef cdidx\n");
         sb.Append("_cdidx() {\n");
@@ -1054,10 +1069,10 @@ public static class ConsoleUi
             var command = EnumeratedCompletionCommands[i];
             var keyword = i == 0 ? "if" : "elif";
             sb.Append($"            {keyword} [[ $subcmd == {command} ]]; then\n");
-            AppendZshArguments(sb, BuildZshArgsForCommand(command, langs));
+            AppendZshArguments(sb, BuildZshArgsForCommand(command, langs, kinds));
         }
         sb.Append("            else\n");
-        AppendZshArguments(sb, BuildZshGenericArgs(langs));
+        AppendZshArguments(sb, BuildZshGenericArgs(langs, kinds));
         sb.Append("            fi\n");
         sb.Append("            ;;\n");
         sb.Append("    esac\n");
@@ -1066,11 +1081,11 @@ public static class ConsoleUi
         return sb.ToString();
     }
 
-    private static List<string> BuildZshArgsForCommand(string command, string langs)
+    private static List<string> BuildZshArgsForCommand(string command, string langs, string kinds)
     {
         var args = new List<string>();
         foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(command))
-            args.AddRange(FormatZshArguments(flag, langs));
+            args.AddRange(FormatZshArguments(flag, langs, kinds));
         // Append a trailing positional placeholder so zsh suggests path/query completion after
         // the flags — but only for commands that actually accept a positional argument. `status`,
         // `db`, `hotspots`, etc. would reject anything typed there, so emitting no placeholder
@@ -1087,7 +1102,7 @@ public static class ConsoleUi
         return args;
     }
 
-    private static List<string> BuildZshGenericArgs(string langs)
+    private static List<string> BuildZshGenericArgs(string langs, string kinds)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var args = new List<string>();
@@ -1098,21 +1113,21 @@ public static class ConsoleUi
                 if (IsEnumeratedBranchScopedFlag(flag.Name))
                     continue;
                 if (seen.Add(flag.Name))
-                    args.AddRange(FormatZshArguments(flag, langs));
+                    args.AddRange(FormatZshArguments(flag, langs, kinds));
             }
         }
         args.Add("'*:query'");
         return args;
     }
 
-    private static IEnumerable<string> FormatZshArguments(CliFlag flag, string langs)
+    private static IEnumerable<string> FormatZshArguments(CliFlag flag, string langs, string kinds)
     {
-        yield return FormatZshArgument(flag.Name, flag, langs);
+        yield return FormatZshArgument(flag.Name, flag, langs, kinds);
         if (flag.ShortName is not null)
-            yield return FormatZshArgument(flag.ShortName, flag, langs);
+            yield return FormatZshArgument(flag.ShortName, flag, langs, kinds);
     }
 
-    private static string FormatZshArgument(string name, CliFlag flag, string langs)
+    private static string FormatZshArgument(string name, CliFlag flag, string langs, string kinds)
     {
         var desc = flag.Description.Replace("'", "''");
         if (!flag.IsValueBearing)
@@ -1127,7 +1142,7 @@ public static class ConsoleUi
             "<id>" => "id",
             "<datetime>" => "datetime",
             "<lang>" => $"language:({langs})",
-            "<kind>" => "kind:(function lambda class struct interface enum property event delegate namespace import)",
+            "<kind>" => $"kind:({kinds})",
             "<query>" => "query",
             "<name>" => "name",
             "<host:port>" => "address",
@@ -1151,6 +1166,7 @@ public static class ConsoleUi
     private static string GetFishCompletions()
     {
         var langs = GetCompletionLangs();
+        var kinds = GetCompletionKinds();
         var lines = new List<string>
         {
             "# cdidx fish completions",
@@ -1186,7 +1202,7 @@ public static class ConsoleUi
             var argSpec = flag.ValuePlaceholder switch
             {
                 "<lang>" => $" -a '{langs}'",
-                "<kind>" => " -a 'function class struct interface enum property event delegate namespace import'",
+                "<kind>" => $" -a '{kinds}'",
                 "<stdio|http>" => " -a 'stdio http'",
                 _ => "",
             };

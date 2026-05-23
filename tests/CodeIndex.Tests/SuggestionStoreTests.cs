@@ -223,6 +223,50 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task TryAddAndSubmit_SlowSubmission_DoesNotHoldFileLock()
+    {
+        var record = MakeRecord("other", null, "Slow remote submission");
+        using var submissionStarted = new ManualResetEventSlim(false);
+        using var releaseSubmission = new ManualResetEventSlim(false);
+        using var callbackFinished = new ManualResetEventSlim(false);
+        Exception? callbackException = null;
+
+        var submitTask = Task.Run(() =>
+        {
+            try
+            {
+                return _store.TryAddAndSubmit(record, _ =>
+                {
+                    submissionStarted.Set();
+                    releaseSubmission.Wait(TimeSpan.FromSeconds(5));
+                    callbackFinished.Set();
+                    return SuggestionStore.SubmitAttemptResult.Failure("timeout");
+                });
+            }
+            catch (Exception ex)
+            {
+                callbackException = ex;
+                throw;
+            }
+        });
+
+        Assert.True(submissionStarted.Wait(TimeSpan.FromSeconds(5)));
+
+        var secondStore = new SuggestionStore(_tempDir);
+        var addedWhileRemoteSubmitWasBlocked = secondStore.TryAdd(
+            MakeRecord("other", null, "Independent suggestion while remote submit is blocked"));
+
+        releaseSubmission.Set();
+        var result = await submitTask;
+
+        Assert.True(addedWhileRemoteSubmitWasBlocked);
+        Assert.True(callbackFinished.IsSet);
+        Assert.Null(callbackException);
+        Assert.Null(result.UpstreamUrl);
+        Assert.Equal(2, _store.LoadAll().Count);
+    }
+
+    [Fact]
     public void TryAddAndSubmit_RateLimitFailure_StampsNextRetryAt()
     {
         var record = MakeRecord("other", null, "Submission is rate limited");

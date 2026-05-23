@@ -479,6 +479,36 @@ public class ConsoleUiTests
         }
     }
 
+    [Fact]
+    public void PrintCompletions_BashCompletesFlagValues()
+    {
+        var output = ConsoleUi.GetCompletionScript("bash");
+
+        Assert.Contains("--db|--path|--exclude-path|--output|-o) COMPREPLY=($(compgen -f -- \"$cur\"))", output);
+        Assert.Contains("--lang) COMPREPLY=($(compgen -W \"", output);
+        Assert.Contains("csharp", output);
+        Assert.Contains("python", output);
+        Assert.Contains("--kind) COMPREPLY=($(compgen -W \"", output);
+        Assert.Contains("function", output);
+        Assert.Contains("type_reference", output);
+        Assert.Contains("razor_event_binding", output);
+    }
+
+    [Fact]
+    public void PrintCompletions_ZshAndFishCompleteKindValuesFromSharedSet()
+    {
+        var zsh = ConsoleUi.GetCompletionScript("zsh");
+        var fish = ConsoleUi.GetCompletionScript("fish");
+
+        Assert.Contains(":language:(", zsh);
+        Assert.Contains(":kind:(", zsh);
+        Assert.Contains("type_reference", zsh);
+        Assert.Contains("razor_event_binding", zsh);
+        Assert.Contains("-a '", fish);
+        Assert.Contains("type_reference", fish);
+        Assert.Contains("razor_event_binding", fish);
+    }
+
     [Theory]
     [InlineData("bash", "if [ \"$cmd\" = \"hotspots\" ]", "--group-by-name", "--exact-name")]
     [InlineData("zsh", "elif [[ $subcmd == hotspots ]]; then", "--group-by-name[Hotspots: collapse same-name rows across files]", "--exact-name[Exact symbol-name equality]")]
