@@ -684,6 +684,45 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InsertSymbols_BatchFailureSkipsOnlyBadRow()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/symbols_with_bad_row.py", Lang = "python", Size = 1000, Lines = 1000,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var warnings = new List<string>();
+        DbWriter.BatchRowSkipWarningForTesting = warnings.Add;
+        try
+        {
+            var symbols = Enumerable.Range(0, 100)
+                .Select(i => new SymbolRecord
+                {
+                    FileId = i == 50 ? -1 : fileId,
+                    Kind = "function",
+                    Name = $"fn_with_bad_row_{i}",
+                    Line = i + 1,
+                    StartLine = i + 1,
+                    EndLine = i + 1,
+                })
+                .ToList();
+
+            _writer.InsertSymbols(symbols);
+        }
+        finally
+        {
+            DbWriter.BatchRowSkipWarningForTesting = null;
+        }
+
+        var (_, _, symbolCount, _) = _writer.GetCounts();
+        Assert.Equal(99, symbolCount);
+        Assert.Equal(1, _writer.BatchRowsSkipped);
+        var warning = Assert.Single(warnings);
+        Assert.Contains("file_id=-1", warning, StringComparison.Ordinal);
+        Assert.Contains("fn_with_bad_row_50", warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DeleteFileData_RemovesChunksAndSymbols()
     {
         var fileId = _writer.UpsertFile(new FileRecord
