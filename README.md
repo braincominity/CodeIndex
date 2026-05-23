@@ -73,6 +73,14 @@ progress line so the display does not wrap.
 Use `cdidx` when a repository will be searched repeatedly from terminals,
 scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 
+### Shell Completion
+
+Generate completion scripts with `cdidx --completions <bash|zsh|fish>`.
+The generated scripts complete subcommands, flags, and common flag values:
+`--lang` suggests supported languages, `--kind` suggests symbol/reference
+kinds, and path-like options such as `--db`, `--path`, and `--output` use shell
+file completion.
+
 ## Highlights
 
 - CLI-first search with human-readable and machine-oriented output.
@@ -254,6 +262,13 @@ script / CI では `--yes`（または `--force`）が必要です。
 
 ターミナル、スクリプト、CI、AI ツールから同じリポジトリを繰り返し検索する
 場合は `cdidx` が向いています。1回限りのテキスト検索には `rg` が向いています。
+
+### シェル補完
+
+`cdidx --completions <bash|zsh|fish>` で補完スクリプトを生成できます。
+生成されたスクリプトは subcommand、flag、よく使う flag 値を補完します。
+`--lang` は対応言語、`--kind` は symbol / reference kind を提示し、`--db`、
+`--path`、`--output` など path 系 option は shell の file completion を使います。
 
 ## 特長
 
