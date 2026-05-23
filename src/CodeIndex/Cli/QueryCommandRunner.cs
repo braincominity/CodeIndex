@@ -1955,6 +1955,21 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("status", options))
             return CommandExitCodes.UsageError;
+        if (options.StatusLogPath)
+        {
+            if (options.CheckWorkspace)
+            {
+                Console.Error.WriteLine("Error: status --log-path cannot be combined with --check.");
+                return CommandExitCodes.UsageError;
+            }
+
+            var logPath = GlobalToolLog.ResolveLogDirectoryForStatus();
+            if (options.Json)
+                Console.WriteLine(JsonSerializer.Serialize(new Dictionary<string, string> { ["log_path"] = logPath }, jsonOptions));
+            else
+                Console.WriteLine(logPath);
+            return CommandExitCodes.Success;
+        }
         if (options.StatusExplainField != null)
         {
             if (options.Json)
@@ -3337,6 +3352,7 @@ public static class QueryCommandRunner
         bool profile = false;
         int? slowQueryMs = null;
         string? statusExplainField = null;
+        bool statusLogPath = false;
         var rankMode = ReferenceRankMode.Weighted;
         var extraNames = new List<string>();
         bool impactDeprecatedDepthUsed = false;
@@ -3654,6 +3670,16 @@ public static class QueryCommandRunner
                         AddParseError("Error: --explain is not supported by this command.");
                     }
                     break;
+                case "--log-path":
+                    if (allowStatusCheck)
+                    {
+                        statusLogPath = true;
+                    }
+                    else
+                    {
+                        AddParseError("Error: --log-path is not supported by this command.");
+                    }
+                    break;
                 case "--path":
                     if (TryReadStringOptionValue(args, ref i, "--path", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var pathPattern, out var pathError))
                     {
@@ -3901,6 +3927,7 @@ public static class QueryCommandRunner
             Profile = profile,
             SlowQueryMs = slowQueryMs,
             StatusExplainField = statusExplainField,
+            StatusLogPath = statusLogPath,
             RankMode = rankMode,
             ExtraNames = extraNames,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
@@ -6222,6 +6249,7 @@ public sealed class QueryCommandOptions
     public bool Profile { get; init; }
     public int? SlowQueryMs { get; init; }
     public string? StatusExplainField { get; init; }
+    public bool StatusLogPath { get; init; }
     public ReferenceRankMode RankMode { get; init; } = ReferenceRankMode.Weighted;
     public List<string> ExtraNames { get; init; } = [];
     public string? ParseError { get; init; }

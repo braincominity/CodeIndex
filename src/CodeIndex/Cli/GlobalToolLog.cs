@@ -108,6 +108,8 @@ internal static class GlobalToolLog
     /// </summary>
     internal static string ResolveLogDirectoryForReport() => ResolveLogDirectory();
 
+    internal static string ResolveLogDirectoryForStatus() => ResolveLogDirectory();
+
     private static string ResolveLogDirectory()
     {
         var overrideDirectory = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");

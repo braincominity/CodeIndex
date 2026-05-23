@@ -29388,6 +29388,56 @@ jobs:
         Assert.Contains("status --json", stderr);
     }
 
+    [Theory]
+    [InlineData("~/cdidx-logs", "cdidx-logs")]
+    [InlineData("$HOME/cdidx-logs", "cdidx-logs")]
+    [InlineData("${HOME}/cdidx-logs", "cdidx-logs")]
+    public void RunStatus_LogPath_ExpandsUserHomeOverrides(string overrideValue, string childDirectory)
+    {
+        var originalLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+        try
+        {
+            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", overrideValue);
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--log-path"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(Path.GetFullPath(Path.Combine(home, childDirectory)), stdout.Trim());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", originalLogDir);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_LogPath_JsonPrintsResolvedDirectoryWithoutDatabase()
+    {
+        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_status_log_path_{Guid.NewGuid():N}");
+        var originalLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+        try
+        {
+            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--log-path", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(Path.GetFullPath(logDir), document.RootElement.GetProperty("log_path").GetString());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", originalLogDir);
+        }
+    }
+
     [Fact]
     public void RunStatus_Json_UsesIndexedAndSourceFreshnessInsteadOfClockAge()
     {
