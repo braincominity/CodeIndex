@@ -444,14 +444,15 @@ public class DbWriter
         // ON CONFLICT DO UPDATEで既存の行IDを保持する
         var cmd = RentCommand(
             @"
-            INSERT INTO files (path, lang, size, lines, checksum, modified, indexed_at)
-            VALUES (@path, @lang, @size, @lines, @checksum, @modified, CURRENT_TIMESTAMP)
+            INSERT INTO files (path, lang, size, lines, checksum, modified, generated, indexed_at)
+            VALUES (@path, @lang, @size, @lines, @checksum, @modified, @generated, CURRENT_TIMESTAMP)
             ON CONFLICT(path) DO UPDATE SET
                 lang = excluded.lang,
                 size = excluded.size,
                 lines = excluded.lines,
                 checksum = excluded.checksum,
                 modified = excluded.modified,
+                generated = excluded.generated,
                 indexed_at = CURRENT_TIMESTAMP
             RETURNING id",
             static c =>
@@ -462,6 +463,7 @@ public class DbWriter
                 c.Parameters.Add("@lines", SqliteType.Integer);
                 c.Parameters.Add("@checksum", SqliteType.Text);
                 c.Parameters.Add("@modified", SqliteType.Text);
+                c.Parameters.Add("@generated", SqliteType.Integer);
             });
         try
         {
@@ -471,6 +473,7 @@ public class DbWriter
             cmd.Parameters["@lines"].Value = file.Lines;
             cmd.Parameters["@checksum"].Value = (object?)file.Checksum ?? DBNull.Value;
             cmd.Parameters["@modified"].Value = file.Modified;
+            cmd.Parameters["@generated"].Value = file.Generated ? 1 : 0;
             return (long)cmd.ExecuteScalar()!;
         }
         finally
