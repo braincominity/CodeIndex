@@ -115,13 +115,15 @@ public class SuggestionStore
     /// Result of a GitHub submission attempt.
     /// GitHub 送信試行の結果。
     /// </summary>
-    public record SubmitAttemptResult(string? IssueUrl, string? Error)
+    public record SubmitAttemptResult(string? IssueUrl, string? Error, DateTime? NextRetryAt = null)
     {
-        public static SubmitAttemptResult Success(string issueUrl) => new(issueUrl, null);
+        public static SubmitAttemptResult Success(string issueUrl) => new(issueUrl, null, null);
 
-        public static SubmitAttemptResult Failure(string error) => new(null, error);
+        public static SubmitAttemptResult Failure(string error) => new(null, error, null);
 
-        public static SubmitAttemptResult Skipped() => new(null, null);
+        public static SubmitAttemptResult RetryAfter(string error, DateTime nextRetryAt) => new(null, error, nextRetryAt);
+
+        public static SubmitAttemptResult Skipped() => new(null, null, null);
     }
 
     /// <summary>
@@ -159,13 +161,13 @@ public class SuggestionStore
             // Attempt GitHub submission if needed and callback is provided.
             // 必要かつコールバックが提供されている場合、GitHub 送信を試みる。
             string? issueUrl = null;
-            if (!alreadySubmitted && submitToGitHub != null)
+            if (!alreadySubmitted && submitToGitHub != null && ShouldAttemptSubmit(found!))
             {
                 var attemptedAt = DateTime.UtcNow;
                 try
                 {
                     var submitResult = submitToGitHub(found!);
-                    StampSubmitAttempt(found!, attemptedAt, submitResult.Error);
+                    StampSubmitAttempt(found!, attemptedAt, submitResult.Error, submitResult.NextRetryAt);
                     issueUrl = submitResult.IssueUrl;
                     if (issueUrl != null)
                         MarkSubmitted(found!, issueUrl, attemptedAt);
@@ -176,7 +178,7 @@ public class SuggestionStore
                 {
                     // Best-effort — GitHub submission failure does not fail the local operation.
                     // ベストエフォート — GitHub 送信失敗はローカル操作を失敗させない。
-                    StampSubmitAttempt(found!, attemptedAt, $"{ex.GetType().Name}: {ex.Message}");
+                    StampSubmitAttempt(found!, attemptedAt, $"{ex.GetType().Name}: {ex.Message}", null);
                     SaveUnlocked(existing);
                 }
             }
@@ -474,15 +476,25 @@ public class SuggestionStore
         record.UpstreamIssueNumber = TryParseIssueNumber(issueUrl);
         record.LastSyncedAt = timestamp;
         record.LastSubmitError = null;
+        record.NextRetryAt = null;
         record.SubmittedToGitHub = null;
         record.GitHubIssueUrl = null;
     }
 
-    private static void StampSubmitAttempt(SuggestionRecord record, DateTime timestamp, string? error)
+    private static bool ShouldAttemptSubmit(SuggestionRecord record)
+    {
+        if (record.NextRetryAt == null)
+            return true;
+
+        return record.NextRetryAt.Value <= DateTime.UtcNow;
+    }
+
+    private static void StampSubmitAttempt(SuggestionRecord record, DateTime timestamp, string? error, DateTime? nextRetryAt)
     {
         record.LastSubmitAttempt = timestamp;
         record.SubmitAttemptCount++;
         record.LastSubmitError = string.IsNullOrWhiteSpace(error) ? null : error;
+        record.NextRetryAt = nextRetryAt;
     }
 
     private static void NormalizeLegacyFields(SuggestionRecord record)

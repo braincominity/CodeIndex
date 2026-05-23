@@ -86,6 +86,14 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_YesFlag_SetsYes()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--rebuild", "--yes"]);
+        Assert.True(options.Rebuild);
+        Assert.True(options.Yes);
+    }
+
+    [Fact]
     public void ParseArgs_NoForceFlag_DefaultsToFalse()
     {
         var options = IndexCommandRunner.ParseArgs(["."]);
@@ -122,6 +130,53 @@ public class IndexCommandRunnerTests
         }
         finally
         {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_RebuildWithoutConfirmationOnNonTty_ReturnsExUsage()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+
+            IndexCommandRunner.IsInputRedirectedForTesting = () => true;
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--json"]);
+
+            Assert.Equal(CommandExitCodes.ExUsage, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("Pass --yes", json.GetProperty("message").GetString());
+            Assert.Contains("--files", json.GetProperty("hint").GetString());
+        }
+        finally
+        {
+            IndexCommandRunner.IsInputRedirectedForTesting = () => Console.IsInputRedirected;
+            IndexCommandRunner.ReadLineForTesting = Console.ReadLine;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_RebuildWithYesOnNonTty_Succeeds()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+
+            IndexCommandRunner.IsInputRedirectedForTesting = () => true;
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--yes", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal("rebuild", json.GetProperty("mode").GetString());
+        }
+        finally
+        {
+            IndexCommandRunner.IsInputRedirectedForTesting = () => Console.IsInputRedirected;
+            IndexCommandRunner.ReadLineForTesting = Console.ReadLine;
             DeleteDirectory(projectRoot);
         }
     }
@@ -2902,6 +2957,35 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_VerboseJson_WritesStatusToStderrAndKeepsStdoutJson()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, stdout, stderr) = RunAndCaptureStreams([projectRoot, "--files", "app.cs", "--verbose", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            using var json = JsonDocument.Parse(stdout);
+            Assert.Equal("success", json.RootElement.GetProperty("Status").GetString());
+            Assert.DoesNotContain("[OK  ]", stdout);
+            Assert.Contains("[OK  ] app.cs", stderr);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_JsonKeepsGraphAndIssuesReadyAfterHealthyScopedRefresh()
     {
         var projectRoot = CreateTempProject();
@@ -5569,7 +5653,7 @@ public class IndexCommandRunnerTests
             File.WriteAllText(Path.Combine(projectRoot, "extra.cs"), "public class Extra { }");
 
             // Rebuild: should drop and re-scan all files / rebuild: 全削除して全ファイル再スキャン
-            var (exitCode2, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--json"]);
+            var (exitCode2, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--yes", "--json"]);
             Assert.Equal(CommandExitCodes.Success, exitCode2);
             Assert.Equal("rebuild", json.GetProperty("mode").GetString());
             // After rebuild, all files should be scanned (not skipped)
@@ -5591,7 +5675,7 @@ public class IndexCommandRunnerTests
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }");
 
-            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--json"]);
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--yes", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
@@ -6136,7 +6220,7 @@ public class IndexCommandRunnerTests
             originalMode = File.GetUnixFileMode(unreadableDir);
             File.SetUnixFileMode(unreadableDir, UnixFileMode.None);
 
-            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--json"]);
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--yes", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
@@ -6800,7 +6884,7 @@ public class IndexCommandRunnerTests
 
             // --rebuild already wipes the DB, so HEAD divergence is irrelevant on that path.
             // --rebuild は DB を消すため HEAD 差分の警告は不要。
-            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--json"]);
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--rebuild", "--yes", "--json"]);
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.False(json.GetProperty("head_changed").GetBoolean());
             Assert.Equal(JsonValueKind.Null, json.GetProperty("head_change_notice").ValueKind);

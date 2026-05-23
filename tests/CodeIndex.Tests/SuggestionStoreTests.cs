@@ -223,6 +223,64 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void TryAddAndSubmit_RateLimitFailure_StampsNextRetryAt()
+    {
+        var record = MakeRecord("other", null, "Submission is rate limited");
+        var nextRetryAt = DateTime.UtcNow.AddMinutes(10);
+
+        var result = _store.TryAddAndSubmit(record,
+            _ => SuggestionStore.SubmitAttemptResult.RetryAfter("429: rate limited", nextRetryAt));
+
+        var stored = Assert.Single(_store.LoadAll());
+        Assert.True(result.IsNew);
+        Assert.Null(result.UpstreamUrl);
+        Assert.Equal(SuggestionStatus.Draft, stored.Status);
+        Assert.Equal(1, stored.SubmitAttemptCount);
+        Assert.Equal("429: rate limited", stored.LastSubmitError);
+        Assert.Equal(nextRetryAt, stored.NextRetryAt);
+    }
+
+    [Fact]
+    public void TryAddAndSubmit_DuplicateBeforeNextRetryAt_DoesNotRetry()
+    {
+        var record = MakeRecord("other", null, "Duplicate waits for retry");
+        var nextRetryAt = DateTime.UtcNow.AddHours(1);
+        _store.TryAddAndSubmit(record,
+            _ => SuggestionStore.SubmitAttemptResult.RetryAfter("429: rate limited", nextRetryAt));
+
+        var duplicate = MakeRecord("other", null, "Duplicate waits for retry");
+        var callbackCalls = 0;
+        _store.TryAddAndSubmit(duplicate, _ =>
+        {
+            callbackCalls++;
+            return SuggestionStore.SubmitAttemptResult.Success("https://github.com/widthdom/CodeIndex/issues/123");
+        });
+
+        var stored = Assert.Single(_store.LoadAll());
+        Assert.Equal(0, callbackCalls);
+        Assert.Equal(1, stored.SubmitAttemptCount);
+        Assert.Equal(nextRetryAt, stored.NextRetryAt);
+        Assert.Null(stored.UpstreamUrl);
+    }
+
+    [Fact]
+    public void TryAddAndSubmit_DuplicateAfterNextRetryAt_RetriesAndClearsNextRetryAtOnSuccess()
+    {
+        var record = MakeRecord("other", null, "Duplicate retries after window");
+        _store.TryAddAndSubmit(record,
+            _ => SuggestionStore.SubmitAttemptResult.RetryAfter("429: rate limited", DateTime.UtcNow.AddMinutes(-1)));
+
+        var duplicate = MakeRecord("other", null, "Duplicate retries after window");
+        _store.TryAddAndSubmit(duplicate,
+            _ => SuggestionStore.SubmitAttemptResult.Success("https://github.com/widthdom/CodeIndex/issues/123"));
+
+        var stored = Assert.Single(_store.LoadAll());
+        Assert.Equal(2, stored.SubmitAttemptCount);
+        Assert.Null(stored.NextRetryAt);
+        Assert.Equal("https://github.com/widthdom/CodeIndex/issues/123", stored.UpstreamUrl);
+    }
+
+    [Fact]
     public void TryAddAndSubmit_Exception_StampsExceptionTypeAndMessage()
     {
         var record = MakeRecord("other", null, "Submission throws");
