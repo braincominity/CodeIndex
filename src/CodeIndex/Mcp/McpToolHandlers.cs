@@ -1325,12 +1325,20 @@ public partial class McpServer
         int failureCount = 0;
         var truncated = false;
         var responseByteLimit = GetBatchQueryResponseByteLimit();
-        var estimatedResponseBytes = 0;
+        var estimatedResponseBytes = EstimateBatchResponseBytes(id, "Executed 0 queries.", successCount, failureCount,
+            responseByteLimit, resultsArray, truncated: false, truncatedQueries);
 
-        bool TryAppendResult(JsonObject entry, string? toolName, JsonNode? toolArgs)
+        bool TryAppendResult(JsonObject entry, string? toolName, JsonNode? toolArgs, bool successfulSlot = false)
         {
-            var entryBytes = EstimateJsonUtf8Bytes(entry);
-            if (estimatedResponseBytes + entryBytes > responseByteLimit)
+            var candidateResults = CloneJsonArray(resultsArray);
+            candidateResults.Add(entry.DeepClone());
+            var candidateSuccessCount = successCount + (successfulSlot ? 1 : 0);
+            var candidateSummary = failureCount == 0
+                ? $"Executed {candidateResults.Count} queries in 0 ms (all succeeded)."
+                : $"Executed {candidateResults.Count} queries in 0 ms ({candidateSuccessCount} succeeded, {failureCount} failed).";
+            var candidateBytes = EstimateBatchResponseBytes(id, candidateSummary, candidateSuccessCount, failureCount,
+                responseByteLimit, candidateResults, truncated: false, truncatedQueries);
+            if (candidateBytes > responseByteLimit)
             {
                 truncated = true;
                 truncatedQueries.Add(new JsonObject
@@ -1342,7 +1350,7 @@ public partial class McpServer
                 return false;
             }
 
-            estimatedResponseBytes += entryBytes;
+            estimatedResponseBytes = candidateBytes;
             resultsArray.Add(entry);
             return true;
         }
@@ -1574,7 +1582,7 @@ public partial class McpServer
                     ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                     ["result"] = structured?.DeepClone(),
                 };
-                if (TryAppendResult(entry, toolName, toolArgs))
+                if (TryAppendResult(entry, toolName, toolArgs, successfulSlot: true))
                     successCount++;
             }
             catch (Exception ex)
@@ -1620,6 +1628,12 @@ public partial class McpServer
             : $"Executed {resultsArray.Count} queries in {totalElapsedMs} ms ({successCount} succeeded, {failureCount} failed).";
         if (truncated)
             summary += $" Response truncated at {responseByteLimit} bytes; split the batch or lower per-slot limits.";
+        var metadata = (JsonObject)payload["metadata"]!;
+        for (var i = 0; i < 3; i++)
+        {
+            estimatedResponseBytes = EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload.DeepClone()));
+            metadata["estimated_response_bytes"] = estimatedResponseBytes;
+        }
         return CreateToolResult(id, summary, payload);
     }
 
@@ -1633,6 +1647,39 @@ public partial class McpServer
 
     private int EstimateJsonUtf8Bytes(JsonNode node) =>
         Encoding.UTF8.GetByteCount(node.ToJsonString(_jsonOptions));
+
+    private int EstimateBatchResponseBytes(JsonNode? id, string summary, int successCount, int failureCount,
+        int responseByteLimit, JsonArray resultsArray, bool truncated, JsonArray truncatedQueries)
+    {
+        var payload = new JsonObject
+        {
+            ["count"] = resultsArray.Count,
+            ["metadata"] = new JsonObject
+            {
+                ["total_elapsed_ms"] = 0,
+                ["success_count"] = successCount,
+                ["failure_count"] = failureCount,
+                ["response_byte_limit"] = responseByteLimit,
+                ["estimated_response_bytes"] = 0,
+            },
+            ["results"] = resultsArray.DeepClone(),
+        };
+        if (truncated)
+        {
+            payload["truncated"] = true;
+            payload["truncated_queries"] = truncatedQueries.DeepClone();
+        }
+
+        return EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload));
+    }
+
+    private static JsonArray CloneJsonArray(JsonArray source)
+    {
+        var clone = new JsonArray();
+        foreach (var item in source)
+            clone.Add(item?.DeepClone());
+        return clone;
+    }
 
     /// <summary>
     /// Build a compact, single-line summary string of a batch slot's arguments

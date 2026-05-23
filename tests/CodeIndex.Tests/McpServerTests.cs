@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.Json;
 using CodeIndex.Cli;
@@ -5045,16 +5046,19 @@ public class McpServerTests : IDisposable
     public void ToolsCall_BatchQuery_TruncatesAggregateResponse_Issue1416()
     {
         var previous = Environment.GetEnvironmentVariable("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES");
-        Environment.SetEnvironmentVariable("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES", "200");
+        Environment.SetEnvironmentVariable("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES", "700");
         try
         {
-            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"ping"},{"tool":"status"},{"tool":"files","arguments":{}}]}}}""")!;
+            InsertIndexedFile("src/large.cs", "csharp", "// " + new string('x', 5000));
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"excerpt","arguments":{"path":"src/large.cs","startLine":1,"endLine":1,"maxLineWidth":0}}]}}}""")!;
             var response = _server.HandleMessage(request)!;
 
             var structured = response["result"]!["structuredContent"]!;
-            Assert.True(structured["truncated"]!.GetValue<bool>());
-            Assert.True(structured["metadata"]!["estimated_response_bytes"]!.GetValue<int>() <= 200);
-            Assert.Equal(200, structured["metadata"]!["response_byte_limit"]!.GetValue<int>());
+            Assert.True(structured["truncated"]?.GetValue<bool>() ?? false, response.ToJsonString());
+            var actualResponseBytes = Encoding.UTF8.GetByteCount(response.ToJsonString());
+            Assert.True(actualResponseBytes <= 700, $"Actual response was {actualResponseBytes} bytes.");
+            Assert.True(structured["metadata"]!["estimated_response_bytes"]!.GetValue<int>() <= 700);
+            Assert.Equal(700, structured["metadata"]!["response_byte_limit"]!.GetValue<int>());
 
             var truncatedQueries = structured["truncated_queries"]!.AsArray();
             Assert.NotEmpty(truncatedQueries);
