@@ -6483,6 +6483,45 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_Update_RollsBackHotspotFamilyRestampWhenCommitIsInterrupted()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
+            var callerPath = Path.Combine(projectRoot, "src", "Caller.cs");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part1.cs"), "public partial class Api { public void Run() { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part2.cs"), "public partial class Api { public void Run(int value) { } }");
+            File.WriteAllText(callerPath, "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+
+            var (initialExitCode, initialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(initialJson.GetProperty("hotspot_family_ready").GetBoolean());
+
+            File.WriteAllText(callerPath, "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); api.Run(); } }");
+            File.SetLastWriteTimeUtc(callerPath, DateTime.UtcNow.AddSeconds(2));
+
+            IndexCommandRunner.HotspotFamilyUpdateRestampReadyForCommitForTesting = () =>
+                throw new InvalidOperationException("simulate crash after hotspot restamp");
+
+            Assert.Throws<InvalidOperationException>(() =>
+                RunAndCaptureJson([projectRoot, "--files", "src/Caller.cs", "--json"]));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp")));
+        }
+        finally
+        {
+            IndexCommandRunner.HotspotFamilyUpdateRestampReadyForCommitForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_Rebuild_IgnoresUnreadableDirectoriesWhenCollectingMarkerFingerprints()
     {
         if (OperatingSystem.IsWindows())
