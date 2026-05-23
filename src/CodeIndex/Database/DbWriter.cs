@@ -13,6 +13,7 @@ public class DbWriter
 {
     private readonly SqliteConnection _conn;
     private readonly PreparedCommandCache? _commandCache;
+    private readonly Action? _markWriteWork;
     internal static Action? FoldBackfillRowUpdatedForTesting { get; set; }
     private const int BatchSize = 500;
     private const int MaxSqlVariables = 999;
@@ -34,7 +35,7 @@ public class DbWriter
     internal SqliteConnection Connection => _conn;
 
     public DbWriter(SqliteConnection connection)
-        : this(connection, commandCache: null)
+        : this(connection, commandCache: null, markWriteWork: null)
     {
     }
 
@@ -50,14 +51,16 @@ public class DbWriter
     public DbWriter(DbContext context)
         : this(
             (context ?? throw new ArgumentNullException(nameof(context))).Connection,
-            context.IsReadOnly ? null : context.PreparedCommands)
+            context.IsReadOnly ? null : context.PreparedCommands,
+            context.MarkWriteWork)
     {
     }
 
-    internal DbWriter(SqliteConnection connection, PreparedCommandCache? commandCache)
+    internal DbWriter(SqliteConnection connection, PreparedCommandCache? commandCache, Action? markWriteWork)
     {
         _conn = connection;
         _commandCache = commandCache;
+        _markWriteWork = markWriteWork;
     }
 
     /// <summary>
@@ -187,10 +190,14 @@ public class DbWriter
                 if (_transaction != null)
                 {
                     _transaction.Commit();
+                    _writer._markWriteWork?.Invoke();
                     _writer.RunPassiveWalCheckpoint();
                 }
                 else
+                {
                     ExecuteSql($"RELEASE SAVEPOINT {_savepointName}");
+                    _writer._markWriteWork?.Invoke();
+                }
                 // Mark committed after success so Dispose() will rollback if Commit/Release throws.
                 // コミット/リリース成功後に committed に遷移し、失敗時は Dispose() でロールバックされるようにする。
                 Volatile.Write(ref _state, StateCommitted);
@@ -314,6 +321,7 @@ public class DbWriter
             using var cmd = _conn!.CreateCommand();
             cmd.CommandText = sql;
             cmd.ExecuteNonQuery();
+            _writer._markWriteWork?.Invoke();
         }
     }
 
