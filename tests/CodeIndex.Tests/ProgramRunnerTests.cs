@@ -11,6 +11,35 @@ namespace CodeIndex.Tests;
 public class ProgramRunnerTests
 {
     [Fact]
+    public void TryConsumeSuggestionDedupThresholdFlag_SetsEnvironmentAndRemovesFlag()
+    {
+        using var env = EnvironmentVariableScope.Capture(SuggestionStore.DedupThresholdEnvironmentVariable);
+        env.Set(SuggestionStore.DedupThresholdEnvironmentVariable, null);
+        string[] args = ["--db", "index.db", "--suggestion-dedup-threshold", "0.7"];
+
+        var ok = ProgramRunner.TryConsumeSuggestionDedupThresholdFlag(ref args, out var error);
+
+        Assert.True(ok);
+        Assert.Empty(error);
+        Assert.Equal(["--db", "index.db"], args);
+        Assert.Equal("0.7", Environment.GetEnvironmentVariable(SuggestionStore.DedupThresholdEnvironmentVariable));
+    }
+
+    [Fact]
+    public void TryConsumeSuggestionDedupThresholdFlag_InvalidValue_ReturnsError()
+    {
+        using var env = EnvironmentVariableScope.Capture(SuggestionStore.DedupThresholdEnvironmentVariable);
+        env.Set(SuggestionStore.DedupThresholdEnvironmentVariable, null);
+        string[] args = ["--suggestion-dedup-threshold=1.5"];
+
+        var ok = ProgramRunner.TryConsumeSuggestionDedupThresholdFlag(ref args, out var error);
+
+        Assert.False(ok);
+        Assert.Contains("--suggestion-dedup-threshold", error);
+        Assert.Null(Environment.GetEnvironmentVariable(SuggestionStore.DedupThresholdEnvironmentVariable));
+    }
+
+    [Fact]
     public void Run_UnhandledException_ReturnsSanitizedSingleLineError()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(

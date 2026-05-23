@@ -23,6 +23,28 @@ public class SuggestionStore
     private readonly string _lockPath;
     private static readonly TimeSpan s_inFlightSubmitRetryDelay = TimeSpan.FromMinutes(1);
     internal const FileShare StreamingReadFileShare = FileShare.ReadWrite | FileShare.Delete;
+    internal const string DedupThresholdEnvironmentVariable = "CDIDX_SUGGESTION_DEDUP_THRESHOLD";
+    internal const double DefaultDedupThreshold = 0.85;
+    private const int FuzzyDedupRecentLimit = 100;
+
+    private static readonly HashSet<string> s_dedupStopWords = new(StringComparer.Ordinal)
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "be",
+        "for",
+        "in",
+        "is",
+        "missing",
+        "no",
+        "not",
+        "of",
+        "the",
+        "to",
+        "with",
+    };
 
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
@@ -96,7 +118,7 @@ public class SuggestionStore
         return WithFileLock(() =>
         {
             var existing = ReadUnlocked();
-            if (existing.Any(s => s.Hash == record.Hash))
+            if (FindDuplicate(existing, record, ResolveDedupThreshold()).Record != null)
                 return false;
 
             existing.Add(record);
@@ -110,7 +132,13 @@ public class SuggestionStore
     /// whether it was already submitted, its lifecycle status, and the upstream URL if known.
     /// TryAddAndSubmit の結果: 新規か重複か、既に送信済みか、lifecycle 状態、判明している upstream URL。
     /// </summary>
-    public record AddAndSubmitResult(bool IsNew, bool AlreadySubmitted, SuggestionStatus Status, string? UpstreamUrl);
+    public record AddAndSubmitResult(
+        bool IsNew,
+        bool AlreadySubmitted,
+        SuggestionStatus Status,
+        string? UpstreamUrl,
+        string? DuplicateOfHash = null,
+        double? DuplicateScore = null);
 
     /// <summary>
     /// Result of a GitHub submission attempt.
@@ -147,7 +175,8 @@ public class SuggestionStore
         var reservation = WithFileLock(() =>
         {
             var existing = ReadUnlocked();
-            var found = existing.FirstOrDefault(s => s.Hash == record.Hash);
+            var duplicate = FindDuplicate(existing, record, ResolveDedupThreshold());
+            var found = duplicate.Record;
 
             bool isNew = found == null;
             bool alreadySubmitted = found != null && HasUpstreamSubmission(found);
@@ -165,14 +194,40 @@ public class SuggestionStore
                 var attemptedAt = DateTime.UtcNow;
                 StampSubmitAttempt(current, attemptedAt, null, attemptedAt.Add(s_inFlightSubmitRetryDelay));
                 SaveUnlocked(existing);
-                return new SubmitReservation(isNew, alreadySubmitted, current.Hash, current.Status, current.UpstreamUrl, CloneForSubmit(current), attemptedAt);
+                return new SubmitReservation(
+                    isNew,
+                    alreadySubmitted,
+                    current.Hash,
+                    current.Status,
+                    current.UpstreamUrl,
+                    CloneForSubmit(current),
+                    attemptedAt,
+                    isNew ? null : current.Hash,
+                    isNew ? null : duplicate.Score);
             }
 
-            return new SubmitReservation(isNew, alreadySubmitted, current.Hash, current.Status, current.UpstreamUrl, null, null);
+            return new SubmitReservation(
+                isNew,
+                alreadySubmitted,
+                current.Hash,
+                current.Status,
+                current.UpstreamUrl,
+                null,
+                null,
+                isNew ? null : current.Hash,
+                isNew ? null : duplicate.Score);
         });
 
         if (reservation.RecordToSubmit == null || submitToGitHub == null || reservation.AttemptedAt == null)
-            return new AddAndSubmitResult(reservation.IsNew, reservation.AlreadySubmitted, reservation.Status, reservation.UpstreamUrl);
+        {
+            return new AddAndSubmitResult(
+                reservation.IsNew,
+                reservation.AlreadySubmitted,
+                reservation.Status,
+                reservation.UpstreamUrl,
+                reservation.DuplicateOfHash,
+                reservation.DuplicateScore);
+        }
 
         SubmitAttemptResult submitResult;
         try
@@ -191,7 +246,15 @@ public class SuggestionStore
             var existing = ReadUnlocked();
             var found = existing.FirstOrDefault(s => s.Hash == reservation.Hash);
             if (found == null)
-                return new AddAndSubmitResult(reservation.IsNew, reservation.AlreadySubmitted, reservation.Status, reservation.UpstreamUrl);
+            {
+                return new AddAndSubmitResult(
+                    reservation.IsNew,
+                    reservation.AlreadySubmitted,
+                    reservation.Status,
+                    reservation.UpstreamUrl,
+                    reservation.DuplicateOfHash,
+                    reservation.DuplicateScore);
+            }
 
             var issueUrl = submitResult.IssueUrl;
             StampSubmitResult(found, submitResult);
@@ -199,7 +262,13 @@ public class SuggestionStore
                 MarkSubmitted(found, issueUrl, reservation.AttemptedAt.Value);
 
             SaveUnlocked(existing);
-            return new AddAndSubmitResult(reservation.IsNew, reservation.AlreadySubmitted, found.Status, issueUrl ?? found.UpstreamUrl);
+            return new AddAndSubmitResult(
+                reservation.IsNew,
+                reservation.AlreadySubmitted,
+                found.Status,
+                issueUrl ?? found.UpstreamUrl,
+                reservation.DuplicateOfHash,
+                reservation.DuplicateScore);
         });
     }
 
@@ -344,6 +413,121 @@ public class SuggestionStore
             if (string.IsNullOrWhiteSpace(record.ClientVersion))
                 record.ClientVersion = "unknown";
         }
+    }
+
+    private static (SuggestionRecord? Record, double? Score) FindDuplicate(
+        IReadOnlyList<SuggestionRecord> existing,
+        SuggestionRecord candidate,
+        double threshold)
+    {
+        var exact = existing.FirstOrDefault(s => s.Hash == candidate.Hash);
+        if (exact != null)
+            return (exact, 1.0);
+
+        var bestScore = 0.0;
+        SuggestionRecord? best = null;
+        foreach (var record in existing
+            .Where(s => SameDedupScope(s, candidate))
+            .OrderByDescending(s => s.CreatedAt)
+            .Take(FuzzyDedupRecentLimit))
+        {
+            var score = ComputeDescriptionSimilarity(record.Description, candidate.Description);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = record;
+            }
+        }
+
+        if (best != null && bestScore >= threshold)
+        {
+            Console.Error.WriteLine(
+                $"cdidx: fuzzy suggestion duplicate matched hash {best.Hash} with score {bestScore:0.###} (threshold {threshold:0.###})");
+            return (best, bestScore);
+        }
+
+        return (null, null);
+    }
+
+    private static bool SameDedupScope(SuggestionRecord left, SuggestionRecord right)
+        => string.Equals(left.Category?.Trim(), right.Category?.Trim(), StringComparison.OrdinalIgnoreCase)
+           && string.Equals(left.Language?.Trim() ?? string.Empty, right.Language?.Trim() ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+    internal static double ComputeDescriptionSimilarity(string left, string right)
+    {
+        var leftTokens = TokenizeForDedup(left);
+        var rightTokens = TokenizeForDedup(right);
+        if (leftTokens.Count == 0 || rightTokens.Count == 0)
+            return string.Equals(left.Trim(), right.Trim(), StringComparison.OrdinalIgnoreCase) ? 1.0 : 0.0;
+
+        var intersection = leftTokens.Intersect(rightTokens, StringComparer.Ordinal).Count();
+        var union = leftTokens.Union(rightTokens, StringComparer.Ordinal).Count();
+        if (union == 0)
+            return 0.0;
+
+        return (double)intersection / union;
+    }
+
+    private static HashSet<string> TokenizeForDedup(string text)
+    {
+        var tokens = new HashSet<string>(StringComparer.Ordinal);
+        var builder = new StringBuilder();
+        foreach (var ch in text.ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                builder.Append(ch);
+                continue;
+            }
+
+            AddToken(builder, tokens);
+        }
+
+        AddToken(builder, tokens);
+        return tokens;
+    }
+
+    private static void AddToken(StringBuilder builder, HashSet<string> tokens)
+    {
+        if (builder.Length == 0)
+            return;
+
+        var rawToken = builder.ToString();
+        var token = s_dedupStopWords.Contains(rawToken) ? string.Empty : NormalizeDedupToken(rawToken);
+        builder.Clear();
+        if (token.Length >= 2 && !s_dedupStopWords.Contains(token))
+            tokens.Add(token);
+    }
+
+    private static string NormalizeDedupToken(string token)
+    {
+        if (token.EndsWith("unsupported", StringComparison.Ordinal))
+            return "support";
+        if (token.EndsWith("supported", StringComparison.Ordinal))
+            return token[..^2];
+        if (token.EndsWith("ing", StringComparison.Ordinal) && token.Length > 5)
+            return token[..^3];
+        if (token.EndsWith("ed", StringComparison.Ordinal) && token.Length > 4)
+            return token[..^2];
+        if (token.EndsWith("s", StringComparison.Ordinal) && token.Length > 3)
+            return token[..^1];
+        return token;
+    }
+
+    private static double ResolveDedupThreshold()
+    {
+        var raw = Environment.GetEnvironmentVariable(DedupThresholdEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(raw))
+            return DefaultDedupThreshold;
+
+        if (double.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var value)
+            && value >= 0
+            && value <= 1)
+        {
+            return value;
+        }
+
+        return DefaultDedupThreshold;
     }
 
     /// <summary>
@@ -556,7 +740,9 @@ public class SuggestionStore
         SuggestionStatus Status,
         string? UpstreamUrl,
         SuggestionRecord? RecordToSubmit,
-        DateTime? AttemptedAt);
+        DateTime? AttemptedAt,
+        string? DuplicateOfHash,
+        double? DuplicateScore);
 
     private static void NormalizeLegacyFields(SuggestionRecord record)
     {

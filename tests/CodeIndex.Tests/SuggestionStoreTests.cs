@@ -91,6 +91,47 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void TryAdd_FuzzyDuplicateSameCategoryAndLanguage_ReturnsFalse()
+    {
+        var record1 = MakeRecord("language_support", "javascript", "missing arrow function support");
+        var record2 = MakeRecord("language_support", "javascript", "arrow functions not supported");
+
+        Assert.True(_store.TryAdd(record1));
+        Assert.False(_store.TryAdd(record2));
+
+        var all = _store.LoadAll();
+        Assert.Single(all);
+        Assert.Equal(record1.Hash, all[0].Hash);
+    }
+
+    [Fact]
+    public void TryAdd_FuzzyDuplicateDifferentCategory_BothSucceed()
+    {
+        var record1 = MakeRecord("language_support", "javascript", "missing arrow function support");
+        var record2 = MakeRecord("reference_extraction", "javascript", "arrow functions not supported");
+
+        Assert.True(_store.TryAdd(record1));
+        Assert.True(_store.TryAdd(record2));
+
+        Assert.Equal(2, _store.LoadAll().Count);
+    }
+
+    [Fact]
+    public void TryAddAndSubmit_FuzzyDuplicate_ReturnsMatchedHashAndScore()
+    {
+        var record1 = MakeRecord("language_support", "javascript", "missing arrow function support");
+        var record2 = MakeRecord("language_support", "javascript", "arrow functions not supported");
+
+        var first = _store.TryAddAndSubmit(record1, null);
+        var second = _store.TryAddAndSubmit(record2, null);
+
+        Assert.True(first.IsNew);
+        Assert.False(second.IsNew);
+        Assert.Equal(record1.Hash, second.DuplicateOfHash);
+        Assert.True(second.DuplicateScore >= SuggestionStore.DefaultDedupThreshold);
+    }
+
+    [Fact]
     public void TryAdd_DifferentSuggestions_BothSucceed()
     {
         var record1 = MakeRecord("symbol_extraction", "csharp", "Missing record support");

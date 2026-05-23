@@ -100,7 +100,10 @@ file completion.
 - MCP server for AI clients such as Claude Code, Cursor, and Windsurf,
   including tools, indexed-file resources, and canned analysis prompts.
 - Local suggestion history can be listed, inspected, and exported with
-  `cdidx suggestions`.
+  `cdidx suggestions`; near-duplicate MCP suggestions are fuzzy-deduped before
+  GitHub submission, with `cdidx mcp --suggestion-dedup-threshold`,
+  `CDIDX_SUGGESTION_DEDUP_THRESHOLD`, or `.cdidxrc.json`
+  `suggestion_dedup_threshold` controlling the score cutoff.
 - Parallel full-scan extraction with configurable `--parallelism`, incremental refreshes
   with `--files` and `--commits`, plus continuous `--watch` mode.
 - Post-extraction hooks from `~/.config/cdidx/hooks/*.dll` (or `CDIDX_HOOKS_DIR`)
@@ -292,6 +295,9 @@ script / CI では `--yes`（または `--force`）が必要です。
 - Claude Code、Cursor、Windsurf などの AI クライアント向け MCP サーバー。
   tools、インデックス済みファイル resources、定型分析 prompts を提供します。
 - `cdidx suggestions` でローカルの提案履歴を一覧表示、詳細表示、エクスポート可能。
+  MCP 提案は GitHub 送信前に近似重複排除され、しきい値は
+  `cdidx mcp --suggestion-dedup-threshold`、`CDIDX_SUGGESTION_DEDUP_THRESHOLD`、
+  または `.cdidxrc.json` の `suggestion_dedup_threshold` で調整できます。
 - `--files` と `--commits` による差分更新、および `--watch` による継続更新モード。
 - `~/.config/cdidx/hooks/*.dll`（または `CDIDX_HOOKS_DIR`）の post-extraction hook で、
   永続化前のシンボルと参照を拡張できます。

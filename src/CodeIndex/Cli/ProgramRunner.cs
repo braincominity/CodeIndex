@@ -564,6 +564,13 @@ internal static class ProgramRunner
             return CommandExitCodes.UsageError;
         }
 
+        if (!TryConsumeSuggestionDedupThresholdFlag(ref cmdArgs, out var thresholdError))
+        {
+            Console.Error.WriteLine(thresholdError);
+            PrintMcpUsage();
+            return CommandExitCodes.UsageError;
+        }
+
         if (!TryExtractMcpTransportFlags(cmdArgs, out var transportSpec, out var listenSpec, out var transportError))
         {
             Console.Error.WriteLine(transportError);
@@ -755,7 +762,65 @@ internal static class ProgramRunner
 
     private static void PrintMcpUsage()
     {
-        Console.Error.WriteLine("Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>]");
+        Console.Error.WriteLine("Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]");
+    }
+
+    internal static bool TryConsumeSuggestionDedupThresholdFlag(ref string[] args, out string error)
+    {
+        error = string.Empty;
+        if (args.Length == 0)
+            return true;
+
+        var kept = new List<string>(args.Length);
+        var passthrough = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (passthrough)
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--")
+            {
+                passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+
+            string? value = null;
+            if (arg == "--suggestion-dedup-threshold")
+            {
+                if (i + 1 >= args.Length)
+                {
+                    error = "Error: --suggestion-dedup-threshold requires a value between 0 and 1.";
+                    return false;
+                }
+                value = args[++i];
+            }
+            else if (arg.StartsWith("--suggestion-dedup-threshold=", StringComparison.Ordinal))
+            {
+                value = arg.Substring("--suggestion-dedup-threshold=".Length);
+            }
+            else
+            {
+                kept.Add(arg);
+                continue;
+            }
+
+            if (!double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var threshold)
+                || threshold < 0
+                || threshold > 1)
+            {
+                error = "Error: --suggestion-dedup-threshold must be a value between 0 and 1.";
+                return false;
+            }
+
+            Environment.SetEnvironmentVariable(SuggestionStore.DedupThresholdEnvironmentVariable, value);
+        }
+
+        args = kept.ToArray();
+        return true;
     }
 
     internal static bool TryExtractMcpTransportFlags(string[] cmdArgs, out string? transport, out string? listen, out string error)

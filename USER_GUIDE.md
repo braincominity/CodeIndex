@@ -1140,6 +1140,7 @@ Supported schema (top-level keys are snake_case; nested indexing kind keys keep 
   "disable_persistent_log": true,        // → CDIDX_DISABLE_PERSISTENT_LOG=1
   "global_tool_log_dir": "./.cdidx/logs", // → CDIDX_GLOBAL_TOOL_LOG_DIR
   "stale_after": "2h",                   // → CDIDX_STALE_AFTER
+  "suggestion_dedup_threshold": 0.85,    // → CDIDX_SUGGESTION_DEDUP_THRESHOLD
   "indexing": {
     "includeKinds": ["class"],           // → CDIDX_INDEX_INCLUDE_SYMBOL_KINDS
     "excludeKinds": ["test_method"]      // → CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS
@@ -1157,7 +1158,7 @@ Supported schema (top-level keys are snake_case; nested indexing kind keys keep 
 }
 ```
 
-JSON5-style line comments (`//`) and trailing commas are accepted so the file stays human-editable. The optional `$schema` key is ignored at runtime; it is honored only so editors that recognize JSON Schema references can offer completion. Setting `disable_persistent_log` to `false` is a no-op (absence already means "logging enabled") — only `true` exports `CDIDX_DISABLE_PERSISTENT_LOG=1`. `stale_after` uses the same compact duration format as `status --check --stale-after`: `30m`, `2h`, or `7d`. `indexing.includeKinds` and `indexing.excludeKinds` set the default symbol-kind filter for `cdidx index`; CLI flags `--include-symbol-kind <kind>[,<kind>]` and `--exclude-symbol-kind <kind>[,<kind>]` override those env-backed defaults for a single run.
+JSON5-style line comments (`//`) and trailing commas are accepted so the file stays human-editable. The optional `$schema` key is ignored at runtime; it is honored only so editors that recognize JSON Schema references can offer completion. Setting `disable_persistent_log` to `false` is a no-op (absence already means "logging enabled") — only `true` exports `CDIDX_DISABLE_PERSISTENT_LOG=1`. `stale_after` uses the same compact duration format as `status --check --stale-after`: `30m`, `2h`, or `7d`. `suggestion_dedup_threshold` sets the MCP suggestion fuzzy-deduplication cutoff as a number from `0` to `1`; the built-in default is `0.85`, and `cdidx mcp --suggestion-dedup-threshold <0..1>` overrides it for one MCP session. `indexing.includeKinds` and `indexing.excludeKinds` set the default symbol-kind filter for `cdidx index`; CLI flags `--include-symbol-kind <kind>[,<kind>]` and `--exclude-symbol-kind <kind>[,<kind>]` override those env-backed defaults for a single run.
 
 ## How it works
 
@@ -2917,6 +2918,7 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
   "disable_persistent_log": true,        // → CDIDX_DISABLE_PERSISTENT_LOG=1
   "global_tool_log_dir": "./.cdidx/logs", // → CDIDX_GLOBAL_TOOL_LOG_DIR
   "stale_after": "2h",                   // → CDIDX_STALE_AFTER
+  "suggestion_dedup_threshold": 0.85,    // → CDIDX_SUGGESTION_DEDUP_THRESHOLD
   "indexing": {
     "includeKinds": ["class"],           // → CDIDX_INDEX_INCLUDE_SYMBOL_KINDS
     "excludeKinds": ["test_method"]      // → CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS
@@ -2934,7 +2936,7 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 }
 ```
 
-人手で編集しやすいよう JSON5 形式の行コメント（`//`）と末尾カンマを許容します。任意の `$schema` キーはランタイムでは無視され、JSON Schema 参照をサポートするエディタが補完を提供するためだけに認識されます。`disable_persistent_log` を `false` に設定しても何も起きません（不在のままで "ログ有効" が既定）— `true` の場合のみ `CDIDX_DISABLE_PERSISTENT_LOG=1` を export します。`stale_after` は `status --check --stale-after` と同じ compact duration 形式（`30m` / `2h` / `7d`）です。`indexing.includeKinds` と `indexing.excludeKinds` は `cdidx index` の symbol-kind filter 既定値を設定し、CLI フラグ `--include-symbol-kind <kind>[,<kind>]` / `--exclude-symbol-kind <kind>[,<kind>]` はその env 経由の既定値を 1 回の実行だけ上書きします。
+人手で編集しやすいよう JSON5 形式の行コメント（`//`）と末尾カンマを許容します。任意の `$schema` キーはランタイムでは無視され、JSON Schema 参照をサポートするエディタが補完を提供するためだけに認識されます。`disable_persistent_log` を `false` に設定しても何も起きません（不在のままで "ログ有効" が既定）— `true` の場合のみ `CDIDX_DISABLE_PERSISTENT_LOG=1` を export します。`stale_after` は `status --check --stale-after` と同じ compact duration 形式（`30m` / `2h` / `7d`）です。`suggestion_dedup_threshold` は MCP suggestion の fuzzy deduplication しきい値を `0` から `1` の数値で設定します。組み込み既定値は `0.85` で、`cdidx mcp --suggestion-dedup-threshold <0..1>` は 1 回の MCP session だけこの値を上書きします。`indexing.includeKinds` と `indexing.excludeKinds` は `cdidx index` の symbol-kind filter 既定値を設定し、CLI フラグ `--include-symbol-kind <kind>[,<kind>]` / `--exclude-symbol-kind <kind>[,<kind>]` はその env 経由の既定値を 1 回の実行だけ上書きします。
 
 ## 動作の仕組み
 
