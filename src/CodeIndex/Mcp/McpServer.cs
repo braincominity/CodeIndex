@@ -1865,7 +1865,7 @@ public partial class McpServer : IDisposable
         var requestToken = _currentRequestToken.Value;
         requestToken.ThrowIfCancellationRequested();
         var reader = new DbReader(db, requestToken);
-        return action(reader);
+        return reader.RunWithGeneratedScope(() => action(reader));
     }
 
     /// <summary>

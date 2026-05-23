@@ -81,7 +81,7 @@ public class McpServerTests : IDisposable
         _server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
     }
 
-    private void InsertIndexedFile(string path, string lang, string content)
+    private void InsertIndexedFile(string path, string lang, string content, bool generated = false)
     {
         var normalized = content.Replace("\r\n", "\n");
         var lines = normalized.Split('\n');
@@ -94,6 +94,7 @@ public class McpServerTests : IDisposable
             Lines = lines.Length,
             Modified = new DateTime(2024, 1, 1),
             Checksum = Guid.NewGuid().ToString("N"),
+            Generated = generated,
         });
         writer.InsertChunks([new ChunkRecord
         {
@@ -1923,6 +1924,19 @@ public class McpServerTests : IDisposable
         Assert.NotNull(structured["results"]![0]!["matchLines"]);
         Assert.NotNull(structured["results"]![0]!["highlights"]);
         Assert.Null(structured["results"]![0]!["content"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Search_ExcludesGeneratedFilesByDefault()
+    {
+        InsertIndexedFile("src/generated.g.cs", "csharp", "class Generated { void Needle() {} }\n", generated: true);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Needle"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Empty(structured["results"]!.AsArray());
     }
 
     [Fact]
