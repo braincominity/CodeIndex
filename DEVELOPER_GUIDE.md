@@ -60,15 +60,23 @@ The lock files for projects with zero direct `PackageReference` entries (e.g. `t
 ```
 Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdidxignore` + reparse/Windows Hidden/System attribute pruning)
   → Parallel extraction workers (`--parallelism`, `CDIDX_INDEX_PARALLELISM`; default CPU count capped at 16) read UTF-8, split chunks, extract symbols/references, and validate content
-  → Single SQLite writer checks unchanged-file reuse, UPSERTs file records, and inserts chunks + symbols + references + issues in per-file transactions
+  → Single SQLite writer checks unchanged-file reuse, UPSERTs file records, runs post-extraction hooks, and inserts chunks + symbols + references + issues in per-file transactions
   → Populate FTS5 index
 ```
 
 Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. Within each directory, `FileIndexer` loads `.gitignore` before `.cdidxignore`, appends both rule sets in that order, and honors later `!` patterns as re-includes. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
 
+### Extending the indexer
+
+Out-of-tree post-extraction hooks can implement `CodeIndex.Indexer.Hooks.IPostExtractionHook` in a `.dll` placed under `~/.config/cdidx/hooks/` (or the directory named by `CDIDX_HOOKS_DIR`). Hook assemblies are discovered in path order. Each concrete hook type is instantiated with a public parameterless constructor, then called after built-in symbol extraction and again after built-in reference extraction, before rows are persisted. Hooks receive a `FileContext` plus mutable `IList<SymbolRecord>` / `IList<ReferenceRecord>` values, so they can annotate extracted records, add synthetic symbols, or add domain-specific references.
+
+Hook failures are isolated to that hook invocation: assembly load, construction, and callback exceptions are captured as diagnostics and indexing continues. `status --json` and MCP `status` expose loaded hooks under `hooks` with `name`, `assembly_path`, and `type_name` so users can confirm which extensions are active.
+
 ### Ignore file parsing
 
 `.gitignore` and `.cdidxignore` parsing follows Git's whitespace rules for pattern lines: leading spaces and tabs are literal pattern characters, `#` starts a comment only when it is the first unescaped character, and unescaped trailing spaces or tabs are trimmed. Escape a trailing space or tab with `\` when the whitespace is part of the filename pattern.
+
+Bracket expressions follow Git-compatible glob behavior: both `[!a]` and `[^a]` are treated as negated character classes when `!` or `^` appears immediately after `[`. A caret elsewhere in the class is literal (`[a^b]`), and a literal leading caret must be escaped (`[\^a]`).
 
 ### CLI recoverable error format
 
@@ -125,13 +133,24 @@ Current stable codes and triggers:
 
 ### SQLite WAL durability policy
 
-`DbContext` opens writable indexes in WAL mode, sets `PRAGMA synchronous=NORMAL`, and pins `PRAGMA wal_autocheckpoint=1000`. When WAL is active, the durable SQLite index is the `.db` file plus its sibling `.db-wal` and `.db-shm` files. Backups, diagnostics bundles, and manual copies must include all three files when the siblings exist, or use SQLite's `.backup` command/API from a live connection. Copying only `codeindex.db` can produce a stale snapshot because committed pages may still live in `codeindex.db-wal`.
+`DbContext` opens writable indexes in WAL mode, sets `PRAGMA application_id=0x43444958` (`CDIX`), sets `PRAGMA synchronous=NORMAL`, and pins `PRAGMA wal_autocheckpoint=1000`. The application id lets file-type detection tools distinguish cdidx databases from generic SQLite databases. When WAL is active, the durable SQLite index is the `.db` file plus its sibling `.db-wal` and `.db-shm` files. Backups, diagnostics bundles, and manual copies must include all three files when the siblings exist, or use SQLite's `.backup` command/API from a live connection. Copying only `codeindex.db` can produce a stale snapshot because committed pages may still live in `codeindex.db-wal`.
 
 Under WAL, `NORMAL` avoids per-commit fsync pressure during 500-row indexing batches while preserving database consistency after crashes. `DbWriter` runs `PRAGMA wal_checkpoint(PASSIVE)` after each outer transaction commit, and SQLite may also checkpoint automatically after the configured 1000-page threshold. Both checkpoint paths are opportunistic: active readers are not blocked, and an uncheckpointed WAL is expected state rather than corruption. If the process is killed after SQLite has committed a transaction but before checkpointing, the next normal opener rolls the WAL forward; no manual recovery step is required. If the process dies before a transaction commits, that transaction is rolled back by SQLite.
 
 Read-only fallback uses an immutable SQLite URI when the normal writable open cannot create or lock journal/WAL side files, so query commands can still read a DB from read-only or sandboxed storage. That fallback intentionally skips writable pragmas, migrations, and WAL recovery writes; if a WAL is present and must be observed, copy the `.db`, `.db-wal`, and `.db-shm` files together to a writable location or use a SQLite backup from an environment that can open the full WAL set. `status --json` exposes the resolved connection values under `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`) for automation and support diagnostics.
 
 Writable opens also reject databases whose `PRAGMA user_version` contains readiness bits outside the current binary's `CurrentSchemaVersion` mask. Read-only status/query paths may still surface `index_newer_than_reader=true` as a degraded audit signal, but write-capable paths must fail with `E003_SCHEMA_TOO_NEW` so an older cdidx cannot silently rewrite a DB stamped by a newer one.
+
+### SQLite performance tuning
+
+Every `DbContext` connection sets `PRAGMA cache_size=-65536` (64 MiB), `PRAGMA temp_store=MEMORY`, and on 64-bit processes `PRAGMA mmap_size=268435456` (256 MiB). These are connection-scoped query-performance knobs; they do not alter the on-disk schema and are skipped only where SQLite cannot apply them.
+
+Operators can override the defaults with environment variables:
+
+| Variable | Default | Meaning |
+|---|---:|---|
+| `CDIDX_SQLITE_CACHE_KB` | `65536` | Positive cache size in KiB; cdidx applies it as a negative SQLite `cache_size` value so SQLite interprets it as KiB. |
+| `CDIDX_SQLITE_MMAP_BYTES` | `268435456` | Non-negative memory-map window in bytes on 64-bit processes. Use `0` to disable mmap. |
 
 ## Database schema
 
@@ -147,6 +166,7 @@ files (
     lines       INTEGER,                    -- line count
     checksum    TEXT,                       -- SHA256 over file bytes with CRLF/CR collapsed to LF (BOM bytes preserved); cross-OS clones match while BOM add/remove still triggers re-index
     modified    DATETIME,                   -- file modification time (UTC)
+    generated   INTEGER NOT NULL DEFAULT 0, -- generated-code marker from filename/header detection
     indexed_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 )
 
@@ -607,7 +627,7 @@ Adding `--json-envelope` to a query command (`search`, `definition`, `references
 
 Every top-level CLI/MCP JSON DTO (`StatusResult`, `RepoMapResult`, `SymbolAnalysisResult`, `ImpactAnalysisResult`, `OutlineResult`, `FileExcerptResult`, `CompactSearchResult`, `SymbolResult`, `DefinitionResult`, `UnusedSymbolResult`, `ReferenceResult`, `CallerResult`, `CalleeResult`, `FileResult`, `FileFindResult`) carries an `api_version` string field stamped from `JsonOutputContract.ApiVersion`. The same value is mirrored on the `--json-envelope` `metadata` block. This describes the JSON output contract, not the cdidx binary version (which is still surfaced via `version.json` and `cdidx --version`). Bump `JsonOutputContract.ApiVersion` only on **breaking** shape changes — renames, removals, or type changes of an existing field. Additive changes (new optional fields, new readiness flags, new enum values) keep the version stable so older consumers continue to parse the payload. Strict downstream consumers should pin against the major value and degrade gracefully when it changes. Issue #1555.
 
-The documented `status --json` trust contract spans `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`, `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`, `unknown_extension_file_count`, `path_case_sensitive`, `stale_after_seconds`, `index_age_seconds`, plus the fold-only and C# metadata-target-only remediation fields `degraded_reason`, `recommended_action`, and `alternative_action`. Keep this list synchronized with `README.md` and `AGENT_GUIDE.md`; `DocumentationStatusContractTests` fails when any required field is missing from one of those docs.
+The documented `status --json` trust contract spans `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`, `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`, `unknown_extension_file_count`, `path_case_sensitive`, `mac_profile`, `stale_after_seconds`, `index_age_seconds`, plus the fold-only and C# metadata-target-only remediation fields `degraded_reason`, `recommended_action`, and `alternative_action`. Keep this list synchronized with `README.md` and `AGENT_GUIDE.md`; `DocumentationStatusContractTests` fails when any required field is missing from one of those docs.
 
 `references` already prefixes each human-readable row with `reference_kind`, and `callers` does the same for its grouped caller rows. When one grouped container mixes kinds (for example `call` and `subscribe` on the same event member), the human-readable label joins the distinct kinds with `+` (for example `call+subscribe`) instead of collapsing to a single preferred label, and the reference-kind column widens dynamically to fit the longest label in the batch so mixed rows do not overrun the neighbouring column. JSON output for `callers` and `callees` keeps the scalar `reference_kind` for back-compat (it reports the preferred summary kind `instantiate` > `subscribe` > `MIN(call)`) and adds a sorted `reference_kinds` array plus a `has_mixed_reference_kinds` bool so consumers can detect mixed containers without trusting a single collapsed label. This lets terminal users distinguish `call` / `instantiate` / `subscribe` / mixed without re-running the command with `--json` and lets AI clients answer mixed-kind questions without chasing a second `--exact` query.
 
@@ -1661,6 +1681,8 @@ CI で `NU1004 The packages lock file is inconsistent with the project dependenc
 ### ignore ファイルの解析
 
 `.gitignore` と `.cdidxignore` の pattern 行は Git の空白規則に合わせて解析する。行頭の space / tab は pattern の literal 文字として扱い、`#` は unescaped な先頭文字のときだけ comment を開始する。未エスケープの末尾 space / tab は削除するため、ファイル名 pattern の一部として末尾空白を含めたい場合は `\` で escape する。
+
+bracket expression は Git 互換の glob 挙動に合わせる。`!` または `^` が `[` の直後にある場合、`[!a]` と `[^a]` はどちらも negated character class として扱う。class の途中にある caret は literal（`[a^b]`）で、先頭 caret を literal にしたい場合は escape する（`[\^a]`）。
 
 ### C# / .NET integration
 

@@ -664,6 +664,7 @@ public static class ConsoleUi
         Console.WriteLine("  --query <query>            Pass a query literal, useful when the query starts with '-'");
         Console.WriteLine("  --exclude-path <glob>      Exclude glob-style path patterns (* and ?) (repeatable)");
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
+        Console.WriteLine("  --include-generated        Include generated files in query results");
         Console.WriteLine("  --snippet-lines <n>        Search snippet length (1-20, default: 8)");
         Console.WriteLine("  --snippet-focus <mode>     search only: long-line focus mode (leftmost|quality|proximity, default: quality)");
         Console.WriteLine($"  --max-line-width <n>       search/references/find/excerpt/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: {LineWidthFormatter.DefaultMaxLineWidth})");
