@@ -3298,17 +3298,17 @@ jobs:
             // NotFound 等のゼロ件応答でも warn は出るべき。重複フラグは argv 解析段階の関心事で、
             // 検索結果の有無とは独立している。
 
-            // --limit appears twice with different values: last value wins, warning emitted.
+            // --limit appears twice with different values: rightmost CLI value wins, warning emitted.
             var (exitLimit, _, stderrLimit) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["Issue184", "--db", dbPath, "--json", "--limit", "5", "--limit", "10"], _jsonOptions));
             Assert.NotEqual(CommandExitCodes.UsageError, exitLimit);
-            Assert.Contains("Warning: --limit specified more than once; using the last value '10'.", stderrLimit);
+            Assert.Contains("Warning: --limit specified more than once; the rightmost CLI value '10' takes precedence over earlier CLI values and any environment/config default.", stderrLimit);
 
             // --top is canonicalized to --limit, so `--limit 5 --top 10` also warns.
             var (exitTop, _, stderrTop) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["Issue184", "--db", dbPath, "--json", "--limit", "5", "--top", "10"], _jsonOptions));
             Assert.NotEqual(CommandExitCodes.UsageError, exitTop);
-            Assert.Contains("Warning: --limit specified more than once; using the last value '10'.", stderrTop);
+            Assert.Contains("Warning: --limit specified more than once; the rightmost CLI value '10' takes precedence over earlier CLI values and any environment/config default.", stderrTop);
 
             // Single --limit must NOT warn.
             var (exitSingle, _, stderrSingle) = CaptureConsole(() => QueryCommandRunner.RunSearch(
