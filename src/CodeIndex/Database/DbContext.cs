@@ -11,6 +11,10 @@ namespace CodeIndex.Database;
 public class DbContext : IDisposable
 {
     public const int ApplicationId = 0x43444958; // "CDIX"
+    public const int DefaultCacheSizeKb = 65536;
+    public const long DefaultMmapSizeBytes = 268435456;
+    public const string CacheSizeEnvironmentVariable = "CDIDX_SQLITE_CACHE_KB";
+    public const string MmapSizeEnvironmentVariable = "CDIDX_SQLITE_MMAP_BYTES";
     public const int DefaultWalAutocheckpointPages = 1000;
     public const string DefaultSynchronousMode = "NORMAL";
     public const string SymbolExtractorVersionMetaPrefix = "symbol_extractor_version_";
@@ -166,6 +170,7 @@ public class DbContext : IDisposable
                 _connection = new SqliteConnection($"Data Source={dbPath}");
                 _connection.Open();
                 Execute("PRAGMA busy_timeout=5000");
+                ApplyConnectionPerformancePragmas();
                 RegisterConnectionFunctionsWithRetry(_connection);
                 _isReadOnly = true;
                 return;
@@ -191,6 +196,7 @@ public class DbContext : IDisposable
                 static milliseconds => System.Threading.Thread.Sleep(milliseconds),
                 dbPath: dbPath);
             Execute("PRAGMA busy_timeout=5000");
+            ApplyConnectionPerformancePragmas();
             RegisterConnectionFunctionsWithRetry(_connection);
             EnsureWritableUserVersionSupported(dbPath);
             Execute($"PRAGMA application_id={ApplicationId}");
@@ -215,6 +221,7 @@ public class DbContext : IDisposable
             _connection?.Dispose();
             _connection = OpenReadOnly(dbPath);
             Execute("PRAGMA busy_timeout=5000");
+            ApplyConnectionPerformancePragmas();
             RegisterConnectionFunctionsWithRetry(_connection);
             _isReadOnly = true;
         }
@@ -223,6 +230,26 @@ public class DbContext : IDisposable
         {
             EnsureForeignKeysEnabled();
         }
+    }
+
+    private void ApplyConnectionPerformancePragmas()
+    {
+        Execute($"PRAGMA cache_size=-{ReadPositiveIntEnvironment(CacheSizeEnvironmentVariable, DefaultCacheSizeKb)}");
+        Execute("PRAGMA temp_store=MEMORY");
+        if (Environment.Is64BitProcess)
+            Execute($"PRAGMA mmap_size={ReadNonNegativeLongEnvironment(MmapSizeEnvironmentVariable, DefaultMmapSizeBytes)}");
+    }
+
+    private static int ReadPositiveIntEnvironment(string name, int fallback)
+    {
+        var value = Environment.GetEnvironmentVariable(name);
+        return int.TryParse(value, out var parsed) && parsed > 0 ? parsed : fallback;
+    }
+
+    private static long ReadNonNegativeLongEnvironment(string name, long fallback)
+    {
+        var value = Environment.GetEnvironmentVariable(name);
+        return long.TryParse(value, out var parsed) && parsed >= 0 ? parsed : fallback;
     }
 
     private void EnsureWritableUserVersionSupported(string dbPath)

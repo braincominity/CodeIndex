@@ -125,6 +125,17 @@ Read-only fallback uses an immutable SQLite URI when the normal writable open ca
 
 Writable opens also reject databases whose `PRAGMA user_version` contains readiness bits outside the current binary's `CurrentSchemaVersion` mask. Read-only status/query paths may still surface `index_newer_than_reader=true` as a degraded audit signal, but write-capable paths must fail with `E003_SCHEMA_TOO_NEW` so an older cdidx cannot silently rewrite a DB stamped by a newer one.
 
+### SQLite performance tuning
+
+Every `DbContext` connection sets `PRAGMA cache_size=-65536` (64 MiB), `PRAGMA temp_store=MEMORY`, and on 64-bit processes `PRAGMA mmap_size=268435456` (256 MiB). These are connection-scoped query-performance knobs; they do not alter the on-disk schema and are skipped only where SQLite cannot apply them.
+
+Operators can override the defaults with environment variables:
+
+| Variable | Default | Meaning |
+|---|---:|---|
+| `CDIDX_SQLITE_CACHE_KB` | `65536` | Positive cache size in KiB; cdidx applies it as a negative SQLite `cache_size` value so SQLite interprets it as KiB. |
+| `CDIDX_SQLITE_MMAP_BYTES` | `268435456` | Non-negative memory-map window in bytes on 64-bit processes. Use `0` to disable mmap. |
+
 ## Database schema
 
 ### Tables
