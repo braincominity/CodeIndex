@@ -1703,12 +1703,33 @@ public static class IndexCommandRunner
                 {
                     if (!writer.HasFileAtPath(relPath))
                     {
-                        skipped++;
-                        if (options.Verbose && !options.Json && !options.Quiet)
+                        using var purgeTxn = writer.BeginTransaction();
+                        var purged = projectRootWritten
+                            ? writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, relPath)
+                            : 0;
+                        if (purged > 0)
                         {
-                            PauseUpdateSpinnerForConsoleWrite();
-                            Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
-                            ResumeUpdateSpinnerAfterConsoleWrite();
+                            DemoteReadinessOnce();
+                            WriteProjectRootOnce();
+                            purgeTxn.Commit();
+                            removed += purged;
+                            ftsMutated = true;
+                            if (options.Verbose && !options.Json && !options.Quiet)
+                            {
+                                PauseUpdateSpinnerForConsoleWrite();
+                                Console.WriteLine($"  [DEL ] {relPath} (unsupported renamed target)");
+                                ResumeUpdateSpinnerAfterConsoleWrite();
+                            }
+                        }
+                        else
+                        {
+                            skipped++;
+                            if (options.Verbose && !options.Json && !options.Quiet)
+                            {
+                                PauseUpdateSpinnerForConsoleWrite();
+                                Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
+                                ResumeUpdateSpinnerAfterConsoleWrite();
+                            }
                         }
                         continue;
                     }
@@ -1797,12 +1818,26 @@ public static class IndexCommandRunner
                         && (record.Lang != "sql" || sqlGraphContractMatchesCurrent));
                 if (existingId != null)
                 {
-                    writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
+                    using var purgeTxn = writer.BeginTransaction();
+                    var purged = writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum)
+                        + (projectRootWritten
+                            ? writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path)
+                            : 0);
+                    if (purged > 0)
+                    {
+                        DemoteReadinessOnce();
+                        WriteProjectRootOnce();
+                        purgeTxn.Commit();
+                        removed += purged;
+                        ftsMutated = true;
+                    }
                     skipped++;
                     if (options.Verbose && !options.Json && !options.Quiet)
                     {
                         PauseUpdateSpinnerForConsoleWrite();
-                        Console.WriteLine($"  [SKIP] {relPath} (unchanged)");
+                        Console.WriteLine(purged > 0
+                            ? $"  [SKIP] {relPath} (unchanged; purged {purged:N0} stale renamed path(s))"
+                            : $"  [SKIP] {relPath} (unchanged)");
                         ResumeUpdateSpinnerAfterConsoleWrite();
                     }
                     continue;
@@ -1811,6 +1846,8 @@ public static class IndexCommandRunner
                 DemoteReadinessOnce();
                 using var txn = writer.BeginTransaction();
                 writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
+                if (projectRootWritten)
+                    writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path);
                 WriteProjectRootOnce();
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
