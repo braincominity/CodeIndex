@@ -282,6 +282,12 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void Constructor_SetsCodeIndexApplicationId()
+    {
+        Assert.Equal(DbContext.ApplicationId, ExecuteScalarLong("PRAGMA application_id"));
+    }
+
+    [Fact]
     public void UpsertFile_InsertsAndReturnsId()
     {
         var file = new FileRecord

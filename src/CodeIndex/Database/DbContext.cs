@@ -10,6 +10,7 @@ namespace CodeIndex.Database;
 /// </summary>
 public class DbContext : IDisposable
 {
+    public const int ApplicationId = 0x43444958; // "CDIX"
     public const int DefaultWalAutocheckpointPages = 1000;
     public const string DefaultSynchronousMode = "NORMAL";
     public const string SymbolExtractorVersionMetaPrefix = "symbol_extractor_version_";
@@ -192,6 +193,7 @@ public class DbContext : IDisposable
             Execute("PRAGMA busy_timeout=5000");
             RegisterConnectionFunctionsWithRetry(_connection);
             EnsureWritableUserVersionSupported(dbPath);
+            Execute($"PRAGMA application_id={ApplicationId}");
 
             // Enable WAL mode and verify it was applied / WALモードを有効にし適用を確認
             var journalMode = ExecuteScalar("PRAGMA journal_mode=WAL");
