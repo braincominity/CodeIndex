@@ -137,8 +137,13 @@ public class DbWriter
         private readonly string? _savepointName;
         private readonly SqliteConnection? _conn;
         private readonly DbWriter _writer;
-        private bool _committed;
-        private bool _disposed;
+        private const int StateActive = 0;
+        private const int StateCommitting = 1;
+        private const int StateCommitted = 2;
+        private const int StateRollingBack = 3;
+        private const int StateRolledBack = 4;
+        private int _state;
+        private int _disposeStarted;
 
         // Real transaction / 実トランザクション
         internal TransactionScope(SqliteTransaction transaction, DbWriter writer)
@@ -157,69 +162,151 @@ public class DbWriter
 
         public void Commit()
         {
-            if (_transaction != null)
+            while (true)
             {
-                _transaction.Commit();
-                _writer.RunPassiveWalCheckpoint();
+                var state = Volatile.Read(ref _state);
+                if (state == StateCommitted)
+                    return;
+                if (state == StateRolledBack)
+                    throw new InvalidOperationException("Cannot commit a transaction scope that has already been rolled back.");
+                if (state == StateRollingBack)
+                {
+                    Thread.Yield();
+                    continue;
+                }
+
+                if (state != StateActive)
+                    throw new InvalidOperationException("Cannot commit a transaction scope while it is being finalized.");
+
+                if (Interlocked.CompareExchange(ref _state, StateCommitting, StateActive) == StateActive)
+                    break;
             }
-            else
-                ExecuteSql($"RELEASE SAVEPOINT {_savepointName}");
-            // Set _committed after success so Dispose() will rollback if Commit/Release throws
-            // コミット/リリース成功後にフラグを立て、失敗時はDispose()でロールバックされるようにする
-            _committed = true;
-            // Clear the writer's cached active-transaction reference immediately after a
-            // real-transaction commit. Otherwise a subsequent RentCommand between Commit
-            // and Dispose would bind a cached prepared command to the now-committed (and
-            // detached from the connection) SqliteTransaction and throw at execute time.
-            // Savepoint Commit (RELEASE) does not affect the outer SqliteTransaction.
-            // real transaction の commit 直後に writer 側の active transaction 参照を解除する。
-            // commit と Dispose の間に RentCommand が走った場合、commit 済み(connection から
-            // 外れている) transaction を cached command に再バインドして execute 時に例外を
-            // 投げるため。savepoint の RELEASE は外側 SqliteTransaction に影響しない。
-            if (_transaction != null)
-                _writer._activeTransaction = null;
+
+            try
+            {
+                if (_transaction != null)
+                {
+                    _transaction.Commit();
+                    _writer.RunPassiveWalCheckpoint();
+                }
+                else
+                    ExecuteSql($"RELEASE SAVEPOINT {_savepointName}");
+                // Mark committed after success so Dispose() will rollback if Commit/Release throws.
+                // コミット/リリース成功後に committed に遷移し、失敗時は Dispose() でロールバックされるようにする。
+                Volatile.Write(ref _state, StateCommitted);
+                // Clear the writer's cached active-transaction reference immediately after a
+                // real-transaction commit. Otherwise a subsequent RentCommand between Commit
+                // and Dispose would bind a cached prepared command to the now-committed (and
+                // detached from the connection) SqliteTransaction and throw at execute time.
+                // Savepoint Commit (RELEASE) does not affect the outer SqliteTransaction.
+                // real transaction の commit 直後に writer 側の active transaction 参照を解除する。
+                // commit と Dispose の間に RentCommand が走った場合、commit 済み(connection から
+                // 外れている) transaction を cached command に再バインドして execute 時に例外を
+                // 投げるため。savepoint の RELEASE は外側 SqliteTransaction に影響しない。
+                if (_transaction != null)
+                    _writer._activeTransaction = null;
+            }
+            catch
+            {
+                Volatile.Write(ref _state, StateActive);
+                throw;
+            }
         }
 
         public void Rollback()
         {
-            _committed = true;
-            if (_transaction != null)
-                _transaction.Rollback();
-            else
-                ExecuteSql($"ROLLBACK TO SAVEPOINT {_savepointName}");
-            // Same rationale as Commit: drop the stale reference so cached commands
-            // re-bind correctly after the transaction boundary.
-            // Commit と同じ理由で stale 参照を解除する。
-            if (_transaction != null)
-                _writer._activeTransaction = null;
+            while (true)
+            {
+                var state = Volatile.Read(ref _state);
+                if (state == StateRolledBack)
+                    return;
+                if (state == StateCommitted)
+                    throw new InvalidOperationException("Cannot roll back a transaction scope that has already been committed.");
+                if (state == StateCommitting || state == StateRollingBack)
+                {
+                    Thread.Yield();
+                    continue;
+                }
+
+                if (state != StateActive)
+                    throw new InvalidOperationException("Cannot roll back a transaction scope while it is being finalized.");
+
+                if (Interlocked.CompareExchange(ref _state, StateRollingBack, StateActive) == StateActive)
+                    break;
+            }
+
+            try
+            {
+                if (_transaction != null)
+                    _transaction.Rollback();
+                else
+                    ExecuteSql($"ROLLBACK TO SAVEPOINT {_savepointName}");
+                Volatile.Write(ref _state, StateRolledBack);
+                // Same rationale as Commit: drop the stale reference so cached commands
+                // re-bind correctly after the transaction boundary.
+                // Commit と同じ理由で stale 参照を解除する。
+                if (_transaction != null)
+                    _writer._activeTransaction = null;
+            }
+            catch
+            {
+                Volatile.Write(ref _state, StateActive);
+                throw;
+            }
         }
 
         public void Dispose()
         {
-            if (_disposed) return;
-            _disposed = true;
+            if (Interlocked.Exchange(ref _disposeStarted, 1) != 0)
+                return;
 
-            // Rollback uncommitted changes / 未コミットの変更をロールバック
-            if (!_committed)
+            try
             {
-                try
+                // Rollback uncommitted changes / 未コミットの変更をロールバック
+                while (true)
                 {
-                    if (_transaction != null)
-                        _transaction.Rollback();
-                    else
-                        ExecuteSql($"ROLLBACK TO SAVEPOINT {_savepointName}");
-                }
-                catch { /* Best effort during dispose / Dispose中はベストエフォート */ }
-            }
+                    var state = Volatile.Read(ref _state);
+                    if (state == StateCommitted || state == StateRolledBack)
+                        break;
+                    if (state == StateCommitting || state == StateRollingBack)
+                    {
+                        Thread.Yield();
+                        continue;
+                    }
 
-            _transaction?.Dispose();
-            if (_writer._transactionDepth > 0) _writer._transactionDepth--;
-            // Safety net: even if Commit/Rollback was bypassed (e.g. uncommitted scope
-            // disposed after an exception), make sure the outer-transaction reference is
-            // cleared before the next RentCommand sees it.
-            // 安全弁: Commit/Rollback を経由せず Dispose された場合でも active reference を解除。
-            if (_writer._transactionDepth == 0)
-                _writer._activeTransaction = null;
+                    if (state != StateActive)
+                        break;
+
+                    if (Interlocked.CompareExchange(ref _state, StateRollingBack, StateActive) != StateActive)
+                        continue;
+
+                    try
+                    {
+                        if (_transaction != null)
+                            _transaction.Rollback();
+                        else
+                            ExecuteSql($"ROLLBACK TO SAVEPOINT {_savepointName}");
+                        Volatile.Write(ref _state, StateRolledBack);
+                    }
+                    catch
+                    {
+                        // Best effort during dispose / Dispose中はベストエフォート
+                        Volatile.Write(ref _state, StateRolledBack);
+                    }
+                    break;
+                }
+            }
+            finally
+            {
+                _transaction?.Dispose();
+                if (_writer._transactionDepth > 0) _writer._transactionDepth--;
+                // Safety net: even if Commit/Rollback was bypassed (e.g. uncommitted scope
+                // disposed after an exception), make sure the outer-transaction reference is
+                // cleared before the next RentCommand sees it.
+                // 安全弁: Commit/Rollback を経由せず Dispose された場合でも active reference を解除。
+                if (_writer._transactionDepth == 0)
+                    _writer._activeTransaction = null;
+            }
         }
 
         private void ExecuteSql(string sql)
