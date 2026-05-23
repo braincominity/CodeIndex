@@ -1069,7 +1069,7 @@ public partial class McpServer : IDisposable
             offset = parsed;
         }
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args: null, reader =>
         {
             var files = reader.ListFiles(limit: offset + pageSize + 1);
             var page = files.Skip(offset).Take(pageSize).ToArray();
@@ -1110,7 +1110,7 @@ public partial class McpServer : IDisposable
                 suggestion: "Use a cdidx file resource URI returned by resources/list (`cdidx://file/<indexed-path>`).",
                 retrySafe: false);
 
-        return WithDbReader(id, reader =>
+        return WithDbReader(id, args: null, reader =>
         {
             var files = reader.ListFiles(query: path, limit: 2);
             var file = files.FirstOrDefault(f => string.Equals(f.Path, path, StringComparison.Ordinal));
@@ -1825,7 +1825,7 @@ public partial class McpServer : IDisposable
 
     // --- DB helper / DBヘルパー ---
 
-    private JsonNode WithDbReader(JsonNode? id, Func<DbReader, JsonNode> action)
+    private JsonNode WithDbReader(JsonNode? id, JsonNode? args, Func<DbReader, JsonNode> action)
     {
         // Accept SQLite file: URIs the same way the CLI does (QueryCommandRunner.WithDb),
         // so AI agents on read-only mounts can pass `--db file:///abs/path?immutable=1` and
@@ -1865,6 +1865,7 @@ public partial class McpServer : IDisposable
         var requestToken = _currentRequestToken.Value;
         requestToken.ThrowIfCancellationRequested();
         var reader = new DbReader(db, requestToken);
+        reader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
         return reader.RunWithGeneratedScope(() => action(reader));
     }
 

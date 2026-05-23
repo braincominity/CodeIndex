@@ -1940,6 +1940,19 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Search_IncludeGeneratedReturnsGeneratedFiles()
+    {
+        InsertIndexedFile("src/generated.g.cs", "csharp", "class Generated { void Needle() {} }\n", generated: true);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Needle","includeGenerated":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal("src/generated.g.cs", structured["results"]![0]!["path"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Search_NoResults()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"nonexistent_xyz_123"}}}""")!;
