@@ -22,7 +22,7 @@ public readonly record struct SqlGraphContractSignal(
     bool Relevant,
     string? DegradedReason);
 
-internal readonly record struct IndexedFileSnapshot(string Path, string? Checksum);
+internal readonly record struct IndexedFileSnapshot(string Path, string? Checksum, int? Lines);
 
 /// <summary>
 /// Handles read/query operations against the database for search, symbols, and files.
@@ -1306,7 +1306,7 @@ public partial class DbReader
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = $"""
-            SELECT f.path, {GetFileColumnSql("checksum")} AS checksum
+            SELECT f.path, {GetFileColumnSql("checksum")} AS checksum, {GetFileColumnSql("lines")} AS lines
             FROM files f
             ORDER BY f.path
             """;
@@ -1314,7 +1314,7 @@ public partial class DbReader
         var results = new List<IndexedFileSnapshot>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
-            results.Add(new IndexedFileSnapshot(reader.GetString(0), GetNullableString(reader, 1)));
+            results.Add(new IndexedFileSnapshot(reader.GetString(0), GetNullableString(reader, 1), GetNullableInt32(reader, 2)));
         return results;
     }
 

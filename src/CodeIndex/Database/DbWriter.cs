@@ -347,7 +347,7 @@ public class DbWriter
     /// 変更なしなら既存ファイルIDを返し、インデックスが必要ならnullを返す。
     /// タイムスタンプが異なってもチェックサムが一致すればDB側を更新しIDを返す。
     /// </summary>
-    public long? GetUnchangedFileId(string relativePath, DateTime modified, string? checksum = null, long? size = null, bool allowReuse = true, string? language = null, bool? generated = null)
+    public long? GetUnchangedFileId(string relativePath, DateTime modified, string? checksum = null, long? size = null, int? lines = null, bool allowReuse = true, string? language = null, bool? generated = null)
     {
         if (!allowReuse)
             return null;
@@ -369,8 +369,8 @@ public class DbWriter
               END
               WHERE path = @path
                 AND (
-                    (@checksum IS NOT NULL AND checksum = @checksum)
-                    OR (@checksum IS NULL AND modified = @modified AND (@size IS NULL OR size = @size))
+                    (@checksum IS NOT NULL AND checksum = @checksum AND (@lines IS NULL OR lines = @lines))
+                    OR (@checksum IS NULL AND modified = @modified AND (@size IS NULL OR size = @size) AND (@lines IS NULL OR lines = @lines))
                 )
               RETURNING id",
             static c =>
@@ -379,6 +379,7 @@ public class DbWriter
                 c.Parameters.Add("@modified", SqliteType.Text);
                 c.Parameters.Add("@checksum", SqliteType.Text);
                 c.Parameters.Add("@size", SqliteType.Integer);
+                c.Parameters.Add("@lines", SqliteType.Integer);
                 c.Parameters.Add("@generated", SqliteType.Integer);
             });
         try
@@ -387,6 +388,7 @@ public class DbWriter
             cmd.Parameters["@modified"].Value = modified;
             cmd.Parameters["@checksum"].Value = checksum is null ? DBNull.Value : checksum;
             cmd.Parameters["@size"].Value = size.HasValue ? size.Value : DBNull.Value;
+            cmd.Parameters["@lines"].Value = lines.HasValue ? lines.Value : DBNull.Value;
             cmd.Parameters["@generated"].Value = generated.HasValue ? (generated.Value ? 1 : 0) : DBNull.Value;
             var raw = cmd.ExecuteScalar();
             return raw is long id ? id : null;

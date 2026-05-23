@@ -21,7 +21,7 @@ internal static class IndexFreshnessChecker
 
         var indexed = reader.GetIndexedFileSnapshots()
             .ToDictionary(file => file.Path, StringComparer.Ordinal);
-        var workspace = new Dictionary<string, string>(StringComparer.Ordinal);
+        var workspace = new Dictionary<string, WorkspaceFileSnapshot>(StringComparer.Ordinal);
         var indexedHeadCommit = reader.GetMetaString(DbContext.IndexedHeadCommitMetaKey);
         var workspaceHeadCommit = GitHelper.TryGetHeadCommit(projectRoot);
         // Only treat HEAD as diverged when we have both sides to compare. A legacy DB (no
@@ -57,7 +57,7 @@ internal static class IndexFreshnessChecker
             try
             {
                 var (record, _, _, _) = indexer.BuildRecordWithRawBytes(absolutePath);
-                workspace[record.Path] = record.Checksum ?? string.Empty;
+                workspace[record.Path] = new WorkspaceFileSnapshot(record.Checksum ?? string.Empty, record.Lines);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
@@ -69,7 +69,7 @@ internal static class IndexFreshnessChecker
 
         result.WorkspaceFileCount = workspace.Count;
 
-        foreach (var (path, checksum) in workspace.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        foreach (var (path, workspaceFile) in workspace.OrderBy(kv => kv.Key, StringComparer.Ordinal))
         {
             if (!indexed.TryGetValue(path, out var indexedFile))
             {
@@ -85,7 +85,8 @@ internal static class IndexFreshnessChecker
                 continue;
             }
 
-            if (!string.Equals(indexedFile.Checksum, checksum, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(indexedFile.Checksum, workspaceFile.Checksum, StringComparison.OrdinalIgnoreCase)
+                || (indexedFile.Lines.HasValue && indexedFile.Lines.Value != workspaceFile.Lines))
             {
                 result.ChangedFileCount++;
                 AddSample(result.ChangedFiles, path);
@@ -164,4 +165,6 @@ internal static class IndexFreshnessChecker
         if (samples.Count < SampleLimit)
             samples.Add(value);
     }
+
+    private readonly record struct WorkspaceFileSnapshot(string Checksum, int Lines);
 }
