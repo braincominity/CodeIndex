@@ -104,6 +104,9 @@ public class SuggestionRecord
     /// <summary>UTC timestamp of the last GitHub submission attempt / 最後に GitHub 送信を試行したUTCタイムスタンプ</summary>
     public DateTime? LastSubmitAttempt { get; set; }
 
+    /// <summary>UTC timestamp when GitHub submission should be retried / GitHub 送信を再試行すべきUTCタイムスタンプ</summary>
+    public DateTime? NextRetryAt { get; set; }
+
     /// <summary>Number of GitHub submission attempts / GitHub 送信試行回数</summary>
     public int SubmitAttemptCount { get; set; }
 
