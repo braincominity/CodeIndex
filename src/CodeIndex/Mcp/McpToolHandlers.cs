@@ -1652,6 +1652,12 @@ public partial class McpServer
                     failureCount = Math.Max(0, failureCount - 1);
                 else
                     successCount = Math.Max(0, successCount - 1);
+                truncatedQueries.Insert(0, new JsonObject
+                {
+                    ["tool"] = removed?["tool"]?.DeepClone(),
+                    ["args_summary"] = removed?["args_summary"]?.DeepClone(),
+                    ["reason"] = "final_response_byte_limit_exceeded",
+                });
                 resultsArray.RemoveAt(resultsArray.Count - 1);
                 continue;
             }

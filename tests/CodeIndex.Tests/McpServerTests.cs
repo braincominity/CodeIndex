@@ -5193,6 +5193,9 @@ public class McpServerTests : IDisposable
             var truncatedQueries = structured["truncated_queries"]!.AsArray();
             Assert.NotEmpty(truncatedQueries);
             Assert.All(truncatedQueries, q => Assert.NotNull(q!["args_summary"]));
+            Assert.Contains(truncatedQueries, q =>
+                q!["tool"]?.GetValue<string>() == "ping" &&
+                q["reason"]?.GetValue<string>() == "final_response_byte_limit_exceeded");
 
             var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
             Assert.Contains("Response truncated", text);
