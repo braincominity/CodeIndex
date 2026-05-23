@@ -107,7 +107,9 @@ public class HttpMcpTransportTests : IDisposable
         }
 
         var snapshot = await WaitForRequestLogRecordsAsync(records, 3);
+        Assert.Equal(3, snapshot.Length);
 
+        // Request logging can be observed from independently handled HTTP requests in any order.
         var missingPost = Assert.Single(snapshot, record =>
             record.AuthOutcome == "missing" &&
             record.StatusCode == (int)HttpStatusCode.Unauthorized &&
@@ -126,6 +128,8 @@ public class HttpMcpTransportTests : IDisposable
         var okPost = Assert.Single(snapshot, record =>
             record.AuthOutcome == "ok" &&
             record.RequestId == "7");
+        Assert.Equal("POST", okPost.Method);
+        Assert.Equal("/", okPost.Path);
         Assert.Equal((int)HttpStatusCode.OK, okPost.StatusCode);
     }
 
