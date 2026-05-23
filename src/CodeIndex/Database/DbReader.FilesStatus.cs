@@ -413,6 +413,9 @@ public partial class DbReader
         // #435 codex review iter 3: `csharp_symbol_name_ready` と同じ条件で expose する。
         // C# ファイルが 0 なら ready=true、そうでなければ列 + stamp の一致を要求する。
         var csharpMetadataTargetReady = !hasCSharpFiles || _csharpMetadataTargetReady;
+        var csharpMetadataTargetDegradedReason = csharpMetadataTargetReady
+            ? null
+            : _csharpMetadataTargetDegradedReason;
         var sqlGraphContractSignal = GetSqlGraphContractSignal(lang: null);
         var hotspotFamilySignal = GetHotspotFamilySignal(lang: null);
         var foldReadyReason = ResolveFoldReadyReason();
@@ -466,6 +469,7 @@ public partial class DbReader
             HotspotFamilyDegradedReason = hotspotFamilySignal.DegradedReason,
             CSharpSymbolNameReady = csharpSymbolNameReady,
             CSharpMetadataTargetReady = csharpMetadataTargetReady,
+            CSharpMetadataTargetDegradedReason = csharpMetadataTargetDegradedReason,
             SqlGraphContractReady = sqlGraphContractSignal.Ready,
             SqlGraphContractDegradedReason = sqlGraphContractSignal.DegradedReason,
             FoldReady = _foldReady,

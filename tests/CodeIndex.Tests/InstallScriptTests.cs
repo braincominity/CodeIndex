@@ -1793,6 +1793,67 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void AcquireInstallLock_WhenFlockIsAvailable_TakesNonBlockingFileLock()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "flock_lock_target");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            flock() {
+                echo "FLOCK_ARGS:$*"
+                return 0
+            }
+
+            acquire_install_lock
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("FLOCK_ARGS:-n 9", stdout);
+        Assert.True(Directory.Exists(installDir));
+        Assert.True(File.Exists(Path.Combine(installDir, ".cdidx-install.lock")));
+    }
+
+    [Fact]
+    public void AcquireInstallLock_WhenFlockIsUnavailable_RefusesExistingLockDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "mkdir_lock_target");
+        Directory.CreateDirectory(Path.Combine(installDir, ".cdidx-install.lockdir"));
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            command() {
+                if [ "${1:-}" = "-v" ] && [ "${2:-}" = "flock" ]; then
+                    return 1
+                fi
+                builtin command "$@"
+            }
+
+            acquire_install_lock
+            echo "UNREACHABLE"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("UNREACHABLE", stdout);
+        Assert.Contains("Another cdidx install is already running", stderr);
+        Assert.True(Directory.Exists(Path.Combine(installDir, ".cdidx-install.lockdir")));
+    }
+
+    [Fact]
     public void DetectPlatform_MacosX64_PrintsActionableUnsupportedRidGuidance()
     {
         if (OperatingSystem.IsWindows())
