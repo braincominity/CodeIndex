@@ -25,7 +25,8 @@ public class DbDebugTests
     [Fact]
     public void DumpToStderr_NoOp_WhenDisabled()
     {
-        Environment.SetEnvironmentVariable("CDIDX_DEBUG", null);
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        env.Set("CDIDX_DEBUG", null);
         DbDebug.ResetContext();
         var output = CaptureStderr(() => DbDebug.DumpToStderr(new InvalidOperationException("boom")));
         Assert.Empty(output);
@@ -39,7 +40,8 @@ public class DbDebugTests
     [InlineData("on")]
     public void IsEnabled_AcceptsTruthyDebugValues(string value)
     {
-        Environment.SetEnvironmentVariable("CDIDX_DEBUG", value);
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        env.Set("CDIDX_DEBUG", value);
         try
         {
             DbDebug.ResetForTesting();
@@ -48,7 +50,6 @@ public class DbDebugTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CDIDX_DEBUG", null);
             DbDebug.ResetForTesting();
         }
     }
@@ -61,7 +62,8 @@ public class DbDebugTests
     [InlineData("off")]
     public void IsEnabled_AcceptsFalsyDebugValues(string value)
     {
-        Environment.SetEnvironmentVariable("CDIDX_DEBUG", value);
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        env.Set("CDIDX_DEBUG", value);
         try
         {
             DbDebug.ResetForTesting();
@@ -70,7 +72,6 @@ public class DbDebugTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CDIDX_DEBUG", null);
             DbDebug.ResetForTesting();
         }
     }
@@ -78,7 +79,8 @@ public class DbDebugTests
     [Fact]
     public void IsEnabled_InvalidDebugValue_WarnsOnceAndFallsBackToOff()
     {
-        Environment.SetEnvironmentVariable("CDIDX_DEBUG", "maybe");
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        env.Set("CDIDX_DEBUG", "maybe");
         try
         {
             DbDebug.ResetForTesting();
@@ -91,7 +93,6 @@ public class DbDebugTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CDIDX_DEBUG", null);
             DbDebug.ResetForTesting();
         }
     }
@@ -99,7 +100,8 @@ public class DbDebugTests
     [Fact]
     public void DumpToStderr_RedactsTextByDefault()
     {
-        Environment.SetEnvironmentVariable("CDIDX_DEBUG", "1");
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        env.Set("CDIDX_DEBUG", "1");
         try
         {
             DbDebug.ResetContext();
@@ -136,7 +138,6 @@ public class DbDebugTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CDIDX_DEBUG", null);
             DbDebug.ResetContext();
         }
     }
@@ -144,7 +145,8 @@ public class DbDebugTests
     [Fact]
     public void DumpToStderr_RedactedMode_UsesPathShapeForPathValues()
     {
-        Environment.SetEnvironmentVariable("CDIDX_DEBUG", "1");
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        env.Set("CDIDX_DEBUG", "1");
         try
         {
             DbDebug.ResetContext();
@@ -173,7 +175,6 @@ public class DbDebugTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CDIDX_DEBUG", null);
             DbDebug.ResetContext();
         }
     }
@@ -181,7 +182,8 @@ public class DbDebugTests
     [Fact]
     public void DumpToStderr_UnsafeMode_IncludesRawContent()
     {
-        Environment.SetEnvironmentVariable("CDIDX_DEBUG", "unsafe");
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        env.Set("CDIDX_DEBUG", "unsafe");
         DbDebug.EnableUnsafeForProcess();
         try
         {
@@ -205,7 +207,6 @@ public class DbDebugTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CDIDX_DEBUG", null);
             DbDebug.ResetContext();
             DbDebug.ResetForTesting();
         }
@@ -220,7 +221,8 @@ public class DbDebugTests
         // redacted mode and emits a one-shot stderr warning. The capture has to
         // wrap the tracking calls too because the downgrade warning fires the
         // first time ResolveMode runs (here: during ExecuteTrackedReader).
-        Environment.SetEnvironmentVariable("CDIDX_DEBUG", "unsafe");
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        env.Set("CDIDX_DEBUG", "unsafe");
         DbDebug.ResetForTesting();
         try
         {
@@ -252,7 +254,6 @@ public class DbDebugTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CDIDX_DEBUG", null);
             DbDebug.ResetContext();
             DbDebug.ResetForTesting();
         }
@@ -261,7 +262,8 @@ public class DbDebugTests
     [Fact]
     public void DumpToStderr_UnsafeDowngradeWarning_EmittedOnlyOnce()
     {
-        Environment.SetEnvironmentVariable("CDIDX_DEBUG", "unsafe");
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        env.Set("CDIDX_DEBUG", "unsafe");
         DbDebug.ResetForTesting();
         try
         {
@@ -297,7 +299,6 @@ public class DbDebugTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CDIDX_DEBUG", null);
             DbDebug.ResetContext();
             DbDebug.ResetForTesting();
         }
@@ -306,7 +307,8 @@ public class DbDebugTests
     [Fact]
     public void DumpToStderr_DoesNotDumpStaleStateAfterReset()
     {
-        Environment.SetEnvironmentVariable("CDIDX_DEBUG", "1");
+        using var env = EnvironmentVariableScope.Capture("CDIDX_DEBUG");
+        env.Set("CDIDX_DEBUG", "1");
         try
         {
             DbDebug.ResetContext();
@@ -334,7 +336,6 @@ public class DbDebugTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CDIDX_DEBUG", null);
             DbDebug.ResetContext();
         }
     }

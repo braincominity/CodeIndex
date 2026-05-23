@@ -18,22 +18,15 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class GitHubIssueReporterTests : IDisposable
 {
-    // Save original env vars to restore after each test
-    // 各テスト後にリストアするため元の環境変数を保存
-    private readonly string? _originalCdidxToken;
-    private readonly string? _originalGhToken;
-
-    public GitHubIssueReporterTests()
-    {
-        _originalCdidxToken = Environment.GetEnvironmentVariable("CDIDX_GITHUB_TOKEN");
-        _originalGhToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
-    }
+    private readonly EnvironmentVariableScope _env = EnvironmentVariableScope.Capture(
+        "CDIDX_GITHUB_TOKEN",
+        "GITHUB_TOKEN");
 
     [Fact]
     public void ResolveToken_NeitherSet_ReturnsNull()
     {
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", null);
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", null);
+        _env.Set("CDIDX_GITHUB_TOKEN", null);
+        _env.Set("GITHUB_TOKEN", null);
 
         Assert.Null(GitHubIssueReporter.ResolveToken());
     }
@@ -41,8 +34,8 @@ public class GitHubIssueReporterTests : IDisposable
     [Fact]
     public void ResolveToken_CdidxTokenSet_ReturnsCdidxToken()
     {
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_cdidx_test_token");
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", null);
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_cdidx_test_token");
+        _env.Set("GITHUB_TOKEN", null);
 
         Assert.Equal("ghp_cdidx_test_token", GitHubIssueReporter.ResolveToken());
     }
@@ -54,8 +47,8 @@ public class GitHubIssueReporterTests : IDisposable
         // from silently publishing to an external repository.
         // 汎用 GITHUB_TOKEN は使わない — CI の環境トークンが意図せず
         // 外部リポジトリに公開されることを防ぐ。
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", null);
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", "ghp_github_test_token");
+        _env.Set("CDIDX_GITHUB_TOKEN", null);
+        _env.Set("GITHUB_TOKEN", "ghp_github_test_token");
 
         Assert.Null(GitHubIssueReporter.ResolveToken());
     }
@@ -63,8 +56,8 @@ public class GitHubIssueReporterTests : IDisposable
     [Fact]
     public void ResolveToken_CdidxTokenSet_IgnoresGenericToken()
     {
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_cdidx_preferred");
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", "ghp_github_fallback");
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_cdidx_preferred");
+        _env.Set("GITHUB_TOKEN", "ghp_github_fallback");
 
         Assert.Equal("ghp_cdidx_preferred", GitHubIssueReporter.ResolveToken());
     }
@@ -72,8 +65,8 @@ public class GitHubIssueReporterTests : IDisposable
     [Fact]
     public void ResolveToken_EmptyString_ReturnsNull()
     {
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "");
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", "");
+        _env.Set("CDIDX_GITHUB_TOKEN", "");
+        _env.Set("GITHUB_TOKEN", "");
 
         Assert.Null(GitHubIssueReporter.ResolveToken());
     }
@@ -81,8 +74,8 @@ public class GitHubIssueReporterTests : IDisposable
     [Fact]
     public void ResolveToken_WhitespaceOnly_ReturnsNull()
     {
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "   ");
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", "   ");
+        _env.Set("CDIDX_GITHUB_TOKEN", "   ");
+        _env.Set("GITHUB_TOKEN", "   ");
 
         Assert.Null(GitHubIssueReporter.ResolveToken());
     }
@@ -114,6 +107,36 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public void ScrubInlineCode_RemovesTripleBacktickFencedBlock()
+    {
+        var input = """
+        Before
+        ```csharp
+        secret();
+        ```
+        After
+        """;
+
+        var result = GitHubIssueReporter.ScrubInlineCode(input);
+
+        Assert.Equal("""
+        Before
+        [code example removed]
+        After
+        """, result);
+        Assert.DoesNotContain("secret", result);
+        Assert.DoesNotContain("```", result);
+    }
+
+    [Fact]
+    public void ScrubInlineCode_DoesNotTreatTripleBackticksAsInlineSpan()
+    {
+        var result = GitHubIssueReporter.ScrubInlineCode("Example ```code``` tail");
+
+        Assert.Equal("Example [code example removed] tail", result);
+    }
+
+    [Fact]
     public void ScrubInlineCode_HandlesEmptyAndNull()
     {
         Assert.Equal("", GitHubIssueReporter.ScrubInlineCode(""));
@@ -128,6 +151,7 @@ public class GitHubIssueReporterTests : IDisposable
         Assert.Contains("GitHub issue creation failed: network timeout", message);
         Assert.Contains("stays recorded locally", message);
         Assert.Contains("CDIDX_GITHUB_TOKEN", message);
+        Assert.Contains("HTTPS_PROXY", message);
         Assert.Contains("retry `suggest_improvement`", message);
     }
 
@@ -150,6 +174,30 @@ public class GitHubIssueReporterTests : IDisposable
         Assert.Equal("422: { \"message\":\"validation failed\" }", detail);
     }
 
+    [Fact]
+    public void GetRateLimitRetryAt_UsesRetryAfterDeltaFor429()
+    {
+        using var response = new HttpResponseMessage((HttpStatusCode)429);
+        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(60));
+        var now = new DateTime(2026, 5, 23, 10, 0, 0, DateTimeKind.Utc);
+
+        var retryAt = GitHubIssueReporter.GetRateLimitRetryAt(response, now);
+
+        Assert.Equal(now.AddSeconds(60), retryAt);
+    }
+
+    [Fact]
+    public void GetRateLimitRetryAt_UsesResetHeaderForForbiddenExhaustedLimit()
+    {
+        using var response = new HttpResponseMessage(HttpStatusCode.Forbidden);
+        response.Headers.TryAddWithoutValidation("x-ratelimit-remaining", "0");
+        response.Headers.TryAddWithoutValidation("x-ratelimit-reset", "1770000000");
+
+        var retryAt = GitHubIssueReporter.GetRateLimitRetryAt(response, new DateTime(2026, 5, 23, 10, 0, 0, DateTimeKind.Utc));
+
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1770000000).UtcDateTime, retryAt);
+    }
+
     // --- Idempotency-on-retry tests / 再試行時の冪等性テスト ---
 
     [Fact]
@@ -164,7 +212,7 @@ public class GitHubIssueReporterTests : IDisposable
         // がレスポンスが消失し、ローカルでは SubmittedToGitHub=false のまま。
         // 再試行時はハッシュ検索による冪等性チェックが既存 Issue を見つけ、
         // 重複作成を回避すること。
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
 
         var handler = new RecordingHandler();
         handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
@@ -206,7 +254,7 @@ public class GitHubIssueReporterTests : IDisposable
         // GitHub Search は作成直後の Issue を反映するまで遅延し得る。
         // Search が空でも、label 付き Issue の直接一覧で提案ハッシュを持つ
         // 既存 Issue を検出し、重複作成を防ぐこと。
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
 
         var record = MakeRecordWithKnownHash();
         var handler = new RecordingHandler();
@@ -256,7 +304,7 @@ public class GitHubIssueReporterTests : IDisposable
         // does not break the normal create path.
         // ベースライン: 検索結果が空なら POST /issues に進む。今回追加した検索
         // ステップが通常の作成パスを壊さないことを確認する。
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
 
         var handler = new RecordingHandler();
         handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
@@ -305,7 +353,7 @@ public class GitHubIssueReporterTests : IDisposable
         // legitimate first submission. The create POST proceeds as before.
         // 検索 API 失敗（5xx, レート制限など）でも正規の新規送信は阻害しない。
         // 検索失敗時は通常の POST 作成パスに進むこと。
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
 
         var handler = new RecordingHandler();
         handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
@@ -340,7 +388,7 @@ public class GitHubIssueReporterTests : IDisposable
     [Fact]
     public async Task TryCreateIssueDetailedAsync_CreateApiFails_ReturnsDiagnosticError()
     {
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
 
         var handler = new RecordingHandler();
         handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
@@ -381,7 +429,7 @@ public class GitHubIssueReporterTests : IDisposable
     [Fact]
     public async Task TryCreateIssueDetailedAsync_UserCancellation_Propagates()
     {
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
 
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
@@ -404,7 +452,7 @@ public class GitHubIssueReporterTests : IDisposable
     [Fact]
     public async Task TryCreateIssueDetailedAsync_TimeoutCancellation_ReturnsDiagnosticError()
     {
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
 
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
@@ -430,7 +478,7 @@ public class GitHubIssueReporterTests : IDisposable
     [Fact]
     public async Task TryCreateIssueDetailedAsync_OutOfMemoryException_Propagates()
     {
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
 
         using var mockClient = new HttpClient(new ThrowingHandler(
             new OutOfMemoryException("allocation failed")));
@@ -441,6 +489,51 @@ public class GitHubIssueReporterTests : IDisposable
 
             await Assert.ThrowsAsync<OutOfMemoryException>(
                 () => GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test"));
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
+    public async Task TryCreateIssueDetailedAsync_RateLimited_ReturnsRetryAfterDiagnostic()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("""{ "total_count": 0, "items": [] }"""),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("[]"),
+            });
+        var rateLimitResponse = new HttpResponseMessage((HttpStatusCode)429)
+        {
+            Content = MakeJsonContent("""{ "message": "rate limited" }"""),
+        };
+        rateLimitResponse.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(60));
+        handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
+            rateLimitResponse);
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var before = DateTime.UtcNow;
+            var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
+            var after = DateTime.UtcNow;
+
+            Assert.Null(result.IssueUrl);
+            Assert.Contains("429", result.Error);
+            Assert.Contains("next_retry_at=", result.Error);
+            Assert.NotNull(result.NextRetryAt);
+            Assert.InRange(result.NextRetryAt.Value, before.AddSeconds(60), after.AddSeconds(61));
+            Assert.Equal(3, handler.RequestCount);
         }
         finally
         {
@@ -493,9 +586,7 @@ public class GitHubIssueReporterTests : IDisposable
 
     public void Dispose()
     {
-        // Restore original env vars / 元の環境変数をリストア
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", _originalCdidxToken);
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", _originalGhToken);
+        _env.Dispose();
         // Defensive: never leak the override into other tests.
         // 防御的: オーバーライドを他テストに残さない。
         GitHubIssueReporter.s_httpClientOverride = null;
