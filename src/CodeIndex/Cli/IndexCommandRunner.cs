@@ -1813,6 +1813,7 @@ public static class IndexCommandRunner
                     record.Checksum,
                     size: record.Size,
                     language: record.Lang,
+                    generated: record.Generated,
                     allowReuse: symbolKindFilterMatchesPrior
                         && record.Lang is not ("javascript" or "typescript")
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
@@ -3159,6 +3160,7 @@ public static class IndexCommandRunner
                             record.Checksum,
                             size: record.Size,
                             language: record.Lang,
+                            generated: record.Generated,
                             allowReuse: symbolKindFilterMatchesPrior
                                 && record.Lang is not ("javascript" or "typescript")
                                 && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
