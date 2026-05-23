@@ -194,4 +194,156 @@ public static partial class SymbolExtractor
         return false;
     }
 
+    private static int? TryFindScalaBracelessClassEndLine(string[] lines, int startIndex, int startColumn)
+    {
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var inBlockComment = false;
+        var inString = false;
+        var inChar = false;
+
+        for (var lineIndex = startIndex; lineIndex < lines.Length; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var scanStart = lineIndex == startIndex ? Math.Max(0, startColumn) : 0;
+
+            for (var i = scanStart; i < line.Length; i++)
+            {
+                var c = line[i];
+
+                if (inBlockComment)
+                {
+                    if (c == '*' && i + 1 < line.Length && line[i + 1] == '/')
+                    {
+                        inBlockComment = false;
+                        i++;
+                    }
+                    continue;
+                }
+
+                if (inString)
+                {
+                    if (c == '\\' && i + 1 < line.Length)
+                    {
+                        i++;
+                        continue;
+                    }
+
+                    if (c == '"')
+                        inString = false;
+                    continue;
+                }
+
+                if (inChar)
+                {
+                    if (c == '\\' && i + 1 < line.Length)
+                    {
+                        i++;
+                        continue;
+                    }
+
+                    if (c == '\'')
+                        inChar = false;
+                    continue;
+                }
+
+                if (c == '/' && i + 1 < line.Length)
+                {
+                    if (line[i + 1] == '/')
+                        break;
+
+                    if (line[i + 1] == '*')
+                    {
+                        inBlockComment = true;
+                        i++;
+                        continue;
+                    }
+                }
+
+                if (c == '"')
+                {
+                    inString = true;
+                    continue;
+                }
+
+                if (c == '\'')
+                {
+                    inChar = true;
+                    continue;
+                }
+
+                if (c == '(')
+                {
+                    parenDepth++;
+                    continue;
+                }
+
+                if (c == ')' && parenDepth > 0)
+                {
+                    parenDepth--;
+                    continue;
+                }
+
+                if (c == '[')
+                {
+                    bracketDepth++;
+                    continue;
+                }
+
+                if (c == ']' && bracketDepth > 0)
+                {
+                    bracketDepth--;
+                    continue;
+                }
+
+                if (c == '{' && parenDepth == 0 && bracketDepth == 0)
+                    return null;
+            }
+
+            if (parenDepth != 0 || bracketDepth != 0 || inBlockComment || inString || inChar)
+                continue;
+
+            var trimmed = line.TrimEnd();
+            if (trimmed.EndsWith("extends", StringComparison.Ordinal)
+                || trimmed.EndsWith("with", StringComparison.Ordinal)
+                || trimmed.EndsWith("derives", StringComparison.Ordinal)
+                || trimmed.EndsWith(':'))
+            {
+                continue;
+            }
+
+            var nextLine = TryGetNextScalaHeaderLine(lines, lineIndex + 1);
+            if (nextLine is null)
+                return lineIndex;
+
+            if (nextLine.StartsWith("extends ", StringComparison.Ordinal)
+                || nextLine.StartsWith("with ", StringComparison.Ordinal)
+                || nextLine.StartsWith("derives ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (nextLine.StartsWith('{'))
+                return null;
+
+            return lineIndex;
+        }
+
+        return null;
+    }
+
+    private static string? TryGetNextScalaHeaderLine(string[] lines, int startIndex)
+    {
+        for (var i = startIndex; i < lines.Length; i++)
+        {
+            var nextLine = lines[i].TrimStart();
+            if (nextLine.Length == 0 || nextLine.StartsWith("//", StringComparison.Ordinal))
+                continue;
+
+            return nextLine;
+        }
+
+        return null;
+    }
+
 }

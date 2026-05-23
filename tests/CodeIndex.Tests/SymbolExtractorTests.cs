@@ -20351,7 +20351,7 @@ public class SymbolExtractorTests
         var content = """
             package example
 
-            class Config(value: String) {}
+            class Config(value: String)
             object Config extends App {
               def load(): Config = Config("default")
             }
@@ -20366,13 +20366,46 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "scala", content);
 
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config" && s.SubKind == "has_companion_object");
-        Assert.Contains(symbols, s => s.Kind == "object" && s.Name == "Config" && s.SubKind == "companion_object");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config" && s.SubKind == "has_companion_object" && s.StartLine == 3 && s.EndLine == 3 && s.BodyStartLine == null && s.BodyEndLine == null);
+        Assert.Contains(symbols, s => s.Kind == "object" && s.Name == "Config" && s.SubKind == "companion_object" && s.ContainerKind == null && s.ContainerName == null);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "load" && s.ContainerKind == "object" && s.ContainerName == "Config");
         Assert.Contains(symbols, s => s.Kind == "object" && s.Name == "PackageRegistry");
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Status");
         Assert.Contains(symbols, s => s.Kind == "object" && s.Name == "Ready");
         Assert.Contains(symbols, s => s.Kind == "object" && s.Name == "Closed");
+    }
+
+    [Fact]
+    public void Extract_Scala_WrappedClassHeaderKeepsBodyRange()
+    {
+        var content = """
+            class Service
+              extends Base {
+              def run(): Int = 1
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Service" && s.StartLine == 1 && s.EndLine == 4 && s.BodyStartLine == 2 && s.BodyEndLine == 4);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerKind == "class" && s.ContainerName == "Service");
+    }
+
+    [Fact]
+    public void Extract_Scala_WrappedBracelessConstructorDoesNotContainCompanion()
+    {
+        var content = """
+            class Config(
+              value: String
+            )
+            object Config {
+              def load(): Config = Config("default")
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config" && s.SubKind == "has_companion_object" && s.StartLine == 1 && s.EndLine == 3 && s.BodyStartLine == null && s.BodyEndLine == null);
+        Assert.Contains(symbols, s => s.Kind == "object" && s.Name == "Config" && s.SubKind == "companion_object" && s.ContainerKind == null && s.ContainerName == null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "load" && s.ContainerKind == "object" && s.ContainerName == "Config");
     }
 
     [Fact]
