@@ -695,7 +695,7 @@ public class FileIndexer
             }
             else if (pattern[index + 1] is { Value: '^', Escaped: false })
             {
-                builder.Append(@"\^");
+                builder.Append('^');
             }
 
             if (allowLeadingRightBracket)
