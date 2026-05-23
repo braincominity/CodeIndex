@@ -1997,6 +1997,7 @@ public static class QueryCommandRunner
 
             var status = reader.GetStatus();
             WorkspaceMetadataEnricher.Enrich(status, options.DbPath, options.DbPathExplicit);
+            status.MacProfile = MacProfileDetector.DetectCurrent();
             if (options.CheckWorkspace)
             {
                 status.WorkspaceCheck = IndexFreshnessChecker.Check(reader, status.ProjectRoot);
@@ -2087,6 +2088,8 @@ public static class QueryCommandRunner
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("Git HEAD", status.GitHead));
                 if (status.GitIsDirty != null)
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("Git Dirty", status.GitIsDirty));
+                if (status.MacProfile != null)
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("MAC", status.MacProfile));
                 // #1509 surface: SHA / branch / timestamp / drift come from the per-success
                 // stamp (indexed_head_sha / _branch / _timestamp) and reflect last-touched HEAD
                 // regardless of update mode. #1508/#1512's IndexedHeadCommit (full-scan only)
@@ -3354,6 +3357,7 @@ public static class QueryCommandRunner
         var visibilityFilters = new List<string>();
         var excludeVisibilityFilters = new List<string>();
         bool excludeTests = false;
+        bool includeGenerated = false;
         DateTime? since = null;
         bool noDedup = false;
         bool noVisibilityRank = false;
@@ -3734,6 +3738,9 @@ public static class QueryCommandRunner
                 case "--exclude-tests":
                     excludeTests = true;
                     break;
+                case "--include-generated":
+                    includeGenerated = true;
+                    break;
                 case "--since":
                     if (!TryReadStringOptionValue(args, ref i, "--since", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var sinceValue, out var sinceError))
                         AddParseError(sinceError!);
@@ -3930,6 +3937,7 @@ public static class QueryCommandRunner
             VisibilityFilters = visibilityFilters,
             ExcludeVisibilityFilters = excludeVisibilityFilters,
             ExcludeTests = excludeTests,
+            IncludeGenerated = includeGenerated,
             CountOnly = countOnly,
             Since = since,
             NoDedup = noDedup,
@@ -4266,7 +4274,8 @@ public static class QueryCommandRunner
                 reader = new DbReader(db);
             }
 
-            var exitCode = action(reader);
+            reader.IncludeGenerated = options.IncludeGenerated;
+            var exitCode = reader.RunWithGeneratedScope(() => action(reader));
             var profileEntries = profiling ? Database.DbDebug.EndProfile() : [];
             if (options.Profile)
                 WriteProfilePayload(profileEntries, jsonOptions);
@@ -4336,7 +4345,7 @@ public static class QueryCommandRunner
         if (unauthorized != null)
         {
             Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: database access denied: {unauthorized.Message}");
-            Console.Error.WriteLine("Hint: check the permissions for `--db`, move the index to a writable location, or use a SQLite `file:` URI with `immutable=1` for read-only mounts.");
+            Console.Error.WriteLine(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
             return;
         }
 
@@ -4344,7 +4353,7 @@ public static class QueryCommandRunner
         if (io != null)
         {
             Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: database I/O error: {io.Message}");
-            Console.Error.WriteLine("Hint: check that the `--db` path and its WAL/SHM sidecar files are readable, then refresh the index if the files were moved or removed.");
+            Console.Error.WriteLine(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
             return;
         }
 
@@ -4354,7 +4363,7 @@ public static class QueryCommandRunner
             if (sqlite.SqliteErrorCode == 14)
             {
                 Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: database access/open denied: {sqlite.Message}");
-                Console.Error.WriteLine("Hint: check that `--db` points to a readable SQLite file, verify parent directory permissions, or use a SQLite `file:` URI with `immutable=1` for read-only mounts.");
+                Console.Error.WriteLine(MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()));
                 return;
             }
 
@@ -4366,7 +4375,9 @@ public static class QueryCommandRunner
             }
 
             Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: SQLite database error ({sqlite.SqliteErrorCode}): {sqlite.Message}");
-            Console.Error.WriteLine("Hint: check `--db`, verify the index was written by a compatible cdidx version, or rebuild it with `cdidx index <projectPath> --rebuild`.");
+            Console.Error.WriteLine(MacProfileDetector.IsPermissionStyleSqliteError(sqlite)
+                ? MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent())
+                : "Hint: check `--db`, verify the index was written by a compatible cdidx version, or rebuild it with `cdidx index <projectPath> --rebuild`.");
             return;
         }
 
@@ -4893,6 +4904,8 @@ public static class QueryCommandRunner
             query["rank_by"] = FormatReferenceRankMode(options.RankMode);
         if (options.ExcludeTests)
             query["exclude_tests"] = true;
+        if (options.IncludeGenerated)
+            query["include_generated"] = true;
         if (options.Since.HasValue)
             query["since"] = options.Since.Value;
         if (options.CountOnly)
@@ -6262,6 +6275,7 @@ public sealed class QueryCommandOptions
     public string? SolutionFilter { get; init; }
     public List<string> ExcludePaths { get; init; } = [];
     public bool ExcludeTests { get; init; }
+    public bool IncludeGenerated { get; init; }
     public bool CountOnly { get; init; }
     public DateTime? Since { get; init; }
     public bool NoDedup { get; init; }
