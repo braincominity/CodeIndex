@@ -2715,6 +2715,10 @@ public partial class McpServer
                 ["submitted_to_github"] = result.AlreadySubmitted || result.UpstreamUrl != null,
                 ["lifecycle_status"] = JsonNamingPolicy.SnakeCaseLower.ConvertName(result.Status.ToString()),
             };
+            if (result.DuplicateOfHash != null)
+                dupPayload["duplicate_of"] = result.DuplicateOfHash;
+            if (result.DuplicateScore != null)
+                dupPayload["duplicate_score"] = result.DuplicateScore.Value;
             if (result.UpstreamUrl != null)
             {
                 dupPayload["upstream_url"] = result.UpstreamUrl;
