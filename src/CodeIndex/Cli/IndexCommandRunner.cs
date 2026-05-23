@@ -387,7 +387,7 @@ public static class IndexCommandRunner
         {
             var dbDir = Path.GetDirectoryName(dbPath);
             if (!string.IsNullOrEmpty(dbDir))
-                Directory.CreateDirectory(dbDir);
+                DataDirectorySecurity.CreatePrivateDirectory(dbDir);
 
             // Acquire a process-exclusive lock so concurrent `cdidx index` runs against the
             // same DB cannot interleave schema/data writes and corrupt the database.
@@ -1835,6 +1835,7 @@ public static class IndexCommandRunner
                     record.Modified,
                     record.Checksum,
                     size: record.Size,
+                    lines: record.Lines,
                     language: record.Lang,
                     generated: record.Generated,
                     allowReuse: symbolKindFilterMatchesPrior
@@ -1883,6 +1884,7 @@ public static class IndexCommandRunner
                 var fileContext = new FileContext(projectRoot, record.Path, absPath, record.Lang);
                 postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
                 symbolsDroppedByKindFilter += options.SymbolKindFilter.Apply(symbols);
+                FileIndexer.ValidateSymbolLineRanges(record, symbols);
                 writer.InsertSymbols(symbols);
                 var references = ReferenceExtractor.Extract(
                     fileId,
@@ -3266,6 +3268,7 @@ public static class IndexCommandRunner
                             record.Modified,
                             record.Checksum,
                             size: record.Size,
+                            lines: record.Lines,
                             language: record.Lang,
                             generated: record.Generated,
                             allowReuse: symbolKindFilterMatchesPrior
@@ -3319,6 +3322,7 @@ public static class IndexCommandRunner
                     postExtractionHooks.OnSymbolsExtracted(fileContext, mutableSymbols);
                     symbolsDroppedByKindFilter += options.SymbolKindFilter.Apply(mutableSymbols);
                     symbols = (IReadOnlyList<SymbolRecord>)mutableSymbols;
+                    FileIndexer.ValidateSymbolLineRanges(record, symbols);
                     writer.InsertSymbols(symbols);
                     var references = item.References == null
                         ? ReferenceExtractor.Extract(

@@ -2385,6 +2385,8 @@ public class FileIndexer
                 warning = $"{relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)";
             }
         }
+        var lineCount = CountPhysicalLines(content);
+
         // Normalize line endings to LF in one pass / 改行を1パスでLFに正規化
         content = NormalizeLineEndings(content);
         // Strip every line-leading UTF-8 BOM (U+FEFF): the leading BOM at offset 0
@@ -2413,20 +2415,6 @@ public class FileIndexer
         // 再索引で引き続き検知される。Closes #183。OS をまたいだ CRLF / LF の
         // 同一性は ComputeChecksum 自体で担保する。#1544 参照。
         content = StripLineLeadingInvisibles(content);
-        // Accurate line count: ignore trailing newline, and treat content that became
-        // empty after CRLF / BOM stripping as zero lines (not `"".Split('\n') == [""]`'s
-        // off-by-one of 1) so `files.lines` stays consistent with the 0-chunk contract
-        // ChunkSplitter.Split applies to the same content. Closes #183.
-        // 正確な行数: 末尾改行を無視し、CRLF / BOM 剥がしの結果として空になった
-        // コンテンツは 0 行として扱う (`"".Split('\n') == [""]` の 1 件ずれを避ける)。
-        // これにより `files.lines` が ChunkSplitter.Split が同じ内容に対して適用する
-        // 0 チャンク契約と整合する。Closes #183.
-        var lineCount = content.Length == 0
-            ? 0
-            : (content.EndsWith('\n')
-                ? content[..^1].Split('\n').Length
-                : content.Split('\n').Length);
-
         var record = new FileRecord
         {
             Path = NormalizePathSeparators(relativePath),
@@ -2498,6 +2486,61 @@ public class FileIndexer
 
     internal static bool IsGeneratedCodeFile(string relativePath, string content)
         => HasGeneratedCodeFileName(relativePath) || HasGeneratedCodeHeader(content);
+
+    internal static int CountPhysicalLines(string content)
+    {
+        if (content.Length == 0)
+            return 0;
+
+        var lines = 1;
+        var lastWasLineBreak = false;
+        for (var i = 0; i < content.Length; i++)
+        {
+            var c = content[i];
+            if (c != '\r' && c != '\n')
+            {
+                lastWasLineBreak = false;
+                continue;
+            }
+
+            lastWasLineBreak = true;
+            if (c == '\r' && i + 1 < content.Length && content[i + 1] == '\n')
+                i++;
+
+            if (i + 1 < content.Length)
+                lines++;
+        }
+
+        return lastWasLineBreak ? Math.Max(lines, 1) : lines;
+    }
+
+    public static void ValidateSymbolLineRanges(FileRecord record, IReadOnlyList<SymbolRecord> symbols)
+    {
+        foreach (var symbol in symbols)
+        {
+            ValidateSymbolLine(record, symbol, symbol.Line, nameof(symbol.Line));
+            ValidateSymbolLine(record, symbol, symbol.StartLine, nameof(symbol.StartLine), allowZero: true);
+            ValidateSymbolLine(record, symbol, symbol.EndLine, nameof(symbol.EndLine), allowZero: true, allowOnePastEnd: true);
+            ValidateSymbolLine(record, symbol, symbol.BodyStartLine, nameof(symbol.BodyStartLine), allowOnePastEnd: true);
+            ValidateSymbolLine(record, symbol, symbol.BodyEndLine, nameof(symbol.BodyEndLine), allowOnePastEnd: true);
+        }
+    }
+
+    private static void ValidateSymbolLine(FileRecord record, SymbolRecord symbol, int? line, string fieldName, bool allowZero = false, bool allowOnePastEnd = false)
+    {
+        if (line is null)
+            return;
+
+        if (allowZero && line == 0)
+            return;
+
+        var maxLine = record.Lines + (allowOnePastEnd ? 1 : 0);
+        if (line < 1 || line > maxLine)
+        {
+            throw new InvalidOperationException(
+                $"{record.Path}: extracted symbol '{symbol.Name}' has {fieldName}={line}, outside file line range 1..{maxLine}");
+        }
+    }
 
     private static bool HasGeneratedCodeFileName(string relativePath)
     {
