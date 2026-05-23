@@ -2609,16 +2609,35 @@ public class DbWriter
     /// true のとき、既に埋まっている folded 列も含めて全行再計算する（fold metadata 不一致時）。
     /// </param>
     /// <returns>Counts of symbol rows and reference rows rewritten.</returns>
-    public (int Symbols, int SymbolReferences) BackfillFoldedColumns(bool rewriteAll = false)
+    public (int Symbols, int SymbolReferences) BackfillFoldedColumns(
+        bool rewriteAll = false,
+        CancellationToken cancellationToken = default) =>
+        BackfillFoldedColumnsCore(rewriteAll, cancellationToken, rowUpdatedForTesting: null);
+
+    internal (int Symbols, int SymbolReferences) BackfillFoldedColumnsForTesting(
+        bool rewriteAll,
+        CancellationToken cancellationToken,
+        Action rowUpdatedForTesting) =>
+        BackfillFoldedColumnsCore(rewriteAll, cancellationToken, rowUpdatedForTesting);
+
+    private (int Symbols, int SymbolReferences) BackfillFoldedColumnsCore(
+        bool rewriteAll,
+        CancellationToken cancellationToken,
+        Action? rowUpdatedForTesting)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var txn = !IsInTransaction() ? BeginTransaction() : null;
-        var symbols = BackfillSymbolFoldedRows(rewriteAll);
-        var symbolReferences = BackfillReferenceFoldedRows(rewriteAll);
+        var symbols = BackfillSymbolFoldedRows(rewriteAll, cancellationToken, rowUpdatedForTesting);
+        var symbolReferences = BackfillReferenceFoldedRows(rewriteAll, cancellationToken, rowUpdatedForTesting);
+        cancellationToken.ThrowIfCancellationRequested();
         txn?.Commit();
         return (symbols, symbolReferences);
     }
 
-    private int BackfillSymbolFoldedRows(bool rewriteAll)
+    private int BackfillSymbolFoldedRows(
+        bool rewriteAll,
+        CancellationToken cancellationToken,
+        Action? rowUpdatedForTesting)
     {
         var rows = new List<(long Id, string Name)>();
         using (var cmd = _conn.CreateCommand())
@@ -2628,7 +2647,10 @@ public class DbWriter
                 : "SELECT id, name FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL";
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
                 rows.Add((reader.GetInt64(0), reader.GetString(1)));
+            }
         }
 
         if (rows.Count == 0)
@@ -2642,15 +2664,20 @@ public class DbWriter
 
         foreach (var row in rows)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             pFolded.Value = (object?)NameFold.Fold(row.Name) ?? DBNull.Value;
             pId.Value = row.Id;
             update.ExecuteNonQuery();
+            rowUpdatedForTesting?.Invoke();
         }
 
         return rows.Count;
     }
 
-    private int BackfillReferenceFoldedRows(bool rewriteAll)
+    private int BackfillReferenceFoldedRows(
+        bool rewriteAll,
+        CancellationToken cancellationToken,
+        Action? rowUpdatedForTesting)
     {
         var rows = new List<(long Id, string? SymbolName, string? ContainerName)>();
         using (var cmd = _conn.CreateCommand())
@@ -2664,6 +2691,7 @@ public class DbWriter
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 rows.Add((
                     reader.GetInt64(0),
                     reader.IsDBNull(1) ? null : reader.GetString(1),
@@ -2686,10 +2714,12 @@ public class DbWriter
 
         foreach (var row in rows)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             pSymbolNameFolded.Value = (object?)NameFold.Fold(row.SymbolName) ?? DBNull.Value;
             pContainerNameFolded.Value = (object?)NameFold.Fold(row.ContainerName) ?? DBNull.Value;
             pId.Value = row.Id;
             update.ExecuteNonQuery();
+            rowUpdatedForTesting?.Invoke();
         }
 
         return rows.Count;

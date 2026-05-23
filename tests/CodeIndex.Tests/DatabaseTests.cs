@@ -1065,6 +1065,41 @@ public class DatabaseTests : IDisposable
         Assert.Null(_db.GetMetaString("fold_key_fingerprint"));
     }
 
+    [Fact]
+    public void BackfillFoldedColumns_CancelledDuringUpdate_RollsBackFoldedRows()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/fold_cancel.py", Lang = "python", Size = 30, Lines = 3,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = fileId, Kind = "function", Name = "first", Line = 1, StartLine = 1, EndLine = 1 },
+            new SymbolRecord { FileId = fileId, Kind = "function", Name = "second", Line = 2, StartLine = 2, EndLine = 2 },
+        ]);
+
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE symbols SET name_folded = NULL";
+            cmd.ExecuteNonQuery();
+        }
+
+        using var cancellation = new CancellationTokenSource();
+        var updatedRows = 0;
+        Assert.Throws<OperationCanceledException>(() =>
+            _writer.BackfillFoldedColumnsForTesting(
+                rewriteAll: true,
+                cancellationToken: cancellation.Token,
+                rowUpdatedForTesting: () =>
+                {
+                    updatedRows++;
+                    cancellation.Cancel();
+                }));
+
+        Assert.Equal(1, updatedRows);
+        Assert.Equal(0, ExecuteScalarLong("SELECT COUNT(*) FROM symbols WHERE name_folded IS NOT NULL"));
+    }
+
     public void Dispose()
     {
         _db.Dispose();
