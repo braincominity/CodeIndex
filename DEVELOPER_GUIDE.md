@@ -115,7 +115,11 @@ Current stable codes and triggers:
 
 ### SQLite WAL durability policy
 
-`DbContext` opens writable indexes in WAL mode, sets `PRAGMA synchronous=NORMAL`, and pins `PRAGMA wal_autocheckpoint=1000`. Under WAL, `NORMAL` avoids per-commit fsync pressure during 500-row indexing batches while preserving database consistency after crashes; a crash can lose the last uncheckpointed transaction, but it must not corrupt committed database structure. `DbWriter` also runs `PRAGMA wal_checkpoint(PASSIVE)` after each outer transaction commit so batch boundaries give SQLite a chance to checkpoint without blocking active readers. `status --json` exposes these resolved connection values under `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`) for automation and support diagnostics.
+`DbContext` opens writable indexes in WAL mode, sets `PRAGMA synchronous=NORMAL`, and pins `PRAGMA wal_autocheckpoint=1000`. When WAL is active, the durable SQLite index is the `.db` file plus its sibling `.db-wal` and `.db-shm` files. Backups, diagnostics bundles, and manual copies must include all three files when the siblings exist, or use SQLite's `.backup` command/API from a live connection. Copying only `codeindex.db` can produce a stale snapshot because committed pages may still live in `codeindex.db-wal`.
+
+Under WAL, `NORMAL` avoids per-commit fsync pressure during 500-row indexing batches while preserving database consistency after crashes. `DbWriter` runs `PRAGMA wal_checkpoint(PASSIVE)` after each outer transaction commit, and SQLite may also checkpoint automatically after the configured 1000-page threshold. Both checkpoint paths are opportunistic: active readers are not blocked, and an uncheckpointed WAL is expected state rather than corruption. If the process is killed after SQLite has committed a transaction but before checkpointing, the next normal opener rolls the WAL forward; no manual recovery step is required. If the process dies before a transaction commits, that transaction is rolled back by SQLite.
+
+Read-only fallback uses an immutable SQLite URI when the normal writable open cannot create or lock journal/WAL side files, so query commands can still read a DB from read-only or sandboxed storage. That fallback intentionally skips writable pragmas, migrations, and WAL recovery writes; if a WAL is present and must be observed, copy the `.db`, `.db-wal`, and `.db-shm` files together to a writable location or use a SQLite backup from an environment that can open the full WAL set. `status --json` exposes the resolved connection values under `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`) for automation and support diagnostics.
 
 ## Database schema
 
@@ -1652,7 +1656,11 @@ path filter を受け付ける query コマンド（`search`, `definition`, `ref
 
 ### SQLite WAL durability policy
 
-`DbContext` は writable な index を WAL mode で開き、`PRAGMA synchronous=NORMAL` を設定し、`PRAGMA wal_autocheckpoint=1000` を固定する。WAL では `NORMAL` により 500 行単位の indexing batch ごとの fsync 負荷を避けつつ、crash 後の database consistency は保つ。crash で最後の未 checkpoint transaction が失われる可能性はあるが、committed database structure を壊してはならない。`DbWriter` は outer transaction commit 後に `PRAGMA wal_checkpoint(PASSIVE)` も実行し、active reader を block せず batch 境界で checkpoint 機会を与える。`status --json` は automation / support diagnostics 用に、解決済みの接続値を `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`) で公開する。
+`DbContext` は writable な index を WAL mode で開き、`PRAGMA synchronous=NORMAL` を設定し、`PRAGMA wal_autocheckpoint=1000` を固定する。WAL が有効な場合、永続化された SQLite index は `.db` ファイルと sibling の `.db-wal` / `.db-shm` ファイルの組で構成される。backup、diagnostics bundle、手動 copy では sibling が存在する場合に 3 ファイルすべてを含めるか、live connection から SQLite の `.backup` command/API を使う必要がある。`codeindex.db` だけを copy すると、committed page がまだ `codeindex.db-wal` に残っているため stale snapshot になる可能性がある。
+
+WAL では `NORMAL` により 500 行単位の indexing batch ごとの fsync 負荷を避けつつ、crash 後の database consistency を保つ。`DbWriter` は outer transaction commit 後に `PRAGMA wal_checkpoint(PASSIVE)` を実行し、SQLite も設定済みの 1000 page threshold を超えると自動 checkpoint する場合がある。どちらの checkpoint path も opportunistic であり、active reader は block されず、未 checkpoint の WAL は corruption ではなく期待される状態である。SQLite が transaction を commit した後、checkpoint 前に process が kill された場合、次の通常 open が WAL を roll forward するため手動 recovery は不要。commit 前に process が終了した transaction は SQLite により rollback される。
+
+通常の writable open が journal/WAL side file を作成または lock できない場合、read-only fallback は immutable SQLite URI を使うため、query command は read-only / sandboxed storage 上の DB でも読み取りを継続できる。この fallback は意図的に writable pragma、migration、WAL recovery write を skip する。WAL が存在し、その内容を観測する必要がある場合は、`.db` / `.db-wal` / `.db-shm` をまとめて writable location に copy するか、full WAL set を open できる環境で SQLite backup を使う。`status --json` は automation / support diagnostics 用に、解決済みの接続値を `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`) で公開する。
 
 ## データベーススキーマ
 
