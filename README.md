@@ -131,8 +131,8 @@ file completion.
   `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`,
   `index_writer_version`, `index_newer_than_reader`,
   `index_newer_than_reader_reason`, `unknown_extension_file_count`,
-  `path_case_sensitive`, `mac_profile`, `data_dir`, `data_dir_source`,
-  `db_pragma_settings`, `hooks`, `stale_after_seconds`,
+  `path_case_sensitive`, `data_dir`, `data_dir_source`, `data_dir_mode`,
+  `mac_profile`, `db_pragma_settings`, `hooks`, `stale_after_seconds`,
   `index_age_seconds`, `degraded_reason`, `recommended_action`, and `alternative_action`; keep this
   list synchronized with `DEVELOPER_GUIDE.md` and `AGENT_GUIDE.md`.
   `hotspot_family_degraded_reason` distinguishes legacy DBs without hotspot-family
@@ -142,6 +142,10 @@ file completion.
   readiness is tracked by per-language `hotspot_family_version_<lang>` metadata
   introduced with hotspot-family contract version 2.
 - Local-first storage in `.cdidx/codeindex.db`.
+- On POSIX systems, CodeIndex creates its `.cdidx` data directory with `0700`
+  permissions so only the owning user can traverse the stored index and local
+  suggestion data. `status --json` reports the effective POSIX mode as
+  `data_dir_mode` when available.
 - 78 detected languages, with symbol and graph support where available.
 - MCP `tools/list` descriptions include a `Language support:` clause sourced
   from the same language registries as `cdidx languages`.
