@@ -133,9 +133,20 @@ internal static class GitHubIssueReporter
             return false;
 
         if (ex is TaskCanceledException taskCanceled)
-            return !taskCanceled.CancellationToken.IsCancellationRequested;
+            return !taskCanceled.CancellationToken.IsCancellationRequested || IsTimeoutCancellation(taskCanceled);
 
         return ex is not OperationCanceledException;
+    }
+
+    private static bool IsTimeoutCancellation(Exception ex)
+    {
+        for (var current = ex.InnerException; current != null; current = current.InnerException)
+        {
+            if (current is TimeoutException)
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>

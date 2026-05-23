@@ -406,8 +406,12 @@ public class GitHubIssueReporterTests : IDisposable
     {
         Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
 
-        using var mockClient = new HttpClient(new ThrowingHandler(
-            new TaskCanceledException("request timed out")));
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        using var mockClient = new HttpClient(new ThrowingHandler(new TaskCanceledException(
+            "request timed out",
+            new TimeoutException("HTTP timeout"),
+            cts.Token)));
         GitHubIssueReporter.s_httpClientOverride = mockClient;
         try
         {
