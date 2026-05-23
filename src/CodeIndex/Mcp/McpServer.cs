@@ -455,6 +455,11 @@ public partial class McpServer : IDisposable
                 {
                     break;
                 }
+                catch (DecoderFallbackException ex)
+                {
+                    await WriteFrameSafelyAsync(transport, BuildInvalidUtf8ParseErrorResponse(ex), loopToken).ConfigureAwait(false);
+                    break;
+                }
             }
         }
         finally
@@ -481,6 +486,19 @@ public partial class McpServer : IDisposable
             }
             catch (OperationCanceledException) when (loopToken.IsCancellationRequested)
             {
+                break;
+            }
+            catch (DecoderFallbackException ex)
+            {
+                await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
+                try
+                {
+                    await WriteFrameSafelyAsync(transport, BuildInvalidUtf8ParseErrorResponse(ex), loopToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    writeGate.Release();
+                }
                 break;
             }
             if (frame == null)
@@ -579,6 +597,19 @@ public partial class McpServer : IDisposable
             Console.Error.WriteLine(BuildResponseWriteErrorLog(ex.Message));
         }
     }
+
+    private string BuildInvalidUtf8ParseErrorResponse(DecoderFallbackException ex)
+    {
+        Console.Error.WriteLine(BuildInvalidUtf8ErrorLog(ex.Message));
+        var errorResponse = CreateErrorResponse(hasId: true, id: null, code: -32700, message: "Parse error: invalid UTF-8 input",
+            category: McpErrorEnvelope.CategoryParseError,
+            suggestion: "Send one JSON-RPC 2.0 object per line encoded as valid UTF-8. Reject or re-encode malformed bytes before retrying.",
+            retrySafe: false);
+        return errorResponse.ToJsonString(_jsonOptions);
+    }
+
+    internal static string BuildInvalidUtf8ErrorLog(string detail)
+        => $"[cdidx-mcp] JSON parse error: invalid UTF-8 input ({detail}). Send one UTF-8 JSON-RPC object per line; reject or re-encode malformed bytes before retrying.";
 
     /// <summary>
     /// Process one MCP JSON-RPC frame and return the wire-ready response string (or null when

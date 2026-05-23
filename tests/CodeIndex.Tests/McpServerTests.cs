@@ -849,6 +849,16 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void BuildInvalidUtf8ErrorLog_IsActionable()
+    {
+        var message = McpServer.BuildInvalidUtf8ErrorLog("invalid byte sequence");
+
+        Assert.Contains("invalid UTF-8", message);
+        Assert.Contains("Send one UTF-8 JSON-RPC object per line", message);
+        Assert.Contains("retry", message);
+    }
+
+    [Fact]
     public void BuildResponseSerializationErrorLog_IdentifiesResponseSerializationStage()
     {
         var message = McpServer.BuildResponseSerializationErrorLog("serializer failed");
@@ -1280,6 +1290,24 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_InvalidUtf8DecodeFailure_ReturnsParseError()
+    {
+        var transport = new InvalidUtf8ReadTransport("stdio");
+        using var server = new McpServer(_dbPath, "test");
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        Assert.Equal(1, transport.WriteCount);
+        using var response = JsonDocument.Parse(transport.LastWritten!);
+        var root = response.RootElement;
+        Assert.Equal("2.0", root.GetProperty("jsonrpc").GetString());
+        var error = root.GetProperty("error");
+        Assert.Equal(-32700, error.GetProperty("code").GetInt32());
+        Assert.Contains("invalid UTF-8", error.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("id").ValueKind);
+    }
+
+    [Fact]
     public async Task RunAsync_StdioCancellationNotification_CancelsActiveRequest()
     {
         using var cancelWritten = new ManualResetEventSlim(false);
@@ -1376,6 +1404,31 @@ public class McpServerTests : IDisposable
             LastWritten = frame;
             WrittenFrames.Add(frame);
             _onWrite?.Invoke(frame);
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class InvalidUtf8ReadTransport : IMcpTransport
+    {
+        public InvalidUtf8ReadTransport(string name)
+        {
+            Name = name;
+        }
+
+        public string Name { get; }
+        public string Endpoint => "invalid-utf8";
+        public int WriteCount { get; private set; }
+        public string? LastWritten { get; private set; }
+
+        public Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
+            => throw new DecoderFallbackException("Unable to translate bytes [ED][A0][80] at index 0 from specified code page to Unicode.");
+
+        public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
+        {
+            WriteCount++;
+            LastWritten = frame;
             return Task.CompletedTask;
         }
 
