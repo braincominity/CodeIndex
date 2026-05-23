@@ -101,6 +101,188 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_SymbolKindFilters_AcceptCommaSeparatedValues()
+    {
+        var options = IndexCommandRunner.ParseArgs([
+            ".",
+            "--include-symbol-kind", "class,function",
+            "--exclude-symbol-kind=test_method",
+        ]);
+
+        Assert.Equal(["class", "function"], options.SymbolKindFilter.Include);
+        Assert.Equal(["test_method"], options.SymbolKindFilter.Exclude);
+        Assert.Null(options.SymbolKindFilter.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_SymbolKindCliFilters_ReplaceEnvironmentDefaults()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalInclude = Environment.GetEnvironmentVariable(IndexCommandRunner.IncludeSymbolKindsEnvironmentVariable);
+            var originalExclude = Environment.GetEnvironmentVariable(IndexCommandRunner.ExcludeSymbolKindsEnvironmentVariable);
+            try
+            {
+                Environment.SetEnvironmentVariable(IndexCommandRunner.IncludeSymbolKindsEnvironmentVariable, "class");
+                Environment.SetEnvironmentVariable(IndexCommandRunner.ExcludeSymbolKindsEnvironmentVariable, "test_method");
+
+                var options = IndexCommandRunner.ParseArgs([
+                    ".",
+                    "--include-symbol-kind", "function",
+                    "--exclude-symbol-kind", "generated_parser",
+                ]);
+
+                Assert.Equal(["function"], options.SymbolKindFilter.Include);
+                Assert.Equal(["generated_parser"], options.SymbolKindFilter.Exclude);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(IndexCommandRunner.IncludeSymbolKindsEnvironmentVariable, originalInclude);
+                Environment.SetEnvironmentVariable(IndexCommandRunner.ExcludeSymbolKindsEnvironmentVariable, originalExclude);
+            }
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_ExcludeSymbolKindDropsMatchingSymbols()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), """
+                class App:
+                    pass
+
+                def helper():
+                    return App()
+                """);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--exclude-symbol-kind", "function", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("symbols_dropped_by_kind_filter").GetInt32());
+            Assert.Equal(["function"], json.GetProperty("symbol_kind_filter").GetProperty("exclude").EnumerateArray().Select(value => value.GetString()).ToArray());
+
+            var counts = ReadSymbolKindCounts(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.True(counts.GetValueOrDefault("class") > 0);
+            Assert.False(counts.ContainsKey("function"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_IncludeSymbolKindKeepsOnlyMatchingSymbols()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), """
+                class App:
+                    pass
+
+                def helper():
+                    return App()
+                """);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--include-symbol-kind", "class", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("summary").GetProperty("symbols_dropped_by_kind_filter").GetInt32() > 0);
+
+            var counts = ReadSymbolKindCounts(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.True(counts.GetValueOrDefault("class") > 0);
+            Assert.DoesNotContain(counts.Keys, kind => !string.Equals(kind, "class", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_RejectsNewSymbolKindFilterPolicy()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), """
+                class App:
+                    pass
+
+                def helper():
+                    return App()
+                """);
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.AppendAllText(Path.Combine(projectRoot, "app.py"), "\n# touched\n");
+            File.SetLastWriteTimeUtc(Path.Combine(projectRoot, "app.py"), DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--exclude-symbol-kind", "function", "--files", "app.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("full index refresh", json.GetProperty("hint").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_RejectsRemovedSymbolKindFilterPolicy()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.py");
+            File.WriteAllText(sourcePath, """
+                class App:
+                    pass
+
+                def helper():
+                    return App()
+                """);
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--exclude-symbol-kind", "function", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.AppendAllText(sourcePath, "\n# touched\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "app.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("symbol-kind filter policy cannot change", json.GetProperty("message").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_Help_IncludesSymbolKindFilterFlags()
+    {
+        var (exitCode, stdout, stderr) = RunAndCaptureStreams(["--help"]);
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Contains("--include-symbol-kind <kind>[,<kind>]", stdout);
+        Assert.Contains("--exclude-symbol-kind <kind>[,<kind>]", stdout);
+        Assert.Equal(string.Empty, stderr);
+    }
+
+    [Fact]
     public void Run_UnresolvedMergeState_RejectsIndexingBeforeScanning()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unresolved_merge");
@@ -7330,6 +7512,19 @@ public class IndexCommandRunnerTests
         return reader.ListFiles(limit: 1000)
             .Select(file => file.Path)
             .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static Dictionary<string, int> ReadSymbolKindCounts(string dbPath)
+    {
+        using var connection = OpenNonPoolingConnection(dbPath);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT kind, COUNT(*) FROM symbols GROUP BY kind";
+        using var reader = command.ExecuteReader();
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        while (reader.Read())
+            counts[reader.GetString(0)] = reader.GetInt32(1);
+        return counts;
     }
 
     private static HashSet<string> ReadImportSymbolNames(string dbPath)
