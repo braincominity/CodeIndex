@@ -107,6 +107,36 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public void ScrubInlineCode_RemovesTripleBacktickFencedBlock()
+    {
+        var input = """
+        Before
+        ```csharp
+        secret();
+        ```
+        After
+        """;
+
+        var result = GitHubIssueReporter.ScrubInlineCode(input);
+
+        Assert.Equal("""
+        Before
+        [code example removed]
+        After
+        """, result);
+        Assert.DoesNotContain("secret", result);
+        Assert.DoesNotContain("```", result);
+    }
+
+    [Fact]
+    public void ScrubInlineCode_DoesNotTreatTripleBackticksAsInlineSpan()
+    {
+        var result = GitHubIssueReporter.ScrubInlineCode("Example ```code``` tail");
+
+        Assert.Equal("Example [code example removed] tail", result);
+    }
+
+    [Fact]
     public void ScrubInlineCode_HandlesEmptyAndNull()
     {
         Assert.Equal("", GitHubIssueReporter.ScrubInlineCode(""));
@@ -121,6 +151,7 @@ public class GitHubIssueReporterTests : IDisposable
         Assert.Contains("GitHub issue creation failed: network timeout", message);
         Assert.Contains("stays recorded locally", message);
         Assert.Contains("CDIDX_GITHUB_TOKEN", message);
+        Assert.Contains("HTTPS_PROXY", message);
         Assert.Contains("retry `suggest_improvement`", message);
     }
 
@@ -141,6 +172,30 @@ public class GitHubIssueReporterTests : IDisposable
         var detail = GitHubIssueReporter.BuildApiErrorDetail(422, "{\n\"message\":\"validation failed\"\n}");
 
         Assert.Equal("422: { \"message\":\"validation failed\" }", detail);
+    }
+
+    [Fact]
+    public void GetRateLimitRetryAt_UsesRetryAfterDeltaFor429()
+    {
+        using var response = new HttpResponseMessage((HttpStatusCode)429);
+        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(60));
+        var now = new DateTime(2026, 5, 23, 10, 0, 0, DateTimeKind.Utc);
+
+        var retryAt = GitHubIssueReporter.GetRateLimitRetryAt(response, now);
+
+        Assert.Equal(now.AddSeconds(60), retryAt);
+    }
+
+    [Fact]
+    public void GetRateLimitRetryAt_UsesResetHeaderForForbiddenExhaustedLimit()
+    {
+        using var response = new HttpResponseMessage(HttpStatusCode.Forbidden);
+        response.Headers.TryAddWithoutValidation("x-ratelimit-remaining", "0");
+        response.Headers.TryAddWithoutValidation("x-ratelimit-reset", "1770000000");
+
+        var retryAt = GitHubIssueReporter.GetRateLimitRetryAt(response, new DateTime(2026, 5, 23, 10, 0, 0, DateTimeKind.Utc));
+
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1770000000).UtcDateTime, retryAt);
     }
 
     // --- Idempotency-on-retry tests / 再試行時の冪等性テスト ---
@@ -372,6 +427,121 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public async Task TryCreateIssueDetailedAsync_UserCancellation_Propagates()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        using var mockClient = new HttpClient(new ThrowingHandler(
+            new TaskCanceledException("user canceled", null, cts.Token)));
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+
+            await Assert.ThrowsAsync<TaskCanceledException>(
+                () => GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test"));
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
+    public async Task TryCreateIssueDetailedAsync_TimeoutCancellation_ReturnsDiagnosticError()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        using var mockClient = new HttpClient(new ThrowingHandler(new TaskCanceledException(
+            "request timed out",
+            new TimeoutException("HTTP timeout"),
+            cts.Token)));
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
+
+            Assert.Null(result.IssueUrl);
+            Assert.Equal("TaskCanceledException: request timed out", result.Error);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
+    public async Task TryCreateIssueDetailedAsync_OutOfMemoryException_Propagates()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        using var mockClient = new HttpClient(new ThrowingHandler(
+            new OutOfMemoryException("allocation failed")));
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+
+            await Assert.ThrowsAsync<OutOfMemoryException>(
+                () => GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test"));
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
+    public async Task TryCreateIssueDetailedAsync_RateLimited_ReturnsRetryAfterDiagnostic()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("""{ "total_count": 0, "items": [] }"""),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("[]"),
+            });
+        var rateLimitResponse = new HttpResponseMessage((HttpStatusCode)429)
+        {
+            Content = MakeJsonContent("""{ "message": "rate limited" }"""),
+        };
+        rateLimitResponse.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(60));
+        handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
+            rateLimitResponse);
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var before = DateTime.UtcNow;
+            var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
+            var after = DateTime.UtcNow;
+
+            Assert.Null(result.IssueUrl);
+            Assert.Contains("429", result.Error);
+            Assert.Contains("next_retry_at=", result.Error);
+            Assert.NotNull(result.NextRetryAt);
+            Assert.InRange(result.NextRetryAt.Value, before.AddSeconds(60), after.AddSeconds(61));
+            Assert.Equal(3, handler.RequestCount);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
     public async Task FindExistingIssueByHashAsync_NonHexHash_ReturnsNullWithoutCallingApi()
     {
         // Defensive: only hex hashes are passed to the search query so that
@@ -451,6 +621,14 @@ public class GitHubIssueReporterTests : IDisposable
             {
                 Content = new StringContent("{}", Encoding.UTF8, "application/json"),
             });
+        }
+    }
+
+    private sealed class ThrowingHandler(Exception exception) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            return Task.FromException<HttpResponseMessage>(exception);
         }
     }
 }

@@ -27,6 +27,8 @@ public static class IndexCommandRunner
         IReadOnlyList<string> Directories);
 
     internal static Action? FullScanWritePhaseStartedForTesting { get; set; }
+    internal static Func<bool> IsInputRedirectedForTesting { get; set; } = () => Console.IsInputRedirected;
+    internal static Func<string?> ReadLineForTesting { get; set; } = Console.ReadLine;
 
     public static int Run(string[] indexArgs, JsonSerializerOptions jsonOptions) =>
         Run(indexArgs, jsonOptions, cancellationForTesting: null);
@@ -158,6 +160,41 @@ public static class IndexCommandRunner
                 CommandExitCodes.UsageError,
                 "Pass comma-separated symbol kinds such as `--exclude-symbol-kind function,test_method`, or remove the empty value.",
                 CommandErrorCodes.UsageError);
+        }
+
+        if (options.Rebuild && !options.Yes && !options.Force)
+        {
+            var resolvedPreviewDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(dbPath));
+            var estimate = TryReadPriorFullScanEstimate(resolvedPreviewDbPath);
+            var estimateSuffix = estimate == null
+                ? string.Empty
+                : $" Estimated time on prior full scan: {ConsoleUi.FormatDuration(estimate.Value, options.DurationFormat)}.";
+            var warning = $"This will DELETE the existing index at {resolvedPreviewDbPath} and re-scan from scratch.{estimateSuffix}";
+
+            if (IsInputRedirectedForTesting())
+            {
+                return WriteCommandError(
+                    options.Json,
+                    jsonOptions,
+                    $"{warning} Pass --yes to confirm --rebuild in non-interactive environments.",
+                    CommandExitCodes.ExUsage,
+                    "Rerun with `--yes` to rebuild, or use `--files`, `--commits`, or `--changed-between` for an incremental refresh.",
+                    CommandErrorCodes.UsageError);
+            }
+
+            Console.Error.Write($"{warning} Proceed? [y/N] ");
+            var answer = ReadLineForTesting();
+            if (!string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(answer, "yes", StringComparison.OrdinalIgnoreCase))
+            {
+                return WriteCommandError(
+                    options.Json,
+                    jsonOptions,
+                    "index rebuild cancelled",
+                    CommandExitCodes.ExUsage,
+                    "Rerun with `--yes` to confirm, or use an incremental refresh mode.",
+                    CommandErrorCodes.UsageError);
+            }
         }
 
         if (options.ChangedBetweenSpecified && options.ChangedBetweenRefs.Count != 2)
@@ -626,7 +663,7 @@ public static class IndexCommandRunner
     private static readonly string[] AcceptedIndexFlags =
     [
         "--db", "--rebuild", "--verbose", "--json", "--dry-run", "--force",
-        "--watch", "--debounce", "--duration-format", "--max-file-bytes",
+        "--yes", "--watch", "--debounce", "--duration-format", "--max-file-bytes",
         "--parallelism",
         "--commits", "--changed-between", "--files", "--solution", "--project",
         "--include-symbol-kind", "--exclude-symbol-kind", "--help",
@@ -659,6 +696,36 @@ public static class IndexCommandRunner
         return eq < 0 ? token : token[..eq];
     }
 
+    private static TimeSpan? TryReadPriorFullScanEstimate(string resolvedDbPath)
+    {
+        if (!File.Exists(resolvedDbPath))
+            return null;
+
+        try
+        {
+            var builder = new SqliteConnectionStringBuilder
+            {
+                DataSource = resolvedDbPath,
+                Mode = SqliteOpenMode.ReadOnly,
+            };
+            using var connection = new SqliteConnection(builder.ConnectionString);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
+            command.Parameters.AddWithValue("@key", DbContext.LastFullScanElapsedMsMetaKey);
+            var raw = command.ExecuteScalar() as string;
+            if (long.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var elapsedMs)
+                && elapsedMs >= 0)
+                return TimeSpan.FromMilliseconds(elapsedMs);
+        }
+        catch
+        {
+            // Legacy, corrupt, or locked DBs should not hide the destructive rebuild warning.
+        }
+
+        return null;
+    }
+
     public static IndexCommandOptions ParseArgs(string[] args)
     {
         string? projectPath = null;
@@ -669,6 +736,7 @@ public static class IndexCommandRunner
         bool quiet = false;
         bool dryRun = false;
         bool force = false;
+        bool yes = false;
         bool watch = false;
         int? watchDebounceMs = null;
         var durationFormat = DurationOutputFormat.Auto;
@@ -726,6 +794,9 @@ public static class IndexCommandRunner
                     break;
                 case "--force":
                     force = true;
+                    break;
+                case "--yes":
+                    yes = true;
                     break;
                 case "--watch":
                     watch = true;
@@ -897,6 +968,7 @@ public static class IndexCommandRunner
             EasterEgg = easterEgg,
             DryRun = dryRun,
             Force = force,
+            Yes = yes,
             Watch = watch,
             WatchDebounceMs = watchDebounceMs,
             DurationFormat = durationFormat,
@@ -1416,6 +1488,22 @@ public static class IndexCommandRunner
             StartUpdateSpinnerIfNeeded();
         }
 
+        void WriteUpdateVerboseStatus(string message)
+        {
+            if (!options.Verbose || options.Quiet)
+                return;
+
+            if (options.Json)
+            {
+                Console.Error.WriteLine(message);
+                return;
+            }
+
+            PauseUpdateSpinnerForConsoleWrite();
+            Console.WriteLine(message);
+            ResumeUpdateSpinnerAfterConsoleWrite();
+        }
+
         void ThrowIfUpdateCancelled()
         {
             if (!cancellationToken.IsCancellationRequested)
@@ -1513,12 +1601,7 @@ public static class IndexCommandRunner
                         if (!writer.HasFileAtPath(relPath))
                         {
                             skipped++;
-                            if (options.Verbose && !options.Json && !options.Quiet)
-                            {
-                                PauseUpdateSpinnerForConsoleWrite();
-                                Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
-                                ResumeUpdateSpinnerAfterConsoleWrite();
-                            }
+                            WriteUpdateVerboseStatus($"  [SKIP] {relPath} (not in DB)");
                             continue;
                         }
 
@@ -1530,22 +1613,12 @@ public static class IndexCommandRunner
                             deleteTxn.Commit();
                             removed++;
                             ftsMutated = true;
-                            if (options.Verbose && !options.Json && !options.Quiet)
-                            {
-                                PauseUpdateSpinnerForConsoleWrite();
-                                Console.WriteLine($"  [DEL ] {relPath}");
-                                ResumeUpdateSpinnerAfterConsoleWrite();
-                            }
+                            WriteUpdateVerboseStatus($"  [DEL ] {relPath}");
                         }
                         else
                         {
                             skipped++;
-                            if (options.Verbose && !options.Json && !options.Quiet)
-                            {
-                                PauseUpdateSpinnerForConsoleWrite();
-                                Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
-                                ResumeUpdateSpinnerAfterConsoleWrite();
-                            }
+                            WriteUpdateVerboseStatus($"  [SKIP] {relPath} (not in DB)");
                         }
                         continue;
                     }
@@ -1715,6 +1788,7 @@ public static class IndexCommandRunner
                     record.Path,
                     record.Modified,
                     record.Checksum,
+                    size: record.Size,
                     language: record.Lang,
                     allowReuse: symbolKindFilterMatchesPrior
                         && record.Lang is not ("javascript" or "typescript")
@@ -1761,12 +1835,7 @@ public static class IndexCommandRunner
                 updated++;
                 ftsMutated = true;
                 ThrowIfUpdateCancelled();
-                if (options.Verbose && !options.Json && !options.Quiet)
-                {
-                    PauseUpdateSpinnerForConsoleWrite();
-                    Console.WriteLine($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
-                    ResumeUpdateSpinnerAfterConsoleWrite();
-                }
+                WriteUpdateVerboseStatus($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
             }
             catch (Exception ex)
             {
@@ -2816,6 +2885,23 @@ public static class IndexCommandRunner
             StartIndexSpinnerIfNeeded();
         }
 
+        void WriteIndexVerboseStatus(string message)
+        {
+            if (!options.Verbose || options.Quiet)
+                return;
+
+            if (options.Json)
+            {
+                Console.Error.WriteLine(message);
+                return;
+            }
+
+            PauseIndexSpinnerForConsoleWrite();
+            ConsoleUi.ClearProgressLine();
+            Console.WriteLine(message);
+            ResumeIndexSpinnerAfterConsoleWrite();
+        }
+
         void EnsureIndexingActivityVisible()
         {
             if (options.Json || options.Quiet)
@@ -3027,6 +3113,7 @@ public static class IndexCommandRunner
                             record.Path,
                             record.Modified,
                             record.Checksum,
+                            size: record.Size,
                             language: record.Lang,
                             allowReuse: symbolKindFilterMatchesPrior
                                 && record.Lang is not ("javascript" or "typescript")
@@ -3093,13 +3180,7 @@ public static class IndexCommandRunner
                     WriteProjectRootOnce();
                     txn.Commit();
 
-                    if (options.Verbose && !options.Json && !options.Quiet)
-                    {
-                        PauseIndexSpinnerForConsoleWrite();
-                        ConsoleUi.ClearProgressLine();
-                        Console.WriteLine($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
-                        ResumeIndexSpinnerAfterConsoleWrite();
-                    }
+                    WriteIndexVerboseStatus($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
                 }
                 catch (Exception ex)
                 {
@@ -3263,6 +3344,9 @@ public static class IndexCommandRunner
             // 非 git workspace で null になった場合はキーごとクリアされる。Issue #1508。
             writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, currentHeadCommit);
             writer.SetMeta(DbContext.IndexedHeadCommitBranchMetaKey, GitHelper.TryGetHeadBranch(projectRoot));
+            writer.SetMeta(
+                DbContext.LastFullScanElapsedMsMetaKey,
+                stopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
             // #1509: also stamp the always-updated "last indexed HEAD" triple (SHA + branch +
             // timestamp). Unlike #1508's IndexedHeadCommitMetaKey which only fires here on
             // full scans, this triple is also stamped at the end of incremental update runs
@@ -4060,6 +4144,7 @@ public sealed class IndexCommandOptions
     public string? EasterEgg { get; init; }
     public bool DryRun { get; init; }
     public bool Force { get; init; }
+    public bool Yes { get; init; }
     public bool Watch { get; init; }
     public int? WatchDebounceMs { get; init; }
     public DurationOutputFormat DurationFormat { get; init; } = DurationOutputFormat.Auto;
