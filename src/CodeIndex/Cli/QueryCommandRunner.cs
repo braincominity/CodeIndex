@@ -157,12 +157,13 @@ public static class QueryCommandRunner
         "-h",
         "--version",
         "-V",
+        "--verbose",
         "--group-by-name",
         "--with-paths",
         "--bytes",
         "--profile",
     ];
-    private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
+    private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
 
     public static int RunBatch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -3357,6 +3358,7 @@ public static class QueryCommandRunner
         string? groupBy = null;
         bool rawBytes = false;
         bool rawKinds = false;
+        bool verbose = false;
         bool profile = false;
         int? slowQueryMs = null;
         string? statusExplainField = null;
@@ -3608,6 +3610,9 @@ public static class QueryCommandRunner
                     break;
                 case "--raw-kinds":
                     rawKinds = true;
+                    break;
+                case "--verbose":
+                    verbose = true;
                     break;
                 case "--profile":
                     profile = true;
@@ -3932,6 +3937,7 @@ public static class QueryCommandRunner
             GroupBy = groupBy,
             RawBytes = rawBytes,
             RawKinds = rawKinds,
+            Verbose = verbose,
             Profile = profile,
             SlowQueryMs = slowQueryMs,
             StatusExplainField = statusExplainField,
@@ -4235,7 +4241,7 @@ public static class QueryCommandRunner
         }
 
         Database.DbDebug.ResetContext();
-        var profiling = options.Profile || options.SlowQueryMs.HasValue;
+        var profiling = options.Profile || options.Verbose || options.SlowQueryMs.HasValue;
         if (profiling)
             Database.DbDebug.BeginProfile(options.SlowQueryMs);
         DbContext? db = null;
@@ -4257,6 +4263,8 @@ public static class QueryCommandRunner
             var profileEntries = profiling ? Database.DbDebug.EndProfile() : [];
             if (options.Profile)
                 WriteProfilePayload(profileEntries, jsonOptions);
+            if (options.Verbose)
+                WriteVerboseQueryDebug(options, profileEntries, jsonOptions);
             afterProfile?.Invoke(exitCode);
             return exitCode;
         }
@@ -4425,6 +4433,47 @@ public static class QueryCommandRunner
                 ["phases"] = phases,
                 ["query_plan"] = queryPlan,
                 ["queries"] = queries,
+            },
+        }.ToJsonString(jsonOptions));
+    }
+
+    private static void WriteVerboseQueryDebug(QueryCommandOptions options, IReadOnlyList<QueryProfileEntry> entries, JsonSerializerOptions jsonOptions)
+    {
+        var elapsedMs = Math.Round(entries.Sum(entry => entry.ElapsedMs), 3);
+        var rowsScanned = entries.Sum(entry => entry.RowsScanned);
+        if (!options.Json)
+        {
+            Console.Error.WriteLine($"DEBUG query: sql_statements={entries.Count} elapsed_ms={elapsedMs.ToString(CultureInfo.InvariantCulture)} rows_scanned={rowsScanned}");
+            for (var i = 0; i < entries.Count; i++)
+            {
+                var entry = entries[i];
+                Console.Error.WriteLine(
+                    $"DEBUG query sql_{i + 1}: elapsed_ms={Math.Round(entry.ElapsedMs, 3).ToString(CultureInfo.InvariantCulture)} rows_scanned={entry.RowsScanned}");
+            }
+            return;
+        }
+
+        var phases = new JsonArray();
+        for (var i = 0; i < entries.Count; i++)
+        {
+            var entry = entries[i];
+            phases.Add(new JsonObject
+            {
+                ["name"] = "sql_" + (i + 1).ToString(CultureInfo.InvariantCulture),
+                ["elapsed_ms"] = Math.Round(entry.ElapsedMs, 3),
+                ["rows_scanned"] = entry.RowsScanned,
+            });
+        }
+
+        Console.WriteLine(new JsonObject
+        {
+            ["_debug"] = new JsonObject
+            {
+                ["sql_statement_count"] = entries.Count,
+                ["elapsed_ms"] = elapsedMs,
+                ["rows_scanned"] = rowsScanned,
+                ["phases"] = phases,
+                ["redaction"] = "SQL text and parameter values are omitted from --verbose debug output; use --profile for opt-in SQL diagnostics.",
             },
         }.ToJsonString(jsonOptions));
     }
@@ -6264,6 +6313,7 @@ public sealed class QueryCommandOptions
     public string? GroupBy { get; init; }
     public bool RawBytes { get; init; }
     public bool RawKinds { get; init; }
+    public bool Verbose { get; init; }
     public bool Profile { get; init; }
     public int? SlowQueryMs { get; init; }
     public string? StatusExplainField { get; init; }
