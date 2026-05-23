@@ -442,7 +442,7 @@ public partial class McpServer : IDisposable
                         _concurrencyGate.Release();
                     }
 
-                    await transport.WriteFrameAsync(response, loopToken).ConfigureAwait(false);
+                    await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
 
                     // `notifications/shutdown` flips `_running` inside `HandleMessage`; exit the loop
                     // immediately so a subsequent slow `ReadFrameAsync` does not extend the lifetime
@@ -492,7 +492,7 @@ public partial class McpServer : IDisposable
                 await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
                 try
                 {
-                    await transport.WriteFrameAsync(response, loopToken).ConfigureAwait(false);
+                    await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -522,7 +522,7 @@ public partial class McpServer : IDisposable
                     await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
                     try
                     {
-                        await transport.WriteFrameAsync(response, loopToken).ConfigureAwait(false);
+                        await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -552,7 +552,32 @@ public partial class McpServer : IDisposable
     {
         var response = ProcessFrame(line);
         if (response != null)
-            await writer.WriteLineAsync(response).ConfigureAwait(false);
+        {
+            try
+            {
+                await writer.WriteLineAsync(response).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
+            {
+                Console.Error.WriteLine(BuildResponseWriteErrorLog(ex.Message));
+            }
+        }
+    }
+
+    private static async Task WriteFrameSafelyAsync(IMcpTransport transport, string? response, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await transport.WriteFrameAsync(response, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            Console.Error.WriteLine(BuildResponseWriteErrorLog("write operation was canceled"));
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            Console.Error.WriteLine(BuildResponseWriteErrorLog(ex.Message));
+        }
     }
 
     /// <summary>
@@ -580,14 +605,17 @@ public partial class McpServer : IDisposable
         }
 
         JsonNode? request = null;
+        var responseHasId = true;
+        JsonNode? responseId = null;
         try
         {
             request = JsonNode.Parse(line);
             if (request == null)
                 return null;
 
+            ExtractResponseId(request, out responseHasId, out responseId);
             var response = HandleMessage(request);
-            return response != null ? _serializeResponse(response) : null;
+            return response != null ? SerializeResponseOrFallback(response, responseHasId, responseId) : null;
         }
         catch (JsonException ex)
         {
@@ -609,18 +637,59 @@ public partial class McpServer : IDisposable
             // 例外型のみを返し、SQLite の "near 'foo': syntax error" などを通じた
             // 内容漏れを防ぐ（#1530）。
             Console.Error.WriteLine(BuildUnhandledLoopErrorLog(ex.Message));
-            if (request is JsonObject requestObj && requestObj.TryGetPropertyValue("id", out var requestId))
-            {
-                var classification = McpErrorEnvelope.ClassifyException(ex);
-                var errorResponse = CreateErrorResponse(true, requestId, classification.JsonRpcCode,
-                    BuildSanitizedLoopErrorMessage(ex),
-                    category: classification.Category,
-                    suggestion: classification.Suggestion,
-                    retrySafe: classification.RetrySafe);
-                return errorResponse.ToJsonString(_jsonOptions);
-            }
-            return null;
+            var classification = McpErrorEnvelope.ClassifyException(ex);
+            var errorResponse = CreateErrorResponse(responseHasId, responseId, classification.JsonRpcCode,
+                BuildSanitizedLoopErrorMessage(ex),
+                category: classification.Category,
+                suggestion: classification.Suggestion,
+                retrySafe: classification.RetrySafe);
+            return SerializeResponseOrFallback(errorResponse, responseHasId, responseId);
         }
+    }
+
+    private string SerializeResponseOrFallback(JsonNode response, bool hasId, JsonNode? id)
+    {
+        try
+        {
+            return _serializeResponse(response);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(BuildResponseSerializationErrorLog(ex.Message));
+            return BuildMinimalInternalErrorResponse(hasId, id, ex);
+        }
+    }
+
+    private static void ExtractResponseId(JsonNode request, out bool hasId, out JsonNode? id)
+    {
+        if (request is JsonObject obj)
+        {
+            if (TryGetRequestId(obj, out hasId, out var requestId))
+                id = requestId is null ? null : JsonNode.Parse(requestId.ToJsonString());
+            else
+                id = null;
+            return;
+        }
+
+        // For malformed non-object JSON values, JSON-RPC error responses should still carry
+        // id:null instead of disappearing when handling or serialization fails.
+        hasId = true;
+        id = null;
+    }
+
+    private static string BuildMinimalInternalErrorResponse(bool hasId, JsonNode? id, Exception ex)
+    {
+        var message = $"Internal error while serializing MCP response ({ex.GetType().Name}). See cdidx server stderr for details.";
+        var builder = new StringBuilder("{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,\"message\":");
+        builder.Append(JsonSerializer.Serialize(message));
+        builder.Append('}');
+        if (hasId)
+        {
+            builder.Append(",\"id\":");
+            builder.Append(id is null ? "null" : id.ToJsonString());
+        }
+        builder.Append('}');
+        return builder.ToString();
     }
 
     /// <summary>
@@ -1691,6 +1760,12 @@ public partial class McpServer : IDisposable
 
     internal static string BuildUnhandledLoopErrorLog(string detail) =>
         $"[cdidx-mcp] Error: {detail}. This request was skipped; fix the request or inspect the server environment, then retry.";
+
+    internal static string BuildResponseSerializationErrorLog(string detail) =>
+        $"[cdidx-mcp] Error serializing response: {detail}. Returning a minimal JSON-RPC error response when possible.";
+
+    internal static string BuildResponseWriteErrorLog(string detail) =>
+        $"[cdidx-mcp] Error writing response: {detail}. The request was handled but the client connection may already be closed.";
 
     internal static string BuildToolErrorLog(string toolName, string detail) =>
         $"[cdidx-mcp] Tool error ({toolName}): {detail}. Fix the tool arguments, refresh the index if needed, then retry.";
