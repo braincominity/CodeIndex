@@ -1315,6 +1315,22 @@ public static class IndexCommandRunner
             StartUpdateSpinnerIfNeeded();
         }
 
+        void WriteUpdateVerboseStatus(string message)
+        {
+            if (!options.Verbose || options.Quiet)
+                return;
+
+            if (options.Json)
+            {
+                Console.Error.WriteLine(message);
+                return;
+            }
+
+            PauseUpdateSpinnerForConsoleWrite();
+            Console.WriteLine(message);
+            ResumeUpdateSpinnerAfterConsoleWrite();
+        }
+
         void ThrowIfUpdateCancelled()
         {
             if (!cancellationToken.IsCancellationRequested)
@@ -1412,12 +1428,7 @@ public static class IndexCommandRunner
                         if (!writer.HasFileAtPath(relPath))
                         {
                             skipped++;
-                            if (options.Verbose && !options.Json && !options.Quiet)
-                            {
-                                PauseUpdateSpinnerForConsoleWrite();
-                                Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
-                                ResumeUpdateSpinnerAfterConsoleWrite();
-                            }
+                            WriteUpdateVerboseStatus($"  [SKIP] {relPath} (not in DB)");
                             continue;
                         }
 
@@ -1429,22 +1440,12 @@ public static class IndexCommandRunner
                             deleteTxn.Commit();
                             removed++;
                             ftsMutated = true;
-                            if (options.Verbose && !options.Json && !options.Quiet)
-                            {
-                                PauseUpdateSpinnerForConsoleWrite();
-                                Console.WriteLine($"  [DEL ] {relPath}");
-                                ResumeUpdateSpinnerAfterConsoleWrite();
-                            }
+                            WriteUpdateVerboseStatus($"  [DEL ] {relPath}");
                         }
                         else
                         {
                             skipped++;
-                            if (options.Verbose && !options.Json && !options.Quiet)
-                            {
-                                PauseUpdateSpinnerForConsoleWrite();
-                                Console.WriteLine($"  [SKIP] {relPath} (not in DB)");
-                                ResumeUpdateSpinnerAfterConsoleWrite();
-                            }
+                            WriteUpdateVerboseStatus($"  [SKIP] {relPath} (not in DB)");
                         }
                         continue;
                     }
@@ -1658,12 +1659,7 @@ public static class IndexCommandRunner
                 updated++;
                 ftsMutated = true;
                 ThrowIfUpdateCancelled();
-                if (options.Verbose && !options.Json && !options.Quiet)
-                {
-                    PauseUpdateSpinnerForConsoleWrite();
-                    Console.WriteLine($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
-                    ResumeUpdateSpinnerAfterConsoleWrite();
-                }
+                WriteUpdateVerboseStatus($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
             }
             catch (Exception ex)
             {
@@ -2702,6 +2698,23 @@ public static class IndexCommandRunner
             StartIndexSpinnerIfNeeded();
         }
 
+        void WriteIndexVerboseStatus(string message)
+        {
+            if (!options.Verbose || options.Quiet)
+                return;
+
+            if (options.Json)
+            {
+                Console.Error.WriteLine(message);
+                return;
+            }
+
+            PauseIndexSpinnerForConsoleWrite();
+            ConsoleUi.ClearProgressLine();
+            Console.WriteLine(message);
+            ResumeIndexSpinnerAfterConsoleWrite();
+        }
+
         void EnsureIndexingActivityVisible()
         {
             if (options.Json || options.Quiet)
@@ -2975,13 +2988,7 @@ public static class IndexCommandRunner
                     WriteProjectRootOnce();
                     txn.Commit();
 
-                    if (options.Verbose && !options.Json && !options.Quiet)
-                    {
-                        PauseIndexSpinnerForConsoleWrite();
-                        ConsoleUi.ClearProgressLine();
-                        Console.WriteLine($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
-                        ResumeIndexSpinnerAfterConsoleWrite();
-                    }
+                    WriteIndexVerboseStatus($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
                 }
                 catch (Exception ex)
                 {

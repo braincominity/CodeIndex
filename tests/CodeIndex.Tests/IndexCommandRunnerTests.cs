@@ -2872,6 +2872,35 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_VerboseJson_WritesStatusToStderrAndKeepsStdoutJson()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, stdout, stderr) = RunAndCaptureStreams([projectRoot, "--files", "app.cs", "--verbose", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            using var json = JsonDocument.Parse(stdout);
+            Assert.Equal("success", json.RootElement.GetProperty("Status").GetString());
+            Assert.DoesNotContain("[OK  ]", stdout);
+            Assert.Contains("[OK  ] app.cs", stderr);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_JsonKeepsGraphAndIssuesReadyAfterHealthyScopedRefresh()
     {
         var projectRoot = CreateTempProject();
