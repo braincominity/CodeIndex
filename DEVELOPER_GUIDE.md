@@ -62,6 +62,10 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
 
 Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
 
+### Ignore file parsing
+
+`.gitignore` and `.cdidxignore` parsing follows Git's whitespace rules for pattern lines: leading spaces and tabs are literal pattern characters, `#` starts a comment only when it is the first unescaped character, and unescaped trailing spaces or tabs are trimmed. Escape a trailing space or tab with `\` when the whitespace is part of the filename pattern.
+
 ### CLI recoverable error format
 
 Recoverable command errors in human output use the canonical line shape below. Include only non-null lines, but every error must include a recovery hint:
@@ -1640,6 +1644,10 @@ CI で `NU1004 The packages lock file is inconsistent with the project dependenc
 ```
 
 `--files` / `--commits` の部分更新も、フルスキャンと同じパスフィルタを再利用する。commit 単位更新に `.gitignore` または `.cdidxignore` の変更が含まれる場合、`IndexCommandRunner` は newly ignored file を安全に purge するため自動でフルスキャンへフォールバックする。malformed な ignore 行は走査エラーとして報告し、その行だけをスキップして index 全体は継続する。Windows では Hidden または System 属性が付いたファイルとディレクトリを言語検出前に拒否する。プロジェクト所有のソースを索引したい場合、ignore ルールでは再包含できないため先にそれらの属性を外す。
+
+### ignore ファイルの解析
+
+`.gitignore` と `.cdidxignore` の pattern 行は Git の空白規則に合わせて解析する。行頭の space / tab は pattern の literal 文字として扱い、`#` は unescaped な先頭文字のときだけ comment を開始する。未エスケープの末尾 space / tab は削除するため、ファイル名 pattern の一部として末尾空白を含めたい場合は `\` で escape する。
 
 ### C# / .NET integration
 
