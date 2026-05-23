@@ -1053,15 +1053,17 @@ internal static class ProgramRunner
             return CommandExitCodes.Success;
         }
 
-        Console.WriteLine(FormatVersionLine(metadata));
+        var updateHint = UpdateChecker.GetNewerReleaseHint(metadata.Version);
+        Console.WriteLine(FormatVersionLine(metadata, updateHint));
         return CommandExitCodes.Success;
     }
 
-    internal static string FormatVersionLine(ConsoleUi.BuildMetadata metadata)
+    internal static string FormatVersionLine(ConsoleUi.BuildMetadata metadata, string? updateHint = null)
     {
         var commit = string.IsNullOrWhiteSpace(metadata.Commit) ? "unknown" : metadata.Commit;
         var buildDate = string.IsNullOrWhiteSpace(metadata.BuildDate) ? "unknown" : metadata.BuildDate;
         var dirty = string.IsNullOrWhiteSpace(metadata.Dirty) ? "unknown" : metadata.Dirty;
+        var suffix = string.IsNullOrWhiteSpace(updateHint) ? string.Empty : $" [{updateHint}]";
 
         // Suppress the metadata suffix only when every component is "unknown",
         // so legacy callers that depend on the exact `cdidx v<ver>` shape keep
@@ -1069,9 +1071,9 @@ internal static class ProgramRunner
         // 全項目が unknown のときだけ末尾メタデータを省略し、ビルド刻印が
         // 無い旧バイナリ／モックでも `cdidx v<ver>` 形式を保つ。
         if (commit == "unknown" && buildDate == "unknown" && dirty == "unknown")
-            return $"cdidx v{metadata.Version}";
+            return $"cdidx v{metadata.Version}{suffix}";
 
-        return $"cdidx v{metadata.Version} (commit {commit}, built {buildDate}, {dirty})";
+        return $"cdidx v{metadata.Version} (commit {commit}, built {buildDate}, {dirty}){suffix}";
     }
 
     private static int RunCompletions(string[] cmdArgs)

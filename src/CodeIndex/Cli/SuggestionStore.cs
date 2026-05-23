@@ -21,6 +21,7 @@ public class SuggestionStore
 {
     private readonly string _filePath;
     private readonly string _lockPath;
+    private static readonly TimeSpan s_inFlightSubmitRetryDelay = TimeSpan.FromMinutes(1);
     internal const FileShare StreamingReadFileShare = FileShare.ReadWrite | FileShare.Delete;
     internal const string DedupThresholdEnvironmentVariable = "CDIDX_SUGGESTION_DEDUP_THRESHOLD";
     internal const double DefaultDedupThreshold = 0.85;
@@ -155,23 +156,23 @@ public class SuggestionStore
     }
 
     /// <summary>
-    /// Atomically add a suggestion and attempt GitHub submission, all under one lock.
-    /// This prevents concurrent callers from both observing SubmittedToGitHub=false
-    /// and creating duplicate GitHub issues.
-    /// 提案の追加と GitHub 送信を1つのロック内でアトミックに実行する。
-    /// 並行呼び出し者が両方とも SubmittedToGitHub=false を観察して
-    /// 重複 GitHub Issue を作成することを防ぐ。
+    /// Add a suggestion under the file lock, then attempt GitHub submission outside the lock.
+    /// The store reserves the attempt before releasing the lock so concurrent callers do not
+    /// also submit the same unsubmitted duplicate while the remote API is slow.
+    /// 提案をファイルロック内で追加し、その後 GitHub 送信はロック外で試行する。
+    /// remote API が遅い間に並行呼び出しが同じ未送信重複を送信しないよう、
+    /// ロック解放前に送信試行を予約する。
     /// </summary>
     /// <param name="record">The suggestion to add / 追加する提案</param>
     /// <param name="submitToGitHub">
-    /// Optional callback to submit to GitHub. Called under lock only when submission
+    /// Optional callback to submit to GitHub. Called outside the lock only when submission
     /// is needed (new record or unsubmitted duplicate). Returns the issue URL on success.
     /// GitHub 送信用のオプションコールバック。送信が必要な場合（新規レコードまたは
-    /// 未送信の重複）にのみロック内で呼ばれる。成功時は Issue URL を返す。
+    /// 未送信の重複）にのみロック外で呼ばれる。成功時は Issue URL を返す。
     /// </param>
     public AddAndSubmitResult TryAddAndSubmit(SuggestionRecord record, Func<SuggestionRecord, SubmitAttemptResult>? submitToGitHub)
     {
-        return WithFileLock(() =>
+        var reservation = WithFileLock(() =>
         {
             var existing = ReadUnlocked();
             var duplicate = FindDuplicate(existing, record, ResolveDedupThreshold());
@@ -187,38 +188,87 @@ public class SuggestionStore
                 found = record;
             }
 
-            // Attempt GitHub submission if needed and callback is provided.
-            // 必要かつコールバックが提供されている場合、GitHub 送信を試みる。
-            string? issueUrl = null;
-            if (!alreadySubmitted && submitToGitHub != null && ShouldAttemptSubmit(found!))
+            var current = found!;
+            if (!alreadySubmitted && submitToGitHub != null && ShouldAttemptSubmit(current))
             {
                 var attemptedAt = DateTime.UtcNow;
-                try
-                {
-                    var submitResult = submitToGitHub(found!);
-                    StampSubmitAttempt(found!, attemptedAt, submitResult.Error, submitResult.NextRetryAt);
-                    issueUrl = submitResult.IssueUrl;
-                    if (issueUrl != null)
-                        MarkSubmitted(found!, issueUrl, attemptedAt);
-
-                    SaveUnlocked(existing);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
-                {
-                    // Best-effort — GitHub submission failure does not fail the local operation.
-                    // ベストエフォート — GitHub 送信失敗はローカル操作を失敗させない。
-                    StampSubmitAttempt(found!, attemptedAt, $"{ex.GetType().Name}: {ex.Message}", null);
-                    SaveUnlocked(existing);
-                }
+                StampSubmitAttempt(current, attemptedAt, null, attemptedAt.Add(s_inFlightSubmitRetryDelay));
+                SaveUnlocked(existing);
+                return new SubmitReservation(
+                    isNew,
+                    alreadySubmitted,
+                    current.Hash,
+                    current.Status,
+                    current.UpstreamUrl,
+                    CloneForSubmit(current),
+                    attemptedAt,
+                    isNew ? null : current.Hash,
+                    isNew ? null : duplicate.Score);
             }
 
-            return new AddAndSubmitResult(
+            return new SubmitReservation(
                 isNew,
                 alreadySubmitted,
-                found!.Status,
-                issueUrl ?? found.UpstreamUrl,
-                isNew ? null : found.Hash,
+                current.Hash,
+                current.Status,
+                current.UpstreamUrl,
+                null,
+                null,
+                isNew ? null : current.Hash,
                 isNew ? null : duplicate.Score);
+        });
+
+        if (reservation.RecordToSubmit == null || submitToGitHub == null || reservation.AttemptedAt == null)
+        {
+            return new AddAndSubmitResult(
+                reservation.IsNew,
+                reservation.AlreadySubmitted,
+                reservation.Status,
+                reservation.UpstreamUrl,
+                reservation.DuplicateOfHash,
+                reservation.DuplicateScore);
+        }
+
+        SubmitAttemptResult submitResult;
+        try
+        {
+            submitResult = submitToGitHub(reservation.RecordToSubmit);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+        {
+            // Best-effort — GitHub submission failure does not fail the local operation.
+            // ベストエフォート — GitHub 送信失敗はローカル操作を失敗させない。
+            submitResult = SubmitAttemptResult.Failure($"{ex.GetType().Name}: {ex.Message}");
+        }
+
+        return WithFileLock(() =>
+        {
+            var existing = ReadUnlocked();
+            var found = existing.FirstOrDefault(s => s.Hash == reservation.Hash);
+            if (found == null)
+            {
+                return new AddAndSubmitResult(
+                    reservation.IsNew,
+                    reservation.AlreadySubmitted,
+                    reservation.Status,
+                    reservation.UpstreamUrl,
+                    reservation.DuplicateOfHash,
+                    reservation.DuplicateScore);
+            }
+
+            var issueUrl = submitResult.IssueUrl;
+            StampSubmitResult(found, submitResult);
+            if (issueUrl != null)
+                MarkSubmitted(found, issueUrl, reservation.AttemptedAt.Value);
+
+            SaveUnlocked(existing);
+            return new AddAndSubmitResult(
+                reservation.IsNew,
+                reservation.AlreadySubmitted,
+                found.Status,
+                issueUrl ?? found.UpstreamUrl,
+                reservation.DuplicateOfHash,
+                reservation.DuplicateScore);
         });
     }
 
@@ -646,6 +696,53 @@ public class SuggestionStore
         record.LastSubmitError = string.IsNullOrWhiteSpace(error) ? null : error;
         record.NextRetryAt = nextRetryAt;
     }
+
+    private static void StampSubmitResult(SuggestionRecord record, SubmitAttemptResult result)
+    {
+        record.LastSubmitError = string.IsNullOrWhiteSpace(result.Error) ? null : result.Error;
+        record.NextRetryAt = result.NextRetryAt;
+    }
+
+    private static SuggestionRecord CloneForSubmit(SuggestionRecord record) => new()
+    {
+        Category = record.Category,
+        Language = record.Language,
+        Description = record.Description,
+        Context = record.Context,
+        Agent = record.Agent,
+        Hash = record.Hash,
+        CreatedAt = record.CreatedAt,
+        Status = record.Status,
+        CreatedByAgent = record.CreatedByAgent,
+        SessionId = record.SessionId,
+        ClientVersion = record.ClientVersion,
+        McpClientName = record.McpClientName,
+        McpClientVersion = record.McpClientVersion,
+        ToolInvocationContext = record.ToolInvocationContext,
+        UpstreamIssueNumber = record.UpstreamIssueNumber,
+        UpstreamUrl = record.UpstreamUrl,
+        LastSyncedAt = record.LastSyncedAt,
+        LastSubmitError = record.LastSubmitError,
+        LastSubmitAttempt = record.LastSubmitAttempt,
+        NextRetryAt = record.NextRetryAt,
+        SubmitAttemptCount = record.SubmitAttemptCount,
+        ResolvedAt = record.ResolvedAt,
+        Supersedes = record.Supersedes,
+        SupersededBy = record.SupersededBy,
+        SubmittedToGitHub = record.SubmittedToGitHub,
+        GitHubIssueUrl = record.GitHubIssueUrl,
+    };
+
+    private sealed record SubmitReservation(
+        bool IsNew,
+        bool AlreadySubmitted,
+        string Hash,
+        SuggestionStatus Status,
+        string? UpstreamUrl,
+        SuggestionRecord? RecordToSubmit,
+        DateTime? AttemptedAt,
+        string? DuplicateOfHash,
+        double? DuplicateScore);
 
     private static void NormalizeLegacyFields(SuggestionRecord record)
     {
