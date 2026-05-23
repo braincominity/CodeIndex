@@ -694,7 +694,7 @@ public class FileIndexer
             }
             else if (pattern[index + 1] is { Value: '^', Escaped: false })
             {
-                builder.Append(@"\^");
+                builder.Append('^');
             }
 
             if (allowLeadingRightBracket)
@@ -2018,7 +2018,7 @@ public class FileIndexer
             try
             {
                 var lineNumber = 0;
-                foreach (var line in File.ReadLines(prefixedIgnorePath))
+                foreach (var line in File.ReadLines(prefixedIgnorePath, Encoding.UTF8))
                 {
                     lineNumber++;
                     if (IgnoreRule.TryParse(dir, line, _ignoreCase, out var rule, out var errorMessage) && rule != null)
