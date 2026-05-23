@@ -35,6 +35,7 @@ public class DbContext : IDisposable
     private bool _hasWriteWork;
 
     internal static Action<string>? OptimizePragmaExecutedForTesting { get; set; }
+    internal static Action<string, string>? PlannerStatisticsCommandExecutedForTesting { get; set; }
 
     public SqliteConnection Connection => _connection;
     public bool IsReadOnly => _isReadOnly;
@@ -1662,23 +1663,35 @@ public class DbContext : IDisposable
             _hasWriteWork = true;
     }
 
+    internal void RunPlannerStatisticsMaintenance(bool forceAnalyze)
+    {
+        if (_isReadOnly)
+            return;
+
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = forceAnalyze ? "ANALYZE" : "PRAGMA optimize";
+        try
+        {
+            cmd.ExecuteNonQuery();
+            PlannerStatisticsCommandExecutedForTesting?.Invoke(_connection.DataSource, cmd.CommandText);
+            if (!forceAnalyze)
+                OptimizePragmaExecutedForTesting?.Invoke(_connection.DataSource);
+            _hasWriteWork = false;
+        }
+        catch (SqliteException)
+        {
+            // Planner statistics are an index-performance aid. If SQLite rejects ANALYZE /
+            // optimize during cleanup (read-only handoff, transient filesystem state), keep
+            // the completed index usable instead of converting success into failure.
+        }
+    }
+
     private void RunOptimizeOnCloseIfNeeded()
     {
         if (!_hasWriteWork || _isReadOnly)
             return;
 
-        using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "PRAGMA optimize";
-        try
-        {
-            cmd.ExecuteNonQuery();
-            OptimizePragmaExecutedForTesting?.Invoke(_connection.DataSource);
-        }
-        catch (SqliteException ex) when (IsReadOnlyOpenError(ex))
-        {
-            // Best effort on close: a writable DB may become read-only before Dispose
-            // (e.g. tests or sandbox handoff). Do not turn cleanup into command failure.
-        }
+        RunPlannerStatisticsMaintenance(forceAnalyze: false);
     }
 
     public void Dispose()
