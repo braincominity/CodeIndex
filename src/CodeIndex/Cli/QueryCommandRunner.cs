@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Hooks;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
@@ -1994,6 +1995,18 @@ public static class QueryCommandRunner
             // Attach runtime metadata / ランタイムメタデータを付加
             status.SymbolKinds = reader.GetSymbolKindCounts();
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
+            var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault().Hooks;
+            if (postExtractionHooks.Count > 0)
+            {
+                status.Hooks = postExtractionHooks
+                    .Select(hook => new PostExtractionHookStatus
+                    {
+                        Name = hook.Name,
+                        AssemblyPath = hook.AssemblyPath,
+                        TypeName = hook.TypeName,
+                    })
+                    .ToList();
+            }
             if (appVersion != null)
                 status.Version = appVersion;
 

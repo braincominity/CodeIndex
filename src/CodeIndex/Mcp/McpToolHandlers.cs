@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 
 namespace CodeIndex.Mcp;
@@ -1119,6 +1120,18 @@ public partial class McpServer
             var status = reader.GetStatus();
             WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit);
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
+            var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault().Hooks;
+            if (postExtractionHooks.Count > 0)
+            {
+                status.Hooks = postExtractionHooks
+                    .Select(hook => new PostExtractionHookStatus
+                    {
+                        Name = hook.Name,
+                        AssemblyPath = hook.AssemblyPath,
+                        TypeName = hook.TypeName,
+                    })
+                    .ToList();
+            }
             status.Version = _version;
             var structured = JsonSerializer.SerializeToNode(status, _jsonOptions)!.AsObject();
             structured["hotspotFamilyReady"] = status.HotspotFamilyReady;
@@ -2230,6 +2243,7 @@ public partial class McpServer
 
         var writer = new DbWriter(db);
         var indexer = new FileIndexer(projectPath, GitHelper.ResolveIgnoreCase(projectPath), GitHelper.TryGetRepositoryRoot(projectPath) ?? Path.GetFullPath(projectPath), maxFileBytes);
+        var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
@@ -2318,6 +2332,8 @@ public partial class McpServer
                 writer.InsertChunks(chunks);
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, filePath, projectPath);
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
+                var fileContext = new FileContext(projectPath, record.Path, filePath, record.Lang);
+                postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
                 writer.InsertSymbols(symbols);
                 var references = ReferenceExtractor.Extract(
                     fileId,
@@ -2326,6 +2342,7 @@ public partial class McpServer
                     symbols,
                     record.Path,
                     record.Lang == "csharp" ? csharpWorkspace.Symbols : null);
+                postExtractionHooks.OnReferencesExtracted(fileContext, references);
                 writer.InsertReferences(references);
                 // Keep MCP index parity with CLI index: persist file-level validation issues too.
                 // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
