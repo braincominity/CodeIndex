@@ -50,6 +50,28 @@ public class ProgramRunnerTests
         Assert.StartsWith("Error: command cancelled before it could complete.", trimmed);
     }
 
+    [Theory]
+    [InlineData("~/cdidx-logs", "cdidx-logs")]
+    [InlineData("$HOME/cdidx-logs", "cdidx-logs")]
+    [InlineData("${HOME}/cdidx-logs", "cdidx-logs")]
+    public void GlobalToolLog_OverrideDirectory_ExpandsHomeShorthand(string overrideValue, string childDirectory)
+    {
+        var originalLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+        try
+        {
+            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", overrideValue);
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+            var resolved = GlobalToolLog.ResolveLogDirectoryForReport();
+
+            Assert.Equal(Path.GetFullPath(Path.Combine(home, childDirectory)), resolved);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", originalLogDir);
+        }
+    }
+
     [Fact]
     public void Run_ForcedGlobalToolLogging_WritesLifecycleAndMirrorsStderr()
     {

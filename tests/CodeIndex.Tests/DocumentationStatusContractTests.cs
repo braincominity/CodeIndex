@@ -14,6 +14,7 @@ public class DocumentationStatusContractTests
         "hotspot_family_degraded_reason",
         "csharp_symbol_name_ready",
         "csharp_metadata_target_ready",
+        "csharp_metadata_target_degraded_reason",
         "indexed_head_commit",
         "worktree_head_changed",
         "indexed_head_sha",

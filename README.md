@@ -58,6 +58,8 @@ with `--files`, `--commits`, or `--changed-between <old-ref> <new-ref>` instead
 of rebuilding; see
 [Quick Start](USER_GUIDE.md#quick-start) and
 [Incremental update reliability](USER_GUIDE.md#incremental-update-reliability).
+If you do need `--rebuild`, interactive terminals ask for confirmation before
+deleting the existing DB, and scripts/CI must pass `--yes` (or `--force`).
 If a directory cannot be scanned because of permissions or an I/O error,
 `cdidx` records the scan error, keeps scanning other directories, and writes a
 temporary `.cdidx/scan-checkpoint.json` so a same-HEAD retry can skip directories
@@ -106,6 +108,7 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
   `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`,
   `hotspot_family_ready`, `hotspot_family_degraded_reason`,
   `csharp_symbol_name_ready`, `csharp_metadata_target_ready`,
+  `csharp_metadata_target_degraded_reason`,
   `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`,
   `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`,
   `index_writer_version`, `index_newer_than_reader`,
@@ -237,6 +240,8 @@ cdidx mcp
 [クイックスタート](USER_GUIDE.md#クイックスタート) と
 [インクリメンタル更新の信頼性](USER_GUIDE.md#インクリメンタル更新の信頼性)
 を参照してください。
+`--rebuild` が必要な場合、interactive terminal では既存 DB 削除前に確認を求め、
+script / CI では `--yes`（または `--force`）が必要です。
 権限や I/O エラーでディレクトリを走査できない場合でも、`cdidx` は scan error を
 記録して他のディレクトリの走査を続け、同じ HEAD の再実行で成功済みディレクトリを
 読み飛ばせるように一時的な `.cdidx/scan-checkpoint.json` を書き込みます。
@@ -281,6 +286,7 @@ cdidx mcp
   `sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`、
   `hotspot_family_ready`、`hotspot_family_degraded_reason`、
   `csharp_symbol_name_ready`、`csharp_metadata_target_ready`、
+  `csharp_metadata_target_degraded_reason`、
   `indexed_head_commit`、`worktree_head_changed`、`indexed_head_sha`、
   `indexed_head_branch`、`indexed_head_timestamp`、`commits_ahead_of_indexed_head`、
   `index_writer_version`、`index_newer_than_reader`、
