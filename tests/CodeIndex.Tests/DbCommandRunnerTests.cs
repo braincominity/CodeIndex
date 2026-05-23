@@ -179,44 +179,16 @@ public class DbCommandRunnerTests
 
     private (int ExitCode, string StdOut, string StdErr) RunAndCaptureStreams(string[] args)
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            var originalErr = Console.Error;
-            using var outWriter = new StringWriter();
-            using var errWriter = new StringWriter();
-            try
-            {
-                Console.SetOut(outWriter);
-                Console.SetError(errWriter);
-                var exitCode = DbCommandRunner.RunIntegrityCheck(args, _jsonOptions);
-                return (exitCode, outWriter.ToString(), errWriter.ToString());
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-                Console.SetError(originalErr);
-            }
-        }
+        using var capture = ConsoleCapture.Start(captureOut: true, captureError: true);
+        var exitCode = DbCommandRunner.RunIntegrityCheck(args, _jsonOptions);
+        return (exitCode, capture.Out!.ToString()!, capture.Error!.ToString()!);
     }
 
     private (int ExitCode, JsonElement Json) RunAndCaptureJson(string[] args)
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            using var writer = new StringWriter();
-            try
-            {
-                Console.SetOut(writer);
-                var exitCode = DbCommandRunner.RunIntegrityCheck(args, _jsonOptions);
-                using var document = JsonDocument.Parse(writer.ToString());
-                return (exitCode, document.RootElement.Clone());
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-            }
-        }
+        using var capture = ConsoleCapture.Start(captureOut: true);
+        var exitCode = DbCommandRunner.RunIntegrityCheck(args, _jsonOptions);
+        using var document = JsonDocument.Parse(capture.Out!.ToString()!);
+        return (exitCode, document.RootElement.Clone());
     }
 }

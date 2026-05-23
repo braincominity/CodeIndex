@@ -138,50 +138,16 @@ public class HookCommandRunnerTests
 
     private (int ExitCode, string StdOut, string StdErr) RunIndexAndCaptureStreams(string[] args)
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            var originalErr = Console.Error;
-            using var stdout = new StringWriter();
-            using var stderr = new StringWriter();
-
-            try
-            {
-                Console.SetOut(stdout);
-                Console.SetError(stderr);
-                var exitCode = IndexCommandRunner.Run(args, _jsonOptions);
-                return (exitCode, stdout.ToString(), stderr.ToString());
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-                Console.SetError(originalErr);
-            }
-        }
+        using var capture = ConsoleCapture.Start(captureOut: true, captureError: true);
+        var exitCode = IndexCommandRunner.Run(args, _jsonOptions);
+        return (exitCode, capture.Out!.ToString()!, capture.Error!.ToString()!);
     }
 
     private (int ExitCode, string StdOut, string StdErr) RunHooksAndCaptureStreams(string[] args)
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            var originalErr = Console.Error;
-            using var stdout = new StringWriter();
-            using var stderr = new StringWriter();
-
-            try
-            {
-                Console.SetOut(stdout);
-                Console.SetError(stderr);
-                var exitCode = HookCommandRunner.Run(args, _jsonOptions);
-                return (exitCode, stdout.ToString(), stderr.ToString());
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-                Console.SetError(originalErr);
-            }
-        }
+        using var capture = ConsoleCapture.Start(captureOut: true, captureError: true);
+        var exitCode = HookCommandRunner.Run(args, _jsonOptions);
+        return (exitCode, capture.Out!.ToString()!, capture.Error!.ToString()!);
     }
 
     private static long CountIndexedPath(string projectRoot, string relativePath)

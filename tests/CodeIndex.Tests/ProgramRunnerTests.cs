@@ -697,26 +697,7 @@ public class ProgramRunnerTests
     };
 
     private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)
-    {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            var originalErr = Console.Error;
-            using var stdout = new StringWriter();
-            using var stderr = new StringWriter();
-            try
-            {
-                Console.SetOut(stdout);
-                Console.SetError(stderr);
-                return (action(), stdout.ToString(), stderr.ToString());
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-                Console.SetError(originalErr);
-            }
-        }
-    }
+        => ConsoleCapture.Capture(action);
 
     private static void AssertCanonicalCommandError(string stderr)
     {

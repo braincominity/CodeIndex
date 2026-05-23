@@ -30763,54 +30763,17 @@ jobs:
 
     private static (T Result, string Stdout, string Stderr) CaptureConsole<T>(Func<T> action)
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            var originalError = Console.Error;
-            using var stdout = new StringWriter();
-            using var stderr = new StringWriter();
-
-            try
-            {
-                Console.SetOut(stdout);
-                Console.SetError(stderr);
-                var result = action();
-                return (result, stdout.ToString(), stderr.ToString());
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-                Console.SetError(originalError);
-            }
-        }
+        using var capture = ConsoleCapture.Start(captureOut: true, captureError: true);
+        var result = action();
+        return (result, capture.Out!.ToString()!, capture.Error!.ToString()!);
     }
 
     private static (T Result, string Stdout, string Stderr) CaptureConsoleWithInput<T>(string input, Func<T> action)
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalIn = Console.In;
-            var originalOut = Console.Out;
-            var originalError = Console.Error;
-            using var stdin = new StringReader(input);
-            using var stdout = new StringWriter();
-            using var stderr = new StringWriter();
-
-            try
-            {
-                Console.SetIn(stdin);
-                Console.SetOut(stdout);
-                Console.SetError(stderr);
-                var result = action();
-                return (result, stdout.ToString(), stderr.ToString());
-            }
-            finally
-            {
-                Console.SetIn(originalIn);
-                Console.SetOut(originalOut);
-                Console.SetError(originalError);
-            }
-        }
+        using var stdin = new StringReader(input);
+        using var capture = ConsoleCapture.StartWithInput(stdin, captureOut: true, captureError: true);
+        var result = action();
+        return (result, capture.Out!.ToString()!, capture.Error!.ToString()!);
     }
 
     private int RunCommandWithInvalidSince(string command)

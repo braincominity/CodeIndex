@@ -149,110 +149,38 @@ public class CommandErrorCodesTests
 
     private (int ExitCode, string StdOut, string StdErr) RunDbIntegrityCheckCapturingStreams(string[] args)
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            var originalErr = Console.Error;
-            using var outWriter = new StringWriter();
-            using var errWriter = new StringWriter();
-            try
-            {
-                Console.SetOut(outWriter);
-                Console.SetError(errWriter);
-                var exitCode = DbCommandRunner.RunIntegrityCheck(args, _jsonOptions);
-                return (exitCode, outWriter.ToString(), errWriter.ToString());
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-                Console.SetError(originalErr);
-            }
-        }
+        using var capture = ConsoleCapture.Start(captureOut: true, captureError: true);
+        var exitCode = DbCommandRunner.RunIntegrityCheck(args, _jsonOptions);
+        return (exitCode, capture.Out!.ToString()!, capture.Error!.ToString()!);
     }
 
     private (int ExitCode, JsonElement Json) RunDbIntegrityCheckCapturingJson(string[] args)
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            using var writer = new StringWriter();
-            try
-            {
-                Console.SetOut(writer);
-                var exitCode = DbCommandRunner.RunIntegrityCheck(args, _jsonOptions);
-                using var document = JsonDocument.Parse(writer.ToString());
-                return (exitCode, document.RootElement.Clone());
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-            }
-        }
+        using var capture = ConsoleCapture.Start(captureOut: true);
+        var exitCode = DbCommandRunner.RunIntegrityCheck(args, _jsonOptions);
+        using var document = JsonDocument.Parse(capture.Out!.ToString()!);
+        return (exitCode, document.RootElement.Clone());
     }
 
     private (int ExitCode, JsonElement Json) RunIndexCapturingJson(string[] args)
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            using var writer = new StringWriter();
-            try
-            {
-                Console.SetOut(writer);
-                var exitCode = IndexCommandRunner.Run(args, _jsonOptions);
-                using var document = JsonDocument.Parse(writer.ToString());
-                return (exitCode, document.RootElement.Clone());
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-            }
-        }
+        using var capture = ConsoleCapture.Start(captureOut: true);
+        var exitCode = IndexCommandRunner.Run(args, _jsonOptions);
+        using var document = JsonDocument.Parse(capture.Out!.ToString()!);
+        return (exitCode, document.RootElement.Clone());
     }
 
     private (int ExitCode, string StdOut, string StdErr) RunSearchCapturingStreams(string[] args)
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            var originalErr = Console.Error;
-            using var outWriter = new StringWriter();
-            using var errWriter = new StringWriter();
-            try
-            {
-                Console.SetOut(outWriter);
-                Console.SetError(errWriter);
-                var exitCode = QueryCommandRunner.RunSearch(args, _jsonOptions);
-                return (exitCode, outWriter.ToString(), errWriter.ToString());
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-                Console.SetError(originalErr);
-            }
-        }
+        using var capture = ConsoleCapture.Start(captureOut: true, captureError: true);
+        var exitCode = QueryCommandRunner.RunSearch(args, _jsonOptions);
+        return (exitCode, capture.Out!.ToString()!, capture.Error!.ToString()!);
     }
 
     private static (int ExitCode, string StdOut, string StdErr) CaptureStreams(Func<int> run)
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalOut = Console.Out;
-            var originalErr = Console.Error;
-            using var outWriter = new StringWriter();
-            using var errWriter = new StringWriter();
-            try
-            {
-                Console.SetOut(outWriter);
-                Console.SetError(errWriter);
-                var exitCode = run();
-                return (exitCode, outWriter.ToString(), errWriter.ToString());
-            }
-            finally
-            {
-                Console.SetOut(originalOut);
-                Console.SetError(originalErr);
-            }
-        }
+        using var capture = ConsoleCapture.Start(captureOut: true, captureError: true);
+        var exitCode = run();
+        return (exitCode, capture.Out!.ToString()!, capture.Error!.ToString()!);
     }
 }
