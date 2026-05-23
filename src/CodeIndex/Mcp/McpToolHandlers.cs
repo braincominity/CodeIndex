@@ -2645,14 +2645,12 @@ public partial class McpServer
             cdidxDir = Path.Combine(Path.GetFullPath("."), ".cdidx");
         Directory.CreateDirectory(cdidxDir);
 
-        // 6. Store locally and attempt GitHub submission atomically.
-        //    TryAddAndSubmit runs the entire sequence under a single file lock:
-        //    read → dedup check → write → GitHub submit → record lifecycle state.
-        //    This prevents concurrent callers from both creating duplicate GitHub issues.
-        //    ローカル保存と GitHub 送信をアトミックに実行する。
-        //    TryAddAndSubmit は全シーケンスを1つのファイルロック内で実行:
-        //    読み込み → 重複チェック → 書き込み → GitHub 送信 → lifecycle 状態を記録。
-        //    並行呼び出しで重複 GitHub Issue が作られることを防ぐ。
+        // 6. Store locally, reserve a submission attempt under the file lock,
+        //    then call GitHub outside the lock so slow remote I/O does not block
+        //    other suggestion-store writers.
+        //    ローカル保存と送信試行の予約だけをファイルロック内で行い、
+        //    GitHub 呼び出しはロック外で実行する。遅い remote I/O が他の
+        //    suggestion-store writer をブロックしないようにする。
         // Derive DB identity for scoped suggestion storage.
         // スコープ付き提案蓄積のため DB identity を導出。
         var dbName = Path.GetFileNameWithoutExtension(_dbPath);

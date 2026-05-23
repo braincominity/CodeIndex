@@ -20,7 +20,8 @@ public class GitHubIssueReporterTests : IDisposable
 {
     private readonly EnvironmentVariableScope _env = EnvironmentVariableScope.Capture(
         "CDIDX_GITHUB_TOKEN",
-        "GITHUB_TOKEN");
+        "GITHUB_TOKEN",
+        "CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS");
 
     [Fact]
     public void ResolveToken_NeitherSet_ReturnsNull()
@@ -78,6 +79,22 @@ public class GitHubIssueReporterTests : IDisposable
         _env.Set("GITHUB_TOKEN", "   ");
 
         Assert.Null(GitHubIssueReporter.ResolveToken());
+    }
+
+    [Fact]
+    public void ResolveSubmitTimeout_UsesPositiveEnvironmentOverride()
+    {
+        _env.Set("CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS", "3");
+
+        Assert.Equal(TimeSpan.FromSeconds(3), GitHubIssueReporter.ResolveSubmitTimeout());
+    }
+
+    [Fact]
+    public void ResolveSubmitTimeout_InvalidOverride_UsesDefault()
+    {
+        _env.Set("CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS", "not-a-number");
+
+        Assert.Equal(GitHubIssueReporter.DefaultTimeout, GitHubIssueReporter.ResolveSubmitTimeout());
     }
 
     // --- ScrubInlineCode tests / ScrubInlineCode テスト ---
@@ -476,6 +493,29 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public async Task TryCreateIssueDetailedAsync_ConfiguredTimeout_ReturnsDiagnosticError()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+        _env.Set("CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS", "1");
+
+        using var mockClient = new HttpClient(new DelayingHandler(TimeSpan.FromSeconds(10)));
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
+
+            Assert.Null(result.IssueUrl);
+            Assert.Equal("TaskCanceledException: GitHub submission timed out after 1 seconds", result.Error);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+
+    [Fact]
     public async Task TryCreateIssueDetailedAsync_OutOfMemoryException_Propagates()
     {
         _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
@@ -629,6 +669,18 @@ public class GitHubIssueReporterTests : IDisposable
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             return Task.FromException<HttpResponseMessage>(exception);
+        }
+    }
+
+    private sealed class DelayingHandler(TimeSpan delay) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            await Task.Delay(delay, cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("""{ "total_count": 0, "items": [] }"""),
+            };
         }
     }
 }
