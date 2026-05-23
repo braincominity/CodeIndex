@@ -1079,6 +1079,20 @@ public static class IndexCommandRunner
         var unresolvedMergeExitCode = RejectUnresolvedMergeState(projectRoot, options.Json, jsonOptions);
         if (unresolvedMergeExitCode != null)
             return unresolvedMergeExitCode.Value;
+        var symbolKindFilterMatchesPrior = string.Equals(
+            priorSymbolKindFilterSignature,
+            options.SymbolKindFilter.Signature,
+            StringComparison.Ordinal);
+        if (options.SymbolKindFilter.IsActive && !symbolKindFilterMatchesPrior)
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "symbol-kind filters cannot be introduced with a scoped update because existing files would keep symbols from the prior index policy",
+                CommandExitCodes.UsageError,
+                "Run a full index refresh without --files, --commits, or --changed-between when changing --include-symbol-kind or --exclude-symbol-kind.",
+                CommandErrorCodes.UsageError);
+        }
 
         var targetPaths = new HashSet<string>(StringComparer.Ordinal);
         var relevantIgnoreFileChanged = false;
@@ -1227,10 +1241,6 @@ public static class IndexCommandRunner
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
         var currentMetadataTargetVersion = DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var priorMetadataTargetCsharpMatchesCurrent = priorMetadataTargetCsharp == currentMetadataTargetVersion;
-        var symbolKindFilterMatchesPrior = string.Equals(
-            priorSymbolKindFilterSignature,
-            options.SymbolKindFilter.Signature,
-            StringComparison.Ordinal);
         var symbolsDroppedByKindFilter = 0;
 
         void WriteJsonLiveness(string message)
@@ -1852,7 +1862,8 @@ public static class IndexCommandRunner
                 foldReadyAfter = writer.MarkFoldReady();
             }
             writer.WriteCdidxWriterVersion(ConsoleUi.LoadVersion());
-            writer.SetMeta(SymbolKindFilterMetaKey, options.SymbolKindFilter.Signature);
+            if (symbolKindFilterMatchesPrior)
+                writer.SetMeta(SymbolKindFilterMetaKey, options.SymbolKindFilter.Signature);
         }
         if (errors == 0)
             StampIndexedHeadMetadata(writer, projectRoot);

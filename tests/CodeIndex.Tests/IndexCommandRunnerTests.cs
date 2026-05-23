@@ -199,6 +199,49 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateMode_RejectsNewSymbolKindFilterPolicy()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), """
+                class App:
+                    pass
+
+                def helper():
+                    return App()
+                """);
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.AppendAllText(Path.Combine(projectRoot, "app.py"), "\n# touched\n");
+            File.SetLastWriteTimeUtc(Path.Combine(projectRoot, "app.py"), DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--exclude-symbol-kind", "function", "--files", "app.py", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("full index refresh", json.GetProperty("hint").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_Help_IncludesSymbolKindFilterFlags()
+    {
+        var (exitCode, stdout, stderr) = RunAndCaptureStreams(["--help"]);
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Contains("--include-symbol-kind <kind>[,<kind>]", stdout);
+        Assert.Contains("--exclude-symbol-kind <kind>[,<kind>]", stdout);
+        Assert.Equal(string.Empty, stderr);
+    }
+
+    [Fact]
     public void Run_UnresolvedMergeState_RejectsIndexingBeforeScanning()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unresolved_merge");
