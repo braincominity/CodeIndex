@@ -587,7 +587,7 @@ public class FileIndexer
             if (escaping)
                 tokens.Add(new PatternToken('\\', Escaped: false));
 
-            while (tokens.Count > 0 && tokens[^1] is { Value: ' ', Escaped: false })
+            while (tokens.Count > 0 && tokens[^1] is { Value: ' ' or '\t', Escaped: false })
                 tokens.RemoveAt(tokens.Count - 1);
 
             return tokens.Count > 0;
