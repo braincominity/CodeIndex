@@ -293,27 +293,30 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void Constructor_UsesSqlitePerformanceEnvironmentOverrides()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_perf_pragmas_{Guid.NewGuid():N}.db");
-        var previousCacheSize = Environment.GetEnvironmentVariable(DbContext.CacheSizeEnvironmentVariable);
-        var previousMmapSize = Environment.GetEnvironmentVariable(DbContext.MmapSizeEnvironmentVariable);
-        try
+        lock (TestConsoleLock.Gate)
         {
-            Environment.SetEnvironmentVariable(DbContext.CacheSizeEnvironmentVariable, "4096");
-            Environment.SetEnvironmentVariable(DbContext.MmapSizeEnvironmentVariable, "1048576");
+            var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_perf_pragmas_{Guid.NewGuid():N}.db");
+            var previousCacheSize = Environment.GetEnvironmentVariable(DbContext.CacheSizeEnvironmentVariable);
+            var previousMmapSize = Environment.GetEnvironmentVariable(DbContext.MmapSizeEnvironmentVariable);
+            try
+            {
+                Environment.SetEnvironmentVariable(DbContext.CacheSizeEnvironmentVariable, "4096");
+                Environment.SetEnvironmentVariable(DbContext.MmapSizeEnvironmentVariable, "1048576");
 
-            using var db = new DbContext(dbPath);
+                using var db = new DbContext(dbPath);
 
-            Assert.Equal(-4096L, ExecuteScalarLong(db.Connection, "PRAGMA cache_size"));
-            if (Environment.Is64BitProcess)
-                Assert.Equal(1048576L, ExecuteScalarLong(db.Connection, "PRAGMA mmap_size"));
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(DbContext.CacheSizeEnvironmentVariable, previousCacheSize);
-            Environment.SetEnvironmentVariable(DbContext.MmapSizeEnvironmentVariable, previousMmapSize);
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(dbPath))
-                File.Delete(dbPath);
+                Assert.Equal(-4096L, ExecuteScalarLong(db.Connection, "PRAGMA cache_size"));
+                if (Environment.Is64BitProcess)
+                    Assert.Equal(1048576L, ExecuteScalarLong(db.Connection, "PRAGMA mmap_size"));
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(DbContext.CacheSizeEnvironmentVariable, previousCacheSize);
+                Environment.SetEnvironmentVariable(DbContext.MmapSizeEnvironmentVariable, previousMmapSize);
+                SqliteConnection.ClearAllPools();
+                if (File.Exists(dbPath))
+                    File.Delete(dbPath);
+            }
         }
     }
 
