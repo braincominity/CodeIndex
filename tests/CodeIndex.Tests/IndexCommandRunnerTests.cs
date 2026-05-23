@@ -1493,6 +1493,34 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_UpdateFiles_RemovesOldPathWhenExtensionChangesToUnsupported()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var oldPath = Path.Combine(projectRoot, "foo.py");
+            var newPath = Path.Combine(projectRoot, "foo.bin");
+            File.WriteAllText(oldPath, "print('hello')\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--files", "foo.py", "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(IndexedFileExists(projectRoot, "foo.py"));
+
+            File.Move(oldPath, newPath);
+
+            var (updateExitCode, _) = RunAndCaptureJson([projectRoot, "--files", "foo.bin", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.False(IndexedFileExists(projectRoot, "foo.py"));
+            Assert.False(IndexedFileExists(projectRoot, "foo.bin"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_FailedFirstMutation_DemotesReadinessBeforeRollback()
     {
         var projectRoot = CreateTempProject();

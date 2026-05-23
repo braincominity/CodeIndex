@@ -1602,12 +1602,31 @@ public static class IndexCommandRunner
                 {
                     if (!writer.HasFileAtPath(relPath))
                     {
-                        skipped++;
-                        if (options.Verbose && !options.Json && !options.Quiet)
+                        using var purgeTxn = writer.BeginTransaction();
+                        var purged = writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, relPath);
+                        if (purged > 0)
                         {
-                            PauseUpdateSpinnerForConsoleWrite();
-                            Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
-                            ResumeUpdateSpinnerAfterConsoleWrite();
+                            DemoteReadinessOnce();
+                            WriteProjectRootOnce();
+                            purgeTxn.Commit();
+                            removed += purged;
+                            ftsMutated = true;
+                            if (options.Verbose && !options.Json && !options.Quiet)
+                            {
+                                PauseUpdateSpinnerForConsoleWrite();
+                                Console.WriteLine($"  [DEL ] {relPath} (unsupported renamed target)");
+                                ResumeUpdateSpinnerAfterConsoleWrite();
+                            }
+                        }
+                        else
+                        {
+                            skipped++;
+                            if (options.Verbose && !options.Json && !options.Quiet)
+                            {
+                                PauseUpdateSpinnerForConsoleWrite();
+                                Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
+                                ResumeUpdateSpinnerAfterConsoleWrite();
+                            }
                         }
                         continue;
                     }
