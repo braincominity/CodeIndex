@@ -1,6 +1,5 @@
 using CodeIndex.Cli;
 using CodeIndex.Database;
-using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -12,10 +11,13 @@ namespace CodeIndex.Tests;
 public class DbRecoveryTests : IDisposable
 {
     private readonly string _dbPath;
+    private readonly IDisposable _sqlitePoolOwner;
+    private bool _disposed;
 
     public DbRecoveryTests()
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_recovery_{Guid.NewGuid():N}.db");
+        _sqlitePoolOwner = SqlitePoolCleanup.EnterExclusiveOwner();
     }
 
     [Fact]
@@ -44,7 +46,7 @@ public class DbRecoveryTests : IDisposable
 
         // Release all pooled connections so Windows can overwrite the file
         // プール済み接続をすべて解放し、Windowsでファイル上書きを可能にする
-        SqliteConnection.ClearAllPools();
+        SqlitePoolCleanup.ClearPoolsForWindowsFileRelease(callerOwnsExclusiveAccess: true);
 
         // Corrupt it by overwriting / 上書きして破損させる
         File.WriteAllBytes(_dbPath, new byte[] { 0x00, 0x01, 0x02, 0x03 });
@@ -86,7 +88,11 @@ public class DbRecoveryTests : IDisposable
 
     public void Dispose()
     {
-        SqliteConnection.ClearAllPools();
-        try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { }
+        if (_disposed)
+            return;
+
+        _disposed = true;
+        _sqlitePoolOwner.Dispose();
+        TestProjectHelper.DeleteFile(_dbPath);
     }
 }
