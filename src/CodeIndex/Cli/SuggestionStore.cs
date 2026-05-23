@@ -782,7 +782,7 @@ public class SuggestionStore
     {
         var dir = Path.GetDirectoryName(_lockPath);
         if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
+            DataDirectorySecurity.CreatePrivateDirectory(dir);
 
         // FileShare.None provides exclusive access across processes on all platforms.
         // The lock is held for the lifetime of the FileStream (released on Dispose).

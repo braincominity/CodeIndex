@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using CodeIndex.Database;
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
@@ -2317,6 +2318,51 @@ public class FileIndexerTests
         }
     }
 
+    [Theory]
+    [InlineData("class A\r\n{\r\n}\r\n", 3)]
+    [InlineData("class A\n{\n}\n", 3)]
+    [InlineData("class A\r{\r}\r", 3)]
+    [InlineData("\uFEFF", 1)]
+    public void BuildRecord_CountsPhysicalLinesBeforeLineLeadingInvisibleStripping(string content, int expectedLines)
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "physical.cs");
+            File.WriteAllText(filePath, content);
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, _, _) = indexer.BuildRecord(filePath);
+
+            Assert.Equal(expectedLines, record.Lines);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ValidateSymbolLineRanges_RejectsLinesOutsideFileRange()
+    {
+        var record = new FileRecord
+        {
+            Path = "src/drift.cs",
+            Lang = "csharp",
+            Lines = 2,
+        };
+        var symbols = new[]
+        {
+            new SymbolRecord { FileId = 1, Kind = "class", Name = "Drift", Line = 3, StartLine = 3, EndLine = 3 },
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => FileIndexer.ValidateSymbolLineRanges(record, symbols));
+
+        Assert.Contains("outside file line range", ex.Message);
+        Assert.Contains("src/drift.cs", ex.Message);
+    }
+
     [Fact]
     public void BuildRecord_CjkSymbolsExtractedCorrectly()
     {
@@ -2965,17 +3011,15 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void BuildRecord_BomOnlyFile_ReportsZeroLines()
+    public void BuildRecord_BomOnlyFile_ReportsOnePhysicalLine()
     {
         // A file whose on-disk bytes are exactly the UTF-8 BOM (EF BB BF) and
-        // nothing else must report `Lines == 0` so `files --json` stays consistent
-        // with ChunkSplitter.Split's 0-chunk contract for the same content. Before
-        // the fix the line count came from `"".Split('\n') == [""]`, yielding
-        // a phantom `Lines = 1`. Closes #183.
-        // オンディスクバイト列が UTF-8 BOM (EF BB BF) のみのファイルは Lines == 0 と
-        // すべき。そうしないと `files --json` が同じ内容に対する ChunkSplitter.Split の
-        // 0 チャンク契約と矛盾する。修正前は `"".Split('\n') == [""]` 由来で
-        // 幽霊の Lines = 1 を返していた。Closes #183.
+        // nothing else still has one physical decoded source line, even though the
+        // normalized content handed to chunking/extraction becomes empty. This pins
+        // the line-number contract used for stale-line detection. Closes #1890.
+        // オンディスクバイト列が UTF-8 BOM (EF BB BF) のみのファイルも、正規化後に
+        // chunk/extraction へ渡す content は空になるが、デコード済み元ソースとしては
+        // 1 つの物理行を持つ。この stale line 検出用の行番号契約を固定する。Closes #1890.
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
         try
         {
@@ -2987,7 +3031,7 @@ public class FileIndexerTests
             var (record, content, _) = indexer.BuildRecord(filePath);
 
             Assert.Equal(string.Empty, content);
-            Assert.Equal(0, record.Lines);
+            Assert.Equal(1, record.Lines);
         }
         finally
         {
