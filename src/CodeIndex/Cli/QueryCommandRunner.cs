@@ -2210,10 +2210,26 @@ public static class QueryCommandRunner
         var options = ParseArgs(cmdArgs, jsonDefault: false);
         if (TryWriteUnsupportedOptionError("vacuum", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("vacuum")))
             return CommandExitCodes.UsageError;
+        var explicitDbPathError = BuildExplicitDbPathParseError(options);
+        if (explicitDbPathError != null && explicitDbPathError.Contains(CommandErrorCodes.DbNotFound, StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine(explicitDbPathError);
+            Console.Error.WriteLine("Hint: point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one.");
+            return CommandExitCodes.NotFound;
+        }
         if (TryWriteParseError(options, "vacuum"))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("vacuum", options))
             return CommandExitCodes.UsageError;
+
+        if (!DbContext.TryValidateExistingCodeIndexDb(options.DbPath, out var validationMessage, out var isNotFound))
+        {
+            Console.Error.WriteLine($"Error [{(isNotFound ? CommandErrorCodes.DbNotFound : CommandErrorCodes.DbError)}]: {validationMessage}");
+            Console.Error.WriteLine(isNotFound
+                ? "Hint: point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one."
+                : "Hint: point `--db` at an existing CodeIndex database created by `cdidx index`, then retry `cdidx vacuum`.");
+            return isNotFound ? CommandExitCodes.NotFound : CommandExitCodes.DatabaseError;
+        }
 
         using var db = new DbContext(options.DbPath);
         var result = db.RunIncrementalVacuum();

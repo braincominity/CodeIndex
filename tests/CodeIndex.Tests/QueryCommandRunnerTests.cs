@@ -183,6 +183,59 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunVacuum_RejectsMissingDatabase_Issue1631()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_missing_db");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "missing.db");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(CommandErrorCodes.DbNotFound, stderr);
+            Assert.False(File.Exists(dbPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunVacuum_RejectsNonCodeIndexDatabase_Issue1631()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_foreign_db");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "foreign.db");
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "CREATE TABLE user_data(id INTEGER PRIMARY KEY, value TEXT);";
+                command.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(CommandErrorCodes.DbError, stderr);
+            Assert.Contains("not an existing CodeIndex DB", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_EmitsVisibilityInJsonAndHumanOutput_Issue1868()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_visibility_output");
