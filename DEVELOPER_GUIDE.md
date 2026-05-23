@@ -267,6 +267,11 @@ use `files(lang)` to resolve candidate files and then probe
 that shape can start from `idx_symbols_kind` and scan every symbol of the
 requested kind before checking file language (#1933).
 
+Large filtered CTEs must project only the columns consumed by downstream CTEs
+instead of using `SELECT *`. SQLite may materialize multi-use CTEs, so carrying
+unused symbol columns through hotspot-style query chains inflates temp rows and
+join width on large indexes (#1928).
+
 ### FTS5 sync triggers
 
 ```sql
