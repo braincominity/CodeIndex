@@ -1595,6 +1595,7 @@ public static class IndexCommandRunner
                 if (existingId != null)
                 {
                     writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
+                    writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path);
                     skipped++;
                     if (options.Verbose && !options.Json && !options.Quiet)
                     {
@@ -1608,6 +1609,7 @@ public static class IndexCommandRunner
                 DemoteReadinessOnce();
                 using var txn = writer.BeginTransaction();
                 writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
+                writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path);
                 WriteProjectRootOnce();
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);

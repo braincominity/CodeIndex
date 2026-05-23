@@ -1422,6 +1422,7 @@ public class IndexCommandRunnerTests
             Assert.True(IndexedFileExists(projectRoot, "foo.py"));
 
             File.Move(oldPath, newPath);
+            File.AppendAllText(newPath, "Updated during rename\n");
             File.SetLastWriteTimeUtc(newPath, DateTime.UtcNow.AddSeconds(2));
 
             var (updateExitCode, _) = RunAndCaptureJson([projectRoot, "--files", "foo.md", "--json"]);
