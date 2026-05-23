@@ -44,6 +44,7 @@ public class FileIndexer
         IReadOnlyList<string> ProbeFailedFilePaths,
         IReadOnlyList<string> ListedDirectories,
         IReadOnlyList<string> FullyScannedDirectories,
+        IReadOnlySet<string> CheckpointedDirectories,
         IReadOnlyList<string> AttributePrunedDirectories)
     {
         public bool HadErrors => Errors.Any(error => error.IsFatal);
@@ -1546,7 +1547,9 @@ public class FileIndexer
             : new PathFilterResult(PathFilterKind.None, errors);
     }
 
-    internal ScanFilesResult ScanFilesDetailed()
+    internal ScanFilesResult ScanFilesDetailed(
+        IReadOnlySet<string>? checkpointedDirectories = null,
+        bool continueOnError = true)
     {
         var files = new List<string>();
         var errors = new List<ScanError>();
@@ -1555,13 +1558,16 @@ public class FileIndexer
         var probeFailedFilePaths = new HashSet<string>(StringComparer.Ordinal);
         var listedDirectories = new HashSet<string>(StringComparer.Ordinal);
         var fullyScannedDirectories = new HashSet<string>(StringComparer.Ordinal);
+        var activeCheckpointedDirectories = checkpointedDirectories is { Count: > 0 }
+            ? new HashSet<string>(checkpointedDirectories, StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
         var attributePrunedDirectories = new HashSet<string>(StringComparer.Ordinal);
         var visitedFileIdentities = new HashSet<FileIdentity>();
         var fullyScanned = true;
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         if (preloadResult.IgnoreRulesAvailable)
         {
-            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, attributePrunedDirectories, visitedFileIdentities, preloadResult.Rules, isProjectRoot: true);
+            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeCheckpointedDirectories, attributePrunedDirectories, visitedFileIdentities, preloadResult.Rules, isProjectRoot: true, continueOnError);
         }
         return new ScanFilesResult(
             files,
@@ -1571,6 +1577,7 @@ public class FileIndexer
             probeFailedFilePaths.ToList(),
             listedDirectories.ToList(),
             fullyScannedDirectories.ToList(),
+            activeCheckpointedDirectories.Concat(fullyScannedDirectories).ToHashSet(StringComparer.Ordinal),
             attributePrunedDirectories.ToList());
     }
 
@@ -1583,12 +1590,17 @@ public class FileIndexer
         HashSet<string> probeFailedFilePaths,
         HashSet<string> listedDirectories,
         HashSet<string> fullyScannedDirectories,
+        HashSet<string> checkpointedDirectories,
         HashSet<string> attributePrunedDirectories,
         HashSet<FileIdentity> visitedFileIdentities,
         IgnoreRuleSet activeIgnoreRules,
-        bool isProjectRoot = false)
+        bool isProjectRoot = false,
+        bool continueOnError = true)
     {
         var relativeDir = ToRelativePath(dir);
+
+        if (checkpointedDirectories.Contains(relativeDir))
+            return true;
 
         var filterKind = GetDirectoryFilterKind(dir, activeIgnoreRules, isProjectRoot);
         if (filterKind != PathFilterKind.None)
@@ -1598,7 +1610,7 @@ public class FileIndexer
             return true;
         }
 
-        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, attributePrunedDirectories, visitedFileIdentities, activeIgnoreRules);
+        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, visitedFileIdentities, activeIgnoreRules, continueOnError);
     }
 
     private bool EnumerateDirectory(
@@ -1610,9 +1622,11 @@ public class FileIndexer
         HashSet<string> probeFailedFilePaths,
         HashSet<string> listedDirectories,
         HashSet<string> fullyScannedDirectories,
+        HashSet<string> checkpointedDirectories,
         HashSet<string> attributePrunedDirectories,
         HashSet<FileIdentity> visitedFileIdentities,
-        IgnoreRuleSet inheritedIgnoreRules)
+        IgnoreRuleSet inheritedIgnoreRules,
+        bool continueOnError)
     {
         var fullyScanned = true;
         try
@@ -1743,7 +1757,10 @@ public class FileIndexer
                     continue;
                 }
 
-                fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, attributePrunedDirectories, visitedFileIdentities, activeIgnoreRules);
+                var childFullyScanned = ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, visitedFileIdentities, activeIgnoreRules, continueOnError: continueOnError);
+                fullyScanned &= childFullyScanned;
+                if (!continueOnError && !childFullyScanned)
+                    break;
             }
         }
         catch (UnauthorizedAccessException)

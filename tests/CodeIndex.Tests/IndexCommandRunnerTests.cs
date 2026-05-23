@@ -3890,6 +3890,59 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_WritesCheckpointAndUsesItOnSuccessfulRetry()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var srcDir = Path.Combine(projectRoot, "src");
+        var secretDir = Path.Combine(projectRoot, "secret");
+        var srcFile = Path.Combine(srcDir, "b.cs");
+        try
+        {
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "config", "user.email", "test@example.com");
+            RunGit(projectRoot, "config", "user.name", "Test");
+            Directory.CreateDirectory(srcDir);
+            Directory.CreateDirectory(secretDir);
+            File.WriteAllText(srcFile, "public class B { }\n");
+            File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            SetUnixPermissions(secretDir, UnixFileMode.None);
+            var (partialExitCode, partialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, partialExitCode);
+            Assert.Equal("partial", partialJson.GetProperty("status").GetString());
+            var checkpointPath = Path.Combine(projectRoot, ".cdidx", "scan-checkpoint.json");
+            Assert.True(File.Exists(checkpointPath));
+
+            SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            File.Delete(srcFile);
+            var (retryExitCode, retryJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, retryExitCode);
+            Assert.Equal("success", retryJson.GetProperty("status").GetString());
+            Assert.False(File.Exists(checkpointPath));
+
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains("src/b.cs", indexedPaths);
+            Assert.Contains("secret/a.cs", indexedPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(secretDir))
+                SetUnixPermissions(secretDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_PurgesStaleRowsWithinListedDirectoriesEvenWhenAnotherDirectoryIsUnreadable()
     {
         if (OperatingSystem.IsWindows())
