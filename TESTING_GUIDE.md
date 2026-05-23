@@ -92,6 +92,7 @@ Prefer the existing helper before writing new setup code.
 - `DeleteFile(path)` retries standalone temp-DB cleanup and uses the same Windows-specific SQLite pool release fallback when pooled handles block deletion.
 - `SqlitePoolCleanup` centralizes the Windows SQLite pool workaround for tests. Tests that own a temporary SQLite file for their whole lifetime can enter an exclusive owner lease and dispose it idempotently before deleting the file, instead of calling `SqliteConnection.ClearAllPools()` directly from `Dispose`.
 - Tests that intentionally call `SqliteConnection.ClearAllPools()`, mutate process-global environment variables, or override the process current directory are grouped into the non-parallel `SQLite pool sensitive` xUnit collection. Add new tests with those hazards to that collection instead of letting them run in parallel with unrelated classes.
+- Tests that mutate process-global environment variables should use `EnvironmentVariableScope.Capture(...)` so the original values are restored from a single disposable cleanup path even if setup or assertions fail.
 
 Use these helpers when possible so test behavior stays consistent across files and operating systems.
 
@@ -270,6 +271,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `DeleteDirectory(path)` は temp project cleanup のリトライと属性正規化を扱います。プロセス全体への干渉を避けるため、SQLite pool の解放は Windows で削除に失敗した場合のリトライ時だけに限定します。
 - `DeleteFile(path)` は standalone な temp DB cleanup をリトライし、pooled handle が削除を妨げる場合は同じ Windows 向け SQLite pool 解放フォールバックを使います。
 - `SqliteConnection.ClearAllPools()` を意図的に呼ぶテスト、process-global な環境変数を変更するテスト、プロセスのカレントディレクトリを上書きするテストは、xUnit の non-parallel collection `SQLite pool sensitive` にまとめます。これらのハザードを持つ新しいテストも、この collection に入れて無関係なクラスとの並列実行を避けてください。
+- Process-global な環境変数を変更するテストでは `EnvironmentVariableScope.Capture(...)` を使い、setup や assertion が失敗しても単一の disposable cleanup 経路で元の値へ戻してください。
 
 テスト挙動をファイル間・OS間で揃えるため、可能な限りこれらを使ってください。
 
