@@ -54,6 +54,11 @@ internal static class JsonOutputSnapshotHelper
         "score",
     };
 
+    private static readonly HashSet<string> PlatformOptionalKeys = new(StringComparer.Ordinal)
+    {
+        "data_dir_mode",
+    };
+
     public static void AssertMatches(
         string goldenName,
         string actualJson,
@@ -128,7 +133,11 @@ internal static class JsonOutputSnapshotHelper
                     if (value is null)
                         continue;
 
-                    if (TimestampKeys.Contains(key))
+                    if (PlatformOptionalKeys.Contains(key))
+                    {
+                        obj.Remove(key);
+                    }
+                    else if (TimestampKeys.Contains(key))
                         obj[key] = "<TIMESTAMP>";
                     else if (CommitShaKeys.Contains(key))
                         obj[key] = "<COMMIT_SHA>";
