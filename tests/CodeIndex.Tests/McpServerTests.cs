@@ -5042,6 +5042,34 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_BatchQuery_TruncatesAggregateResponse_Issue1416()
+    {
+        var previous = Environment.GetEnvironmentVariable("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES");
+        Environment.SetEnvironmentVariable("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES", "200");
+        try
+        {
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"ping"},{"tool":"status"},{"tool":"files","arguments":{}}]}}}""")!;
+            var response = _server.HandleMessage(request)!;
+
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.True(structured["truncated"]!.GetValue<bool>());
+            Assert.True(structured["metadata"]!["estimated_response_bytes"]!.GetValue<int>() <= 200);
+            Assert.Equal(200, structured["metadata"]!["response_byte_limit"]!.GetValue<int>());
+
+            var truncatedQueries = structured["truncated_queries"]!.AsArray();
+            Assert.NotEmpty(truncatedQueries);
+            Assert.All(truncatedQueries, q => Assert.NotNull(q!["args_summary"]));
+
+            var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+            Assert.Contains("Response truncated", text);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES", previous);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_BatchQuery_ArgsSummaryReflectsRequestedArguments_Issue1537()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"symbols","arguments":{"query":"App","lang":"csharp"}}]}}}""")!;

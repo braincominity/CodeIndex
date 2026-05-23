@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
@@ -14,6 +15,9 @@ namespace CodeIndex.Mcp;
 /// </summary>
 public partial class McpServer
 {
+    private const int DefaultBatchQueryResponseByteLimit = MaxLineLength;
+    private const string BatchQueryResponseByteLimitEnvVar = "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES";
+
     // --- Tool implementations / ツール実装 ---
 
     /// <summary>
@@ -1315,9 +1319,33 @@ public partial class McpServer
             return CreateToolErrorResponse(id, $"Batch too large: {queries.Count} queries (max {maxBatchSize})");
 
         var resultsArray = new JsonArray();
+        var truncatedQueries = new JsonArray();
         var totalStopwatch = Stopwatch.StartNew();
         int successCount = 0;
         int failureCount = 0;
+        var truncated = false;
+        var responseByteLimit = GetBatchQueryResponseByteLimit();
+        var estimatedResponseBytes = 0;
+
+        bool TryAppendResult(JsonObject entry, string? toolName, JsonNode? toolArgs)
+        {
+            var entryBytes = EstimateJsonUtf8Bytes(entry);
+            if (estimatedResponseBytes + entryBytes > responseByteLimit)
+            {
+                truncated = true;
+                truncatedQueries.Add(new JsonObject
+                {
+                    ["tool"] = toolName,
+                    ["args_summary"] = BuildArgsSummary(toolArgs),
+                    ["reason"] = "response_byte_limit_exceeded",
+                });
+                return false;
+            }
+
+            estimatedResponseBytes += entryBytes;
+            resultsArray.Add(entry);
+            return true;
+        }
 
         void AppendSlotError(string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, string errorMessage,
             int? code = null, string? category = null, string? suggestion = null, bool? retrySafe = null)
@@ -1344,7 +1372,7 @@ public partial class McpServer
                 entry["suggestion"] = suggestion;
             if (retrySafe.HasValue)
                 entry["retry_safe"] = retrySafe.Value;
-            resultsArray.Add(entry);
+            TryAppendResult(entry, toolName, toolArgs);
         }
 
         // Rate-limited slot error variant. Mirrors the shape of `AppendSlotError` so existing
@@ -1368,7 +1396,7 @@ public partial class McpServer
             // #1581: 既存の #1560 フィールド（`error_category`, `retry_after_ms`）と並べて
             // canonical envelope（`category`, `suggestion`, `retry_safe`）も書き、トップレベル
             // とスロット単位のレート制限エラーで判定形状を揃える。
-            resultsArray.Add(new JsonObject
+            var entry = new JsonObject
             {
                 ["tool"] = toolName,
                 ["args_summary"] = BuildArgsSummary(toolArgs),
@@ -1379,7 +1407,8 @@ public partial class McpServer
                 ["category"] = McpErrorEnvelope.CategoryRateLimited,
                 ["suggestion"] = $"Back off for at least {retryAfterMs} ms before retrying this tool.",
                 ["retry_safe"] = true,
-            });
+            };
+            TryAppendResult(entry, toolName, toolArgs);
         }
 
         foreach (var q in queries)
@@ -1387,6 +1416,18 @@ public partial class McpServer
             var toolName = q?["tool"]?.GetValue<string>();
             var toolArgs = q?["arguments"];
             var slotStopwatch = Stopwatch.StartNew();
+
+            if (truncated)
+            {
+                slotStopwatch.Stop();
+                truncatedQueries.Add(new JsonObject
+                {
+                    ["tool"] = toolName,
+                    ["args_summary"] = BuildArgsSummary(toolArgs),
+                    ["reason"] = "response_byte_limit_already_exceeded",
+                });
+                continue;
+            }
 
             if (string.IsNullOrEmpty(toolName))
             {
@@ -1526,14 +1567,15 @@ public partial class McpServer
 
                 slotStopwatch.Stop();
                 var structured = response["result"]?["structuredContent"];
-                successCount++;
-                resultsArray.Add(new JsonObject
+                var entry = new JsonObject
                 {
                     ["tool"] = toolName,
                     ["args_summary"] = BuildArgsSummary(toolArgs),
                     ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                     ["result"] = structured?.DeepClone(),
-                });
+                };
+                if (TryAppendResult(entry, toolName, toolArgs))
+                    successCount++;
             }
             catch (Exception ex)
             {
@@ -1563,14 +1605,34 @@ public partial class McpServer
                 ["total_elapsed_ms"] = totalElapsedMs,
                 ["success_count"] = successCount,
                 ["failure_count"] = failureCount,
+                ["response_byte_limit"] = responseByteLimit,
+                ["estimated_response_bytes"] = estimatedResponseBytes,
             },
             ["results"] = resultsArray,
         };
+        if (truncated)
+        {
+            payload["truncated"] = true;
+            payload["truncated_queries"] = truncatedQueries;
+        }
         var summary = failureCount == 0
             ? $"Executed {resultsArray.Count} queries in {totalElapsedMs} ms (all succeeded)."
             : $"Executed {resultsArray.Count} queries in {totalElapsedMs} ms ({successCount} succeeded, {failureCount} failed).";
+        if (truncated)
+            summary += $" Response truncated at {responseByteLimit} bytes; split the batch or lower per-slot limits.";
         return CreateToolResult(id, summary, payload);
     }
+
+    private static int GetBatchQueryResponseByteLimit()
+    {
+        var configured = Environment.GetEnvironmentVariable(BatchQueryResponseByteLimitEnvVar);
+        if (int.TryParse(configured, out var limit) && limit > 0)
+            return limit;
+        return DefaultBatchQueryResponseByteLimit;
+    }
+
+    private int EstimateJsonUtf8Bytes(JsonNode node) =>
+        Encoding.UTF8.GetByteCount(node.ToJsonString(_jsonOptions));
 
     /// <summary>
     /// Build a compact, single-line summary string of a batch slot's arguments
