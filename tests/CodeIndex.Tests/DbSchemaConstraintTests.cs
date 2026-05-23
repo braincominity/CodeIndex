@@ -55,6 +55,8 @@ public class DbSchemaConstraintTests
                 Assert.Equal(0L, CountRows(conn, table, "file_id IS NULL"));
                 Assert.Equal(1L, CountRows(conn, table, "file_id = 1"));
             }
+            Assert.Equal(0L, CountFtsMatches(conn, "orphan"));
+            Assert.Equal(1L, CountFtsMatches(conn, "ok"));
         }
         finally
         {
@@ -121,8 +123,14 @@ public class DbSchemaConstraintTests
                 line INTEGER NOT NULL DEFAULT 0,
                 message TEXT NOT NULL
             );
+            CREATE VIRTUAL TABLE fts_chunks USING fts5(
+                content,
+                content='chunks',
+                content_rowid='id'
+            );
             INSERT INTO files (id, path, lang, size, lines, checksum, modified) VALUES (1, 'src/Legacy.cs', 'csharp', 1, 1, 'abc', '2026-01-01 00:00:00');
             INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content) VALUES (1, 0, 1, 1, 'ok'), (NULL, 1, 1, 1, 'orphan');
+            INSERT INTO fts_chunks(rowid, content) SELECT id, content FROM chunks;
             INSERT INTO reference_lines (file_id, line, context) VALUES (1, 1, 'ok'), (NULL, 2, 'orphan');
             INSERT INTO symbols (file_id, kind, name, line) VALUES (1, 'function', 'Ok', 1), (NULL, 'function', 'Orphan', 2);
             INSERT INTO symbol_references (file_id, symbol_name, reference_kind, line) VALUES (1, 'Ok', 'call', 1), (NULL, 'Orphan', 'call', 2);
@@ -154,6 +162,14 @@ public class DbSchemaConstraintTests
     {
         using var cmd = conn.CreateCommand();
         cmd.CommandText = $"SELECT COUNT(*) FROM {tableName} WHERE {where}";
+        return (long)cmd.ExecuteScalar()!;
+    }
+
+    private static long CountFtsMatches(SqliteConnection conn, string query)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH @query";
+        cmd.Parameters.AddWithValue("@query", query);
         return (long)cmd.ExecuteScalar()!;
     }
 }

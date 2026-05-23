@@ -33,6 +33,7 @@ public class DbContext : IDisposable
     private PreparedCommandCache? _preparedCommands;
     private bool _suppressWriteWorkTracking = true;
     private bool _hasWriteWork;
+    private bool _rebuildFtsAfterSchemaMigration;
 
     internal static Action<string>? OptimizePragmaExecutedForTesting { get; set; }
 
@@ -1321,6 +1322,11 @@ public class DbContext : IDisposable
                 content='chunks',
                 content_rowid='id'
             )");
+        if (_rebuildFtsAfterSchemaMigration)
+        {
+            Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('rebuild')");
+            _rebuildFtsAfterSchemaMigration = false;
+        }
 
         // FTS5 content-synced triggers — keep fts_chunks in sync with chunks table.
         // Without these, CASCADE DELETEs on chunks leave orphan entries in fts_chunks.
@@ -1450,6 +1456,11 @@ public class DbContext : IDisposable
         Execute($"DROP TRIGGER IF EXISTS fts_chunks_ai");
         Execute($"DROP TRIGGER IF EXISTS fts_chunks_ad");
         Execute($"DROP TRIGGER IF EXISTS fts_chunks_au");
+        if (string.Equals(tableName, "chunks", StringComparison.Ordinal))
+        {
+            Execute("DROP TABLE IF EXISTS fts_chunks");
+            _rebuildFtsAfterSchemaMigration = true;
+        }
         Execute($"DELETE FROM {tableName} WHERE file_id IS NULL");
         Execute($"ALTER TABLE {tableName} RENAME TO {oldTableName}");
         Execute(createSql);
