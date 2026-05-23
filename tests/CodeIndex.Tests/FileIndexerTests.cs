@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.Versioning;
+using System.Text;
 using System.Threading.Tasks;
 using CodeIndex.Database;
 using CodeIndex.Cli;
@@ -1279,6 +1280,35 @@ public class FileIndexerTests
                 .ToList();
 
             Assert.Equal(["app.js", "src/.gitignore", "src/Service.cs"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_ReadsGitignoreAndCdidxignoreAsUtf8()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(Path.Combine(tempDir, "資料"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "cafe"));
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "資料/\n", Encoding.UTF8);
+            File.WriteAllText(Path.Combine(tempDir, ".cdidxignore"), "cafe/éclair.py\n", Encoding.UTF8);
+            File.WriteAllText(Path.Combine(tempDir, "資料", "ignored.py"), "print('ignored')");
+            File.WriteAllText(Path.Combine(tempDir, "cafe", "éclair.py"), "print('ignored')");
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('kept')");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "keep.py"], files);
         }
         finally
         {
