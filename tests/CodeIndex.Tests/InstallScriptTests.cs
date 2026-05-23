@@ -3467,6 +3467,51 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void ReinstallReal_VersionFirstLineWithUpdateHint_AcceptsAndContinues()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        // #1626: older validated releases can legitimately append the standard
+        // update-check hint to the single-line --version output. The validator
+        // must accept only that exact suffix shape, not arbitrary trailing text.
+        // #1626: 検証対象の古いリリースは --version の 1 行出力に定型の更新
+        // ヒントを追記しうるため、その suffix だけを許容する。
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version)
+                    echo "cdidx v1.2.3 (commit abc1234, built 2026-05-12, clean) [A newer release is available: v1.2.4]"
+                    ;;
+                search)
+                    echo "sample.py:1:def greet(name):"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("first non-empty line of cdidx --version must be exactly", stderr);
+    }
+
+    [Fact]
     public void ReinstallReal_SearchHeaderInlineDiagnostic_AbortsWithError()
     {
         if (OperatingSystem.IsWindows())

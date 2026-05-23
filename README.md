@@ -73,9 +73,20 @@ progress line so the display does not wrap.
 Use `cdidx` when a repository will be searched repeatedly from terminals,
 scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 
+### Shell Completion
+
+Generate completion scripts with `cdidx --completions <bash|zsh|fish>`.
+The generated scripts complete subcommands, flags, and common flag values:
+`--lang` suggests supported languages, `--kind` suggests symbol/reference
+kinds, and path-like options such as `--db`, `--path`, and `--output` use shell
+file completion.
+
 ## Highlights
 
 - CLI-first search with human-readable and machine-oriented output.
+- `cdidx --version` checks GitHub releases at most once per day and appends a
+  newer-release hint when one is available; set `CDIDX_DISABLE_UPDATE_CHECK=1`
+  to suppress the check.
 - Search ranking prefers public/exported symbol matches ahead of protected,
   internal, and private matches; `--no-visibility-rank` keeps the legacy order.
 - `symbols`, `definition`, `unused`, and `hotspots` can include or exclude
@@ -115,7 +126,7 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
   `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`,
   `index_writer_version`, `index_newer_than_reader`,
   `index_newer_than_reader_reason`, `unknown_extension_file_count`,
-  `path_case_sensitive`, `db_pragma_settings`, `hooks`, `stale_after_seconds`,
+  `path_case_sensitive`, `mac_profile`, `db_pragma_settings`, `hooks`, `stale_after_seconds`,
   `index_age_seconds`, `degraded_reason`, `recommended_action`, and `alternative_action`; keep this
   list synchronized with `DEVELOPER_GUIDE.md` and `AGENT_GUIDE.md`.
   `hotspot_family_degraded_reason` distinguishes legacy DBs without hotspot-family
@@ -255,9 +266,19 @@ script / CI では `--yes`（または `--force`）が必要です。
 ターミナル、スクリプト、CI、AI ツールから同じリポジトリを繰り返し検索する
 場合は `cdidx` が向いています。1回限りのテキスト検索には `rg` が向いています。
 
+### シェル補完
+
+`cdidx --completions <bash|zsh|fish>` で補完スクリプトを生成できます。
+生成されたスクリプトは subcommand、flag、よく使う flag 値を補完します。
+`--lang` は対応言語、`--kind` は symbol / reference kind を提示し、`--db`、
+`--path`、`--output` など path 系 option は shell の file completion を使います。
+
 ## 特長
 
 - CLI-first の検索。人間向け出力と機械処理向け出力に対応。
+- `cdidx --version` は GitHub releases を 1 日 1 回まで確認し、新しい
+  リリースがある場合にヒントを追記します。確認を抑止するには
+  `CDIDX_DISABLE_UPDATE_CHECK=1` を設定します。
 - 検索順位は public/exported なシンボル一致を protected、internal、private より優先します。
   従来順が必要な場合は `--no-visibility-rank` を使えます。
 - `symbols`、`definition`、`unused`、`hotspots` は `--visibility` と
@@ -295,7 +316,7 @@ script / CI では `--yes`（または `--force`）が必要です。
   `indexed_head_branch`、`indexed_head_timestamp`、`commits_ahead_of_indexed_head`、
   `index_writer_version`、`index_newer_than_reader`、
   `index_newer_than_reader_reason`、`unknown_extension_file_count`、
-  `path_case_sensitive`、`db_pragma_settings`、`hooks`、`stale_after_seconds`、
+  `path_case_sensitive`、`mac_profile`、`db_pragma_settings`、`hooks`、`stale_after_seconds`、
   `index_age_seconds`、`degraded_reason`、`recommended_action`、`alternative_action` を対象にします。
   この一覧は `DEVELOPER_GUIDE.md` と `AGENT_GUIDE.md` に同期してください。
   `hotspot_family_degraded_reason` は、hotspot-family 未対応の legacy DB
