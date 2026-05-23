@@ -196,7 +196,6 @@ public class DbWriter
                 else
                 {
                     ExecuteSql($"RELEASE SAVEPOINT {_savepointName}");
-                    _writer._markWriteWork?.Invoke();
                 }
                 // Mark committed after success so Dispose() will rollback if Commit/Release throws.
                 // コミット/リリース成功後に committed に遷移し、失敗時は Dispose() でロールバックされるようにする。
