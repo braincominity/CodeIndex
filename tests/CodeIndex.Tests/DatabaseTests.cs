@@ -44,6 +44,57 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void Dispose_AfterWriteWork_RunsOptimizePragma()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_optimize_write_test_{Guid.NewGuid():N}.db");
+        var optimizeCount = 0;
+        DbContext.OptimizePragmaExecutedForTesting = dataSource =>
+        {
+            if (dataSource.Contains(Path.GetFileName(dbPath), StringComparison.Ordinal))
+                optimizeCount++;
+        };
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+            }
+
+            Assert.Equal(1, optimizeCount);
+        }
+        finally
+        {
+            DbContext.OptimizePragmaExecutedForTesting = null;
+            DeleteDbFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Dispose_WithoutWriteWork_SkipsOptimizePragma()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_optimize_read_test_{Guid.NewGuid():N}.db");
+        var optimizeCount = 0;
+        DbContext.OptimizePragmaExecutedForTesting = dataSource =>
+        {
+            if (dataSource.Contains(Path.GetFileName(dbPath), StringComparison.Ordinal))
+                optimizeCount++;
+        };
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+            }
+
+            Assert.Equal(0, optimizeCount);
+        }
+        finally
+        {
+            DbContext.OptimizePragmaExecutedForTesting = null;
+            DeleteDbFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void InitializeSchema_CreatesReferenceCompositeIndexesForGraphLookups()
     {
         var indexes = ReadIndexNames(_db.Connection, "symbol_references");
@@ -424,6 +475,22 @@ public class DatabaseTests : IDisposable
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = "SELECT generated FROM files WHERE path = 'src/generated.g.cs'";
         Assert.Equal(1L, cmd.ExecuteScalar());
+    }
+
+    [Fact]
+    public void GetUnchangedFileId_ReturnsNullWhenTimestampMatchesButChecksumDiffers()
+    {
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var file = new FileRecord
+        {
+            Path = "src/coarse-time.py", Lang = "python", Size = 50, Lines = 5,
+            Modified = modified, Checksum = "first_checksum",
+        };
+        _writer.UpsertFile(file);
+
+        var id = _writer.GetUnchangedFileId("src/coarse-time.py", modified, "second_checksum");
+
+        Assert.Null(id);
     }
 
     [Fact]
@@ -1167,24 +1234,38 @@ public class DatabaseTests : IDisposable
 
     private void DeleteDbPath()
     {
-        if (!File.Exists(_dbPath))
-            return;
+        DeleteDbFiles(_dbPath);
+    }
 
+    private static void DeleteDbFiles(string dbPath)
+    {
+        SqliteConnection.ClearAllPools();
+        foreach (var path in new[] { dbPath, dbPath + "-wal", dbPath + "-shm" })
+        {
+            if (!File.Exists(path))
+                continue;
+
+            DeleteDbFile(path);
+        }
+    }
+
+    private static void DeleteDbFile(string dbPath)
+    {
         try
         {
-            File.Delete(_dbPath);
+            File.Delete(dbPath);
         }
         catch (IOException)
         {
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (File.Exists(_dbPath))
-                File.Delete(_dbPath);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
         }
         catch (UnauthorizedAccessException)
         {
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (File.Exists(_dbPath))
-                File.Delete(_dbPath);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
         }
     }
 
