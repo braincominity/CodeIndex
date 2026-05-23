@@ -167,13 +167,21 @@ public class DbContext : IDisposable
             // 通常経路にフォールバックさせて read-write-CREATE の副作用を防ぐ。
             if (UriRequestsReadOnly(dbPath))
             {
-                _connection = new SqliteConnection($"Data Source={dbPath}");
-                _connection.Open();
-                Execute("PRAGMA busy_timeout=5000");
-                ApplyConnectionPerformancePragmas();
-                RegisterConnectionFunctionsWithRetry(_connection);
-                _isReadOnly = true;
-                return;
+                try
+                {
+                    _connection = new SqliteConnection($"Data Source={dbPath}");
+                    _connection.Open();
+                    Execute("PRAGMA busy_timeout=5000");
+                    ApplyConnectionPerformancePragmas();
+                    RegisterConnectionFunctionsWithRetry(_connection);
+                    _isReadOnly = true;
+                    return;
+                }
+                catch
+                {
+                    _connection?.Dispose();
+                    throw;
+                }
             }
 
             // Bare file: URI — normalize to a filesystem path and fall through.
@@ -219,11 +227,24 @@ public class DbContext : IDisposable
             // read-only FS / サンドボックスでも縮退 read path を動かせるようフォールバック。
             // immutable=1 を付けないと SQLite は -shm/-wal を触ろうとして CANTOPEN で落ちることがある。
             _connection?.Dispose();
-            _connection = OpenReadOnly(dbPath);
-            Execute("PRAGMA busy_timeout=5000");
-            ApplyConnectionPerformancePragmas();
-            RegisterConnectionFunctionsWithRetry(_connection);
-            _isReadOnly = true;
+            try
+            {
+                _connection = OpenReadOnly(dbPath);
+                Execute("PRAGMA busy_timeout=5000");
+                ApplyConnectionPerformancePragmas();
+                RegisterConnectionFunctionsWithRetry(_connection);
+                _isReadOnly = true;
+            }
+            catch
+            {
+                _connection?.Dispose();
+                throw;
+            }
+        }
+        catch
+        {
+            _connection?.Dispose();
+            throw;
         }
 
         if (!_isReadOnly)
