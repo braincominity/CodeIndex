@@ -1175,8 +1175,14 @@ run_reinstall_real() {
     # `prefixv1.2.3` の左境界違反が素通りするため、awk の match() で直前文字が
     # 識別子クラスなら棄却する。POSIX awk の RSTART/RLENGTH は BSD awk・gawk・
     # mawk すべて対応しているためポータブル。
+    local reinstall_version_output_for_token_check="$reinstall_version_output"
+    case "$reinstall_version_output_for_token_check" in
+        *" [A newer release is available: v"*"]")
+            reinstall_version_output_for_token_check="${reinstall_version_output_for_token_check% \[A newer release is available: v*\]}"
+            ;;
+    esac
     local reinstall_found_versions
-    reinstall_found_versions="$(printf '%s\n' "$reinstall_version_output" \
+    reinstall_found_versions="$(printf '%s\n' "$reinstall_version_output_for_token_check" \
         | awk '{
             line = $0
             while (match(line, /v[0-9]+\.[0-9]+\.[0-9]+([A-Za-z0-9._+-]*)?/)) {
@@ -1196,7 +1202,9 @@ run_reinstall_real() {
     # Real `cdidx --version` output is exactly one non-empty line that
     # starts with `cdidx v<ver>` and, since #1550, optionally ends with a
     # parenthesized build-metadata block `(commit <sha>, built <date>,
-    # <clean|dirty>)`. No bare trailing text is permitted. Require two
+    # <clean|dirty>)`, followed by the exact #1626 update-check hint when
+    # the validated version is older than the latest release. No bare
+    # trailing text is permitted. Require two
     # invariants:
     #   (a) EXACTLY one non-empty line in the output, rejecting multi-line
     #       shapes such as `cdidx v1.2.3\nwarning: expected package v1.2.3
@@ -1205,14 +1213,16 @@ run_reinstall_real() {
     #       distinct version token.
     #   (b) That single non-empty line EITHER EXACTLY equals `${BINARY_NAME}
     #       v<requested>` OR equals `${BINARY_NAME} v<requested> (<build
-    #       metadata>)`. Trailing-diagnostic shapes such as
+    #       metadata>)`, with an optional exact update-check hint suffix.
+    #       Trailing-diagnostic shapes such as
     #       `cdidx v1.2.3 warning: expected package missing` (no parens
     #       around the trailing text) are rejected.
     # single-token の診断文だけで silent pass しないよう、`cdidx --version` の
     # 出力全体が 1 行の非空行で、その行が `${BINARY_NAME} v<要求版>` か
-    # `${BINARY_NAME} v<要求版> (<build metadata>)` のいずれかと完全一致する
-    # ことを要求する（#1550 以降、末尾に括弧で囲ったメタデータが付くケースを
-    # 許容する）。末尾に括弧無しの診断文が続く `cdidx v1.2.3 warning: ...` や、
+    # `${BINARY_NAME} v<要求版> (<build metadata>)` に、必要なら #1626 の定型
+    # update-check hint が続く形と完全一致することを要求する（#1550 以降、末尾に
+    # 括弧で囲ったメタデータが付くケースを許容する）。末尾に括弧無しの診断文が続く
+    # `cdidx v1.2.3 warning: ...` や、
     # 先頭行の後に診断行が続く `cdidx v1.2.3\nwarning: ...` のような shape は
     # これで弾く。
     local reinstall_nonempty_line_count
@@ -1223,18 +1233,24 @@ run_reinstall_real() {
     local reinstall_first_version_line
     reinstall_first_version_line="$(printf '%s\n' "$reinstall_version_output" | awk 'NF { print; exit }')"
     local reinstall_version_head="${BINARY_NAME} v${reinstall_expected_version}"
+    local reinstall_version_line_core="$reinstall_first_version_line"
+    case "$reinstall_first_version_line" in
+        *" [A newer release is available: v"*"]")
+            reinstall_version_line_core="${reinstall_first_version_line% \[A newer release is available: v*\]}"
+            ;;
+    esac
     local reinstall_version_line_ok=0
-    if [ "$reinstall_first_version_line" = "$reinstall_version_head" ]; then
+    if [ "$reinstall_version_line_core" = "$reinstall_version_head" ]; then
         reinstall_version_line_ok=1
     else
-        case "$reinstall_first_version_line" in
+        case "$reinstall_version_line_core" in
             "${reinstall_version_head} ("*")")
                 reinstall_version_line_ok=1
                 ;;
         esac
     fi
     if [ "$reinstall_version_line_ok" != "1" ]; then
-        error "Real reinstall validation: first non-empty line of ${BINARY_NAME} --version must be exactly '${reinstall_version_head}' or '${reinstall_version_head} (<build metadata>)' but got: ${reinstall_first_version_line:-<empty>}."
+        error "Real reinstall validation: first non-empty line of ${BINARY_NAME} --version must be exactly '${reinstall_version_head}', '${reinstall_version_head} (<build metadata>)', or either form with the standard update hint suffix but got: ${reinstall_first_version_line:-<empty>}."
     fi
 
     # Build a tiny scratch project and exercise `cdidx . --db <tmp>` so that

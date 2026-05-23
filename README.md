@@ -84,6 +84,9 @@ file completion.
 ## Highlights
 
 - CLI-first search with human-readable and machine-oriented output.
+- `cdidx --version` checks GitHub releases at most once per day and appends a
+  newer-release hint when one is available; set `CDIDX_DISABLE_UPDATE_CHECK=1`
+  to suppress the check.
 - Search ranking prefers public/exported symbol matches ahead of protected,
   internal, and private matches; `--no-visibility-rank` keeps the legacy order.
 - `symbols`, `definition`, `unused`, and `hotspots` can include or exclude
@@ -273,6 +276,9 @@ script / CI では `--yes`（または `--force`）が必要です。
 ## 特長
 
 - CLI-first の検索。人間向け出力と機械処理向け出力に対応。
+- `cdidx --version` は GitHub releases を 1 日 1 回まで確認し、新しい
+  リリースがある場合にヒントを追記します。確認を抑止するには
+  `CDIDX_DISABLE_UPDATE_CHECK=1` を設定します。
 - 検索順位は public/exported なシンボル一致を protected、internal、private より優先します。
   従来順が必要な場合は `--no-visibility-rank` を使えます。
 - `symbols`、`definition`、`unused`、`hotspots` は `--visibility` と
