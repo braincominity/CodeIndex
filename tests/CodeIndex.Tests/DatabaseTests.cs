@@ -161,6 +161,13 @@ public class DatabaseTests : IDisposable
             Assert.Equal(dbPath, ex.Path);
             Assert.Contains("newer cdidx", ex.Message, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("rebuild the index", ex.Hint, StringComparison.OrdinalIgnoreCase);
+
+            using var verifyConnection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString);
+            verifyConnection.Open();
+            using var verifyJournalMode = verifyConnection.CreateCommand();
+            verifyJournalMode.CommandText = "PRAGMA journal_mode";
+            var journalMode = Assert.IsType<string>(verifyJournalMode.ExecuteScalar());
+            Assert.False(string.Equals("wal", journalMode, StringComparison.OrdinalIgnoreCase));
         }
         finally
         {

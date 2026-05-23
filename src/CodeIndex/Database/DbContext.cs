@@ -191,6 +191,7 @@ public class DbContext : IDisposable
                 dbPath: dbPath);
             Execute("PRAGMA busy_timeout=5000");
             RegisterConnectionFunctionsWithRetry(_connection);
+            EnsureWritableUserVersionSupported(dbPath);
 
             // Enable WAL mode and verify it was applied / WALモードを有効にし適用を確認
             var journalMode = ExecuteScalar("PRAGMA journal_mode=WAL");
@@ -218,7 +219,6 @@ public class DbContext : IDisposable
 
         if (!_isReadOnly)
         {
-            EnsureWritableUserVersionSupported(dbPath);
             EnsureForeignKeysEnabled();
         }
     }
