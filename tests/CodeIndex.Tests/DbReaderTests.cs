@@ -16301,6 +16301,42 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void Search_RawLongQueryDemotesChunksBelowHalfTokenCoverage_Issue1970()
+    {
+        var tokens = new[]
+        {
+            "coverage1970alpha",
+            "coverage1970bravo",
+            "coverage1970charlie",
+            "coverage1970delta",
+            "coverage1970echo",
+            "coverage1970foxtrot",
+            "coverage1970golf",
+            "coverage1970hotel",
+            "coverage1970india",
+            "coverage1970juliet",
+        };
+        InsertIndexedFile(
+            "src/coverage1970_partial.py",
+            "python",
+            $"{tokens[0]} {tokens[1]}\n");
+        InsertIndexedFile(
+            "src/coverage1970_fuller.py",
+            "python",
+            string.Join(' ', tokens.Take(6)) + "\n");
+
+        var rawQuery = string.Join(" OR ", tokens.Select(token => $"\"{token}\""));
+        var results = _reader.Search(rawQuery, rawQuery: true, limit: 10);
+
+        var fullerIndex = results.FindIndex(r => r.Path == "src/coverage1970_fuller.py");
+        var partialIndex = results.FindIndex(r => r.Path == "src/coverage1970_partial.py");
+        Assert.True(fullerIndex >= 0, "file covering at least 60% of the long query should appear in results");
+        Assert.True(partialIndex >= 0, "file covering fewer than half of the long query should appear in results");
+        Assert.True(fullerIndex < partialIndex,
+            $"higher-coverage file ranked at {fullerIndex} should precede partial match at {partialIndex}");
+    }
+
+    [Fact]
     public void SearchRankingBuckets_DoNotEmbedCorrelatedExistsInOrderBy_Issue1520()
     {
         // Issue #1520: the ranking constants must not embed a correlated EXISTS subquery
