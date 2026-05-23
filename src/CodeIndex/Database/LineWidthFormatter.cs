@@ -125,15 +125,15 @@ public static class LineWidthFormatter
         return new ClampedTextResult(finalPrefix + line[safeStart..safeEnd] + finalSuffix, true, line.Length - visibleChars);
     }
 
-    // Avoid slicing in the middle of a UTF-16 surrogate pair so output stays valid UTF-16
-    // and non-BMP characters (e.g. emoji like U+1F44D) survive line clamping without becoming U+FFFD.
+    // Avoid slicing in the middle of a grapheme cluster so combining marks, ZWJ emoji,
+    // and non-BMP characters survive line clamping without becoming detached or invalid.
     private static int SafeSliceEnd(string line, int desiredEnd)
     {
         if (desiredEnd <= 0)
             return 0;
         if (desiredEnd >= line.Length)
             return line.Length;
-        return char.IsLowSurrogate(line[desiredEnd]) ? desiredEnd - 1 : desiredEnd;
+        return PreviousTextElementBoundary(line, desiredEnd);
     }
 
     private static int SafeSliceStart(string line, int desiredStart)
@@ -142,11 +142,26 @@ public static class LineWidthFormatter
             return 0;
         if (desiredStart >= line.Length)
             return line.Length;
-        return char.IsLowSurrogate(line[desiredStart]) ? desiredStart + 1 : desiredStart;
+        return PreviousTextElementBoundary(line, desiredStart);
     }
 
     private static string BuildMarker(int elidedChars) =>
         $"...(+{elidedChars})...";
+
+    private static int PreviousTextElementBoundary(string line, int index)
+    {
+        var previous = 0;
+        foreach (var boundary in StringInfo.ParseCombiningCharacters(line))
+        {
+            if (boundary == index)
+                return index;
+            if (boundary > index)
+                return previous;
+            previous = boundary;
+        }
+
+        return previous;
+    }
 
     private static int SliceEndByDisplayWidth(string line, int maxDisplayWidth, int start = 0)
     {
