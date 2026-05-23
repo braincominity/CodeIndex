@@ -1271,6 +1271,39 @@ public class DatabaseTests : IDisposable
         Assert.Null(_db.GetMetaString("fold_key_fingerprint"));
     }
 
+    [Fact]
+    public void GetUnchangedFileId_ReturnsNullWhenStoredLineCountDiffers()
+    {
+        var file = new FileRecord
+        {
+            Path = "src/crlf.cs",
+            Lang = "csharp",
+            Size = 20,
+            Lines = 2,
+            Checksum = "same-logical-content",
+            Modified = DateTime.UtcNow,
+        };
+        var fileId = _writer.UpsertFile(file);
+
+        var unchanged = _writer.GetUnchangedFileId(
+            file.Path,
+            file.Modified.AddMinutes(1),
+            file.Checksum,
+            size: 24,
+            lines: 2,
+            language: file.Lang);
+        var staleLines = _writer.GetUnchangedFileId(
+            file.Path,
+            file.Modified.AddMinutes(2),
+            file.Checksum,
+            size: 24,
+            lines: 3,
+            language: file.Lang);
+
+        Assert.Equal(fileId, unchanged);
+        Assert.Null(staleLines);
+    }
+
     public void Dispose()
     {
         _db.Dispose();
