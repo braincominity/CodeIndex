@@ -970,6 +970,20 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ProcessFrame_ResponseSerializationFailureForInvalidRequestId_ReturnsErrorWithNullId()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            _ => throw new JsonException("serializer failed"));
+
+        var response = server.ProcessFrame("""{"jsonrpc":"2.0","id":false,"method":"tools/list"}""");
+
+        using var doc = JsonDocument.Parse(response!);
+        var root = doc.RootElement;
+        Assert.Equal(-32603, root.GetProperty("error").GetProperty("code").GetInt32());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("id").ValueKind);
+    }
+
+    [Fact]
     public async Task ProcessLineAsync_ResponseWriteFailure_DoesNotThrow()
     {
         using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());

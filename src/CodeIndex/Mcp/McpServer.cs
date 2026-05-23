@@ -646,10 +646,12 @@ public partial class McpServer : IDisposable
 
     private static void ExtractResponseId(JsonNode request, out bool hasId, out JsonNode? id)
     {
-        if (request is JsonObject obj && obj.TryGetPropertyValue("id", out var requestId))
+        if (request is JsonObject obj)
         {
-            hasId = true;
-            id = requestId is null ? null : JsonNode.Parse(requestId.ToJsonString());
+            if (TryGetRequestId(obj, out hasId, out var requestId))
+                id = requestId is null ? null : JsonNode.Parse(requestId.ToJsonString());
+            else
+                id = null;
             return;
         }
 
