@@ -1603,7 +1603,9 @@ public static class IndexCommandRunner
                     if (!writer.HasFileAtPath(relPath))
                     {
                         using var purgeTxn = writer.BeginTransaction();
-                        var purged = writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, relPath);
+                        var purged = projectRootWritten
+                            ? writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, relPath)
+                            : 0;
                         if (purged > 0)
                         {
                             DemoteReadinessOnce();
@@ -1716,7 +1718,9 @@ public static class IndexCommandRunner
                 {
                     using var purgeTxn = writer.BeginTransaction();
                     var purged = writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum)
-                        + writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path);
+                        + (projectRootWritten
+                            ? writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path)
+                            : 0);
                     if (purged > 0)
                     {
                         DemoteReadinessOnce();
@@ -1740,7 +1744,8 @@ public static class IndexCommandRunner
                 DemoteReadinessOnce();
                 using var txn = writer.BeginTransaction();
                 writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
-                writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path);
+                if (projectRootWritten)
+                    writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path);
                 WriteProjectRootOnce();
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
