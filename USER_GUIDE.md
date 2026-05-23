@@ -895,7 +895,8 @@ cdidx report --output report.tgz --json
 | `--focus-line <line>` | `excerpt` | Line inside the requested excerpt whose focused column should stay visible when `--max-line-width` clamps long single-line content; requires `--focus-column` (max: 10000000) |
 | `--focus-column <n>` | `excerpt` | Column inside the focused line to keep centered when `--max-line-width` clamps long single-line content; must be within that line's length (max: 100000) |
 | `--focus-length <n>` | `excerpt` | Width of the focused span when `--max-line-width` clamps long single-line content (default: 1, max: 100000; requires `--focus-column`) |
-| `--rebuild` | `index` | Delete existing DB and rebuild |
+| `--rebuild` | `index` | Delete existing DB and rebuild. Interactive terminals prompt for confirmation; non-interactive runs must also pass `--yes` (or `--force`) and otherwise exit with code 64. |
+| `--yes` | `index` | Confirm `--rebuild` in non-interactive scripts and CI. |
 | `--verbose` | `index` | Show per-file status (`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`) |
 | `--commits <id...>` | `index` | Update only files changed in specified commits. Prefer this after a normal commit because git history includes rename/delete paths. |
 | `--changed-between <old-ref> <new-ref>` | `index` | Update only files changed between two git refs. Useful after branch switches when tooling knows the previous and current refs; rename old and new paths are both considered. |
@@ -1104,6 +1105,19 @@ Over-quota tool calls receive a structured JSON-RPC `-32000` error:
 
 Inside `batch_query`, each inner slot is also checked against the inner tool's bucket. Over-quota slots surface `error_category: "rate_limited"` and `retry_after_ms` directly in the per-slot result without failing the rest of the batch.
 
+### Logs
+
+Persistent lifecycle logs are written to the first available directory in this order:
+
+1. `CDIDX_GLOBAL_TOOL_LOG_DIR` (`~`, `~/...`, `$HOME/...`, and `${HOME}/...` are expanded)
+2. Windows: `%LOCALAPPDATA%\cdidx\logs`
+3. macOS: `~/Library/Logs/cdidx`
+4. Linux and other Unix-like systems: `$XDG_STATE_HOME/cdidx/logs`
+5. Linux and other Unix-like systems without `XDG_STATE_HOME`: `~/.local/state/cdidx/logs`
+6. fallback: the OS local-app-data directory, then the temp directory under `cdidx/logs`
+
+Run `cdidx status --log-path` to print the active log directory without opening the index database. Add `--json` to receive `{"log_path":"..."}`. Set `CDIDX_DISABLE_PERSISTENT_LOG=1` to disable persistent lifecycle logs.
+
 ### Project-local configuration file (`.cdidxrc.json`)
 
 You can check a `.cdidxrc.json` file into a repository to set per-project defaults instead of relying on shell-profile or CI env vars (#1571). On startup `cdidx` walks upward from the current working directory looking for the first `.cdidxrc.json`, validates its schema, and materializes recognized keys as process environment variables — so every existing env-var consumer picks them up without further changes.
@@ -1139,11 +1153,11 @@ JSON5-style line comments (`//`) and trailing commas are accepted so the file st
 
 ## How it works
 
-cdidx scans your project directory, applies the built-in skip lists plus user `.gitignore` / `.cdidxignore` rules, skips Windows Hidden/System paths before language detection, splits each remaining source file into overlapping chunks, and stores everything in a SQLite database with FTS5 full-text search. Incremental mode (default) first purges database entries for files that no longer exist on disk, then checks each file's last-modified timestamp against the database — only files whose timestamp exactly matches are skipped, and any difference (newer or older) triggers re-indexing. Newly appeared files are indexed as new entries. The same path filter is reused for scoped `--files` / `--commits` refreshes, commit-based refreshes automatically switch to a full scan when ignore files changed, and Git-managed workspaces follow the repository's `core.ignorecase` setting when evaluating ignore rules. This means re-indexing after a branch switch only processes the files that actually differ unless ignore rules themselves changed.
+cdidx scans your project directory, applies the built-in skip lists plus user `.gitignore` / `.cdidxignore` rules, skips Windows Hidden/System paths before language detection, splits each remaining source file into overlapping chunks, and stores everything in a SQLite database with FTS5 full-text search. In each directory, `.gitignore` is loaded before `.cdidxignore`; later rules are additive, so a `!` pattern in `.cdidxignore` can re-include a path ignored earlier by `.gitignore` in the same directory scope. Incremental mode (default) first purges database entries for files that no longer exist on disk, then checks each file's last-modified timestamp against the database — only files whose timestamp exactly matches are skipped, and any difference (newer or older) triggers re-indexing. Newly appeared files are indexed as new entries. The same path filter is reused for scoped `--files` / `--commits` refreshes, commit-based refreshes automatically switch to a full scan when ignore files changed, and Git-managed workspaces follow the repository's `core.ignorecase` setting when evaluating ignore rules. This means re-indexing after a branch switch only processes the files that actually differ unless ignore rules themselves changed.
 
 ### Incremental update reliability
 
-Scoped updates use the same path filter as a full scan. If a commit-based update sees `.gitignore` or `.cdidxignore` change in the selected commits, cdidx promotes that run to a full incremental scan so newly ignored files are purged and newly re-included files can be indexed. `--files` only updates the paths you pass, so after changing ignore rules use `cdidx <projectPath> --json` unless a commit-scoped command can see the ignore-file change.
+Scoped updates use the same path filter as a full scan, including the same `.gitignore`-then-`.cdidxignore` ordering and `!` re-include semantics. If a commit-based update sees `.gitignore` or `.cdidxignore` change in the selected commits, cdidx promotes that run to a full incremental scan so newly ignored files are purged and newly re-included files can be indexed. `--files` only updates the paths you pass, so after changing ignore rules use `cdidx <projectPath> --json` unless a commit-scoped command can see the ignore-file change.
 
 Indexing commits file-by-file SQLite transactions. Other processes can query during a long refresh, but they may observe a transitional live snapshot until the indexing command finishes. For automation, run `cdidx status --check --json` after the refresh completes and require `index_matches_workspace: true` before trusting search, symbol, or graph results.
 
@@ -1478,7 +1492,7 @@ These options make it practical to keep the index up-to-date in real time, even 
 
 ### Incremental update reliability
 
-Scoped updates reuse the same skip and ignore rules as a full scan. If a commit-based update sees `.gitignore` or `.cdidxignore` change in the selected commits, cdidx promotes that run to a full incremental scan automatically so files newly hidden by ignore rules are purged and files newly re-included can appear in the index. `--files` is narrower: it updates only the paths you pass, so use a full `cdidx ./myproject --json` refresh after changing ignore rules unless a commit-scoped command can see that ignore-file change.
+Scoped updates reuse the same skip and ignore rules as a full scan, including `.gitignore` before `.cdidxignore` in each directory and `!` re-include patterns in later rules. If a commit-based update sees `.gitignore` or `.cdidxignore` change in the selected commits, cdidx promotes that run to a full incremental scan automatically so files newly hidden by ignore rules are purged and files newly re-included can appear in the index. `--files` is narrower: it updates only the paths you pass, so use a full `cdidx ./myproject --json` refresh after changing ignore rules unless a commit-scoped command can see that ignore-file change.
 
 The index database is updated file by file inside SQLite transactions. Queries from another process can continue during a long refresh, but they may observe a transitional mix of old and new rows until the indexing command finishes. Treat that as a live snapshot, not a corrupted database: rerun `cdidx status --check --json` after the refresh completes before trusting automation results. If a branch switch or other history-moving operation left rows for files that exist only on the previous checkout, incremental JSON output includes `head_changed`, `prior_indexed_head_commit`, `current_head_commit`, and `head_change_notice`; use `--changed-between <old-ref> <new-ref>` when you know both refs, or run a full project refresh when you need repo-wide stale-path cleanup.
 
@@ -2326,7 +2340,7 @@ cdidx ./myproject --json
 
 インデックスの問題をデバッグしたり、どのファイルが実際に処理されたかを確認するのに便利です。
 
-既定では `cdidx index` は DB を `<projectPath>/.cdidx/codeindex.db` に置きます。組み込みのスキップ対象 (`node_modules`、`bin`、`obj`、lockfile など) は常に除外され、さらにユーザーの `.gitignore` と任意の `.cdidxignore` もフルスキャン、`--files`、`--commits` の更新経路すべてで尊重されます。Windows では Hidden または System 属性が付いたパスを言語検出前にスキップするため、広い範囲を走査しても `System Volume Information` や `$Recycle.Bin` のような OS 管理 cache には入りません。プロジェクト所有のソースを索引したい場合は、ignore ルールでは再包含できないため先にそれらの属性を外してください。Git 管理下では ignore の大文字小文字判定は OS 名ではなくリポジトリの `core.ignorecase` に従い、repo 配下の subdirectory を project root にした場合でも同じ設定を引き継ぎます。さらに、その subdirectory より上位にある repo-root などの `.gitignore` も有効で、`--commits` の changed path も一度リポジトリルート基準で解決してから project root 配下へ絞り込みます。`**` も無制限のクロスディレクトリ wildcard ではなく Git の path-form globstar でのみ特別扱いされます。`--commits` 実行中に ignore ファイル自体が変わっていた場合は、新しく無視対象になったファイルを安全にパージするため自動でフルスキャンへフォールバックします。不正な ignore 行は警告してスキップし、index 全体は中断しません。逆に ignore ファイル自体が読めない場合は、そのディレクトリ範囲を fail-closed で扱い、不完全なルールのまま index しません。
+既定では `cdidx index` は DB を `<projectPath>/.cdidx/codeindex.db` に置きます。組み込みのスキップ対象 (`node_modules`、`bin`、`obj`、lockfile など) は常に除外され、さらにユーザーの `.gitignore` と任意の `.cdidxignore` もフルスキャン、`--files`、`--commits` の更新経路すべてで尊重されます。同じディレクトリでは `.gitignore` を先に読み、その後で `.cdidxignore` を読みます。後のルールは加算的に適用されるため、`.cdidxignore` の `!` パターンで同じディレクトリスコープの `.gitignore` が先に除外した path を再包含できます。Windows では Hidden または System 属性が付いたパスを言語検出前にスキップするため、広い範囲を走査しても `System Volume Information` や `$Recycle.Bin` のような OS 管理 cache には入りません。プロジェクト所有のソースを索引したい場合は、ignore ルールでは再包含できないため先にそれらの属性を外してください。Git 管理下では ignore の大文字小文字判定は OS 名ではなくリポジトリの `core.ignorecase` に従い、repo 配下の subdirectory を project root にした場合でも同じ設定を引き継ぎます。さらに、その subdirectory より上位にある repo-root などの `.gitignore` も有効で、`--commits` の changed path も一度リポジトリルート基準で解決してから project root 配下へ絞り込みます。`**` も無制限のクロスディレクトリ wildcard ではなく Git の path-form globstar でのみ特別扱いされます。`--commits` 実行中に ignore ファイル自体が変わっていた場合は、新しく無視対象になったファイルを安全にパージするため自動でフルスキャンへフォールバックします。不正な ignore 行は警告してスキップし、index 全体は中断しません。逆に ignore ファイル自体が読めない場合は、そのディレクトリ範囲を fail-closed で扱い、不完全なルールのまま index しません。
 
 古い `.cdidx/codeindex.db` を Unicode-aware な `--exact` に上げたいだけなら、フル rebuild は不要です:
 
@@ -2647,7 +2661,8 @@ cdidx report --output report.tgz --json
 | `--focus-line <line>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に、注目列を表示に残したい抜粋内の行。`--focus-column` 必須（最大: 10000000） |
 | `--focus-column <n>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際に、中央付近へ残したい列。対象行の長さ以内である必要があります（最大: 100000） |
 | `--focus-length <n>` | `excerpt` | `--max-line-width` で長い1行を切り詰める際の注目範囲の幅（デフォルト: 1、最大: 100000、`--focus-column` 必須） |
-| `--rebuild` | `index` | 既存DBを削除して再構築 |
+| `--rebuild` | `index` | 既存DBを削除して再構築。interactive terminal では確認プロンプトを出し、non-interactive 実行では `--yes`（または `--force`）がないと終了コード 64 で拒否する。 |
+| `--yes` | `index` | non-interactive script / CI で `--rebuild` を確認済みとして実行する。 |
 | `--verbose` | `index` | ファイルごとのステータス表示（`[OK  ]`/`[SKIP]`/`[DEL ]`/`[ERR ]`） |
 | `--commits <id...>` | `index` | 指定コミットの変更ファイルのみ更新。通常のコミット後はこちらを推奨。rename/delete の旧パスも git 履歴から拾える。 |
 | `--changed-between <old-ref> <new-ref>` | `index` | 2つの git ref 間で変更されたファイルのみ更新。ブランチ切り替え前後の ref が分かる workflow 向け。rename の旧パスと新パスを両方考慮する。 |
@@ -2850,6 +2865,19 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 
 `batch_query` の内側スロットも各内側ツールのバケットで判定されます。超過したスロットはバッチ全体を失敗させずに、スロット結果に `error_category: "rate_limited"` と `retry_after_ms` を含めて返します。
 
+### ログ
+
+永続 lifecycle log は、利用可能な最初のディレクトリに書き込まれます。解決順は次のとおりです。
+
+1. `CDIDX_GLOBAL_TOOL_LOG_DIR`（`~`、`~/...`、`$HOME/...`、`${HOME}/...` は展開されます）
+2. Windows: `%LOCALAPPDATA%\cdidx\logs`
+3. macOS: `~/Library/Logs/cdidx`
+4. Linux などの Unix 系: `$XDG_STATE_HOME/cdidx/logs`
+5. `XDG_STATE_HOME` がない Linux などの Unix 系: `~/.local/state/cdidx/logs`
+6. fallback: OS の local-app-data ディレクトリ、それも無い場合は temp 配下の `cdidx/logs`
+
+有効なログディレクトリだけを確認したい場合は `cdidx status --log-path` を実行してください。このコマンドは index database を開きません。`--json` を付けると `{"log_path":"..."}` を返します。永続 lifecycle log を無効化するには `CDIDX_DISABLE_PERSISTENT_LOG=1` を設定します。
+
 ### プロジェクト固有の設定ファイル (`.cdidxrc.json`)
 
 シェルプロファイルや CI の環境変数に頼らず、プロジェクトごとの既定値を `.cdidxrc.json` ファイルとしてリポジトリにチェックインできます (#1571)。`cdidx` は起動時にカレントディレクトリから上方向に最初の `.cdidxrc.json` を探索し、スキーマを検証してから既知のキーをプロセス環境変数として注入します。これにより、既存の環境変数コンシューマはコード変更なしに同じ値を受け取れます。
@@ -2885,11 +2913,11 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 
 ## 動作の仕組み
 
-cdidxはプロジェクトディレクトリを走査し、組み込みのスキップ対象とユーザーの `.gitignore` / `.cdidxignore` を適用し、Windows の Hidden/System パスを言語検出前にスキップしたうえで、各ソースファイルを重複を持つチャンクに分割し、FTS5全文検索付きのSQLiteデータベースに格納します。インクリメンタルモード（デフォルト）では各ファイルの最終更新タイムスタンプをDB内の値と比較し、完全一致するファイルのみスキップします。タイムスタンプが異なれば（新しくても古くても）再インデックスされるため、ブランチ切り替え後も正確にインデックスが更新されます。`--files` / `--commits` の部分更新も同じパスフィルタを再利用し、commit 側で ignore ファイルが変わったときは自動でフルスキャンへ切り替わります。Git 管理下の ignore 判定は OS 固定ではなく `core.ignorecase` を参照し、`**` も Git の path-form globstar だけを特別扱いするため、差分更新でも Git と同じ範囲で ignore されます。つまり ignore ルール自体が変わらない限り、差分再インデックスは実際に変わったファイルだけに比例します。
+cdidxはプロジェクトディレクトリを走査し、組み込みのスキップ対象とユーザーの `.gitignore` / `.cdidxignore` を適用し、Windows の Hidden/System パスを言語検出前にスキップしたうえで、各ソースファイルを重複を持つチャンクに分割し、FTS5全文検索付きのSQLiteデータベースに格納します。同じディレクトリでは `.gitignore` を先に読み、`.cdidxignore` を後から読むため、後の `.cdidxignore` ルールは加算的に適用され、`!` パターンで同じディレクトリスコープの `.gitignore` 除外を再包含できます。インクリメンタルモード（デフォルト）では各ファイルの最終更新タイムスタンプをDB内の値と比較し、完全一致するファイルのみスキップします。タイムスタンプが異なれば（新しくても古くても）再インデックスされるため、ブランチ切り替え後も正確にインデックスが更新されます。`--files` / `--commits` の部分更新も同じパスフィルタを再利用し、commit 側で ignore ファイルが変わったときは自動でフルスキャンへ切り替わります。Git 管理下の ignore 判定は OS 固定ではなく `core.ignorecase` を参照し、`**` も Git の path-form globstar だけを特別扱いするため、差分更新でも Git と同じ範囲で ignore されます。つまり ignore ルール自体が変わらない限り、差分再インデックスは実際に変わったファイルだけに比例します。
 
 ### インクリメンタル更新の信頼性
 
-部分更新はフルスキャンと同じ path filter を使います。commit ベースの更新で対象コミット内の `.gitignore` または `.cdidxignore` 変更を検出した場合、cdidx はその実行をフルインクリメンタルスキャンへ昇格し、新しく ignore されたファイルを purge し、新しく再包含されたファイルを index できるようにします。`--files` は渡した path だけを更新するため、ignore ルール変更後は、commit-scoped コマンドがその ignore ファイル変更を見られる場合を除き、`cdidx <projectPath> --json` を使ってください。
+部分更新はフルスキャンと同じ path filter を使い、同じ `.gitignore` から `.cdidxignore` への順序と `!` 再包含 semantics を適用します。commit ベースの更新で対象コミット内の `.gitignore` または `.cdidxignore` 変更を検出した場合、cdidx はその実行をフルインクリメンタルスキャンへ昇格し、新しく ignore されたファイルを purge し、新しく再包含されたファイルを index できるようにします。`--files` は渡した path だけを更新するため、ignore ルール変更後は、commit-scoped コマンドがその ignore ファイル変更を見られる場合を除き、`cdidx <projectPath> --json` を使ってください。
 
 indexing はファイル単位の SQLite transaction を commit します。長い refresh 中も別プロセスから query できますが、indexing command が完了するまでは途中の live snapshot を観測する可能性があります。自動化では refresh 完了後に `cdidx status --check --json` を実行し、`index_matches_workspace: true` を確認してから search、symbol、graph の結果を信頼してください。
 

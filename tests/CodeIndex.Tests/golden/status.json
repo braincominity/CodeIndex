@@ -73,6 +73,7 @@
   "hotspot_family_degraded_reason": "cross-file hotspot family grouping is degraded (hotspot_family_support_not_indexed=csharp); Run \u0060cdidx index \u003CprojectPath\u003E\u0060 to rebuild and stamp authoritative hotspot families.",
   "csharp_symbol_name_ready": false,
   "csharp_metadata_target_ready": false,
+  "csharp_metadata_target_degraded_reason": "csharp_metadata_target_stamp_outdated",
   "sql_graph_contract_ready": true,
   "fold_ready": false,
   "fold_ready_reason": "missing_fold_backfill",
