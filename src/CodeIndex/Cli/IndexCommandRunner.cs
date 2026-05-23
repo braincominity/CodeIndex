@@ -16,6 +16,9 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class IndexCommandRunner
 {
+    internal const string IncludeSymbolKindsEnvironmentVariable = "CDIDX_INDEX_INCLUDE_SYMBOL_KINDS";
+    internal const string ExcludeSymbolKindsEnvironmentVariable = "CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS";
+    private const string SymbolKindFilterMetaKey = "index_symbol_kind_filter";
     private const int ScanCheckpointVersion = 1;
     private const string ScanCheckpointFileName = "scan-checkpoint.json";
 
@@ -146,6 +149,17 @@ public static class IndexCommandRunner
                 options.ParseError,
                 CommandExitCodes.UsageError,
                 "Rerun `cdidx index <projectPath> --commits <commit-id> [commit-id ...]` with 7-40 hex commit object IDs.",
+                CommandErrorCodes.UsageError);
+        }
+
+        if (options.SymbolKindFilter.ParseError != null)
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                options.SymbolKindFilter.ParseError,
+                CommandExitCodes.UsageError,
+                "Pass comma-separated symbol kinds such as `--exclude-symbol-kind function,test_method`, or remove the empty value.",
                 CommandErrorCodes.UsageError);
         }
 
@@ -441,6 +455,7 @@ public static class IndexCommandRunner
         var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
         var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
         var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
+        var priorSymbolKindFilterSignature = db.GetMetaString(SymbolKindFilterMetaKey);
         // Captured BEFORE `--rebuild` drops the DB so an incremental run can warn the user when
         // the worktree's HEAD has moved since the previously indexed snapshot. The same value
         // is read at `status` time (without `--check`) to surface a worktree branch / HEAD
@@ -475,8 +490,8 @@ public static class IndexCommandRunner
         var projectRoot = Path.GetFullPath(options.ProjectPath!);
 
         initialExitCode = isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd, indexCancellation.Token)
-            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, initialCwd, indexCancellation.Token);
+            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexCancellation.Token)
+            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexCancellation.Token);
             }
         }
         catch (IndexInterruptedException ex)
@@ -651,7 +666,8 @@ public static class IndexCommandRunner
         "--db", "--rebuild", "--verbose", "--json", "--dry-run", "--force",
         "--yes", "--watch", "--debounce", "--duration-format", "--max-file-bytes",
         "--parallelism",
-        "--commits", "--changed-between", "--files", "--solution", "--project", "--help",
+        "--commits", "--changed-between", "--files", "--solution", "--project",
+        "--include-symbol-kind", "--exclude-symbol-kind", "--help",
     ];
 
     private static readonly string[] AcceptedBackfillFoldFlags =
@@ -738,6 +754,22 @@ public static class IndexCommandRunner
         string? solutionPath = null;
         string? projectFilterError = null;
         string? parseError = null;
+        var includeSymbolKinds = new List<string>();
+        var excludeSymbolKinds = new List<string>();
+        string? symbolKindFilterError = null;
+        var includeSymbolKindsSpecifiedOnCli = false;
+        var excludeSymbolKindsSpecifiedOnCli = false;
+
+        AddSymbolKindFilterValues(
+            IncludeSymbolKindsEnvironmentVariable,
+            Environment.GetEnvironmentVariable(IncludeSymbolKindsEnvironmentVariable),
+            includeSymbolKinds,
+            ref symbolKindFilterError);
+        AddSymbolKindFilterValues(
+            ExcludeSymbolKindsEnvironmentVariable,
+            Environment.GetEnvironmentVariable(ExcludeSymbolKindsEnvironmentVariable),
+            excludeSymbolKinds,
+            ref symbolKindFilterError);
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -830,6 +862,38 @@ public static class IndexCommandRunner
                 case var option when option.StartsWith("--project=", StringComparison.Ordinal):
                     projectFilters.Add(option["--project=".Length..]);
                     break;
+                case "--include-symbol-kind" when i + 1 < args.Length:
+                    if (!includeSymbolKindsSpecifiedOnCli)
+                    {
+                        includeSymbolKinds.Clear();
+                        includeSymbolKindsSpecifiedOnCli = true;
+                    }
+                    AddSymbolKindFilterValues("--include-symbol-kind", args[++i], includeSymbolKinds, ref symbolKindFilterError);
+                    break;
+                case var option when option.StartsWith("--include-symbol-kind=", StringComparison.Ordinal):
+                    if (!includeSymbolKindsSpecifiedOnCli)
+                    {
+                        includeSymbolKinds.Clear();
+                        includeSymbolKindsSpecifiedOnCli = true;
+                    }
+                    AddSymbolKindFilterValues("--include-symbol-kind", option["--include-symbol-kind=".Length..], includeSymbolKinds, ref symbolKindFilterError);
+                    break;
+                case "--exclude-symbol-kind" when i + 1 < args.Length:
+                    if (!excludeSymbolKindsSpecifiedOnCli)
+                    {
+                        excludeSymbolKinds.Clear();
+                        excludeSymbolKindsSpecifiedOnCli = true;
+                    }
+                    AddSymbolKindFilterValues("--exclude-symbol-kind", args[++i], excludeSymbolKinds, ref symbolKindFilterError);
+                    break;
+                case var option when option.StartsWith("--exclude-symbol-kind=", StringComparison.Ordinal):
+                    if (!excludeSymbolKindsSpecifiedOnCli)
+                    {
+                        excludeSymbolKinds.Clear();
+                        excludeSymbolKindsSpecifiedOnCli = true;
+                    }
+                    AddSymbolKindFilterValues("--exclude-symbol-kind", option["--exclude-symbol-kind=".Length..], excludeSymbolKinds, ref symbolKindFilterError);
+                    break;
                 case "--files":
                     while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
                         updateFiles.Add(args[++i]);
@@ -911,7 +975,25 @@ public static class IndexCommandRunner
             DurationFormat = durationFormat,
             MaxFileSizeBytes = maxFileSizeBytes,
             Parallelism = parallelism,
+            SymbolKindFilter = SymbolKindFilter.Create(includeSymbolKinds, excludeSymbolKinds, symbolKindFilterError),
         };
+    }
+
+    private static void AddSymbolKindFilterValues(string source, string? value, List<string> target, ref string? parseError)
+    {
+        if (value == null)
+            return;
+
+        foreach (var raw in value.Split(',', StringSplitOptions.TrimEntries))
+        {
+            if (raw.Length == 0)
+            {
+                parseError ??= $"{source} contains an empty symbol kind";
+                continue;
+            }
+
+            target.Add(raw);
+        }
     }
 
     internal const string IndexParallelismEnvironmentVariable = "CDIDX_INDEX_PARALLELISM";
@@ -1095,6 +1177,7 @@ public static class IndexCommandRunner
         string? priorIndexedProjectRoot,
         string? priorIndexedHeadCommit,
         string? currentHeadCommit,
+        string? priorSymbolKindFilterSignature,
         string? initialCwd,
         CancellationToken cancellationToken)
     {
@@ -1104,6 +1187,22 @@ public static class IndexCommandRunner
         var unresolvedMergeExitCode = RejectUnresolvedMergeState(projectRoot, options.Json, jsonOptions);
         if (unresolvedMergeExitCode != null)
             return unresolvedMergeExitCode.Value;
+        var symbolKindFilterMatchesPrior = string.Equals(
+            priorSymbolKindFilterSignature,
+            options.SymbolKindFilter.Signature,
+            StringComparison.Ordinal);
+        var scopedUpdateSymbolKindFilterMatchesPrior = symbolKindFilterMatchesPrior
+            || (priorSymbolKindFilterSignature == null && !options.SymbolKindFilter.IsActive);
+        if (!scopedUpdateSymbolKindFilterMatchesPrior)
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "symbol-kind filter policy cannot change during a scoped update because existing files would keep symbols from the prior index policy",
+                CommandExitCodes.UsageError,
+                "Run a full index refresh without --files, --commits, or --changed-between when changing --include-symbol-kind or --exclude-symbol-kind.",
+                CommandErrorCodes.UsageError);
+        }
 
         var targetPaths = new HashSet<string>(StringComparer.Ordinal);
         var relevantIgnoreFileChanged = false;
@@ -1223,6 +1322,7 @@ public static class IndexCommandRunner
                 priorIndexedProjectRoot,
                 priorIndexedHeadCommit,
                 currentHeadCommit,
+                priorSymbolKindFilterSignature,
                 initialCwd,
                 cancellationToken);
         }
@@ -1252,6 +1352,7 @@ public static class IndexCommandRunner
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
         var currentMetadataTargetVersion = DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var priorMetadataTargetCsharpMatchesCurrent = priorMetadataTargetCsharp == currentMetadataTargetVersion;
+        var symbolsDroppedByKindFilter = 0;
 
         void WriteJsonLiveness(string message)
         {
@@ -1691,7 +1792,8 @@ public static class IndexCommandRunner
                     record.Checksum,
                     size: record.Size,
                     language: record.Lang,
-                    allowReuse: record.Lang is not ("javascript" or "typescript")
+                    allowReuse: symbolKindFilterMatchesPrior
+                        && record.Lang is not ("javascript" or "typescript")
                         && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                         && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                         && (record.Lang != "sql" || sqlGraphContractMatchesCurrent));
@@ -1719,6 +1821,7 @@ public static class IndexCommandRunner
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
                 var fileContext = new FileContext(projectRoot, record.Path, absPath, record.Lang);
                 postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
+                symbolsDroppedByKindFilter += options.SymbolKindFilter.Apply(symbols);
                 writer.InsertSymbols(symbols);
                 var references = ReferenceExtractor.Extract(
                     fileId,
@@ -1870,6 +1973,7 @@ public static class IndexCommandRunner
                 foldReadyAfter = writer.MarkFoldReady();
             }
             writer.WriteCdidxWriterVersion(ConsoleUi.LoadVersion());
+            writer.SetMeta(SymbolKindFilterMetaKey, options.SymbolKindFilter.Signature);
         }
         if (errors == 0)
             StampIndexedHeadMetadata(writer, projectRoot);
@@ -1925,7 +2029,9 @@ public static class IndexCommandRunner
                     Skipped = skipped,
                     Warnings = warnings,
                     Errors = errors,
+                    SymbolsDroppedByKindFilter = symbolsDroppedByKindFilter,
                 },
+                SymbolKindFilter = options.SymbolKindFilter.ToJsonResult(),
                 GraphTableAvailable = graphTableAvailableAfter,
                 IssuesTableAvailable = issuesTableAvailableAfter,
                 SqlGraphContractReady = sqlGraphContractReadyAfter,
@@ -1966,6 +2072,7 @@ public static class IndexCommandRunner
             if (skipped > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Skipped", $"{skipped:N0}", indent: "  "));
             if (warnings > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Warnings", $"{warnings:N0}", indent: "  "));
             if (errors > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Errors", $"{errors:N0}", indent: "  "));
+            if (symbolsDroppedByKindFilter > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Filtered symbols", $"{symbolsDroppedByKindFilter:N0}", indent: "  "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("Graph", graphTableAvailableAfter ? "ready" : "degraded", indent: "  "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("Issues", issuesTableAvailableAfter ? "ready" : "degraded", indent: "  "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("SQL graph", sqlGraphContractReadyAfter ? "ready" : "degraded", indent: "  "));
@@ -2496,6 +2603,7 @@ public static class IndexCommandRunner
         string? priorIndexedProjectRoot,
         string? priorIndexedHeadCommit,
         string? currentHeadCommit,
+        string? priorSymbolKindFilterSignature,
         string? initialCwd,
         CancellationToken cancellationToken)
     {
@@ -2518,6 +2626,10 @@ public static class IndexCommandRunner
             priorHotspotFamilyVersions,
             priorHotspotFamilyMarkerFingerprints,
             currentHotspotFamilyMarkerFingerprints);
+        var symbolKindFilterMatchesPrior = string.Equals(
+            priorSymbolKindFilterSignature,
+            options.SymbolKindFilter.Signature,
+            StringComparison.Ordinal);
 
         // Detect HEAD divergence on the default incremental path (no `--rebuild`). `--rebuild`
         // already wipes the DB, so the prior captured HEAD is irrelevant there. We only signal
@@ -2739,6 +2851,7 @@ public static class IndexCommandRunner
 
         CancellationTokenSource? indexCts = null;
         int processed = 0, skipped = 0, warnings = warningList.Count, errors = errorList.Count;
+        var symbolsDroppedByKindFilter = 0;
 
           var interactiveIndexSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
         var redirectedIndexingMessagePrinted = false;
@@ -2751,7 +2864,8 @@ public static class IndexCommandRunner
         Task? jsonHeartbeatTask = null;
         var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
         var extractionParallelism = Math.Max(1, options.Parallelism);
-        var parallelizeExtraction = options.Rebuild || writer.GetCounts().files == 0;
+        var parallelizeExtraction = (options.Rebuild || writer.GetCounts().files == 0)
+            && !options.SymbolKindFilter.IsActive;
 
         void StartIndexSpinnerIfNeeded()
         {
@@ -3008,8 +3122,9 @@ public static class IndexCommandRunner
                             record.Checksum,
                             size: record.Size,
                             language: record.Lang,
-                            allowReuse: record.Lang is not ("javascript" or "typescript")
-                        && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
+                            allowReuse: symbolKindFilterMatchesPrior
+                                && record.Lang is not ("javascript" or "typescript")
+                                && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                                 && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                                 && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
                                 && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
@@ -3054,7 +3169,10 @@ public static class IndexCommandRunner
                     if (item.Symbols == null)
                         SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(item.FilePath, record.Lang));
                     var fileContext = new FileContext(projectRoot, record.Path, item.FilePath, record.Lang);
-                    postExtractionHooks.OnSymbolsExtracted(fileContext, AsMutableList(symbols));
+                    var mutableSymbols = symbols as IList<SymbolRecord> ?? symbols.ToList();
+                    postExtractionHooks.OnSymbolsExtracted(fileContext, mutableSymbols);
+                    symbolsDroppedByKindFilter += options.SymbolKindFilter.Apply(mutableSymbols);
+                    symbols = (IReadOnlyList<SymbolRecord>)mutableSymbols;
                     writer.InsertSymbols(symbols);
                     var references = item.References == null
                         ? ReferenceExtractor.Extract(
@@ -3216,6 +3334,7 @@ public static class IndexCommandRunner
                 foldReadyReasonAfter = GetFoldReadyReason(backfillReady, foldVersionMatchesCurrent, foldFingerprintMatchesCurrent);
 
             writer.WriteCdidxWriterVersion(ConsoleUi.LoadVersion());
+            writer.SetMeta(SymbolKindFilterMetaKey, options.SymbolKindFilter.Signature);
 
             // Successful no-op full scans should repair stale / missing explicit-DB roots
             // only after readiness stamps succeed, so an interruption cannot rewrite trust
@@ -3299,7 +3418,9 @@ public static class IndexCommandRunner
                     FilesPurged = purged,
                     Warnings = warnings,
                     Errors = errors,
+                    SymbolsDroppedByKindFilter = symbolsDroppedByKindFilter,
                 },
+                SymbolKindFilter = options.SymbolKindFilter.ToJsonResult(),
                 GraphTableAvailable = graphTableAvailableAfter,
                 IssuesTableAvailable = issuesTableAvailableAfter,
                 SqlGraphContractReady = sqlGraphContractReadyAfter,
@@ -3350,6 +3471,7 @@ public static class IndexCommandRunner
             }
             if (warnings > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Warnings", $"{warnings:N0}", indent: "  "));
             if (errors > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Errors", $"{errors:N0}", indent: "  "));
+            if (symbolsDroppedByKindFilter > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Filtered symbols", $"{symbolsDroppedByKindFilter:N0}", indent: "  "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("Graph", graphTableAvailableAfter ? "ready" : "degraded", indent: "  "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("Issues", issuesTableAvailableAfter ? "ready" : "degraded", indent: "  "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("SQL graph", sqlGraphContractReadyAfter ? "ready" : "degraded", indent: "  "));
@@ -4061,6 +4183,78 @@ public sealed class IndexCommandOptions
     public DurationOutputFormat DurationFormat { get; init; } = DurationOutputFormat.Auto;
     public long? MaxFileSizeBytes { get; init; }
     public int Parallelism { get; init; } = IndexCommandRunner.DefaultIndexParallelism();
+    public SymbolKindFilter SymbolKindFilter { get; init; } = SymbolKindFilter.Empty;
+}
+
+public sealed class SymbolKindFilter
+{
+    public static readonly SymbolKindFilter Empty = new([], [], null);
+
+    private readonly HashSet<string> _include;
+    private readonly HashSet<string> _exclude;
+
+    private SymbolKindFilter(IReadOnlyList<string> include, IReadOnlyList<string> exclude, string? parseError)
+    {
+        Include = include;
+        Exclude = exclude;
+        ParseError = parseError;
+        _include = new HashSet<string>(include, StringComparer.OrdinalIgnoreCase);
+        _exclude = new HashSet<string>(exclude, StringComparer.OrdinalIgnoreCase);
+        Signature = $"include={string.Join(",", include)};exclude={string.Join(",", exclude)}";
+    }
+
+    public IReadOnlyList<string> Include { get; }
+    public IReadOnlyList<string> Exclude { get; }
+    public string? ParseError { get; }
+    public string Signature { get; }
+    public bool IsActive => Include.Count > 0 || Exclude.Count > 0;
+
+    public static SymbolKindFilter Create(IEnumerable<string> include, IEnumerable<string> exclude, string? parseError)
+    {
+        static IReadOnlyList<string> Normalize(IEnumerable<string> values)
+            => values
+                .Select(value => value.Trim())
+                .Where(value => value.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+        return new SymbolKindFilter(Normalize(include), Normalize(exclude), parseError);
+    }
+
+    public int Apply(IList<SymbolRecord> symbols)
+    {
+        if (!IsActive || symbols.Count == 0)
+            return 0;
+
+        var before = symbols.Count;
+        for (var i = symbols.Count - 1; i >= 0; i--)
+        {
+            var kind = symbols[i].Kind;
+            if (ShouldDrop(kind))
+                symbols.RemoveAt(i);
+        }
+
+        return before - symbols.Count;
+    }
+
+    public IndexSymbolKindFilterJsonResult ToJsonResult()
+        => new()
+        {
+            Include = Include,
+            Exclude = Exclude,
+        };
+
+    private bool ShouldDrop(string? kind)
+    {
+        if (string.IsNullOrWhiteSpace(kind))
+            return _include.Count > 0;
+
+        if (_include.Count > 0 && !_include.Contains(kind))
+            return true;
+
+        return _exclude.Contains(kind);
+    }
 }
 
 public sealed class BackfillFoldCommandOptions
