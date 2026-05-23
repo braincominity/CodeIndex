@@ -94,7 +94,7 @@ public class DbContext : IDisposable
 
         if (dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase) && UriRequestsReadOnly(dbPath))
         {
-            message = $"database must be writable for backfill-fold: {dbPath}";
+            message = $"database must be writable: {dbPath}";
             return false;
         }
 

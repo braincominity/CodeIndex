@@ -236,6 +236,31 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunVacuum_RejectsReadOnlyUriWithNeutralWritableMessage_Issue1631()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_readonly_uri");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+                ["--db", dbUri],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(CommandErrorCodes.DbError, stderr);
+            Assert.Contains("database must be writable", stderr);
+            Assert.DoesNotContain("backfill-fold", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_EmitsVisibilityInJsonAndHumanOutput_Issue1868()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_visibility_output");
