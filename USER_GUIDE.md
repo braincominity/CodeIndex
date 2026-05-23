@@ -10,7 +10,7 @@ AI/MCP setup, language list, and troubleshooting details.
 [![CodeQL](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml)
 [![Release](https://github.com/Widthdom/CodeIndex/actions/workflows/release.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/release.yml)
 
-![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white)
+![.NET 8.x](https://img.shields.io/badge/.NET-8.x-512BD4?logo=dotnet&logoColor=white)
 ![C#](https://img.shields.io/badge/C%23-12-239120?logo=csharp&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![License](https://img.shields.io/badge/License-FSL--1.1--ALv2-orange)
@@ -411,7 +411,10 @@ RUN export CDIDX_INSTALL_DIR=/usr/local/bin \
 
 ### Option B: NuGet Global Tool
 
-Requires [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
+Requires the [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
+CodeIndex targets `net8.0`; .NET 8.x is the supported and tested SDK/runtime
+line. Newer major .NET releases are outside the supported/tested matrix until
+CI covers them.
 
 ```bash
 dotnet tool install -g cdidx
@@ -443,7 +446,7 @@ dotnet tool update -g cdidx
 
 ### Option C: Build from source
 
-Requires [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
+Requires the [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
 
 ```bash
 dotnet build src/CodeIndex/CodeIndex.csproj -c Release
@@ -1105,6 +1108,19 @@ Over-quota tool calls receive a structured JSON-RPC `-32000` error:
 
 Inside `batch_query`, each inner slot is also checked against the inner tool's bucket. Over-quota slots surface `error_category: "rate_limited"` and `retry_after_ms` directly in the per-slot result without failing the rest of the batch.
 
+### Logs
+
+Persistent lifecycle logs are written to the first available directory in this order:
+
+1. `CDIDX_GLOBAL_TOOL_LOG_DIR` (`~`, `~/...`, `$HOME/...`, and `${HOME}/...` are expanded)
+2. Windows: `%LOCALAPPDATA%\cdidx\logs`
+3. macOS: `~/Library/Logs/cdidx`
+4. Linux and other Unix-like systems: `$XDG_STATE_HOME/cdidx/logs`
+5. Linux and other Unix-like systems without `XDG_STATE_HOME`: `~/.local/state/cdidx/logs`
+6. fallback: the OS local-app-data directory, then the temp directory under `cdidx/logs`
+
+Run `cdidx status --log-path` to print the active log directory without opening the index database. Add `--json` to receive `{"log_path":"..."}`. Set `CDIDX_DISABLE_PERSISTENT_LOG=1` to disable persistent lifecycle logs.
+
 ### Project-local configuration file (`.cdidxrc.json`)
 
 You can check a `.cdidxrc.json` file into a repository to set per-project defaults instead of relying on shell-profile or CI env vars (#1571). On startup `cdidx` walks upward from the current working directory looking for the first `.cdidxrc.json`, validates its schema, and materializes recognized keys as process environment variables — so every existing env-var consumer picks them up without further changes.
@@ -1113,7 +1129,7 @@ Precedence is **CLI flag > environment variable > config file > built-in default
 
 Secrets are intentionally **not** loadable from the file: `CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, and `CDIDX_MCP_HTTP_TOKEN` are env-only so tokens never get checked into version control.
 
-Supported schema (snake_case keys; every key is optional):
+Supported schema (top-level keys are snake_case; nested indexing kind keys keep the CLI issue spelling; every key is optional):
 
 ```jsonc
 {
@@ -1123,6 +1139,10 @@ Supported schema (snake_case keys; every key is optional):
   "disable_persistent_log": true,        // → CDIDX_DISABLE_PERSISTENT_LOG=1
   "global_tool_log_dir": "./.cdidx/logs", // → CDIDX_GLOBAL_TOOL_LOG_DIR
   "stale_after": "2h",                   // → CDIDX_STALE_AFTER
+  "indexing": {
+    "includeKinds": ["class"],           // → CDIDX_INDEX_INCLUDE_SYMBOL_KINDS
+    "excludeKinds": ["test_method"]      // → CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS
+  },
   "mcp": {
     "tools": {
       "allow": ["search", "definition", "references"], // → CDIDX_MCP_TOOLS_ALLOW
@@ -1136,11 +1156,13 @@ Supported schema (snake_case keys; every key is optional):
 }
 ```
 
-JSON5-style line comments (`//`) and trailing commas are accepted so the file stays human-editable. The optional `$schema` key is ignored at runtime; it is honored only so editors that recognize JSON Schema references can offer completion. Setting `disable_persistent_log` to `false` is a no-op (absence already means "logging enabled") — only `true` exports `CDIDX_DISABLE_PERSISTENT_LOG=1`. `stale_after` uses the same compact duration format as `status --check --stale-after`: `30m`, `2h`, or `7d`.
+JSON5-style line comments (`//`) and trailing commas are accepted so the file stays human-editable. The optional `$schema` key is ignored at runtime; it is honored only so editors that recognize JSON Schema references can offer completion. Setting `disable_persistent_log` to `false` is a no-op (absence already means "logging enabled") — only `true` exports `CDIDX_DISABLE_PERSISTENT_LOG=1`. `stale_after` uses the same compact duration format as `status --check --stale-after`: `30m`, `2h`, or `7d`. `indexing.includeKinds` and `indexing.excludeKinds` set the default symbol-kind filter for `cdidx index`; CLI flags `--include-symbol-kind <kind>[,<kind>]` and `--exclude-symbol-kind <kind>[,<kind>]` override those env-backed defaults for a single run.
 
 ## How it works
 
 cdidx scans your project directory, applies the built-in skip lists plus user `.gitignore` / `.cdidxignore` rules, skips Windows Hidden/System paths before language detection, splits each remaining source file into overlapping chunks, and stores everything in a SQLite database with FTS5 full-text search. In each directory, `.gitignore` is loaded before `.cdidxignore`; later rules are additive, so a `!` pattern in `.cdidxignore` can re-include a path ignored earlier by `.gitignore` in the same directory scope. Incremental mode (default) first purges database entries for files that no longer exist on disk, then checks each file's last-modified timestamp against the database — only files whose timestamp exactly matches are skipped, and any difference (newer or older) triggers re-indexing. Newly appeared files are indexed as new entries. The same path filter is reused for scoped `--files` / `--commits` refreshes, commit-based refreshes automatically switch to a full scan when ignore files changed, and Git-managed workspaces follow the repository's `core.ignorecase` setting when evaluating ignore rules. This means re-indexing after a branch switch only processes the files that actually differ unless ignore rules themselves changed.
+
+At index time, `--include-symbol-kind` keeps only matching symbol kinds and `--exclude-symbol-kind` drops matching symbol kinds before rows are written to `symbols`. Values are comma-separated and case-insensitive. If both filters are present, include is applied first and exclude wins for overlapping kinds. The resolved policy is included in index JSON as `symbol_kind_filter`, and the summary reports `symbols_dropped_by_kind_filter`.
 
 ### Incremental update reliability
 
@@ -1340,7 +1362,7 @@ cdidx --version
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 
-Or, if .NET 8+ SDK is available:
+Or, if the .NET 8.x SDK is available:
 
 ```bash
 dotnet tool install -g cdidx
@@ -1785,7 +1807,7 @@ The short version: `version.json` is the single source of truth, and the maintai
 <a id="cdidx日本語"></a>
 # cdidx（日本語）
 
-![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white)
+![.NET 8.x](https://img.shields.io/badge/.NET-8.x-512BD4?logo=dotnet&logoColor=white)
 ![C#](https://img.shields.io/badge/C%23-12-239120?logo=csharp&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![License](https://img.shields.io/badge/License-FSL--1.1--ALv2-orange)
@@ -2179,7 +2201,10 @@ RUN export CDIDX_INSTALL_DIR=/usr/local/bin \
 
 ### 方法B: NuGet グローバルツール
 
-[.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) が必要です。
+[.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0) が必要です。
+CodeIndex は `net8.0` を対象にしており、.NET 8.x がサポート済みかつ
+テスト済みの SDK/runtime 系列です。CI で対象になるまでは、より新しい
+メジャー .NET リリースはサポート・テスト対象外です。
 
 ```bash
 dotnet tool install -g cdidx
@@ -2197,7 +2222,7 @@ dotnet tool update -g cdidx
 
 ### 方法C: ソースからビルド
 
-[.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) が必要です。
+[.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0) が必要です。
 
 ```bash
 dotnet build src/CodeIndex/CodeIndex.csproj -c Release
@@ -2852,6 +2877,19 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 
 `batch_query` の内側スロットも各内側ツールのバケットで判定されます。超過したスロットはバッチ全体を失敗させずに、スロット結果に `error_category: "rate_limited"` と `retry_after_ms` を含めて返します。
 
+### ログ
+
+永続 lifecycle log は、利用可能な最初のディレクトリに書き込まれます。解決順は次のとおりです。
+
+1. `CDIDX_GLOBAL_TOOL_LOG_DIR`（`~`、`~/...`、`$HOME/...`、`${HOME}/...` は展開されます）
+2. Windows: `%LOCALAPPDATA%\cdidx\logs`
+3. macOS: `~/Library/Logs/cdidx`
+4. Linux などの Unix 系: `$XDG_STATE_HOME/cdidx/logs`
+5. `XDG_STATE_HOME` がない Linux などの Unix 系: `~/.local/state/cdidx/logs`
+6. fallback: OS の local-app-data ディレクトリ、それも無い場合は temp 配下の `cdidx/logs`
+
+有効なログディレクトリだけを確認したい場合は `cdidx status --log-path` を実行してください。このコマンドは index database を開きません。`--json` を付けると `{"log_path":"..."}` を返します。永続 lifecycle log を無効化するには `CDIDX_DISABLE_PERSISTENT_LOG=1` を設定します。
+
 ### プロジェクト固有の設定ファイル (`.cdidxrc.json`)
 
 シェルプロファイルや CI の環境変数に頼らず、プロジェクトごとの既定値を `.cdidxrc.json` ファイルとしてリポジトリにチェックインできます (#1571)。`cdidx` は起動時にカレントディレクトリから上方向に最初の `.cdidxrc.json` を探索し、スキーマを検証してから既知のキーをプロセス環境変数として注入します。これにより、既存の環境変数コンシューマはコード変更なしに同じ値を受け取れます。
@@ -2860,7 +2898,7 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 
 シークレットは意図的に**ファイルから読み込めません**。`CDIDX_GITHUB_TOKEN` / `CDIDX_MCP_AUTH_TOKEN` / `CDIDX_MCP_HTTP_TOKEN` は環境変数専用としており、トークンがバージョン管理に混入するのを防ぎます。
 
-対応スキーマ（snake_case、すべて任意）:
+対応スキーマ（top-level key は snake_case、ネストした indexing の kind key は CLI issue の表記を維持、すべて任意）:
 
 ```jsonc
 {
@@ -2870,6 +2908,10 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
   "disable_persistent_log": true,        // → CDIDX_DISABLE_PERSISTENT_LOG=1
   "global_tool_log_dir": "./.cdidx/logs", // → CDIDX_GLOBAL_TOOL_LOG_DIR
   "stale_after": "2h",                   // → CDIDX_STALE_AFTER
+  "indexing": {
+    "includeKinds": ["class"],           // → CDIDX_INDEX_INCLUDE_SYMBOL_KINDS
+    "excludeKinds": ["test_method"]      // → CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS
+  },
   "mcp": {
     "tools": {
       "allow": ["search", "definition", "references"], // → CDIDX_MCP_TOOLS_ALLOW
@@ -2883,11 +2925,13 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 }
 ```
 
-人手で編集しやすいよう JSON5 形式の行コメント（`//`）と末尾カンマを許容します。任意の `$schema` キーはランタイムでは無視され、JSON Schema 参照をサポートするエディタが補完を提供するためだけに認識されます。`disable_persistent_log` を `false` に設定しても何も起きません（不在のままで "ログ有効" が既定）— `true` の場合のみ `CDIDX_DISABLE_PERSISTENT_LOG=1` を export します。`stale_after` は `status --check --stale-after` と同じ compact duration 形式（`30m` / `2h` / `7d`）です。
+人手で編集しやすいよう JSON5 形式の行コメント（`//`）と末尾カンマを許容します。任意の `$schema` キーはランタイムでは無視され、JSON Schema 参照をサポートするエディタが補完を提供するためだけに認識されます。`disable_persistent_log` を `false` に設定しても何も起きません（不在のままで "ログ有効" が既定）— `true` の場合のみ `CDIDX_DISABLE_PERSISTENT_LOG=1` を export します。`stale_after` は `status --check --stale-after` と同じ compact duration 形式（`30m` / `2h` / `7d`）です。`indexing.includeKinds` と `indexing.excludeKinds` は `cdidx index` の symbol-kind filter 既定値を設定し、CLI フラグ `--include-symbol-kind <kind>[,<kind>]` / `--exclude-symbol-kind <kind>[,<kind>]` はその env 経由の既定値を 1 回の実行だけ上書きします。
 
 ## 動作の仕組み
 
 cdidxはプロジェクトディレクトリを走査し、組み込みのスキップ対象とユーザーの `.gitignore` / `.cdidxignore` を適用し、Windows の Hidden/System パスを言語検出前にスキップしたうえで、各ソースファイルを重複を持つチャンクに分割し、FTS5全文検索付きのSQLiteデータベースに格納します。同じディレクトリでは `.gitignore` を先に読み、`.cdidxignore` を後から読むため、後の `.cdidxignore` ルールは加算的に適用され、`!` パターンで同じディレクトリスコープの `.gitignore` 除外を再包含できます。インクリメンタルモード（デフォルト）では各ファイルの最終更新タイムスタンプをDB内の値と比較し、完全一致するファイルのみスキップします。タイムスタンプが異なれば（新しくても古くても）再インデックスされるため、ブランチ切り替え後も正確にインデックスが更新されます。`--files` / `--commits` の部分更新も同じパスフィルタを再利用し、commit 側で ignore ファイルが変わったときは自動でフルスキャンへ切り替わります。Git 管理下の ignore 判定は OS 固定ではなく `core.ignorecase` を参照し、`**` も Git の path-form globstar だけを特別扱いするため、差分更新でも Git と同じ範囲で ignore されます。つまり ignore ルール自体が変わらない限り、差分再インデックスは実際に変わったファイルだけに比例します。
+
+index 時には `--include-symbol-kind` で一致する kind だけを保持し、`--exclude-symbol-kind` で一致する kind を `symbols` に書き込む前に除外できます。値はカンマ区切りで、大文字小文字は区別しません。両方を指定した場合は include を先に適用し、重複した kind では exclude が優先されます。解決済み policy は index JSON の `symbol_kind_filter` に入り、summary には `symbols_dropped_by_kind_filter` が出ます。
 
 ### インクリメンタル更新の信頼性
 
@@ -3087,7 +3131,7 @@ cdidx --version
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 
-または .NET 8+ SDK がある場合:
+または .NET 8.x SDK がある場合:
 
 ```bash
 dotnet tool install -g cdidx

@@ -22,6 +22,8 @@ public static class DegradationReasonCodes
     public const string IssuesTableMissing = "issues_table_available=false";
     public const string CSharpSymbolNameNotReady = "csharp_symbol_name_ready=false";
     public const string CSharpMetadataTargetNotReady = "csharp_metadata_target_ready=false";
+    public const string CSharpMetadataTargetMissingColumn = "csharp_metadata_target_missing_column";
+    public const string CSharpMetadataTargetStampOutdated = "csharp_metadata_target_stamp_outdated";
     public const string IndexNewerThanReader = "index_newer_than_reader=true";
 
     public static readonly IReadOnlyList<string> All =
@@ -40,6 +42,8 @@ public static class DegradationReasonCodes
         IssuesTableMissing,
         CSharpSymbolNameNotReady,
         CSharpMetadataTargetNotReady,
+        CSharpMetadataTargetMissingColumn,
+        CSharpMetadataTargetStampOutdated,
         IndexNewerThanReader,
     ];
 
@@ -148,6 +152,16 @@ public static class DegradationReasonCodes
             CSharpMetadataTargetNotReady => new(
                 code,
                 "C# metadata attribute dependency edges are using legacy heuristics.",
+                "Run `cdidx index <projectPath>` to restamp authoritative C# metadata targets.",
+                "Run `cdidx index <projectPath> --rebuild` for a full rebuild."),
+            CSharpMetadataTargetMissingColumn => new(
+                code,
+                "C# metadata attribute dependency edges are degraded because the symbols.is_metadata_target column is missing.",
+                "Run `cdidx index <projectPath> --rebuild` to recreate the index with metadata-target storage.",
+                "Run `cdidx index <projectPath>` after upgrading if the DB can be migrated in place."),
+            CSharpMetadataTargetStampOutdated => new(
+                code,
+                "C# metadata attribute dependency edges are degraded because the metadata-target version stamp is missing or stale.",
                 "Run `cdidx index <projectPath>` to restamp authoritative C# metadata targets.",
                 "Run `cdidx index <projectPath> --rebuild` for a full rebuild."),
             IndexNewerThanReader => new(
