@@ -16334,6 +16334,12 @@ public class DbReaderTests : IDisposable
         Assert.True(partialIndex >= 0, "file covering fewer than half of the long query should appear in results");
         Assert.True(fullerIndex < partialIndex,
             $"higher-coverage file ranked at {fullerIndex} should precede partial match at {partialIndex}");
+
+        var qualifiedResults = _reader.Search($"content:({rawQuery})", rawQuery: true, limit: 10);
+        var columnListResults = _reader.Search($"{{content}}:({rawQuery})", rawQuery: true, limit: 10);
+
+        Assert.Equal(results.Select(r => r.Path), qualifiedResults.Select(r => r.Path));
+        Assert.Equal(results.Select(r => r.Path), columnListResults.Select(r => r.Path));
     }
 
     [Fact]

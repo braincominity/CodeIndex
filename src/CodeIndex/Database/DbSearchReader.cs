@@ -727,12 +727,30 @@ public partial class DbReader
                 i++;
 
             var token = query[startIdentifier..i];
-            if (!IsRawFtsOperatorToken(token))
+            if (!IsRawFtsOperatorToken(token) && !IsRawFtsColumnQualifierToken(query, startIdentifier, i))
                 tokens.Add(token);
             i--;
         }
 
         return tokens.ToArray();
+    }
+
+    private static bool IsRawFtsColumnQualifierToken(string query, int tokenStart, int tokenEnd)
+    {
+        var afterToken = SkipWhitespace(query, tokenEnd);
+        if (afterToken < query.Length && query[afterToken] == ':')
+            return true;
+
+        var columnListStart = query.LastIndexOf('{', tokenStart);
+        if (columnListStart < 0)
+            return false;
+
+        var columnListEnd = query.IndexOf('}', tokenEnd);
+        if (columnListEnd < 0)
+            return false;
+
+        var afterColumnList = SkipWhitespace(query, columnListEnd + 1);
+        return afterColumnList < query.Length && query[afterColumnList] == ':';
     }
 
     private static bool IsRawFtsOperatorToken(string token)
