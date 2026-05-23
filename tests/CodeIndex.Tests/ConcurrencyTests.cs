@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using CodeIndex.Database;
 using CodeIndex.Models;
-using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -14,10 +13,13 @@ public class ConcurrencyTests : IDisposable
 {
     private readonly string _dbPath;
     private readonly DbContext _db;
+    private readonly IDisposable _sqlitePoolOwner;
+    private bool _disposed;
 
     public ConcurrencyTests()
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_concurrency_{Guid.NewGuid():N}.db");
+        _sqlitePoolOwner = SqlitePoolCleanup.EnterExclusiveOwner();
         _db = new DbContext(_dbPath);
         _db.InitializeSchema();
     }
@@ -540,8 +542,12 @@ public class ConcurrencyTests : IDisposable
 
     public void Dispose()
     {
+        if (_disposed)
+            return;
+
+        _disposed = true;
         _db.Dispose();
-        SqliteConnection.ClearAllPools();
-        try { File.Delete(_dbPath); } catch { }
+        _sqlitePoolOwner.Dispose();
+        try { TestProjectHelper.DeleteFile(_dbPath); } catch { }
     }
 }

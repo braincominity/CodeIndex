@@ -18,18 +18,25 @@ public class LegacySchemaMigrationTests : IDisposable
 {
     private readonly string _dbDir;
     private readonly string _dbPath;
+    private readonly IDisposable _sqlitePoolOwner;
+    private bool _disposed;
 
     public LegacySchemaMigrationTests()
     {
         _dbDir = Path.Combine(Path.GetTempPath(), $"codeindex_legacy_upgrade_{Guid.NewGuid():N}");
         Directory.CreateDirectory(_dbDir);
         _dbPath = Path.Combine(_dbDir, "codeindex.db");
+        _sqlitePoolOwner = SqlitePoolCleanup.EnterExclusiveOwner();
         SeedLegacyDb(_dbPath);
     }
 
     public void Dispose()
     {
-        SqliteConnection.ClearAllPools();
+        if (_disposed)
+            return;
+
+        _disposed = true;
+        _sqlitePoolOwner.Dispose();
         try
         {
             if (Directory.Exists(_dbDir))
@@ -39,7 +46,7 @@ public class LegacySchemaMigrationTests : IDisposable
                 {
                     try { File.SetUnixFileMode(_dbDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute); } catch { }
                 }
-                Directory.Delete(_dbDir, recursive: true);
+                TestProjectHelper.DeleteDirectory(_dbDir);
             }
         }
         catch { /* ignore */ }
@@ -54,7 +61,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // no checksum / indexed_at on files. This mirrors what older cdidx binaries produced.
         // 旧 cdidx が生成していたスキーマ。追加カラム・テーブルをすべて欠落させる。
         var builder = new SqliteConnectionStringBuilder { DataSource = dbPath };
-        using var conn = new SqliteConnection(builder.ConnectionString);
+        using var conn = new Microsoft.Data.Sqlite.SqliteConnection(builder.ConnectionString);
         conn.Open();
         Exec(conn, @"CREATE TABLE files (
                         id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -176,7 +183,7 @@ public class LegacySchemaMigrationTests : IDisposable
             PRAGMA wal_checkpoint(TRUNCATE);
             """;
         cmd.ExecuteNonQuery();
-        SqliteConnection.ClearAllPools();
+        SqlitePoolCleanup.ClearPoolsForWindowsFileRelease(callerOwnsExclusiveAccess: true);
     }
 
     private static void DropSymbolExactFallbackIndex(string dbPath)
