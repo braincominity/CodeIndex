@@ -46,6 +46,8 @@ The test project mirrors the production areas closely.
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `McpServerTests.cs`
   MCP JSON-RPC behavior and tool outputs.
+- `HttpMcpTransportTests.cs`
+  HTTP MCP transport behavior, including authentication responses, warm server reuse, concurrent requests, and request logging. Request-log assertions must validate recorded contents without assuming callback order between independently handled HTTP requests.
 - `GitHelperTests.cs`
   Git-specific behavior, including worktrees and commit-based updates.
 - `WorkspaceMetadataEnricherTests.cs`
