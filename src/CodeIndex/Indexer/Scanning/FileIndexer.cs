@@ -2347,6 +2347,9 @@ public class FileIndexer
         // Closes #1544.
         var checksum = ComputeChecksum(bytes);
 
+        if (ContainsIndexBlockingNullByte(bytes))
+            throw new BinaryFileSkippedException($"{relativePath}: binary file skipped because it contains NULL bytes");
+
         string content;
         string? warning = null;
         // BOM-based encoding detection: UTF-16 LE/BE source files are otherwise mangled
@@ -2873,6 +2876,16 @@ public class FileIndexer
 
         return issues;
     }
+
+    internal static bool ContainsIndexBlockingNullByte(byte[] rawBytes)
+    {
+        var hasUtf16BeBom = rawBytes.Length >= 2 && rawBytes[0] == 0xFE && rawBytes[1] == 0xFF;
+        var hasUtf16LeBom = rawBytes.Length >= 2 && rawBytes[0] == 0xFF && rawBytes[1] == 0xFE
+            && !(rawBytes.Length >= 4 && rawBytes[2] == 0x00 && rawBytes[3] == 0x00);
+        return !hasUtf16BeBom && !hasUtf16LeBom && rawBytes.Any(b => b == 0);
+    }
+
+    internal sealed class BinaryFileSkippedException(string message) : InvalidOperationException(message);
 
     public static bool HasConflictMarkers(string content) =>
         TryGetConflictMarkerLine(content, out _);

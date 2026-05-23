@@ -2353,6 +2353,24 @@ public partial class McpServer
                 WriteProjectRootOnce();
                 txn.Commit();
             }
+            catch (FileIndexer.BinaryFileSkippedException)
+            {
+                try
+                {
+                    var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, filePath));
+                    if (writer.HasFileAtPath(relativePath))
+                    {
+                        using var txn = writer.BeginTransaction();
+                        writer.DeleteFileByPath(relativePath);
+                        WriteProjectRootOnce();
+                        txn.Commit();
+                    }
+                }
+                catch
+                {
+                    errors++;
+                }
+            }
             catch
             {
                 errors++;
