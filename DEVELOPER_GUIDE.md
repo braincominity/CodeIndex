@@ -121,6 +121,8 @@ Under WAL, `NORMAL` avoids per-commit fsync pressure during 500-row indexing bat
 
 Read-only fallback uses an immutable SQLite URI when the normal writable open cannot create or lock journal/WAL side files, so query commands can still read a DB from read-only or sandboxed storage. That fallback intentionally skips writable pragmas, migrations, and WAL recovery writes; if a WAL is present and must be observed, copy the `.db`, `.db-wal`, and `.db-shm` files together to a writable location or use a SQLite backup from an environment that can open the full WAL set. `status --json` exposes the resolved connection values under `db_pragma_settings` (`journal_mode`, `synchronous`, `wal_autocheckpoint`) for automation and support diagnostics.
 
+Writable opens also reject databases whose `PRAGMA user_version` contains readiness bits outside the current binary's `CurrentSchemaVersion` mask. Read-only status/query paths may still surface `index_newer_than_reader=true` as a degraded audit signal, but write-capable paths must fail with `E003_SCHEMA_TOO_NEW` so an older cdidx cannot silently rewrite a DB stamped by a newer one.
+
 ## Database schema
 
 ### Tables
