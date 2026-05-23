@@ -78,10 +78,10 @@ internal static class GitHubIssueReporter
     /// <summary>
     /// Try to create a GitHub Issue for the given suggestion.
     /// Returns the issue URL on success, null if no token is set or on failure.
-    /// This method is best-effort — it never throws.
+    /// This method is best-effort, but preserves cooperative cancellation and fatal runtime failures.
     /// 指定された提案の GitHub Issue 作成を試みる。
     /// 成功時は Issue URL を返し、トークン未設定時や失敗時は null を返す。
-    /// ベストエフォート — 例外を投げない。
+    /// ベストエフォート。ただし協調キャンセルと致命的なランタイム障害は保持する。
     /// </summary>
     public static async Task<string?> TryCreateIssueAsync(SuggestionRecord record, string version)
     {
@@ -92,6 +92,8 @@ internal static class GitHubIssueReporter
     /// <summary>
     /// Try to create a GitHub Issue and return diagnostic state for persistence.
     /// GitHub Issue 作成を試み、永続化用の診断状態を返す。
+    /// Preserves cooperative cancellation and fatal runtime failures.
+    /// 協調キャンセルと致命的なランタイム障害は保持する。
     /// </summary>
     public static async Task<SuggestionStore.SubmitAttemptResult> TryCreateIssueDetailedAsync(SuggestionRecord record, string version)
     {
@@ -116,13 +118,24 @@ internal static class GitHubIssueReporter
 
             return await CreateIssueAsync(record, version, token);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ShouldTreatAsSubmissionFailure(ex))
         {
             // Best-effort: log to stderr but do not propagate.
             // ベストエフォート: stderr にログ出力するが伝播しない。
             Console.Error.WriteLine(BuildSubmissionFailureMessage(ex.Message));
             return SuggestionStore.SubmitAttemptResult.Failure($"{ex.GetType().Name}: {ex.Message}");
         }
+    }
+
+    private static bool ShouldTreatAsSubmissionFailure(Exception ex)
+    {
+        if (ex is OutOfMemoryException)
+            return false;
+
+        if (ex is TaskCanceledException taskCanceled)
+            return !taskCanceled.CancellationToken.IsCancellationRequested;
+
+        return ex is not OperationCanceledException;
     }
 
     /// <summary>

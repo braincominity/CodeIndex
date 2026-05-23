@@ -379,6 +379,72 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public async Task TryCreateIssueDetailedAsync_UserCancellation_Propagates()
+    {
+        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        using var mockClient = new HttpClient(new ThrowingHandler(
+            new TaskCanceledException("user canceled", null, cts.Token)));
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+
+            await Assert.ThrowsAsync<TaskCanceledException>(
+                () => GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test"));
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
+    public async Task TryCreateIssueDetailedAsync_TimeoutCancellation_ReturnsDiagnosticError()
+    {
+        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        using var mockClient = new HttpClient(new ThrowingHandler(
+            new TaskCanceledException("request timed out")));
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+            var result = await GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test");
+
+            Assert.Null(result.IssueUrl);
+            Assert.Equal("TaskCanceledException: request timed out", result.Error);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
+    public async Task TryCreateIssueDetailedAsync_OutOfMemoryException_Propagates()
+    {
+        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+
+        using var mockClient = new HttpClient(new ThrowingHandler(
+            new OutOfMemoryException("allocation failed")));
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var record = MakeRecordWithKnownHash();
+
+            await Assert.ThrowsAsync<OutOfMemoryException>(
+                () => GitHubIssueReporter.TryCreateIssueDetailedAsync(record, "1.0.0-test"));
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
+    }
+
+    [Fact]
     public async Task FindExistingIssueByHashAsync_NonHexHash_ReturnsNullWithoutCallingApi()
     {
         // Defensive: only hex hashes are passed to the search query so that
@@ -460,6 +526,14 @@ public class GitHubIssueReporterTests : IDisposable
             {
                 Content = new StringContent("{}", Encoding.UTF8, "application/json"),
             });
+        }
+    }
+
+    private sealed class ThrowingHandler(Exception exception) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            return Task.FromException<HttpResponseMessage>(exception);
         }
     }
 }
