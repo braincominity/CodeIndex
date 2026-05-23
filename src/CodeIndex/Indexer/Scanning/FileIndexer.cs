@@ -1457,6 +1457,15 @@ public class FileIndexer
     internal PathFilterResult EvaluatePathFilter(string absolutePath, bool isDirectory = false)
     {
         var errors = new List<ScanError>();
+        if (!IsFilePathSyntaxIndexable(absolutePath))
+        {
+            errors.Add(new ScanError(
+                FormatPathForScanIssue(absolutePath),
+                "Skipped file because its path contains NUL or control characters.",
+                ScanIssueSeverity.Warning));
+            return new PathFilterResult(PathFilterKind.ExcludedByDefaultFile, errors);
+        }
+
         var fullPath = Path.GetFullPath(absolutePath);
         if (!IsPathEqualOrParent(_projectRoot, fullPath))
             return new PathFilterResult(PathFilterKind.OutsideProjectRoot, errors);

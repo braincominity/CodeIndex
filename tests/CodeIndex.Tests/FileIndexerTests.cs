@@ -971,6 +971,30 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void EvaluatePathFilter_RejectsControlCharacterPathBeforeNormalization()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var indexer = new FileIndexer(tempDir);
+
+            var filter = indexer.EvaluatePathFilter(Path.Combine(tempDir, "bad\0name.cs"));
+
+            Assert.Equal(FileIndexer.PathFilterKind.ExcludedByDefaultFile, filter.FilterKind);
+            Assert.True(filter.ShouldDeleteExisting);
+            var warning = Assert.Single(filter.Errors);
+            Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
+            Assert.Contains("control characters", warning.Message);
+            Assert.Contains("\\u0000", warning.Path);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_SkipsAppleDoubleResourceForks()
     {
         // AppleDouble (`._*`) files masquerade as the real file's language (e.g. `._app.js`
