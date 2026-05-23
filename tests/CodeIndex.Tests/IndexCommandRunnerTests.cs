@@ -93,6 +93,83 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_SymbolKindFilters_AcceptCommaSeparatedValues()
+    {
+        var options = IndexCommandRunner.ParseArgs([
+            ".",
+            "--include-symbol-kind", "class,function",
+            "--exclude-symbol-kind=test_method",
+        ]);
+
+        Assert.Equal(["class", "function"], options.SymbolKindFilter.Include);
+        Assert.Equal(["test_method"], options.SymbolKindFilter.Exclude);
+        Assert.Null(options.SymbolKindFilter.ParseError);
+    }
+
+    [Fact]
+    public void Run_FullScan_ExcludeSymbolKindDropsMatchingSymbols()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), """
+                class App:
+                    pass
+
+                def helper():
+                    return App()
+                """);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--exclude-symbol-kind", "function", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("symbols_dropped_by_kind_filter").GetInt32());
+            Assert.Equal(["function"], json.GetProperty("symbol_kind_filter").GetProperty("exclude").EnumerateArray().Select(value => value.GetString()).ToArray());
+
+            var counts = ReadSymbolKindCounts(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.True(counts.GetValueOrDefault("class") > 0);
+            Assert.False(counts.ContainsKey("function"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_IncludeSymbolKindKeepsOnlyMatchingSymbols()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), """
+                class App:
+                    pass
+
+                def helper():
+                    return App()
+                """);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--include-symbol-kind", "class", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("summary").GetProperty("symbols_dropped_by_kind_filter").GetInt32() > 0);
+
+            var counts = ReadSymbolKindCounts(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.True(counts.GetValueOrDefault("class") > 0);
+            Assert.DoesNotContain(counts.Keys, kind => !string.Equals(kind, "class", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UnresolvedMergeState_RejectsIndexingBeforeScanning()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unresolved_merge");
@@ -6918,6 +6995,19 @@ public class IndexCommandRunnerTests
         return reader.ListFiles(limit: 1000)
             .Select(file => file.Path)
             .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static Dictionary<string, int> ReadSymbolKindCounts(string dbPath)
+    {
+        using var connection = OpenNonPoolingConnection(dbPath);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT kind, COUNT(*) FROM symbols GROUP BY kind";
+        using var reader = command.ExecuteReader();
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        while (reader.Read())
+            counts[reader.GetString(0)] = reader.GetInt32(1);
+        return counts;
     }
 
     private static HashSet<string> ReadImportSymbolNames(string dbPath)

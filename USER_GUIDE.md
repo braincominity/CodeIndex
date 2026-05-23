@@ -1107,7 +1107,7 @@ Precedence is **CLI flag > environment variable > config file > built-in default
 
 Secrets are intentionally **not** loadable from the file: `CDIDX_GITHUB_TOKEN`, `CDIDX_MCP_AUTH_TOKEN`, and `CDIDX_MCP_HTTP_TOKEN` are env-only so tokens never get checked into version control.
 
-Supported schema (snake_case keys; every key is optional):
+Supported schema (top-level keys are snake_case; nested indexing kind keys keep the CLI issue spelling; every key is optional):
 
 ```jsonc
 {
@@ -1117,6 +1117,10 @@ Supported schema (snake_case keys; every key is optional):
   "disable_persistent_log": true,        // → CDIDX_DISABLE_PERSISTENT_LOG=1
   "global_tool_log_dir": "./.cdidx/logs", // → CDIDX_GLOBAL_TOOL_LOG_DIR
   "stale_after": "2h",                   // → CDIDX_STALE_AFTER
+  "indexing": {
+    "includeKinds": ["class"],           // → CDIDX_INDEX_INCLUDE_SYMBOL_KINDS
+    "excludeKinds": ["test_method"]      // → CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS
+  },
   "mcp": {
     "tools": {
       "allow": ["search", "definition", "references"], // → CDIDX_MCP_TOOLS_ALLOW
@@ -1130,11 +1134,13 @@ Supported schema (snake_case keys; every key is optional):
 }
 ```
 
-JSON5-style line comments (`//`) and trailing commas are accepted so the file stays human-editable. The optional `$schema` key is ignored at runtime; it is honored only so editors that recognize JSON Schema references can offer completion. Setting `disable_persistent_log` to `false` is a no-op (absence already means "logging enabled") — only `true` exports `CDIDX_DISABLE_PERSISTENT_LOG=1`. `stale_after` uses the same compact duration format as `status --check --stale-after`: `30m`, `2h`, or `7d`.
+JSON5-style line comments (`//`) and trailing commas are accepted so the file stays human-editable. The optional `$schema` key is ignored at runtime; it is honored only so editors that recognize JSON Schema references can offer completion. Setting `disable_persistent_log` to `false` is a no-op (absence already means "logging enabled") — only `true` exports `CDIDX_DISABLE_PERSISTENT_LOG=1`. `stale_after` uses the same compact duration format as `status --check --stale-after`: `30m`, `2h`, or `7d`. `indexing.includeKinds` and `indexing.excludeKinds` set the default symbol-kind filter for `cdidx index`; CLI flags `--include-symbol-kind <kind>[,<kind>]` and `--exclude-symbol-kind <kind>[,<kind>]` override those env-backed defaults for a single run.
 
 ## How it works
 
 cdidx scans your project directory, applies the built-in skip lists plus user `.gitignore` / `.cdidxignore` rules, skips Windows Hidden/System paths before language detection, splits each remaining source file into overlapping chunks, and stores everything in a SQLite database with FTS5 full-text search. Incremental mode (default) first purges database entries for files that no longer exist on disk, then checks each file's last-modified timestamp against the database — only files whose timestamp exactly matches are skipped, and any difference (newer or older) triggers re-indexing. Newly appeared files are indexed as new entries. The same path filter is reused for scoped `--files` / `--commits` refreshes, commit-based refreshes automatically switch to a full scan when ignore files changed, and Git-managed workspaces follow the repository's `core.ignorecase` setting when evaluating ignore rules. This means re-indexing after a branch switch only processes the files that actually differ unless ignore rules themselves changed.
+
+At index time, `--include-symbol-kind` keeps only matching symbol kinds and `--exclude-symbol-kind` drops matching symbol kinds before rows are written to `symbols`. Values are comma-separated and case-insensitive. If both filters are present, include is applied first and exclude wins for overlapping kinds. The resolved policy is included in index JSON as `symbol_kind_filter`, and the summary reports `symbols_dropped_by_kind_filter`.
 
 ### Incremental update reliability
 
@@ -2849,7 +2855,7 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 
 シークレットは意図的に**ファイルから読み込めません**。`CDIDX_GITHUB_TOKEN` / `CDIDX_MCP_AUTH_TOKEN` / `CDIDX_MCP_HTTP_TOKEN` は環境変数専用としており、トークンがバージョン管理に混入するのを防ぎます。
 
-対応スキーマ（snake_case、すべて任意）:
+対応スキーマ（top-level key は snake_case、ネストした indexing の kind key は CLI issue の表記を維持、すべて任意）:
 
 ```jsonc
 {
@@ -2859,6 +2865,10 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
   "disable_persistent_log": true,        // → CDIDX_DISABLE_PERSISTENT_LOG=1
   "global_tool_log_dir": "./.cdidx/logs", // → CDIDX_GLOBAL_TOOL_LOG_DIR
   "stale_after": "2h",                   // → CDIDX_STALE_AFTER
+  "indexing": {
+    "includeKinds": ["class"],           // → CDIDX_INDEX_INCLUDE_SYMBOL_KINDS
+    "excludeKinds": ["test_method"]      // → CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS
+  },
   "mcp": {
     "tools": {
       "allow": ["search", "definition", "references"], // → CDIDX_MCP_TOOLS_ALLOW
@@ -2872,11 +2882,13 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 }
 ```
 
-人手で編集しやすいよう JSON5 形式の行コメント（`//`）と末尾カンマを許容します。任意の `$schema` キーはランタイムでは無視され、JSON Schema 参照をサポートするエディタが補完を提供するためだけに認識されます。`disable_persistent_log` を `false` に設定しても何も起きません（不在のままで "ログ有効" が既定）— `true` の場合のみ `CDIDX_DISABLE_PERSISTENT_LOG=1` を export します。`stale_after` は `status --check --stale-after` と同じ compact duration 形式（`30m` / `2h` / `7d`）です。
+人手で編集しやすいよう JSON5 形式の行コメント（`//`）と末尾カンマを許容します。任意の `$schema` キーはランタイムでは無視され、JSON Schema 参照をサポートするエディタが補完を提供するためだけに認識されます。`disable_persistent_log` を `false` に設定しても何も起きません（不在のままで "ログ有効" が既定）— `true` の場合のみ `CDIDX_DISABLE_PERSISTENT_LOG=1` を export します。`stale_after` は `status --check --stale-after` と同じ compact duration 形式（`30m` / `2h` / `7d`）です。`indexing.includeKinds` と `indexing.excludeKinds` は `cdidx index` の symbol-kind filter 既定値を設定し、CLI フラグ `--include-symbol-kind <kind>[,<kind>]` / `--exclude-symbol-kind <kind>[,<kind>]` はその env 経由の既定値を 1 回の実行だけ上書きします。
 
 ## 動作の仕組み
 
 cdidxはプロジェクトディレクトリを走査し、組み込みのスキップ対象とユーザーの `.gitignore` / `.cdidxignore` を適用し、Windows の Hidden/System パスを言語検出前にスキップしたうえで、各ソースファイルを重複を持つチャンクに分割し、FTS5全文検索付きのSQLiteデータベースに格納します。インクリメンタルモード（デフォルト）では各ファイルの最終更新タイムスタンプをDB内の値と比較し、完全一致するファイルのみスキップします。タイムスタンプが異なれば（新しくても古くても）再インデックスされるため、ブランチ切り替え後も正確にインデックスが更新されます。`--files` / `--commits` の部分更新も同じパスフィルタを再利用し、commit 側で ignore ファイルが変わったときは自動でフルスキャンへ切り替わります。Git 管理下の ignore 判定は OS 固定ではなく `core.ignorecase` を参照し、`**` も Git の path-form globstar だけを特別扱いするため、差分更新でも Git と同じ範囲で ignore されます。つまり ignore ルール自体が変わらない限り、差分再インデックスは実際に変わったファイルだけに比例します。
+
+index 時には `--include-symbol-kind` で一致する kind だけを保持し、`--exclude-symbol-kind` で一致する kind を `symbols` に書き込む前に除外できます。値はカンマ区切りで、大文字小文字は区別しません。両方を指定した場合は include を先に適用し、重複した kind では exclude が優先されます。解決済み policy は index JSON の `symbol_kind_filter` に入り、summary には `symbols_dropped_by_kind_filter` が出ます。
 
 ### インクリメンタル更新の信頼性
 

@@ -138,6 +138,7 @@ internal sealed class IndexUpdateSummaryJsonResult
     public int Skipped { get; init; }
     public int Warnings { get; init; }
     public int Errors { get; init; }
+    public int SymbolsDroppedByKindFilter { get; init; }
 }
 
 internal sealed class IndexFullScanSummaryJsonResult
@@ -151,6 +152,13 @@ internal sealed class IndexFullScanSummaryJsonResult
     public int FilesPurged { get; init; }
     public int Warnings { get; init; }
     public int Errors { get; init; }
+    public int SymbolsDroppedByKindFilter { get; init; }
+}
+
+public sealed class IndexSymbolKindFilterJsonResult
+{
+    public IReadOnlyList<string> Include { get; init; } = [];
+    public IReadOnlyList<string> Exclude { get; init; } = [];
 }
 
 internal sealed class IndexUpdateJsonResult
@@ -158,6 +166,7 @@ internal sealed class IndexUpdateJsonResult
     public string Status { get; init; } = string.Empty;
     public string Mode { get; init; } = string.Empty;
     public IndexUpdateSummaryJsonResult Summary { get; init; } = new();
+    public IndexSymbolKindFilterJsonResult SymbolKindFilter { get; init; } = new();
     public bool GraphTableAvailable { get; init; }
     public bool IssuesTableAvailable { get; init; }
     public bool SqlGraphContractReady { get; init; }
@@ -187,6 +196,7 @@ internal sealed class IndexFullScanJsonResult
     public string Status { get; init; } = string.Empty;
     public string Mode { get; init; } = string.Empty;
     public IndexFullScanSummaryJsonResult Summary { get; init; } = new();
+    public IndexSymbolKindFilterJsonResult SymbolKindFilter { get; init; } = new();
     public bool GraphTableAvailable { get; init; }
     public bool IssuesTableAvailable { get; init; }
     public bool SqlGraphContractReady { get; init; }
