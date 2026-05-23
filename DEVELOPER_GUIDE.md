@@ -60,7 +60,7 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
   → Populate FTS5 index
 ```
 
-Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
+Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. Within each directory, `FileIndexer` loads `.gitignore` before `.cdidxignore`, appends both rule sets in that order, and honors later `!` patterns as re-includes. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
 
 ### CLI recoverable error format
 
@@ -1631,7 +1631,7 @@ CI で `NU1004 The packages lock file is inconsistent with the project dependenc
   → FTS5インデックス反映
 ```
 
-`--files` / `--commits` の部分更新も、フルスキャンと同じパスフィルタを再利用する。commit 単位更新に `.gitignore` または `.cdidxignore` の変更が含まれる場合、`IndexCommandRunner` は newly ignored file を安全に purge するため自動でフルスキャンへフォールバックする。malformed な ignore 行は走査エラーとして報告し、その行だけをスキップして index 全体は継続する。Windows では Hidden または System 属性が付いたファイルとディレクトリを言語検出前に拒否する。プロジェクト所有のソースを索引したい場合、ignore ルールでは再包含できないため先にそれらの属性を外す。
+`--files` / `--commits` の部分更新も、フルスキャンと同じパスフィルタを再利用する。各ディレクトリでは `FileIndexer` が `.gitignore` を `.cdidxignore` より先に読み、この順序でルールを追加し、後続の `!` パターンを再包含として扱う。commit 単位更新に `.gitignore` または `.cdidxignore` の変更が含まれる場合、`IndexCommandRunner` は newly ignored file を安全に purge するため自動でフルスキャンへフォールバックする。malformed な ignore 行は走査エラーとして報告し、その行だけをスキップして index 全体は継続する。Windows では Hidden または System 属性が付いたファイルとディレクトリを言語検出前に拒否する。プロジェクト所有のソースを索引したい場合、ignore ルールでは再包含できないため先にそれらの属性を外す。
 
 ### C# / .NET integration
 
