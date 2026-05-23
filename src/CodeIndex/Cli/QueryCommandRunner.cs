@@ -3354,6 +3354,7 @@ public static class QueryCommandRunner
         var visibilityFilters = new List<string>();
         var excludeVisibilityFilters = new List<string>();
         bool excludeTests = false;
+        bool includeGenerated = false;
         DateTime? since = null;
         bool noDedup = false;
         bool noVisibilityRank = false;
@@ -3734,6 +3735,9 @@ public static class QueryCommandRunner
                 case "--exclude-tests":
                     excludeTests = true;
                     break;
+                case "--include-generated":
+                    includeGenerated = true;
+                    break;
                 case "--since":
                     if (!TryReadStringOptionValue(args, ref i, "--since", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var sinceValue, out var sinceError))
                         AddParseError(sinceError!);
@@ -3930,6 +3934,7 @@ public static class QueryCommandRunner
             VisibilityFilters = visibilityFilters,
             ExcludeVisibilityFilters = excludeVisibilityFilters,
             ExcludeTests = excludeTests,
+            IncludeGenerated = includeGenerated,
             CountOnly = countOnly,
             Since = since,
             NoDedup = noDedup,
@@ -4266,7 +4271,8 @@ public static class QueryCommandRunner
                 reader = new DbReader(db);
             }
 
-            var exitCode = action(reader);
+            reader.IncludeGenerated = options.IncludeGenerated;
+            var exitCode = reader.RunWithGeneratedScope(() => action(reader));
             var profileEntries = profiling ? Database.DbDebug.EndProfile() : [];
             if (options.Profile)
                 WriteProfilePayload(profileEntries, jsonOptions);
@@ -4893,6 +4899,8 @@ public static class QueryCommandRunner
             query["rank_by"] = FormatReferenceRankMode(options.RankMode);
         if (options.ExcludeTests)
             query["exclude_tests"] = true;
+        if (options.IncludeGenerated)
+            query["include_generated"] = true;
         if (options.Since.HasValue)
             query["since"] = options.Since.Value;
         if (options.CountOnly)
@@ -6262,6 +6270,7 @@ public sealed class QueryCommandOptions
     public string? SolutionFilter { get; init; }
     public List<string> ExcludePaths { get; init; } = [];
     public bool ExcludeTests { get; init; }
+    public bool IncludeGenerated { get; init; }
     public bool CountOnly { get; init; }
     public DateTime? Since { get; init; }
     public bool NoDedup { get; init; }
