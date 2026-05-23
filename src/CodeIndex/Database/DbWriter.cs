@@ -271,8 +271,8 @@ public class DbWriter
               END
               WHERE path = @path
                 AND (
-                    (modified = @modified AND (@size IS NULL OR size = @size))
-                    OR (@checksum IS NOT NULL AND checksum = @checksum)
+                    (@checksum IS NOT NULL AND checksum = @checksum)
+                    OR (@checksum IS NULL AND modified = @modified AND (@size IS NULL OR size = @size))
                 )
               RETURNING id",
             static c =>
@@ -404,6 +404,78 @@ public class DbWriter
         txn?.Commit();
 
         return staleIds.Count;
+    }
+
+    /// <summary>
+    /// Purge stale DB rows that look like an extension-changing rename in the same directory.
+    /// 同一ディレクトリ・同一stemの拡張子変更リネームに見える古いDB行を削除する。
+    /// </summary>
+    public int PurgeStaleFilesSharingDirectoryAndStem(string projectRoot, string retainedRelativePath)
+    {
+        var retainedDirectory = GetRelativeDirectory(retainedRelativePath);
+        var retainedStem = GetRelativeFileStem(retainedRelativePath);
+        if (retainedStem.Length == 0)
+            return 0;
+
+        var staleIds = new List<long>();
+        using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT id, path FROM files WHERE path <> @path";
+            cmd.Parameters.AddWithValue("@path", retainedRelativePath);
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var id = reader.GetInt64(0);
+                var relativePath = reader.GetString(1);
+                if (!string.Equals(GetRelativeDirectory(relativePath), retainedDirectory, StringComparison.Ordinal)
+                    || !string.Equals(GetRelativeFileStem(relativePath), retainedStem, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var absolutePath = Path.Combine(projectRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                if (!File.Exists(LongPath.EnsureWindowsPrefix(absolutePath)))
+                    staleIds.Add(id);
+            }
+        }
+
+        return DeleteStaleFileIds(staleIds);
+    }
+
+    private int DeleteStaleFileIds(IReadOnlyCollection<long> staleIds)
+    {
+        if (staleIds.Count == 0)
+            return 0;
+
+        using var txn = !IsInTransaction() ? BeginTransaction() : null;
+        using var deleteCmd = _conn.CreateCommand();
+        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
+        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
+        deleteCmd.Prepare();
+        foreach (var id in staleIds)
+        {
+            pId.Value = id;
+            deleteCmd.ExecuteNonQuery();
+        }
+        txn?.Commit();
+
+        return staleIds.Count;
+    }
+
+    private static string GetRelativeDirectory(string relativePath)
+    {
+        var normalized = relativePath.Replace('\\', '/');
+        var slashIndex = normalized.LastIndexOf('/');
+        return slashIndex < 0 ? string.Empty : normalized[..slashIndex];
+    }
+
+    private static string GetRelativeFileStem(string relativePath)
+    {
+        var normalized = relativePath.Replace('\\', '/');
+        var slashIndex = normalized.LastIndexOf('/');
+        var fileName = slashIndex < 0 ? normalized : normalized[(slashIndex + 1)..];
+        var dotIndex = fileName.LastIndexOf('.');
+        return dotIndex <= 0 ? fileName : fileName[..dotIndex];
     }
 
     /// <summary>
