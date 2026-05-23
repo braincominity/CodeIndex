@@ -141,6 +141,17 @@ Read-only fallback uses an immutable SQLite URI when the normal writable open ca
 
 Writable opens also reject databases whose `PRAGMA user_version` contains readiness bits outside the current binary's `CurrentSchemaVersion` mask. Read-only status/query paths may still surface `index_newer_than_reader=true` as a degraded audit signal, but write-capable paths must fail with `E003_SCHEMA_TOO_NEW` so an older cdidx cannot silently rewrite a DB stamped by a newer one.
 
+### Data directory resolution
+
+When `--db <path>` is omitted, cdidx resolves the SQLite location from a data directory and appends `codeindex.db`. The precedence chain is:
+
+1. `--data-dir <dir>`
+2. `CDIDX_DATA_DIR`
+3. `XDG_DATA_HOME/cdidx/<workspace-hash>` when `XDG_DATA_HOME` is set
+4. `<workspace>/.cdidx`
+
+`--db <path>` remains the most explicit override and bypasses data-directory resolution. `status --json` reports the effective directory as `data_dir` and the selected source as `data_dir_source` (`flag`, `env`, `xdg`, or `workspace`) so automation can audit where the index lives.
+
 ### SQLite performance tuning
 
 Every `DbContext` connection sets `PRAGMA cache_size=-65536` (64 MiB), `PRAGMA temp_store=MEMORY`, and on 64-bit processes `PRAGMA mmap_size=268435456` (256 MiB). These are connection-scoped query-performance knobs; they do not alter the on-disk schema and are skipped only where SQLite cannot apply them.

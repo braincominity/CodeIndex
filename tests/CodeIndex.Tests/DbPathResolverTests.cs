@@ -36,6 +36,47 @@ public class DbPathResolverTests
     }
 
     [Fact]
+    public void ResolveForIndex_PrefersExplicitDataDirWhenDbPathMissing()
+    {
+        var projectPath = Path.Combine(Path.DirectorySeparatorChar.ToString(), "tmp", "sample-project");
+        var dataDir = Path.Combine(Path.GetTempPath(), $"cdidx_data_dir_{Guid.NewGuid():N}");
+
+        var resolved = DbPathResolver.ResolveForIndex(projectPath, explicitDbPath: null, explicitDataDir: dataDir);
+
+        Assert.Equal(Path.Combine(Path.GetFullPath(dataDir), "codeindex.db"), resolved.DbPath);
+        Assert.Equal(Path.GetFullPath(dataDir), resolved.DataDir);
+        Assert.Equal(DbPathResolver.DataDirSourceFlag, resolved.DataDirSource);
+    }
+
+    [Fact]
+    public void ResolveDataDir_PrefersEnvironmentBeforeXdgAndWorkspace()
+    {
+        var projectPath = Path.Combine(Path.DirectorySeparatorChar.ToString(), "tmp", "sample-project");
+        var envDir = Path.Combine(Path.GetTempPath(), $"cdidx_env_dir_{Guid.NewGuid():N}");
+        var xdgDir = Path.Combine(Path.GetTempPath(), $"cdidx_xdg_dir_{Guid.NewGuid():N}");
+
+        var resolved = DbPathResolver.ResolveDataDir(projectPath, explicitDataDir: null, environmentDataDir: envDir, xdgDataHome: xdgDir);
+
+        Assert.Equal(Path.Combine(Path.GetFullPath(envDir), "codeindex.db"), resolved.DbPath);
+        Assert.Equal(DbPathResolver.DataDirSourceEnv, resolved.DataDirSource);
+    }
+
+    [Fact]
+    public void ResolveDataDir_UsesStableXdgWorkspaceHashBeforeWorkspaceDefault()
+    {
+        var projectPath = Path.Combine(Path.DirectorySeparatorChar.ToString(), "tmp", "sample-project");
+        var xdgDir = Path.Combine(Path.GetTempPath(), $"cdidx_xdg_dir_{Guid.NewGuid():N}");
+
+        var first = DbPathResolver.ResolveDataDir(projectPath, explicitDataDir: null, environmentDataDir: null, xdgDataHome: xdgDir);
+        var second = DbPathResolver.ResolveDataDir(projectPath, explicitDataDir: null, environmentDataDir: null, xdgDataHome: xdgDir);
+
+        Assert.Equal(first.DbPath, second.DbPath);
+        Assert.StartsWith(Path.Combine(Path.GetFullPath(xdgDir), "cdidx"), first.DbPath, StringComparison.Ordinal);
+        Assert.EndsWith(Path.Combine("codeindex.db"), first.DbPath, StringComparison.Ordinal);
+        Assert.Equal(DbPathResolver.DataDirSourceXdg, first.DataDirSource);
+    }
+
+    [Fact]
     public void ResolveProjectRootForQuery_UsesParentOfCdidxDirectory()
     {
         var projectPath = Path.Combine(Path.DirectorySeparatorChar.ToString(), "tmp", "sample-project");

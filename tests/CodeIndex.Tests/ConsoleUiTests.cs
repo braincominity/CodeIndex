@@ -571,7 +571,7 @@ public class ConsoleUiTests
 
         var expected = new SortedSet<string>(StringComparer.Ordinal)
         {
-            "db", "json", "output", "log-lines", "no-log", "include-args",
+            "data-dir", "db", "json", "output", "log-lines", "no-log", "include-args",
         };
         Assert.Equal(expected, bashReport);
         Assert.Equal(expected, zshReport);

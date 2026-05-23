@@ -51,6 +51,7 @@ public static class QueryCommandRunner
     private static readonly HashSet<string> ValueTakingOptions =
     [
         "--db",
+        "--data-dir",
         "--limit",
         "--top",
         "--lang",
@@ -1998,6 +1999,8 @@ public static class QueryCommandRunner
 
             var status = reader.GetStatus();
             WorkspaceMetadataEnricher.Enrich(status, options.DbPath, options.DbPathExplicit);
+            status.DataDir = options.DataDir;
+            status.DataDirSource = options.DataDirSource;
             status.MacProfile = MacProfileDetector.DetectCurrent();
             if (options.CheckWorkspace)
             {
@@ -3330,7 +3333,8 @@ public static class QueryCommandRunner
 
     public static QueryCommandOptions ParseArgs(string[] args, bool jsonDefault, bool allowNamedQuery = false, bool allowStatusCheck = false)
     {
-        string dbPath = Path.Combine(".cdidx", "codeindex.db");
+        string? dbPath = null;
+        string? dataDir = null;
         bool? json = null;
         int limit = 20;
         string? lang = null;
@@ -3478,6 +3482,15 @@ public static class QueryCommandRunner
                     }
                     else
                         AddParseError(dbPathError!);
+                    break;
+                case "--data-dir":
+                    if (TryReadStringOptionValue(args, ref i, "--data-dir", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var dataDirValue, out var dataDirError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--data-dir", dataDirValue!);
+                        dataDir = dataDirValue!;
+                    }
+                    else
+                        AddParseError(dataDirError!);
                     break;
                 case "--json":
                     json = true;
@@ -3912,10 +3925,14 @@ public static class QueryCommandRunner
 
         ValidateQueryPathOptionValues(userPathPatterns, excludePaths, AddParseError);
 
+        var dbResolution = DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, dbPath, dataDir);
+
         return new QueryCommandOptions
         {
-            DbPath = dbPath,
+            DbPath = dbResolution.DbPath,
             DbPathExplicit = dbPathExplicit,
+            DataDir = dbResolution.DataDir,
+            DataDirSource = dbResolution.DataDirSource,
             Json = json ?? jsonDefault,
             Limit = limit,
             Lang = lang,
@@ -5989,6 +6006,7 @@ public static class QueryCommandRunner
     private static readonly Dictionary<string, string> MissingOptionValueHints = new(StringComparer.Ordinal)
     {
         ["--db"] = "pass a path to a CodeIndex SQLite database, e.g. `--db .cdidx/codeindex.db`, or omit `--db` to use `.cdidx/codeindex.db`.",
+        ["--data-dir"] = "pass a directory where cdidx should store `codeindex.db`, e.g. `--data-dir /var/cache/cdidx`.",
         ["--limit"] = "pass a positive integer, e.g. `--limit 20` (default 20).",
         ["--top"] = "pass a positive integer, e.g. `--top 20` (alias for `--limit`, default 20).",
         ["--lang"] = "pass a language identifier, e.g. `--lang csharp`. Run `cdidx languages` for the supported set.",
@@ -6298,6 +6316,8 @@ public sealed class QueryCommandOptions
 {
     public string DbPath { get; init; } = Path.Combine(".cdidx", "codeindex.db");
     public bool DbPathExplicit { get; init; }
+    public string? DataDir { get; init; }
+    public string? DataDirSource { get; init; }
     public bool Json { get; init; }
     public int Limit { get; init; } = 20;
     public string? Lang { get; init; }
