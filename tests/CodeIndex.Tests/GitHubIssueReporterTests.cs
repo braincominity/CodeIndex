@@ -18,22 +18,15 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class GitHubIssueReporterTests : IDisposable
 {
-    // Save original env vars to restore after each test
-    // 各テスト後にリストアするため元の環境変数を保存
-    private readonly string? _originalCdidxToken;
-    private readonly string? _originalGhToken;
-
-    public GitHubIssueReporterTests()
-    {
-        _originalCdidxToken = Environment.GetEnvironmentVariable("CDIDX_GITHUB_TOKEN");
-        _originalGhToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
-    }
+    private readonly EnvironmentVariableScope _env = EnvironmentVariableScope.Capture(
+        "CDIDX_GITHUB_TOKEN",
+        "GITHUB_TOKEN");
 
     [Fact]
     public void ResolveToken_NeitherSet_ReturnsNull()
     {
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", null);
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", null);
+        _env.Set("CDIDX_GITHUB_TOKEN", null);
+        _env.Set("GITHUB_TOKEN", null);
 
         Assert.Null(GitHubIssueReporter.ResolveToken());
     }
@@ -41,8 +34,8 @@ public class GitHubIssueReporterTests : IDisposable
     [Fact]
     public void ResolveToken_CdidxTokenSet_ReturnsCdidxToken()
     {
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_cdidx_test_token");
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", null);
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_cdidx_test_token");
+        _env.Set("GITHUB_TOKEN", null);
 
         Assert.Equal("ghp_cdidx_test_token", GitHubIssueReporter.ResolveToken());
     }
@@ -54,8 +47,8 @@ public class GitHubIssueReporterTests : IDisposable
         // from silently publishing to an external repository.
         // 汎用 GITHUB_TOKEN は使わない — CI の環境トークンが意図せず
         // 外部リポジトリに公開されることを防ぐ。
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", null);
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", "ghp_github_test_token");
+        _env.Set("CDIDX_GITHUB_TOKEN", null);
+        _env.Set("GITHUB_TOKEN", "ghp_github_test_token");
 
         Assert.Null(GitHubIssueReporter.ResolveToken());
     }
@@ -63,8 +56,8 @@ public class GitHubIssueReporterTests : IDisposable
     [Fact]
     public void ResolveToken_CdidxTokenSet_IgnoresGenericToken()
     {
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_cdidx_preferred");
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", "ghp_github_fallback");
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_cdidx_preferred");
+        _env.Set("GITHUB_TOKEN", "ghp_github_fallback");
 
         Assert.Equal("ghp_cdidx_preferred", GitHubIssueReporter.ResolveToken());
     }
@@ -72,8 +65,8 @@ public class GitHubIssueReporterTests : IDisposable
     [Fact]
     public void ResolveToken_EmptyString_ReturnsNull()
     {
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "");
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", "");
+        _env.Set("CDIDX_GITHUB_TOKEN", "");
+        _env.Set("GITHUB_TOKEN", "");
 
         Assert.Null(GitHubIssueReporter.ResolveToken());
     }
@@ -81,8 +74,8 @@ public class GitHubIssueReporterTests : IDisposable
     [Fact]
     public void ResolveToken_WhitespaceOnly_ReturnsNull()
     {
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "   ");
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", "   ");
+        _env.Set("CDIDX_GITHUB_TOKEN", "   ");
+        _env.Set("GITHUB_TOKEN", "   ");
 
         Assert.Null(GitHubIssueReporter.ResolveToken());
     }
@@ -219,7 +212,7 @@ public class GitHubIssueReporterTests : IDisposable
         // がレスポンスが消失し、ローカルでは SubmittedToGitHub=false のまま。
         // 再試行時はハッシュ検索による冪等性チェックが既存 Issue を見つけ、
         // 重複作成を回避すること。
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
 
         var handler = new RecordingHandler();
         handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
@@ -261,7 +254,7 @@ public class GitHubIssueReporterTests : IDisposable
         // GitHub Search は作成直後の Issue を反映するまで遅延し得る。
         // Search が空でも、label 付き Issue の直接一覧で提案ハッシュを持つ
         // 既存 Issue を検出し、重複作成を防ぐこと。
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
 
         var record = MakeRecordWithKnownHash();
         var handler = new RecordingHandler();
@@ -311,7 +304,7 @@ public class GitHubIssueReporterTests : IDisposable
         // does not break the normal create path.
         // ベースライン: 検索結果が空なら POST /issues に進む。今回追加した検索
         // ステップが通常の作成パスを壊さないことを確認する。
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
 
         var handler = new RecordingHandler();
         handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
@@ -360,7 +353,7 @@ public class GitHubIssueReporterTests : IDisposable
         // legitimate first submission. The create POST proceeds as before.
         // 検索 API 失敗（5xx, レート制限など）でも正規の新規送信は阻害しない。
         // 検索失敗時は通常の POST 作成パスに進むこと。
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
 
         var handler = new RecordingHandler();
         handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
@@ -395,7 +388,7 @@ public class GitHubIssueReporterTests : IDisposable
     [Fact]
     public async Task TryCreateIssueDetailedAsync_CreateApiFails_ReturnsDiagnosticError()
     {
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_idempotency_test");
 
         var handler = new RecordingHandler();
         handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
@@ -523,9 +516,7 @@ public class GitHubIssueReporterTests : IDisposable
 
     public void Dispose()
     {
-        // Restore original env vars / 元の環境変数をリストア
-        Environment.SetEnvironmentVariable("CDIDX_GITHUB_TOKEN", _originalCdidxToken);
-        Environment.SetEnvironmentVariable("GITHUB_TOKEN", _originalGhToken);
+        _env.Dispose();
         // Defensive: never leak the override into other tests.
         // 防御的: オーバーライドを他テストに残さない。
         GitHubIssueReporter.s_httpClientOverride = null;
