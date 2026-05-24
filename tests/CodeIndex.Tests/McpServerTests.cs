@@ -5163,6 +5163,11 @@ public class McpServerTests : IDisposable
         Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["hotspot_family_ready"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["hotspotFamilyReady"]);
+        Assert.False(response["result"]!["structuredContent"]!["foldReady"]!.GetValue<bool>());
+        Assert.Equal(DegradationReasonCodes.MissingFoldBackfill, response["result"]!["structuredContent"]!["fold_ready_reason"]!.GetValue<string>());
+        Assert.Contains("--exact falls back", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
+        Assert.Equal("cdidx backfill-fold", response["result"]!["structuredContent"]!["recommended_action"]!.GetValue<string>());
+        Assert.Equal("cdidx index . --rebuild", response["result"]!["structuredContent"]!["alternative_action"]!.GetValue<string>());
     }
 
     [Fact]
