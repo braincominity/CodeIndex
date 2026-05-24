@@ -261,6 +261,9 @@ public class ImpactResult
     public int Depth { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
+    public string ReferenceKind { get; set; } = string.Empty;
+    public IReadOnlyList<string> ReferenceKinds { get; set; } = Array.Empty<string>();
+    public IReadOnlyDictionary<string, int> ReferenceKindCounts { get; set; } = new Dictionary<string, int>();
     // Optional list of distinct shortest call paths from the resolved root symbol
     // through any intermediates to this caller. Each inner list is ordered
     // [resolvedRoot, intermediate..., thisCallerName]. Populated only when the
