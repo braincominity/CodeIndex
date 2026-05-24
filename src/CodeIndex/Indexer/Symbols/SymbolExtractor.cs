@@ -2720,6 +2720,7 @@ public static partial class SymbolExtractor
                     if (lang == "rust"
                         && pattern.Kind == "property"
                         && pattern.BodyStyle == BodyStyle.None
+                        && pattern.ReturnTypeGroup != null
                         && !IsRustDirectTraitBodyMember(symbols, i + 1))
                     {
                         break;
