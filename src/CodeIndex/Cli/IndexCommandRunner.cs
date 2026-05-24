@@ -28,6 +28,7 @@ public static class IndexCommandRunner
         IReadOnlyList<string> Directories);
 
     internal static Action? FullScanWritePhaseStartedForTesting { get; set; }
+    internal static Action? HotspotFamilyUpdateRestampReadyForCommitForTesting { get; set; }
     internal static Func<bool> IsInputRedirectedForTesting { get; set; } = () => Console.IsInputRedirected;
     internal static Func<string?> ReadLineForTesting { get; set; } = Console.ReadLine;
 
@@ -233,6 +234,7 @@ public static class IndexCommandRunner
 
         dbPath = DbPathResolver.NormalizeDbPath(dbPath);
         var resolvedDbPath = Path.GetFullPath(dbPath);
+        var databaseExistedBeforeIndex = File.Exists(LongPath.EnsureWindowsPrefix(resolvedDbPath));
 
         if (!options.Json && !options.Quiet)
         {
@@ -506,6 +508,8 @@ public static class IndexCommandRunner
         initialExitCode = isUpdateMode
             ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexCancellation.Token)
             : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexCancellation.Token);
+        if (initialExitCode == CommandExitCodes.Success)
+            db.RunPlannerStatisticsMaintenance(forceAnalyze: !databaseExistedBeforeIndex);
             }
         }
         catch (IndexInterruptedException ex)
@@ -2204,12 +2208,21 @@ public static class IndexCommandRunner
             {
                 csharpMetadataTargetReadyAfter = true;
             }
-            writer.RebuildTypeScriptAugmentationReferences(projectRoot);
-            RestampHotspotFamilyTrustForUpdate(
-                writer,
-                priorHotspotFamilyVersions,
-                priorHotspotFamilyMarkerFingerprints,
-                currentHotspotFamilyMarkerFingerprints);
+            // Keep hotspot-family maintenance rewrites and readiness restamps in one rollback
+            // boundary. If the process dies after SetMeta but before commit, SQLite rolls back
+            // the version stamp along with any maintenance rows, so readers never see a partial
+            // family_key/container_qualified_name state as authoritative (#1488).
+            using (var hotspotFamilyTxn = writer.BeginTransaction())
+            {
+                writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+                RestampHotspotFamilyTrustForUpdate(
+                    writer,
+                    priorHotspotFamilyVersions,
+                    priorHotspotFamilyMarkerFingerprints,
+                    currentHotspotFamilyMarkerFingerprints);
+                HotspotFamilyUpdateRestampReadyForCommitForTesting?.Invoke();
+                hotspotFamilyTxn.Commit();
+            }
             // FoldReady restamp requires both the prior stored version and fingerprint to
             // match the current binary/runtime. Otherwise untouched rows still carry keys
             // from an older fold implementation or runtime table set, and advertising
