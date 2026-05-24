@@ -13120,6 +13120,8 @@ jobs:
             Assert.True(json.GetProperty("has_mixed_reference_kinds").GetBoolean());
             var kinds = json.GetProperty("reference_kinds").EnumerateArray().Select(k => k.GetString()).ToArray();
             Assert.Equal(new[] { "event", "invoke" }, kinds);
+            Assert.Equal(1, json.GetProperty("reference_kind_counts").GetProperty("call").GetInt32());
+            Assert.Equal(1, json.GetProperty("reference_kind_counts").GetProperty("subscribe").GetInt32());
             Assert.Equal("event", json.GetProperty("reference_kind").GetString());
 
             var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
@@ -13127,7 +13129,7 @@ jobs:
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, humanExitCode);
-            Assert.Contains("event+invoke", humanStdout);
+            Assert.Contains("call, subscribe", humanStdout);
             Assert.Contains("SetupAndFire", humanStdout);
             Assert.Contains("-> Changed (2 refs)", humanStdout);
             Assert.Contains("(1 callers in 1 files)", humanStderr);
@@ -13272,9 +13274,9 @@ jobs:
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains("invoke       function   DerivedWidget", stdout);
+            Assert.Contains("call         function   DerivedWidget", stdout);
             Assert.Contains("src/DerivedWidget.cs:3  -> BaseWidget (1 refs)", stdout);
-            Assert.Contains("invoke       function   Make", stdout);
+            Assert.Contains("instantiate  function   Make", stdout);
             Assert.Contains("src/Factory.cs:3  -> BaseWidget (1 refs)", stdout);
             Assert.Contains("(2 callers in 2 files)", stderr);
         }

@@ -849,10 +849,10 @@ public static class QueryCommandRunner
             }
             else
             {
-                var kindColumnWidth = ComputeReferenceKindColumnWidth(results, r => FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds));
+                var kindColumnWidth = ComputeReferenceKindColumnWidth(results, r => FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds, r.ReferenceKindCounts));
                 foreach (var r in results)
                 {
-                    var kindLabel = FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds);
+                    var kindLabel = FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds, r.ReferenceKindCounts);
                     Console.WriteLine($"{kindLabel.PadRight(kindColumnWidth)} {r.CallerKind ?? "?",-10} {r.CallerName ?? "<top-level>",-32} {r.Path}:{r.FirstLine}  -> {r.CalleeName} ({r.ReferenceCount} refs)");
                 }
                 var callerFileCount = results.Select(r => r.Path).Distinct().Count();
@@ -975,10 +975,10 @@ public static class QueryCommandRunner
             }
             else
             {
-                var kindColumnWidth = ComputeReferenceKindColumnWidth(results, r => FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds));
+                var kindColumnWidth = ComputeReferenceKindColumnWidth(results, r => FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds, r.ReferenceKindCounts));
                 foreach (var r in results)
                 {
-                    var kindLabel = FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds);
+                    var kindLabel = FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds, r.ReferenceKindCounts);
                     Console.WriteLine($"{kindLabel.PadRight(kindColumnWidth)} {r.CalleeName,-32} {r.Path}:{r.FirstLine}  <- {r.CallerName ?? "<top-level>"} ({r.ReferenceCount} refs)");
                 }
                 var calleeFileCount = results.Select(r => r.Path).Distinct().Count();
@@ -5006,17 +5006,25 @@ public static class QueryCommandRunner
         ConsoleUi.GetUsageLine(commandName)
         ?? throw new InvalidOperationException($"Missing usage line for command '{commandName}'.");
 
-    // Human-readable reference_kind label for a grouped caller/callee row. When the
-    // group spans multiple kinds (e.g. `call` + `subscribe`), render them joined with
-    // `+` so the operator sees that the grouped row hides mixed semantics (issue #501).
-    // 単一ラベルに畳まれた reference_kind を人間向けに整形する。複数 kind が混在する
-    // 行 (`call` + `subscribe` など) は `+` 区切りで並べ、畳まれて見えなくなる意味の
-    // 違いを運用者が気付けるようにする (issue #501)。
-    private static string FormatReferenceKindLabel(string primary, IReadOnlyList<string> kinds, bool hasMixed)
+    // Human-readable reference_kind label for a grouped caller/callee row. Counts
+    // keep high-volume relationships visible without requiring JSON re-querying.
+    // grouped caller/callee 行の人間向け reference_kind ラベル。count を併記して、
+    // JSON で再取得しなくても高頻度の関係が見えるようにする。
+    private static string FormatReferenceKindLabel(string primary, IReadOnlyList<string> kinds, bool hasMixed, IReadOnlyDictionary<string, int>? counts)
     {
-        if (!hasMixed || kinds == null || kinds.Count <= 1)
-            return primary ?? string.Empty;
-        return string.Join("+", kinds);
+        if (counts == null || counts.Count == 0)
+        {
+            if (!hasMixed || kinds == null || kinds.Count <= 1)
+                return primary ?? string.Empty;
+            return string.Join("+", kinds);
+        }
+
+        var orderedKinds = kinds is { Count: > 0 } && kinds.Any(kind => counts.TryGetValue(kind, out var count) && count > 0)
+            ? kinds
+            : counts.Keys.Where(kind => counts[kind] > 0).OrderBy(kind => kind, StringComparer.Ordinal).ToArray();
+        return string.Join(", ", orderedKinds
+            .Where(kind => counts.TryGetValue(kind, out var count) && count > 0)
+            .Select(kind => counts[kind] == 1 ? kind : $"{kind} x{counts[kind]}"));
     }
 
     // Pick a column width that fits every label in the current batch so mixed-kind
