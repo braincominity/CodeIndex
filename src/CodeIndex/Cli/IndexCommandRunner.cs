@@ -2084,10 +2084,10 @@ public static class IndexCommandRunner
                     writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path);
                 WriteProjectRootOnce();
                 var fileId = writer.UpsertFile(record);
-                currentUpdatePath = $"{relPath} (chunking)";
+                currentUpdatePath = FormatIndexPhasePath(relPath, "chunking");
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
-                currentUpdatePath = $"{relPath} (symbols)";
+                currentUpdatePath = FormatIndexPhasePath(relPath, "symbols");
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, absPath, Path.GetFullPath(options.ProjectPath!));
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
                 var fileContext = new FileContext(projectRoot, record.Path, absPath, record.Lang);
@@ -2095,7 +2095,7 @@ public static class IndexCommandRunner
                 symbolsDroppedByKindFilter += options.SymbolKindFilter.Apply(symbols);
                 FileIndexer.ValidateSymbolLineRanges(record, symbols);
                 writer.InsertSymbols(symbols);
-                currentUpdatePath = $"{relPath} (references)";
+                currentUpdatePath = FormatIndexPhasePath(relPath, "references");
                 var references = ReferenceExtractor.Extract(
                     fileId,
                     record.Lang,
@@ -2106,10 +2106,10 @@ public static class IndexCommandRunner
                 postExtractionHooks.OnReferencesExtracted(fileContext, references);
                 writer.InsertReferences(references);
                 // Validate content for encoding issues / エンコーディング問題を検証
-                currentUpdatePath = $"{relPath} (validating)";
+                currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
                 writer.InsertIssues(fileId, issues);
-                currentUpdatePath = $"{relPath} (committing)";
+                currentUpdatePath = FormatIndexPhasePath(relPath, "committing");
                 writer.ClearBatchInProgress();
                 txn.Commit();
 
@@ -2784,6 +2784,9 @@ public static class IndexCommandRunner
         ex is RegexMatchTimeoutException timeoutException
             ? RuntimeSafety.FormatRegexTimeout(timeoutException)
             : ex.Message;
+
+    internal static string FormatIndexPhasePath(string path, string phase) =>
+        $"{path} ({phase})";
 
     private static string CollapseLineBreaks(string value)
     {
@@ -3618,12 +3621,12 @@ public static class IndexCommandRunner
                     using var txn = writer.BeginTransaction();
                     writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
                     var fileId = writer.UpsertFile(record);
-                    currentJsonIndexFile = $"{record.Path} (chunking)";
+                    currentJsonIndexFile = FormatIndexPhasePath(record.Path, "chunking");
                     var chunks = item.Chunks == null
                         ? ChunkSplitter.Split(fileId, item.Content!)
                         : ReassignChunkFileIds(item.Chunks, fileId);
                     writer.InsertChunks(chunks);
-                    currentJsonIndexFile = $"{record.Path} (symbols)";
+                    currentJsonIndexFile = FormatIndexPhasePath(record.Path, "symbols");
                     var symbols = item.Symbols == null
                         ? SymbolExtractor.Extract(fileId, record.Lang, item.Content!, item.FilePath, Path.GetFullPath(options.ProjectPath!))
                         : ReassignSymbolFileIds(item.Symbols, fileId);
@@ -3636,7 +3639,7 @@ public static class IndexCommandRunner
                     symbols = (IReadOnlyList<SymbolRecord>)mutableSymbols;
                     FileIndexer.ValidateSymbolLineRanges(record, symbols);
                     writer.InsertSymbols(symbols);
-                    currentJsonIndexFile = $"{record.Path} (references)";
+                    currentJsonIndexFile = FormatIndexPhasePath(record.Path, "references");
                     var references = item.References == null
                         ? ReferenceExtractor.Extract(
                             fileId,
@@ -3648,10 +3651,10 @@ public static class IndexCommandRunner
                         : ReassignReferenceFileIds(item.References, fileId);
                     postExtractionHooks.OnReferencesExtracted(fileContext, AsMutableList(references));
                     writer.InsertReferences(references);
-                    currentJsonIndexFile = $"{record.Path} (validating)";
+                    currentJsonIndexFile = FormatIndexPhasePath(record.Path, "validating");
                     var issues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!);
                     writer.InsertIssues(fileId, issues);
-                    currentJsonIndexFile = $"{record.Path} (committing)";
+                    currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
                     WriteProjectRootOnce();
                     txn.Commit();
 
