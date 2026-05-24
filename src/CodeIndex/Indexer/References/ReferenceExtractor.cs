@@ -1008,6 +1008,9 @@ public static partial class ReferenceExtractor
         var sqlDefinitionLeafSpansByLine = language == "sql"
             ? SqlReferenceExtractor.BuildDefinitionLeafSpansByLine(lines, symbols)
             : null;
+        var sqlWindowFunctionCallSiteSuppressions = language == "sql"
+            ? SqlReferenceExtractor.BuildWindowFunctionCallSiteSuppressions(structuralLines)
+            : null;
         var cobolCallableSymbols = language == "cobol"
             ? symbols
                 .Where(symbol => symbol.Kind == "function")
@@ -2549,6 +2552,9 @@ public static partial class ReferenceExtractor
                     if (language == "objc" && IsObjCSelectorLiteralCall(preparedLine, name, callIndex))
                         continue;
                     if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
+                        continue;
+                    if (sqlWindowFunctionCallSiteSuppressions != null
+                        && sqlWindowFunctionCallSiteSuppressions.Contains((lineNumber, callIndex)))
                         continue;
                     matchedCallIndices.Add(callIndex);
                     if (TryAddCallLikeReference(name, callIndex))

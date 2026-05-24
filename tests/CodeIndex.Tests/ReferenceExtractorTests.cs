@@ -14719,6 +14719,32 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_GeneratedColumnsCaptureExpressionDependencies()
+    {
+        const string content = """
+            CREATE TABLE dbo.Orders (
+                subtotal int,
+                tax int,
+                total int GENERATED ALWAYS AS (round(subtotal + tax, 2)) STORED,
+                invoice_no int DEFAULT NEXT VALUE FOR billing.invoice_seq,
+                created_at timestamp DEFAULT CURRENT_TIMESTAMP
+            );
+            ALTER TABLE dbo.Orders ADD computed_total AS (subtotal + tax) PERSISTED;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "round" && r.ReferenceKind == "generated_column_dependency");
+        Assert.Contains(references, r => r.SymbolName == "subtotal" && r.ReferenceKind == "generated_column_dependency");
+        Assert.Contains(references, r => r.SymbolName == "tax" && r.ReferenceKind == "generated_column_dependency");
+        Assert.Contains(references, r => r.SymbolName.EndsWith("invoice_seq", StringComparison.Ordinal) && r.ReferenceKind == "generated_column_dependency");
+        Assert.DoesNotContain(references, r => r.SymbolName == "GENERATED" && r.ReferenceKind == "generated_column_dependency");
+        Assert.DoesNotContain(references, r => r.SymbolName == "DEFAULT" && r.ReferenceKind == "generated_column_dependency");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CURRENT_TIMESTAMP" && r.ReferenceKind == "generated_column_dependency");
+    }
+
+    [Fact]
     public void Extract_SQL_DropTableCapturesAllTargetReferences()
     {
         // T-SQL teardown migrations should still be searchable by the table names they touch,
@@ -14923,6 +14949,47 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Customers" && r.ReferenceKind == "reference" && r.Line == 1);
         Assert.Contains(references, r => r.SymbolName == "Customers" && r.ReferenceKind == "reference" && r.Line == 2);
         Assert.DoesNotContain(references, r => r.SymbolName == "Customers" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SQL_WindowOverClausesEmitColumnReferences()
+    {
+        const string content = """
+            SELECT
+                ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY created_at DESC) AS rn,
+                SUM(amount) OVER (PARTITION BY [region] ORDER BY COALESCE(sale_date, fallback_date) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total
+            FROM sales.orders;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "customer_id" && r.ReferenceKind == "column_reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "created_at" && r.ReferenceKind == "column_reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "region" && r.ReferenceKind == "column_reference" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "sale_date" && r.ReferenceKind == "column_reference" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "fallback_date" && r.ReferenceKind == "column_reference" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "COALESCE" && r.ReferenceKind == "column_reference");
+        Assert.DoesNotContain(references, r => (r.SymbolName is "ROW_NUMBER" or "SUM") && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName is "ROWS" or "UNBOUNDED" or "PRECEDING" or "CURRENT" or "ROW");
+    }
+
+    [Fact]
+    public void Extract_SQL_MultilineWindowOverClausesSuppressFunctionCalls()
+    {
+        const string content = """
+            SELECT
+                SUM(amount)
+                    OVER (PARTITION BY customer_id ORDER BY created_at DESC) AS running_total
+            FROM sales.orders;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "customer_id" && r.ReferenceKind == "column_reference" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "created_at" && r.ReferenceKind == "column_reference" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "SUM" && r.ReferenceKind == "call");
     }
 
     [Fact]
