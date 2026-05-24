@@ -1258,7 +1258,11 @@ public class DbContext : IDisposable
         EnsureColumn("symbols", "visibility", "TEXT");
         EnsureColumn("symbols", "return_type", "TEXT");
         EnsureColumn("symbols", "is_metadata_target", "INTEGER");
-        EnsureColumn("symbol_references", "reference_line_id", "INTEGER REFERENCES reference_lines(id)");
+        var rebuildsSymbolReferences = !ColumnIsNotNull("symbol_references", "file_id");
+        EnsureColumn(
+            "symbol_references",
+            "reference_line_id",
+            rebuildsSymbolReferences ? "INTEGER" : "INTEGER REFERENCES reference_lines(id)");
         // #86: Unicode-aware folded name columns for `--exact` name matching across all
         // `--exact` command variants. Populated by the writer via NameFold.Fold; NULL on
         // legacy rows until a full reindex, in which case the reader falls back to the
@@ -1363,6 +1367,7 @@ public class DbContext : IDisposable
     private void EnforceRequiredFileIdConstraints()
     {
         Execute("PRAGMA foreign_keys=OFF");
+        Execute("PRAGMA legacy_alter_table=ON");
         try
         {
             RebuildTableWithRequiredFileId(
@@ -1454,6 +1459,7 @@ public class DbContext : IDisposable
         }
         finally
         {
+            Execute("PRAGMA legacy_alter_table=OFF");
             Execute("PRAGMA foreign_keys=ON");
         }
     }
