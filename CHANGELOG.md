@@ -11,6 +11,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.25.0] - 2026-05-25
+
+#### Added
+
+- **`deps` can aggregate explicit workspace member databases (#1704)** — `deps --workspace-db <path>` can be repeated to include dependency edges from additional CodeIndex databases, and JSON edges now include `source_db` / `target_db` tags when workspace DB aggregation is active.
+
+#### Changed
+
+- **Zero-result query exit codes are consistent by default (#1425)** — valid query commands now exit `0` for genuine zero-row results, and `--strict-not-found` restores exit code `2` for scripts that require non-zero empty results.
+
+#### Fixed
+
+- **NuGet README links now point at the packaged release tag** - NuGet package README and release-note links are generated with the package version tag instead of `main`, so older package pages keep pointing at matching documentation.
+- **NuGet releases now publish symbol packages (#1599)** — release packing now produces a `.snupkg` alongside the `.nupkg`, verifies both artifacts, and pushes both packages to NuGet.org so downstream consumers can debug with symbols.
+- **Oversize files now surface through `validate` (#1603)** — files above the configured indexing size limit are persisted with a `file_too_large` issue instead of disappearing as per-file errors, so `validate --kind file_too_large` explains why their chunks, symbols, and references are absent.
+- **Reversed ignore character ranges are now rejected (#1624)** — `.gitignore` and `.cdidxignore` patterns such as `[z-a]` are skipped with a warning instead of compiling into a matcher that silently matches nothing.
+- **Help output wraps long interactive lines to the terminal width (#1672)** — `cdidx --help` now wraps long usage and option descriptions for interactive terminals while preserving the existing fixed output for redirected logs and pipes.
+- **Checksum comparisons now enforce lowercase hex format (#1722)** — persisted SHA-256 hashes are compared case-sensitively and the fold fingerprint emitter now uses lowercase hex, making hash format drift visible.
+- **Caller/callee reference kind counts now preserve per-kind histograms (#1777)** - grouped `callers` / `callees` rows now populate `reference_kind_counts` / `referenceKindCounts` from the actual kind distribution, so a row with five `call` edges and one `instantiate` edge no longer collapses to an indistinguishable distinct-kind list.
+- **Extensionless shebang detection now honors UTF-16 BOM scripts (#1830)** — `cdidx` detects UTF-8, UTF-8 BOM, UTF-16 LE, and UTF-16 BE shebang lines before treating NUL bytes as binary content.
+- **MCP `batch_query` results now include correlation fields (#1838)** — Each slot result carries `request_index` and `ok` so clients can match responses to requests without relying only on array position.
+- **MCP error responses now reach the transport before diagnostic logs (#1927, #2020, #2021)** — stdio writes explicitly flush before the server reads the next frame, and parse/error diagnostics are emitted after the response write attempt so clients receive JSON-RPC failures before operators see loop errors.
+- **MCP `batch_query` now reports actual execution counts (#1992)** — Batch metadata now includes `submitted`, `executed`, and `errors`, and the summary says how many requests actually ran out of the submitted count.
+- **MCP string-array validation now rejects mixed invalid entries (#1994)** — Mixed arrays such as `path` or `names` with null, blank, or non-string entries now fail with a structured validation error instead of silently dropping the bad values.
+- **MCP array filters now enforce size bounds (#2028)** — String-array filters are capped at 100 entries and 4096 characters per entry to prevent unbounded path/filter payloads from reaching query construction.
+- **Go embedded generic struct types are indexed (#2047)** — struct bodies now expose embedded generic types such as `Reader[T]` and `*pkg.Writer[U]` as import-kind symbols without treating ordinary named fields as embedded types.
+- **Go blank identifiers are no longer indexed as properties (#2048)** — `var` and `const` declarations skip `_` while preserving ordinary names such as `_unused`.
+- **Go interface method signatures preserve type parameters (#2049)** — interface method extraction now recognizes bracketed method type parameters and stores the candidate method signature instead of the surrounding raw line.
+- **Go build directives and CGO imports are exposed as metadata (#2050)** — `//go:build` / `//go:test` comments are indexed as annotation symbols, and `import "C"` is classified as `cgo` instead of a regular import.
+- **Python decorator references now include decorator argument and composition callables (#2055)** — Python reference extraction now records callable symbols used inside parameterized decorators and composed decorator chains.
+- **Clearer long-running extraction progress during indexing (#2627)** — `cdidx index --json` liveness output now includes the current per-file phase, and C# pattern-reference regexes use bounded matching so unusually expensive source/test files no longer look like an undifferentiated one-path stall.
+
 ### [1.24.5] - 2026-05-25
 
 #### Fixed
@@ -2777,6 +2809,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.25.0] - 2026-05-25
+
+#### 追加
+
+- **`deps` が明示指定した workspace member DB を集約できるようになりました (#1704)** — `deps --workspace-db <path>` を繰り返し指定して追加の CodeIndex DB から dependency edge を含められるようになり、workspace DB 集約時の JSON edge には `source_db` / `target_db` タグが含まれます。
+
+#### 変更
+
+- **0 件クエリの終了コードを既定で統一しました (#1425)** — 有効な query コマンドが本当に 0 件を返す場合は終了コード `0` になり、空結果を非 0 として扱いたいスクリプト向けに `--strict-not-found` で終了コード `2` を返せます。
+
+#### 修正
+
+- **NuGet README のリンクがパッケージ対象のリリースタグを指すようになりました** - NuGet package README と release note のリンクは `main` ではなくパッケージ version のタグで生成されるため、過去バージョンの package page から対応する documentation を参照できます。
+- **NuGet リリースでシンボルパッケージを公開するようになりました (#1599)** — release packing は `.nupkg` と並行して `.snupkg` を生成し、両方の成果物を検証して NuGet.org に push するため、下流利用者がシンボル付きでデバッグできるようになります。
+- **サイズ上限を超えたファイルが `validate` で見えるようになりました (#1603)** — 設定された indexing size limit を超えたファイルは per-file error として消えるのではなく `file_too_large` issue として保存されるため、`validate --kind file_too_large` で chunks / symbols / references が存在しない理由を確認できます。
+- **ignore ルールの逆順文字範囲を拒否するようにしました (#1624)** — `.gitignore` と `.cdidxignore` の `[z-a]` のような pattern は、何にも一致しない matcher として静かに受理されず、警告付きで skipped されます。
+- **対話端末で長い help 行を端末幅に合わせて折り返すようになりました (#1672)** — `cdidx --help` は対話端末では長い usage と option description を折り返し、リダイレクトや pipe では従来の固定出力を維持します。
+- **checksum 比較で lowercase hex 形式を厳格に扱うようになりました (#1722)** — 永続化された SHA-256 ハッシュを大文字小文字を区別して比較し、fold fingerprint の出力も lowercase hex に統一したため、ハッシュ形式のずれを検知できるようになりました。
+- **caller/callee の reference kind count が kind ごとのヒストグラムを保持するようになりました (#1777)** - grouped `callers` / `callees` 行は実際の kind 分布から `reference_kind_counts` / `referenceKindCounts` を埋めるため、5 件の `call` と 1 件の `instantiate` を持つ行が distinct kind の一覧だけに潰れなくなりました。
+- **拡張子なし shebang 検出が UTF-16 BOM 付きスクリプトに対応しました (#1830)** — `cdidx` は NUL バイトを binary content として扱う前に、UTF-8、UTF-8 BOM、UTF-16 LE、UTF-16 BE の shebang 行を検出します。
+- **MCP `batch_query` の結果に対応付けフィールドを追加しました (#1838)** — 各 slot 結果に `request_index` と `ok` を含め、クライアントが配列位置だけに依存せずリクエストとレスポンスを対応付けられるようにしました。
+- **MCP のエラー応答が診断ログより先に transport へ届くようになりました (#1927, #2020, #2021)** — stdio 書き込みは次のフレームを読む前に明示的に flush し、parse/error 診断は応答書き込みの試行後に出力するため、クライアントは loop error のログより先に JSON-RPC failure を受け取れます。
+- **MCP `batch_query` が実際の実行件数を報告するようになりました (#1992)** — batch metadata に `submitted` / `executed` / `errors` を追加し、summary でも投入件数に対して実際に処理された件数を示すようにしました。
+- **MCP の string-array 検証が混在する不正要素を拒否するようになりました (#1994)** — `path` や `names` などに null、空白、非文字列が混ざった場合、不正値を暗黙に落とさず構造化 validation error として返します。
+- **MCP の配列 filter にサイズ上限を追加しました (#2028)** — string-array filter は 100 件、各要素 4096 文字を上限とし、無制限の path/filter payload が query construction に届かないようにしました。
+- **Go struct の embedded generic type を index するようになりました (#2047)** — struct body 内の `Reader[T]` や `*pkg.Writer[U]` などを import-kind symbol として公開し、通常の named field は embedded type として扱いません。
+- **Go の blank identifier を property として index しなくなりました (#2048)** — `var` / `const` 宣言では `_` を除外しつつ、`_unused` のような通常の名前は維持します。
+- **Go interface method の signature が type parameter を保持するようになりました (#2049)** — interface method 抽出は bracket 付き method type parameter を認識し、周囲の raw line ではなく候補 method signature を保存します。
+- **Go の build directive と CGO import を metadata として公開するようになりました (#2050)** — `//go:build` / `//go:test` comment は annotation symbol として index され、`import "C"` は通常 import ではなく `cgo` として分類されます。
+- **Python decorator references が decorator 引数と合成 chain 内の callable も含むようになりました (#2055)** — Python reference extraction は、parameterized decorator や composed decorator chain 内で使われる callable symbol も記録するようになりました。
+- **index 中の長時間抽出 progress を明確化しました (#2627)** — `cdidx index --json` の liveness output が現在のファイル内 phase を表示し、C# pattern-reference regex には bounded matching を適用したため、非常に重い source/test file が単なる 1 path の停止のように見え続ける状態を避けます。
+
 ### [1.24.5] - 2026-05-25
 
 #### 修正
@@ -5532,7 +5596,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.24.5...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.25.0...HEAD
+[1.25.0]: https://github.com/Widthdom/CodeIndex/compare/v1.24.5...v1.25.0
 [1.24.5]: https://github.com/Widthdom/CodeIndex/compare/v1.24.4...v1.24.5
 [1.24.4]: https://github.com/Widthdom/CodeIndex/compare/v1.24.3...v1.24.4
 [1.24.3]: https://github.com/Widthdom/CodeIndex/compare/v1.24.2...v1.24.3
