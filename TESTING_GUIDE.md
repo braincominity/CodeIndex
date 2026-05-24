@@ -44,6 +44,8 @@ The test project mirrors the production areas closely.
   is a coarse runaway guard for the real `InstallScriptTests.cs` C# extraction fixture. Its wall-clock budget is intentionally broader than a benchmark so slower or noisy CI hosts do not fail the suite for ordinary variance.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). It is reported as skipped on macOS arm64 while SDK/ILLink can crash before exercising `cdidx` (#2586). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
+- `QueryCommandRunnerTests.RunPublishedTrimmedCli_SearchSupportsCSharpRazorAliases`
+  uses the same trimmed RID-specific publish path to verify C# Razor language aliases. It is also reported as skipped on macOS arm64 because the SDK/ILLink crash happens before the test reaches `cdidx`.
 - `McpServerTests.cs`
   MCP JSON-RPC behavior and tool outputs.
 - `HttpMcpTransportTests.cs`
@@ -227,6 +229,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   は実ファイル `InstallScriptTests.cs` を C# 抽出に通す coarse な runaway guard です。wall-clock の予算は benchmark より意図的に広く取り、遅い / 混雑した CI host で通常の揺れだけにより suite が失敗しないようにしています。
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
   は trimmed な RID 固有 CLI を publish し、SDK が生成した entry point（`dotnet` 経由の `cdidx.dll`、または native の `cdidx`/`cdidx.exe` apphost）を実行します。self-contained publish output に常に `cdidx.dll` が出るとは仮定しないでください。
+- `QueryCommandRunnerTests.RunPublishedTrimmedCli_SearchSupportsCSharpRazorAliases`
+  は同じ trimmed RID 固有 publish 経路で C# Razor の言語 alias を検証します。このテストも macOS arm64 では、`cdidx` に到達する前に SDK/ILLink がクラッシュし得るため skipped として報告されます。
 - `McpServerTests.cs`
   MCP の JSON-RPC 挙動とツール出力のテスト。
 - `GitHelperTests.cs`
