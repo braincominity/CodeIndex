@@ -9,6 +9,15 @@ using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
+public sealed class SkipOnMacOsArm64FactAttribute : FactAttribute
+{
+    public SkipOnMacOsArm64FactAttribute()
+    {
+        if (OperatingSystem.IsMacOS() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
+            Skip = "macOS arm64 SDK/ILLink currently crashes before this test can exercise cdidx (#2570).";
+    }
+}
+
 /// <summary>
 /// Tests for indexing command argument handling.
 /// インデックスコマンドの引数処理テスト。
@@ -700,19 +709,22 @@ public class IndexCommandRunnerTests
     [Fact]
     public void ParseArgs_MaxFileBytesInvalidValue_IsIgnored()
     {
-        var originalErr = Console.Error;
-        using var stderr = new StringWriter();
-        try
+        lock (TestConsoleLock.Gate)
         {
-            Console.SetError(stderr);
-            var options = IndexCommandRunner.ParseArgs([".", "--max-file-bytes", "0"]);
+            var originalErr = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                var options = IndexCommandRunner.ParseArgs([".", "--max-file-bytes", "0"]);
 
-            Assert.True(options.MaxFileSizeBytes is null or > 0);
-            Assert.Contains("invalid --max-file-bytes value", stderr.ToString());
-        }
-        finally
-        {
-            Console.SetError(originalErr);
+                Assert.True(options.MaxFileSizeBytes is null or > 0);
+                Assert.Contains("invalid --max-file-bytes value", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalErr);
+            }
         }
     }
 
@@ -791,18 +803,21 @@ public class IndexCommandRunnerTests
     [Fact]
     public void ParseArgs_DurationFormatFlag_InvalidValue_IsIgnored()
     {
-        var originalErr = Console.Error;
-        using var stderr = new StringWriter();
-        try
+        lock (TestConsoleLock.Gate)
         {
-            Console.SetError(stderr);
-            var options = IndexCommandRunner.ParseArgs([".", "--duration-format", "bogus"]);
-            Assert.Equal(DurationOutputFormat.Auto, options.DurationFormat);
-            Assert.Contains("invalid --duration-format value", stderr.ToString());
-        }
-        finally
-        {
-            Console.SetError(originalErr);
+            var originalErr = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                var options = IndexCommandRunner.ParseArgs([".", "--duration-format", "bogus"]);
+                Assert.Equal(DurationOutputFormat.Auto, options.DurationFormat);
+                Assert.Contains("invalid --duration-format value", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalErr);
+            }
         }
     }
 
@@ -2053,7 +2068,7 @@ public class IndexCommandRunnerTests
         }
     }
 
-    [Fact]
+    [SkipOnMacOsArm64Fact]
     public void RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson()
     {
         var publishDir = Path.Combine(Path.GetTempPath(), $"cdidx_trimmed_publish_{Guid.NewGuid():N}");
@@ -7620,6 +7635,84 @@ public class IndexCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunStatusCheck_AfterCommitScopedRefreshAtHead_DoesNotReportHeadChanged()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "add run");
+            var currentHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+            var shortCurrentHead = currentHead[..12];
+
+            var (refreshExitCode, _) = RunAndCaptureJson([projectRoot, "--commits", shortCurrentHead, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+
+            var check = statusJson.GetProperty("workspace_check");
+            Assert.False(check.GetProperty("head_changed").GetBoolean());
+            Assert.True(check.GetProperty("matches_workspace").GetBoolean());
+            Assert.Equal("matched", check.GetProperty("reason").GetString());
+            Assert.Equal(currentHead, statusJson.GetProperty("indexed_head_sha").GetString());
+            Assert.Equal(0, statusJson.GetProperty("commits_ahead_of_indexed_head").GetInt32());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatusCheck_AfterFilesRefreshAtHead_StillReportsHeadChanged()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "add run");
+
+            var (refreshExitCode, _) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
+            Assert.Equal(CommandExitCodes.UsageError, statusExitCode);
+
+            var check = statusJson.GetProperty("workspace_check");
+            Assert.True(check.GetProperty("head_changed").GetBoolean());
+            Assert.False(check.GetProperty("matches_workspace").GetBoolean());
+            Assert.Equal("head_changed", check.GetProperty("reason").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
     private (int ExitCode, JsonElement Json) RunAndCaptureJson(string[] args)
     {
         lock (TestConsoleLock.Gate)
@@ -7862,13 +7955,13 @@ public class IndexCommandRunnerTests
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"dotnet publish failed: {stdout}{stderr}".Trim());
 
-        var publishedDll = Path.Combine(outputDir, "cdidx.dll");
-        if (File.Exists(publishedDll))
-            return publishedDll;
-
         var publishedAppHost = Path.Combine(outputDir, OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
         if (File.Exists(publishedAppHost))
             return publishedAppHost;
+
+        var publishedDll = Path.Combine(outputDir, "cdidx.dll");
+        if (File.Exists(publishedDll))
+            return publishedDll;
 
         throw new InvalidOperationException(
             $"Published cdidx entry point not found. Expected {publishedDll} or {publishedAppHost}");

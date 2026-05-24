@@ -22266,6 +22266,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Html_CapturesDataAndAriaAttributeNamesAsProperties()
+    {
+        var content = """
+            <button DATA-TestId="save-button" data-user-id=42 aria-label="Save" aria-expanded></button>
+            <section
+              data-panel-state="open"
+              aria-labelledby='panel-title'></section>
+            <div title="data-fake=&quot;nope&quot; aria-hidden=&quot;true&quot;" id="real"></div>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "data-testid" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "data-user-id" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "aria-label" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "aria-expanded" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "data-panel-state" && s.Line == 3);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "aria-labelledby" && s.Line == 4);
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "data-fake");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "aria-hidden");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
     public void Extract_Html_CapturesExternalScriptAndLinkAsImports()
     {
         var content = """
@@ -22341,6 +22365,35 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my-button");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app-sidebar");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "div");
+    }
+
+    [Fact]
+    public void Extract_Html_CapturesSlotDeclarationsAndProjectionReferences()
+    {
+        var content = """
+            <template id="card-template">
+              <slot name="header">Untitled</slot>
+              <slot></slot>
+              <slot name='footer'><slot name="nested"></slot></slot>
+            </template>
+            <article>
+              <h2 slot="header">Title</h2>
+              <p>Default content</p>
+              <span slot='footer'>Actions</span>
+              <slot slot="footer" name="forwarded"></slot>
+            </article>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "header");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "(default)");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "footer");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "nested");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "forwarded");
+        Assert.Equal(2, symbols.Count(s => s.Kind == "reference" && s.Name == "footer"));
+        Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "header");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "slot");
     }
 
     [Fact]
