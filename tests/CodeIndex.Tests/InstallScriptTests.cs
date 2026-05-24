@@ -63,7 +63,7 @@ public sealed class InstallScriptTests : IDisposable
             echo "cdidx v1.10.0"
             EOF
             chmod +x "{{Path.Combine(installDir, "cdidx")}}"
-            printf '{"version":"1.10.0"}' > "{{Path.Combine(installDir, "version.json")}}"
+            printf '{"version":"1.10.0","integrity_ok":true}' > "{{Path.Combine(installDir, "version.json")}}"
             : > "{{Path.Combine(installDir, nativeAssetName)}}"
             printf 'license text' > "{{Path.Combine(installDir, "LICENSE")}}"
             printf 'commercial license text' > "{{Path.Combine(installDir, "COMMERCIAL_LICENSE.md")}}"
@@ -761,7 +761,7 @@ public sealed class InstallScriptTests : IDisposable
             EOF
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -860,7 +860,7 @@ public sealed class InstallScriptTests : IDisposable
             printf 'trademark text' > "{{Path.Combine(payloadDir, "TRADEMARKS.md")}}"
             printf 'fsl text' > "{{Path.Combine(payloadDir, "LICENSES", "FSL-1.1-ALv2.txt")}}"
             printf 'apache text' > "{{Path.Combine(payloadDir, "LICENSES", "Apache-2.0.txt")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -957,7 +957,7 @@ public sealed class InstallScriptTests : IDisposable
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
             printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -1064,7 +1064,7 @@ public sealed class InstallScriptTests : IDisposable
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
             printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -1162,7 +1162,7 @@ public sealed class InstallScriptTests : IDisposable
             EOF
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -1267,7 +1267,7 @@ public sealed class InstallScriptTests : IDisposable
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
             printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -1399,7 +1399,7 @@ public sealed class InstallScriptTests : IDisposable
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
             printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -1535,7 +1535,7 @@ public sealed class InstallScriptTests : IDisposable
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
             printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -1669,7 +1669,7 @@ public sealed class InstallScriptTests : IDisposable
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
             printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -1809,7 +1809,7 @@ public sealed class InstallScriptTests : IDisposable
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
             : > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             printf '%s  %s\n' deadbeef CodeIndex-linux-arm64.tar.gz > "{{checksumsPath}}"
 
@@ -2842,7 +2842,7 @@ public sealed class InstallScriptTests : IDisposable
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
             printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -4589,6 +4589,18 @@ public sealed class InstallScriptTests : IDisposable
                 {{(enforceStrictMode ? "set -euo pipefail" : "")}}
                 export CDIDX_INSTALL_SH_LIB_ONLY=1
                 source "{{GetInstallScriptPath()}}"
+                make_payload_archive() {
+                    local payload_dir="$1"
+                    local archive_path="$2"
+                    (
+                        cd "$payload_dir"
+                        find . -type f ! -name MANIFEST.sha256 ! -name .MANIFEST.sha256.tmp | sed 's#^\./##' | LC_ALL=C sort | while IFS= read -r file; do
+                            calculate_sha256 "$file" | awk -v file="$file" '{ print $1 "  " file }'
+                        done > .MANIFEST.sha256.tmp
+                        mv .MANIFEST.sha256.tmp MANIFEST.sha256
+                    )
+                    tar czf "$archive_path" -C "$payload_dir" .
+                }
                 {{snippet}}
                 """);
             File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);

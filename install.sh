@@ -1110,7 +1110,8 @@ EOF
             calculate_sha256 "${BINARY_NAME}" | awk -v file="${BINARY_NAME}" '{ print $1 "  " file }'
             calculate_sha256 version.json | awk '{ print $1 "  version.json" }'
             calculate_sha256 "${runtime_asset}" | awk -v file="${runtime_asset}" '{ print $1 "  " file }'
-        } > MANIFEST.sha256
+        } > .MANIFEST.sha256.tmp
+        mv .MANIFEST.sha256.tmp MANIFEST.sha256
         tar czf "../${archive_name}" MANIFEST.sha256 "${BINARY_NAME}" version.json "${runtime_asset}"
     )
 

@@ -278,9 +278,10 @@ jobs:
           mkdir -p artifacts
           cd publish
           find . -exec touch -t 200001010000 {} +
-          find . -type f | sed 's#^\./##' | LC_ALL=C sort | while IFS= read -r file; do
+          find . -type f ! -name MANIFEST.sha256 ! -name .MANIFEST.sha256.tmp | sed 's#^\./##' | LC_ALL=C sort | while IFS= read -r file; do
             sha256sum "$file"
-          done > MANIFEST.sha256
+          done > .MANIFEST.sha256.tmp
+          mv .MANIFEST.sha256.tmp MANIFEST.sha256
           find . -type f | sed 's#^\./##' | LC_ALL=C sort > "../artifacts/CodeIndex-${{ matrix.rid }}.members"
           tar czf "../artifacts/CodeIndex-${{ matrix.rid }}.tar.gz" -T "../artifacts/CodeIndex-${{ matrix.rid }}.members"
           tar tzf "../artifacts/CodeIndex-${{ matrix.rid }}.tar.gz" | LC_ALL=C sort > "../artifacts/CodeIndex-${{ matrix.rid }}.actual-members"
@@ -294,7 +295,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path artifacts
           $fixedTimestamp = [DateTime]'2000-01-01T00:00:00Z'
           Get-ChildItem publish -Recurse | ForEach-Object { $_.LastWriteTimeUtc = $fixedTimestamp }
-          $files = Get-ChildItem publish -File -Recurse | Sort-Object FullName
+          $files = Get-ChildItem publish -File -Recurse |
+            Where-Object { $_.Name -ne 'MANIFEST.sha256' -and $_.Name -ne '.MANIFEST.sha256.tmp' } |
+            Sort-Object FullName
           $manifestLines = foreach ($file in $files) {
             $relative = [System.IO.Path]::GetRelativePath((Resolve-Path publish), $file.FullName).Replace('\', '/')
             $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
