@@ -1140,10 +1140,14 @@ public class DbContext : IDisposable
 
     public void InitializeSchema()
     {
-        using var transaction = _connection.BeginTransaction(deferred: false);
-        _activeMigrationTransaction = transaction;
+        var legacyAlterTable = ExecuteScalar("PRAGMA legacy_alter_table");
+        Execute("PRAGMA legacy_alter_table=ON");
         try
         {
+            using var transaction = _connection.BeginTransaction(deferred: false);
+            _activeMigrationTransaction = transaction;
+            try
+            {
             // Files table / ファイルテーブル
             Execute(@"
             CREATE TABLE IF NOT EXISTS files (
@@ -1351,18 +1355,24 @@ public class DbContext : IDisposable
                 INSERT INTO fts_chunks(rowid, content) VALUES (new.id, new.content);
             END");
             transaction.Commit();
+            }
+            finally
+            {
+                _activeMigrationTransaction = null;
+            }
         }
         finally
         {
-            _activeMigrationTransaction = null;
+            Execute($"PRAGMA legacy_alter_table={legacyAlterTable}");
+            _schemaCache?.Refresh();
         }
-
-        _schemaCache?.Refresh();
     }
 
     private void EnforceRequiredFileIdConstraints()
     {
         Execute("PRAGMA foreign_keys=OFF");
+        var legacyAlterTable = ExecuteScalar("PRAGMA legacy_alter_table");
+        Execute("PRAGMA legacy_alter_table=ON");
         try
         {
             RebuildTableWithRequiredFileId(
@@ -1422,6 +1432,7 @@ public class DbContext : IDisposable
         }
         finally
         {
+            Execute($"PRAGMA legacy_alter_table={legacyAlterTable}");
             Execute("PRAGMA foreign_keys=ON");
         }
     }
