@@ -813,7 +813,7 @@ public static partial class SymbolExtractor
             new("import",   new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:(?:typing|typing_extensions)\.)?(?:TypeVar|ParamSpec|TypeVarTuple)\s*\(", RegexOptions.Compiled), BodyStyle.None),
             new("property", new Regex(@"^\s*(?<name>\w+)\s*:\s*(?:(?:typing|typing_extensions)\.)?Final(?:\[[^\]]+\])?\s*=", RegexOptions.Compiled), BodyStyle.None),
             new("import",   new Regex(@"^\s*(?:from\s+(?<name>(?:\.+[\w.]*|[\w.]+))\s+import\b|import\s+(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
-            new("import",   new Regex(@"\b(?:importlib\.import_module|importlib\.util\.find_spec|__import__)\s*\(\s*['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*(?:[_\p{L}]\w*\s*=\s*)?(?:importlib\.import_module|importlib\.util\.find_spec|__import__)\s*\(\s*['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["cobol"] =
         [

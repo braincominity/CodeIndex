@@ -860,18 +860,24 @@ public class SymbolExtractorTests
     {
         var content = """
             importlib.import_module("plugins.alpha")
+            loaded = importlib.import_module("plugins.beta")
             __import__('legacy.loader')
             importlib.util.find_spec("optional.backend")
             importlib.import_module(module_name)
+            note = "importlib.import_module('not.real')"
+            # importlib.import_module("commented.out")
             """;
 
         var symbols = SymbolExtractor.Extract(1, "python", content);
         var imports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
 
         Assert.Contains("plugins.alpha", imports);
+        Assert.Contains("plugins.beta", imports);
         Assert.Contains("legacy.loader", imports);
         Assert.Contains("optional.backend", imports);
         Assert.DoesNotContain("module_name", imports);
+        Assert.DoesNotContain("not.real", imports);
+        Assert.DoesNotContain("commented.out", imports);
     }
 
     [Fact]

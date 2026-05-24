@@ -3156,7 +3156,8 @@ public static partial class ReferenceExtractor
                     container,
                     name => IsIgnoredCallName(language, name));
                 PythonReferenceExtractor.EmitDynamicImportReferences(
-                    context,
+                    preparedLine,
+                    originalLine,
                     references,
                     seen,
                     fileId,

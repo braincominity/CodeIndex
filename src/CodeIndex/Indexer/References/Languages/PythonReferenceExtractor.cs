@@ -115,9 +115,15 @@ internal static class PythonReferenceExtractor
         @"\bcontextlib\.suppress\s*\(\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)",
         RegexOptions.Compiled);
     private static readonly Regex ImportlibDynamicImportRegex = new(
-        @"\bimportlib(?:\.util)?\.(?:import_module|find_spec)\s*\(\s*(?:(?<quote>['""])(?<module>[^'""]+)\k<quote>)?",
+        @"\bimportlib(?:\.util)?\.(?:import_module|find_spec)\s*\(",
+        RegexOptions.Compiled);
+    private static readonly Regex ImportlibDynamicImportLiteralRegex = new(
+        @"\bimportlib(?:\.util)?\.(?:import_module|find_spec)\s*\(\s*(?<quote>['""])(?<module>[^'""]+)\k<quote>",
         RegexOptions.Compiled);
     private static readonly Regex BuiltinDynamicImportRegex = new(
+        @"(?<!\.)\b__import__\s*\(",
+        RegexOptions.Compiled);
+    private static readonly Regex BuiltinDynamicImportLiteralRegex = new(
         @"(?<!\.)\b__import__\s*\(\s*(?<quote>['""])(?<module>[^'""]+)\k<quote>",
         RegexOptions.Compiled);
 
@@ -1033,6 +1039,7 @@ internal static class PythonReferenceExtractor
 
     public static void EmitDynamicImportReferences(
         string preparedLine,
+        string originalLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -1054,7 +1061,11 @@ internal static class PythonReferenceExtractor
                 container,
                 "python");
 
-            var moduleGroup = match.Groups["module"];
+            var literalMatch = ImportlibDynamicImportLiteralRegex.Match(originalLine, match.Index);
+            if (!literalMatch.Success || literalMatch.Index != match.Index)
+                continue;
+
+            var moduleGroup = literalMatch.Groups["module"];
             if (moduleGroup.Success && moduleGroup.Value.Length > 0)
             {
                 ReferenceExtractor.AddReference(
@@ -1073,7 +1084,11 @@ internal static class PythonReferenceExtractor
 
         foreach (Match match in BuiltinDynamicImportRegex.Matches(preparedLine))
         {
-            var moduleGroup = match.Groups["module"];
+            var literalMatch = BuiltinDynamicImportLiteralRegex.Match(originalLine, match.Index);
+            if (!literalMatch.Success || literalMatch.Index != match.Index)
+                continue;
+
+            var moduleGroup = literalMatch.Groups["module"];
             ReferenceExtractor.AddReference(
                 references,
                 seen,
