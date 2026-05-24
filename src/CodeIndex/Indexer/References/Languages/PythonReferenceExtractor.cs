@@ -73,7 +73,7 @@ internal static class PythonReferenceExtractor
         @":\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)(?=\s*(?:=|,|$))",
         RegexOptions.Compiled);
     private static readonly Regex AnnotationExpressionTypeRegex = new(
-        @":\s*(?<type>[^=,]+)(?=\s*(?:=|,|$))",
+        @":\s*(?<type>[^=]+)(?=\s*(?:=|$))",
         RegexOptions.Compiled);
     private static readonly Regex VariableAnnotationTypeRegex = new(
         @"^\s*(?:self\.)?\w+\s*:\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)(?=\s*(?:=|#|$))",
@@ -88,11 +88,11 @@ internal static class PythonReferenceExtractor
         @"\b(?:(?:typing|typing_extensions)\.)?NewType\s*\(\s*[^,\n]+,\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)",
         RegexOptions.Compiled);
     private static readonly Regex TypeVarBoundTypeRegex = new(
-        @"\b(?:(?:typing|typing_extensions)\.)?TypeVar\s*\([^)]*\bbound\s*=\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)",
+        @"\b(?:(?:typing|typing_extensions)\.)?(?:TypeVar|ParamSpec)\s*\([^)]*\bbound\s*=\s*(?<type>[^)]*)\)",
         RegexOptions.Compiled);
     private static readonly Regex TypeVarConstraintTypesRegex = new(
-        @"\b(?:(?:typing|typing_extensions)\.)?TypeVar\s*\(\s*[^,\n]+,\s*(?<types>[^)=]*,[^)=]*)\)",
-        RegexOptions.Compiled);
+        @"\b(?:(?:typing|typing_extensions)\.)?(?:TypeVar|ParamSpec|TypeVarTuple)\s*\(\s*[^,\n]+,\s*(?<types>[^)]*)\)",
+        RegexOptions.Compiled | RegexOptions.Singleline);
     private static readonly Regex GetTypeHintsTargetRegex = new(
         @"(?<!\.)\bget_type_hints\s*\(\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)",
         RegexOptions.Compiled);
@@ -756,20 +756,16 @@ internal static class PythonReferenceExtractor
     {
         foreach (Match match in TypeVarBoundTypeRegex.Matches(preparedLine))
         {
-            var name = match.Groups["name"].Value;
-            if (isIgnoredName(name))
-                continue;
-
-            ReferenceExtractor.AddTypeReferenceSegments(
+            EmitPythonTypeExpressionReferences(
+                match.Groups["type"],
                 references,
                 seen,
                 fileId,
-                name,
-                match.Groups["name"].Index,
                 context,
                 lineNumber,
                 container,
-                "python");
+                resolveContainerForReference: null,
+                isIgnoredName);
         }
     }
 
@@ -786,23 +782,16 @@ internal static class PythonReferenceExtractor
         foreach (Match match in TypeVarConstraintTypesRegex.Matches(preparedLine))
         {
             var typesGroup = match.Groups["types"];
-            foreach (Match typeMatch in TypeNameRegex.Matches(typesGroup.Value))
-            {
-                var name = typeMatch.Groups["name"].Value;
-                if (isIgnoredName(name))
-                    continue;
-
-                ReferenceExtractor.AddTypeReferenceSegments(
-                    references,
-                    seen,
-                    fileId,
-                    name,
-                    typesGroup.Index + typeMatch.Groups["name"].Index,
-                    context,
-                    lineNumber,
-                    container,
-                    "python");
-            }
+            EmitPythonTypeExpressionReferences(
+                typesGroup,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                container,
+                resolveContainerForReference: null,
+                isIgnoredName);
         }
     }
 

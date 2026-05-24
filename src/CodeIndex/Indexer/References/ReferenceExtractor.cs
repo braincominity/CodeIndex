@@ -2953,6 +2953,20 @@ public static partial class ReferenceExtractor
                     pythonPreparedLine = builtPythonHeaderMap.Text;
                     pythonHeaderMap = builtPythonHeaderMap;
                 }
+                var pythonTypeFactoryLine = preparedLine;
+                var pythonTypeFactoryMap = default(PythonLogicalHeaderReferenceLine?);
+                if (preparedLine.Contains("TypeVar", StringComparison.Ordinal)
+                    || preparedLine.Contains("ParamSpec", StringComparison.Ordinal))
+                {
+                    var typeFactoryStartColumn = originalLine.IndexOfAny(['T', 'P']);
+                    if (typeFactoryStartColumn < 0)
+                        typeFactoryStartColumn = 0;
+                    if (TryBuildPythonLogicalStatementReferenceLine(lines, i, typeFactoryStartColumn, out var builtPythonTypeFactoryMap))
+                    {
+                        pythonTypeFactoryLine = builtPythonTypeFactoryMap.Text;
+                        pythonTypeFactoryMap = builtPythonTypeFactoryMap;
+                    }
+                }
                 var pythonHeaderContainer = pythonHeaderSymbol ?? container;
 
                 var pythonReferenceStart = references.Count;
@@ -3077,8 +3091,9 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     name => IsIgnoredCallName(language, name));
+                var pythonTypeFactoryReferenceStart = references.Count;
                 PythonReferenceExtractor.EmitTypeVarBoundReferences(
-                    preparedLine,
+                    pythonTypeFactoryLine,
                     references,
                     seen,
                     fileId,
@@ -3087,7 +3102,7 @@ public static partial class ReferenceExtractor
                     container,
                     name => IsIgnoredCallName(language, name));
                 PythonReferenceExtractor.EmitTypeVarConstraintReferences(
-                    preparedLine,
+                    pythonTypeFactoryLine,
                     references,
                     seen,
                     fileId,
@@ -3150,6 +3165,8 @@ public static partial class ReferenceExtractor
                     container,
                     name => IsIgnoredCallName(language, name));
 
+                if (pythonTypeFactoryMap.HasValue)
+                    RemapPythonLogicalHeaderReferences(references, pythonTypeFactoryReferenceStart, pythonTypeFactoryMap.Value, lines);
                 if (pythonHeaderMap.HasValue)
                     RemapPythonLogicalHeaderReferences(references, pythonReferenceStart, pythonHeaderMap.Value, lines);
             }
@@ -3532,6 +3549,88 @@ public static partial class ReferenceExtractor
                     header = new PythonLogicalHeaderReferenceLine(builder.ToString(), physicalLines.ToArray(), physicalColumns.ToArray());
                     return header.Text.Length > 0;
                 }
+            }
+
+            if (parenDepth == 0 && bracketDepth == 0 && !line.TrimEnd().EndsWith('\\'))
+                break;
+        }
+
+        header = new PythonLogicalHeaderReferenceLine(builder.ToString(), physicalLines.ToArray(), physicalColumns.ToArray());
+        return header.Text.Length > 0;
+    }
+
+    private static bool TryBuildPythonLogicalStatementReferenceLine(
+        string[] lines,
+        int startLineIndex,
+        int startColumn,
+        out PythonLogicalHeaderReferenceLine header)
+    {
+        var builder = new StringBuilder();
+        var physicalLines = new List<int>();
+        var physicalColumns = new List<int>();
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var inString = false;
+        var quote = '\0';
+
+        for (var lineIndex = startLineIndex; lineIndex < lines.Length; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var column = lineIndex == startLineIndex ? startColumn : FindFirstNonWhitespaceColumn(line);
+            if (column < line.Length)
+            {
+                if (builder.Length > 0)
+                {
+                    builder.Append(' ');
+                    physicalLines.Add(lineIndex);
+                    physicalColumns.Add(column);
+                }
+
+                for (var fragmentColumn = column; fragmentColumn < line.Length; fragmentColumn++)
+                {
+                    var fragmentChar = line[fragmentColumn];
+                    if (fragmentChar == '\\' && fragmentColumn == line.Length - 1)
+                        break;
+
+                    builder.Append(fragmentChar);
+                    physicalLines.Add(lineIndex);
+                    physicalColumns.Add(fragmentColumn);
+                }
+            }
+
+            for (var scan = column; scan < line.Length; scan++)
+            {
+                var ch = line[scan];
+                if (inString)
+                {
+                    if (ch == '\\')
+                    {
+                        scan++;
+                        continue;
+                    }
+
+                    if (ch == quote)
+                        inString = false;
+                    continue;
+                }
+
+                if (ch is '\'' or '"')
+                {
+                    inString = true;
+                    quote = ch;
+                    continue;
+                }
+
+                if (ch == '#')
+                    break;
+                if (ch == '(')
+                    parenDepth++;
+                else if (ch == ')' && parenDepth > 0)
+                    parenDepth--;
+                else if (ch == '[')
+                    bracketDepth++;
+                else if (ch == ']' && bracketDepth > 0)
+                    bracketDepth--;
             }
 
             if (parenDepth == 0 && bracketDepth == 0 && !line.TrimEnd().EndsWith('\\'))
