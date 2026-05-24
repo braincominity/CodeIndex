@@ -117,6 +117,33 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public void ScrubInlineCode_RemovesInlineSpanContainingNestedBackticks()
+    {
+        var input = "Template examples like `const x = `template`` should not leak";
+        var result = GitHubIssueReporter.ScrubInlineCode(input);
+        Assert.Equal("Template examples like [code example removed] should not leak", result);
+        Assert.DoesNotContain("template", result);
+    }
+
+    [Fact]
+    public void ScrubInlineCode_IgnoresEscapedBackticksInsideInlineSpan()
+    {
+        var input = "Escaped examples like `const x = \\`secret\\`` should not leak";
+        var result = GitHubIssueReporter.ScrubInlineCode(input);
+        Assert.Equal("Escaped examples like [code example removed] should not leak", result);
+        Assert.DoesNotContain("secret", result);
+    }
+
+    [Fact]
+    public void ScrubInlineCode_RemovesInlineSpanFollowedByLetter()
+    {
+        var input = "Call `secret()`when submitting";
+        var result = GitHubIssueReporter.ScrubInlineCode(input);
+        Assert.Equal("Call [code example removed]when submitting", result);
+        Assert.DoesNotContain("secret", result);
+    }
+
+    [Fact]
     public void ScrubInlineCode_PreservesPlainText()
     {
         var input = "Symbol extraction misses Kotlin data classes";
