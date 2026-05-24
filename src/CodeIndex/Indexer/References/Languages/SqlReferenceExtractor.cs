@@ -291,6 +291,12 @@ internal static class SqlReferenceExtractor
     private static readonly Regex MergeTargetHintContinuationPrefixRegex = new(
         $@"(?<![\w$])MERGE\b(?:\s+{TopTargetModifierPattern})?(?:\s+INTO)?\s+{QualifiedIdentifierNoCapturePattern}\s+WITH\s*\((?:[^()]|\([^()]*\))*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex WindowClauseColumnRegex = new(
+        $@"(?<![\w$]){QualifiedIdentifierPattern}(?:\s+(?:ASC|DESC)\b)?(?:\s+NULLS\s+(?:FIRST|LAST)\b)?",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex WindowFrameKeywordRegex = new(
+        @"(?<![\w$])(?<name>ROWS|RANGE|GROUPS|BETWEEN|UNBOUNDED|PRECEDING|FOLLOWING|CURRENT|ROW|EXCLUDE|TIES|OTHERS|NO)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     public static State CreateState() => new();
 
@@ -481,6 +487,20 @@ internal static class SqlReferenceExtractor
 
             suppressedCallIndices.Add(nameGroup.Index + statementStart - lineOffset);
         }
+
+        EmitWindowClauseReferences(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            suppressedCallIndices,
+            resolveContainerForCall,
+            shouldIgnoreName);
 
         EmitProcedureCalls(
             statement,
@@ -1394,6 +1414,274 @@ internal static class SqlReferenceExtractor
             shouldIgnoreName);
     }
 
+    private static void EmitWindowClauseReferences(
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        HashSet<int> suppressedCallIndices,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName)
+    {
+        int searchStart = 0;
+        while (TryFindNextWindowClause(
+            statement,
+            searchStart,
+            out var overKeywordIndex,
+            out var openParenIndex,
+            out var closeParenIndex))
+        {
+            if (TryFindWindowFunctionNameIndex(statement, overKeywordIndex, out var functionNameIndex)
+                && functionNameIndex >= statementLineOffset)
+            {
+                suppressedCallIndices.Add(functionNameIndex + statementStart - lineOffset);
+            }
+
+            var bodyStart = openParenIndex + 1;
+            if (closeParenIndex > statementLineOffset)
+            {
+                EmitWindowClauseColumnReferences(
+                    statement,
+                    bodyStart,
+                    closeParenIndex,
+                    statementStart,
+                    statementLineOffset,
+                    lineOffset,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    suppressedCallIndices,
+                    resolveContainerForCall,
+                    shouldIgnoreName);
+            }
+
+            searchStart = closeParenIndex + 1;
+        }
+    }
+
+    private static bool TryFindNextWindowClause(
+        string statement,
+        int searchStart,
+        out int overKeywordIndex,
+        out int openParenIndex,
+        out int closeParenIndex)
+    {
+        overKeywordIndex = -1;
+        openParenIndex = -1;
+        closeParenIndex = -1;
+
+        for (int i = searchStart; i < statement.Length;)
+        {
+            if (!IsKeywordAt(statement, i, "OVER"))
+            {
+                i++;
+                continue;
+            }
+
+            if (IsInsideDoubleQuotedRegion(statement, i))
+            {
+                i += "OVER".Length;
+                continue;
+            }
+
+            int probe = SkipWhitespaceAhead(statement, i + "OVER".Length);
+            if (probe >= statement.Length || statement[probe] != '(')
+            {
+                i += "OVER".Length;
+                continue;
+            }
+
+            int close = FindMatchingParen(statement, probe);
+            if (close < 0)
+            {
+                i += "OVER".Length;
+                continue;
+            }
+
+            overKeywordIndex = i;
+            openParenIndex = probe;
+            closeParenIndex = close;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryFindWindowFunctionNameIndex(string statement, int overKeywordIndex, out int functionNameIndex)
+    {
+        functionNameIndex = -1;
+        int probe = overKeywordIndex - 1;
+        while (probe >= 0 && char.IsWhiteSpace(statement[probe]))
+            probe--;
+        if (probe < 0 || statement[probe] != ')')
+            return false;
+
+        int openParen = FindMatchingOpenParen(statement, probe);
+        if (openParen <= 0)
+            return false;
+
+        probe = openParen - 1;
+        while (probe >= 0 && char.IsWhiteSpace(statement[probe]))
+            probe--;
+        int nameEnd = probe;
+        while (probe >= 0 && IsSqlIdentifierPart(statement[probe]))
+            probe--;
+        int nameStart = probe + 1;
+        if (nameStart > nameEnd)
+            return false;
+
+        functionNameIndex = nameStart;
+        return true;
+    }
+
+    private static void EmitWindowClauseColumnReferences(
+        string statement,
+        int bodyStart,
+        int bodyEnd,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        HashSet<int> suppressedCallIndices,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName)
+    {
+        foreach (Match keywordMatch in WindowFrameKeywordRegex.Matches(statement))
+        {
+            if (keywordMatch.Index >= bodyStart && keywordMatch.Index < bodyEnd && keywordMatch.Index >= statementLineOffset)
+                suppressedCallIndices.Add(keywordMatch.Index + statementStart - lineOffset);
+        }
+
+        foreach (var (start, end) in EnumerateWindowColumnListSpans(statement, bodyStart, bodyEnd))
+        {
+            foreach (Match match in WindowClauseColumnRegex.Matches(statement))
+            {
+                var nameGroup = match.Groups["name"];
+                if (!nameGroup.Success || nameGroup.Index < start || nameGroup.Index >= end || nameGroup.Index < statementLineOffset)
+                    continue;
+                if (IsSqlWindowKeyword(nameGroup.Value))
+                    continue;
+                if (IsImmediatelyFollowedByOpenParen(statement, nameGroup.Index + nameGroup.Length))
+                    continue;
+
+                NormalizeIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                if (!wasQuoted && shouldIgnoreName(resolvedName))
+                    continue;
+
+                int nameColumn = nameIndex + statementStart - lineOffset;
+                var container = resolveContainerForCall(nameGroup.Index);
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    resolvedName,
+                    nameColumn,
+                    "column_reference",
+                    context,
+                    lineNumber,
+                    container);
+            }
+        }
+    }
+
+    private static IEnumerable<(int Start, int End)> EnumerateWindowColumnListSpans(string statement, int bodyStart, int bodyEnd)
+    {
+        int position = bodyStart;
+        while (position < bodyEnd)
+        {
+            if (IsKeywordAt(statement, position, "PARTITION"))
+            {
+                int byIndex = SkipWhitespaceAhead(statement, position + "PARTITION".Length);
+                if (IsKeywordAt(statement, byIndex, "BY"))
+                {
+                    int start = SkipWhitespaceAhead(statement, byIndex + "BY".Length);
+                    int end = FindWindowListEnd(statement, start, bodyEnd);
+                    yield return (start, end);
+                    position = end;
+                    continue;
+                }
+            }
+
+            if (IsKeywordAt(statement, position, "ORDER"))
+            {
+                int byIndex = SkipWhitespaceAhead(statement, position + "ORDER".Length);
+                if (IsKeywordAt(statement, byIndex, "BY"))
+                {
+                    int start = SkipWhitespaceAhead(statement, byIndex + "BY".Length);
+                    int end = FindWindowListEnd(statement, start, bodyEnd);
+                    yield return (start, end);
+                    position = end;
+                    continue;
+                }
+            }
+
+            position++;
+        }
+    }
+
+    private static int FindWindowListEnd(string statement, int start, int bodyEnd)
+    {
+        for (int i = start; i < bodyEnd; i++)
+        {
+            if (IsKeywordAt(statement, i, "PARTITION")
+                || IsKeywordAt(statement, i, "ORDER")
+                || IsKeywordAt(statement, i, "ROWS")
+                || IsKeywordAt(statement, i, "RANGE")
+                || IsKeywordAt(statement, i, "GROUPS"))
+            {
+                return i;
+            }
+        }
+
+        return bodyEnd;
+    }
+
+    private static bool IsKeywordAt(string text, int index, string keyword)
+    {
+        if (index < 0 || index + keyword.Length > text.Length)
+            return false;
+        if (string.Compare(text, index, keyword, 0, keyword.Length, StringComparison.OrdinalIgnoreCase) != 0)
+            return false;
+        if (index > 0 && IsSqlIdentifierPart(text[index - 1]))
+            return false;
+        var after = index + keyword.Length;
+        return after >= text.Length || !IsSqlIdentifierPart(text[after]);
+    }
+
+    private static bool IsSqlIdentifierPart(char value)
+    {
+        return char.IsLetterOrDigit(value) || value == '_' || value == '$' || value == '#';
+    }
+
+    private static bool IsSqlWindowKeyword(string value)
+    {
+        return string.Equals(value, "PARTITION", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "ORDER", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "BY", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "ASC", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "DESC", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "NULLS", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "FIRST", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "LAST", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsImmediatelyFollowedByOpenParen(string text, int index)
+    {
+        int probe = SkipWhitespaceAhead(text, index);
+        return probe < text.Length && text[probe] == '(';
+    }
+
     private static void EmitProcedureCalls(
         string statement,
         int statementStart,
@@ -1634,6 +1922,28 @@ internal static class SqlReferenceExtractor
             }
 
             if (text[i] != ')')
+                continue;
+
+            depth--;
+            if (depth == 0)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static int FindMatchingOpenParen(string text, int closeParenIndex)
+    {
+        var depth = 0;
+        for (var i = closeParenIndex; i >= 0; i--)
+        {
+            if (text[i] == ')')
+            {
+                depth++;
+                continue;
+            }
+
+            if (text[i] != '(')
                 continue;
 
             depth--;
