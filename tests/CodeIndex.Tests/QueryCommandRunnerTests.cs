@@ -6988,7 +6988,7 @@ jobs:
     }
 
     [Fact]
-    public void RunSymbols_SwiftKindFiltersSeparateTypealiasAndAssociatedtype()
+    public void RunSymbols_SwiftKindFiltersSeparateTypealiasAssociatedtypeAndProtocol()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_swift_kind_filters");
         try
@@ -7014,9 +7014,13 @@ jobs:
             var (associatedtypeExitCode, associatedtypeStdout, associatedtypeStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["--db", dbPath, "--json", "--lang", "swift", "--kind", "associatedtype"],
                 _jsonOptions));
+            var (protocolExitCode, protocolStdout, protocolStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "swift", "--kind", "protocol"],
+                _jsonOptions));
 
             var typealiasRows = ParseJsonLines(typealiasStdout);
             var associatedtypeRows = ParseJsonLines(associatedtypeStdout);
+            var protocolRows = ParseJsonLines(protocolStdout);
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
@@ -7032,6 +7036,12 @@ jobs:
             Assert.Single(associatedtypeRows);
             Assert.Equal("associatedtype", associatedtypeRows[0].RootElement.GetProperty("kind").GetString());
             Assert.Contains("Item", associatedtypeRows[0].RootElement.GetProperty("name").GetString(), StringComparison.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, protocolExitCode);
+            Assert.Equal(string.Empty, protocolStderr);
+            Assert.Single(protocolRows);
+            Assert.Equal("protocol", protocolRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Equal("Store", protocolRows[0].RootElement.GetProperty("name").GetString());
         }
         finally
         {
