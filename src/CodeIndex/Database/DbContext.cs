@@ -1496,6 +1496,7 @@ public class DbContext : IDisposable
                 )
                 """,
                 "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion");
+            Execute("DROP TABLE IF EXISTS _reference_lines_nullable_file_id");
             RebuildTableWithRequiredFileId(
                 "file_issues",
                 """
@@ -1534,7 +1535,8 @@ public class DbContext : IDisposable
         Execute($"ALTER TABLE {tableName} RENAME TO {oldTableName}");
         Execute(createSql);
         Execute($"INSERT INTO {tableName} ({columns}) SELECT {columns} FROM {oldTableName}");
-        Execute($"DROP TABLE {oldTableName}");
+        if (!string.Equals(tableName, "reference_lines", StringComparison.Ordinal))
+            Execute($"DROP TABLE {oldTableName}");
     }
 
     private bool ColumnIsNotNull(string tableName, string columnName)
