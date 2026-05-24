@@ -1601,8 +1601,8 @@ public partial class McpServer
                 entry["suggestion"] = suggestion;
             if (retrySafe.HasValue)
                 entry["retry_safe"] = retrySafe.Value;
-            if (TryAppendResult(entry, toolName, toolArgs, requestIndex, failedSlot: true))
-                failureCount++;
+            TryAppendResult(entry, toolName, toolArgs, requestIndex, failedSlot: true);
+            failureCount++;
         }
 
         // Rate-limited slot error variant. Mirrors the shape of `AppendSlotError` so existing
@@ -1639,8 +1639,8 @@ public partial class McpServer
                 ["suggestion"] = $"Back off for at least {retryAfterMs} ms before retrying this tool.",
                 ["retry_safe"] = true,
             };
-            if (TryAppendResult(entry, toolName, toolArgs, requestIndex, failedSlot: true))
-                failureCount++;
+            TryAppendResult(entry, toolName, toolArgs, requestIndex, failedSlot: true);
+            failureCount++;
         }
 
         for (var requestIndex = 0; requestIndex < queries.Count; requestIndex++)
@@ -1823,8 +1823,8 @@ public partial class McpServer
                     ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                     ["result"] = structured?.DeepClone(),
                 };
-                if (TryAppendResult(entry, toolName, toolArgs, requestIndex, successfulSlot: true))
-                    successCount++;
+                TryAppendResult(entry, toolName, toolArgs, requestIndex, successfulSlot: true);
+                successCount++;
             }
             catch (Exception ex)
             {
@@ -1891,10 +1891,6 @@ public partial class McpServer
             if (resultsArray.Count > 0)
             {
                 var removed = resultsArray[resultsArray.Count - 1];
-                if (removed?["error"] != null)
-                    failureCount = Math.Max(0, failureCount - 1);
-                else
-                    successCount = Math.Max(0, successCount - 1);
                 truncatedQueries.Insert(0, new JsonObject
                 {
                     ["request_index"] = removed?["request_index"]?.DeepClone(),

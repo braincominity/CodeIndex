@@ -5567,6 +5567,9 @@ public class McpServerTests : IDisposable
             Assert.True(actualResponseBytes <= 700, $"Actual response was {actualResponseBytes} bytes.");
             Assert.True(structured["metadata"]!["estimated_response_bytes"]!.GetValue<int>() <= 700);
             Assert.Equal(700, structured["metadata"]!["response_byte_limit"]!.GetValue<int>());
+            Assert.Equal(2, structured["metadata"]!["submitted"]!.GetValue<int>());
+            Assert.Equal(2, structured["metadata"]!["executed"]!.GetValue<int>());
+            Assert.Equal(0, structured["metadata"]!["errors"]!.GetValue<int>());
 
             var truncatedQueries = structured["truncated_queries"]!.AsArray();
             Assert.NotEmpty(truncatedQueries);
