@@ -618,18 +618,29 @@ jobs:
         run: |
           set -euo pipefail
           expected_package="nupkg/cdidx.${VERSION}.nupkg"
+          expected_symbols="nupkg/cdidx.${VERSION}.snupkg"
           if [ ! -f "$expected_package" ]; then
             echo "Expected packed package ${expected_package} was not produced." >&2
             printf 'Produced packages:\n' >&2
             ls -la nupkg >&2
             exit 1
           fi
+          if [ ! -f "$expected_symbols" ]; then
+            echo "Expected packed symbol package ${expected_symbols} was not produced." >&2
+            printf 'Produced packages:\n' >&2
+            ls -la nupkg >&2
+            exit 1
+          fi
 
       - name: Publish to NuGet
-        run: >
-          dotnet nuget push nupkg/*.nupkg
-          --api-key ${{ secrets.NUGET_API_KEY }}
-          --source https://api.nuget.org/v3/index.json
+        run: |
+          set -euo pipefail
+          dotnet nuget push nupkg/*.nupkg \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json
+          dotnet nuget push nupkg/*.snupkg \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json
 
   publish-homebrew:
     if: github.repository == 'Widthdom/CodeIndex'
