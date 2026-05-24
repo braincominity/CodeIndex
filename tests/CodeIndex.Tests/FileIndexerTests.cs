@@ -3085,6 +3085,10 @@ public class FileIndexerTests
 
             var dbPath = Path.Combine(tempDir, ".cdidx", "codeindex.db");
             Assert.Equal("class UpdatedCafe { }", ReadSingleChunkContent(dbPath, "Caf\u00e9.cs"));
+
+            File.WriteAllBytes(Path.Combine(tempDir, nfdPath), [0, 1, 2, 3]);
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([tempDir, "--files", nfdPath, "--json", "--quiet"], jsonOptions));
+            Assert.False(HasIndexedFile(dbPath, "Caf\u00e9.cs"));
         }
         finally
         {
@@ -4283,5 +4287,14 @@ public class FileIndexerTests
             """;
         cmd.Parameters.AddWithValue("@path", filePath);
         return Assert.IsType<string>(cmd.ExecuteScalar());
+    }
+
+    private static bool HasIndexedFile(string dbPath, string filePath)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM files WHERE path = @path";
+        cmd.Parameters.AddWithValue("@path", filePath);
+        return cmd.ExecuteScalar() != null;
     }
 }

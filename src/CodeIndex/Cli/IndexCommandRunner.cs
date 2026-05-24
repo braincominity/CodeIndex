@@ -2132,11 +2132,11 @@ public static class IndexCommandRunner
                         ResumeUpdateSpinnerAfterConsoleWrite();
                     }
 
-                    if (writer.HasFileAtPath(relPath))
+                    if (writer.HasFileAtPath(dbPath))
                     {
                         DemoteReadinessOnce();
                         using var deleteTxn = writer.BeginTransaction();
-                        if (writer.DeleteFileByPath(relPath))
+                        if (writer.DeleteFileByPath(dbPath))
                         {
                             WriteProjectRootOnce();
                             deleteTxn.Commit();
@@ -2201,11 +2201,11 @@ public static class IndexCommandRunner
                         ResumeUpdateSpinnerAfterConsoleWrite();
                     }
 
-                    if (writer.HasFileAtPath(relPath))
+                    if (writer.HasFileAtPath(dbPath))
                     {
                         DemoteReadinessOnce();
                         using var deleteTxn = writer.BeginTransaction();
-                        if (writer.DeleteFileByPath(relPath))
+                        if (writer.DeleteFileByPath(dbPath))
                         {
                             WriteProjectRootOnce();
                             deleteTxn.Commit();
@@ -3257,6 +3257,7 @@ public static class IndexCommandRunner
                 .ToHashSet(StringComparer.Ordinal);
             var attributePrunedDirectories = scanResult.AttributePrunedDirectories
                 .ToHashSet(StringComparer.Ordinal);
+            attributePrunedDirectories.UnionWith(scanResult.NestedRepositories);
             purged += writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, attributePrunedDirectories);
         }
         else
@@ -3267,6 +3268,7 @@ public static class IndexCommandRunner
                     .ToHashSet(StringComparer.Ordinal);
                 var attributePrunedDirectories = scanResult.AttributePrunedDirectories
                     .ToHashSet(StringComparer.Ordinal);
+                attributePrunedDirectories.UnionWith(scanResult.NestedRepositories);
                 purged = writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, attributePrunedDirectories);
             }
             else
