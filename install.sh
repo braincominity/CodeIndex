@@ -554,7 +554,7 @@ calculate_sha256() {
 verify_payload_manifest() {
     local extract_dir="$1"
     local manifest="${extract_dir}/MANIFEST.sha256"
-    local line expected path actual
+    local manifest_paths line expected path actual extracted_paths
 
     if [ ! -f "$manifest" ]; then
         if semver_ge "${VERSION#v}" "$MANIFEST_REQUIRED_VERSION"; then
@@ -563,6 +563,14 @@ verify_payload_manifest() {
 
         warn "Release payload is missing MANIFEST.sha256; falling back to archive-level checksum verification for legacy release ${VERSION}."
         return 0
+    fi
+
+    if ! manifest_paths="$(mktemp)"; then
+        error "Failed to create temporary manifest path list."
+    fi
+    if ! extracted_paths="$(mktemp)"; then
+        rm -f "$manifest_paths"
+        error "Failed to create temporary extracted path list."
     fi
 
     while IFS= read -r line || [ -n "$line" ]; do
@@ -574,14 +582,32 @@ verify_payload_manifest() {
                 error "Invalid path in release payload manifest: ${path}"
                 ;;
         esac
+        printf '%s\n' "$path" >> "$manifest_paths"
         if [ ! -f "${extract_dir}/${path}" ]; then
+            rm -f "$manifest_paths" "$extracted_paths"
             error "Release payload manifest entry missing after extraction: ${path}"
         fi
         actual="$(calculate_sha256 "${extract_dir}/${path}")"
         if [ "$actual" != "$expected" ]; then
+            rm -f "$manifest_paths" "$extracted_paths"
             error "Release payload checksum mismatch for ${path}.\n  Expected: ${expected}\n  Actual:   ${actual}"
         fi
     done < "$manifest"
+
+    (
+        cd "$extract_dir"
+        find . -type f ! -name MANIFEST.sha256 | sed 's#^\./##' | LC_ALL=C sort
+    ) > "$extracted_paths"
+
+    while IFS= read -r path || [ -n "$path" ]; do
+        [ -n "$path" ] || continue
+        if ! grep -Fxq "$path" "$manifest_paths"; then
+            rm -f "$manifest_paths" "$extracted_paths"
+            error "Release payload contains file not listed in MANIFEST.sha256: ${path}"
+        fi
+    done < "$extracted_paths"
+
+    rm -f "$manifest_paths" "$extracted_paths"
 }
 
 write_integrity_version_json() {

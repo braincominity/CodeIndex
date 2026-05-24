@@ -1061,6 +1061,77 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void DownloadAndInstall_ArchiveWithUnmanifestedFileFails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "unmanifested_file_target");
+        var payloadDir = Path.Combine(_tempRoot, "unmanifested_file_payload");
+        var archivePath = Path.Combine(_tempRoot, "unmanifested_file.tar.gz");
+        var checksumsPath = Path.Combine(_tempRoot, "unmanifested_file.sha256sums.txt");
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            $$"""
+            mkdir -p "{{payloadDir}}"
+            cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "cdidx v1.24.6"
+            EOF
+            chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
+            printf '{"version":"1.24.6"}' > "{{Path.Combine(payloadDir, "version.json")}}"
+            printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
+            (
+                cd "{{payloadDir}}"
+                find . -type f ! -name MANIFEST.sha256 ! -name .MANIFEST.sha256.tmp | sed 's#^\./##' | LC_ALL=C sort | while IFS= read -r file; do
+                    printf '%s  %s\n' "$(calculate_sha256 "$file")" "$file"
+                done > .MANIFEST.sha256.tmp
+                mv .MANIFEST.sha256.tmp MANIFEST.sha256
+            )
+            mkdir -p "{{Path.Combine(payloadDir, "LICENSES")}}"
+            printf 'extra-license' > "{{Path.Combine(payloadDir, "LICENSES", "extra.txt")}}"
+            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+
+            checksum="$(calculate_sha256 "{{archivePath}}")"
+            printf '%s  CodeIndex-linux-x64.tar.gz\n' "$checksum" > "{{checksumsPath}}"
+
+            VERSION="v1.24.6"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o) output_path="$2"; shift 2 ;;
+                        -w) shift 2 ;;
+                        *) url="$1"; shift ;;
+                    esac
+                done
+                case "$url" in
+                    */sha256sums.txt) cp "{{checksumsPath}}" "$output_path" ;;
+                    *) cp "{{archivePath}}" "$output_path" ;;
+                esac
+                printf '200'
+                return 0
+            }
+
+            download_and_install
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("Release payload contains file not listed in MANIFEST.sha256: LICENSES/extra.txt", stderr);
+        Assert.False(File.Exists(Path.Combine(installDir, "LICENSES", "extra.txt")));
+    }
+
+    [Fact]
     public void DownloadAndInstall_StageDirMktempFailure_AbortsBeforeInstallWritesUnderStrictMode()
     {
         if (OperatingSystem.IsWindows())
