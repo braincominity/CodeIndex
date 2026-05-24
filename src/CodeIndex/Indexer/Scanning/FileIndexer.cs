@@ -1633,8 +1633,10 @@ public class FileIndexer
 
     internal ScanFilesResult ScanFilesDetailed(
         IReadOnlySet<string>? checkpointedDirectories = null,
-        bool continueOnError = true)
+        bool continueOnError = true,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var files = new List<string>();
         var errors = new List<ScanError>();
         var nonIndexablePaths = new HashSet<string>(StringComparer.Ordinal);
@@ -1651,7 +1653,7 @@ public class FileIndexer
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         if (preloadResult.IgnoreRulesAvailable)
         {
-            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeCheckpointedDirectories, attributePrunedDirectories, visitedFileIdentities, preloadResult.Rules, isProjectRoot: true, continueOnError);
+            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeCheckpointedDirectories, attributePrunedDirectories, visitedFileIdentities, preloadResult.Rules, isProjectRoot: true, continueOnError, cancellationToken);
         }
         return new ScanFilesResult(
             files,
@@ -1680,8 +1682,10 @@ public class FileIndexer
         HashSet<FileIdentity> visitedFileIdentities,
         IgnoreRuleSet activeIgnoreRules,
         bool isProjectRoot = false,
-        bool continueOnError = true)
+        bool continueOnError = true,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var relativeDir = ToRelativePath(dir);
 
         if (checkpointedDirectories.Contains(relativeDir))
@@ -1695,7 +1699,7 @@ public class FileIndexer
             return true;
         }
 
-        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, visitedFileIdentities, activeIgnoreRules, continueOnError);
+        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, visitedFileIdentities, activeIgnoreRules, continueOnError, cancellationToken);
     }
 
     private bool EnumerateDirectory(
@@ -1711,8 +1715,10 @@ public class FileIndexer
         HashSet<string> attributePrunedDirectories,
         HashSet<FileIdentity> visitedFileIdentities,
         IgnoreRuleSet inheritedIgnoreRules,
-        bool continueOnError)
+        bool continueOnError,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var fullyScanned = true;
         try
         {
@@ -1744,6 +1750,7 @@ public class FileIndexer
                     : null;
                 foreach (var enumeratedFile in _enumerateFiles(dir))
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     // Strip any \\?\ prefix returned by EnumerateFiles when we passed a long-path
                     // directory, so downstream relative-path math (which compares against the
                     // un-prefixed _projectRoot) still produces the canonical project-relative key.
@@ -1861,6 +1868,7 @@ public class FileIndexer
 
             foreach (var enumeratedSubDir in Directory.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir)))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
                 // In passthrough mode, only descend into subdirectories that are themselves
                 // submodules or submodule ancestors. Treat siblings the same way SkipDirs
@@ -1895,7 +1903,7 @@ public class FileIndexer
                     continue;
                 }
 
-                var childFullyScanned = ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, visitedFileIdentities, activeIgnoreRules, continueOnError: continueOnError);
+                var childFullyScanned = ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, visitedFileIdentities, activeIgnoreRules, continueOnError: continueOnError, cancellationToken: cancellationToken);
                 fullyScanned &= childFullyScanned;
                 if (!continueOnError && !childFullyScanned)
                     break;
@@ -2404,9 +2412,9 @@ public class FileIndexer
     /// Build a FileRecord and return file content (avoids reading the file twice).
     /// FileRecordを構築しファイル内容も返す（二重読み込み防止）。
     /// </summary>
-    public (FileRecord record, string content, string? warning) BuildRecord(string absolutePath)
+    public (FileRecord record, string content, string? warning) BuildRecord(string absolutePath, CancellationToken cancellationToken = default)
     {
-        var (record, content, _, warning) = BuildRecordWithRawBytes(absolutePath);
+        var (record, content, _, warning) = BuildRecordWithRawBytes(absolutePath, cancellationToken);
         return (record, content, warning);
     }
 
@@ -2416,8 +2424,9 @@ public class FileIndexer
     /// FileRecordを構築し、デコード済み内容とraw bytesを返す。
     /// 呼び出し側は再読込なしでエンコーディング検証できる。
     /// </summary>
-    public (FileRecord record, string content, byte[] rawBytes, string? warning) BuildRecordWithRawBytes(string absolutePath)
+    public (FileRecord record, string content, byte[] rawBytes, string? warning) BuildRecordWithRawBytes(string absolutePath, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!IsFilePathSyntaxIndexable(absolutePath))
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
 
@@ -2475,6 +2484,7 @@ public class FileIndexer
             int read;
             while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 total += read;
                 if (total > _maxFileSizeBytes)
                     throw new FileTooLargeSkippedException(

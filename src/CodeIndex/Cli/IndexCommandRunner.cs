@@ -2084,7 +2084,7 @@ public static class IndexCommandRunner
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
-                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, absPath, Path.GetFullPath(options.ProjectPath!));
+                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, absPath, Path.GetFullPath(options.ProjectPath!), cancellationToken);
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
                 var fileContext = new FileContext(projectRoot, record.Path, absPath, record.Lang);
                 postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
@@ -2097,7 +2097,8 @@ public static class IndexCommandRunner
                     content,
                     symbols,
                     record.Path,
-                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null);
+                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                    cancellationToken);
                 postExtractionHooks.OnReferencesExtracted(fileContext, references);
                 writer.InsertReferences(references);
                 // Validate content for encoding issues / エンコーディング問題を検証
@@ -3476,7 +3477,7 @@ public static class IndexCommandRunner
                         var filePath = files[fileIndex];
                         try
                         {
-                            var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(filePath);
+                            var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(filePath, cancellationToken);
                             IReadOnlyList<ChunkRecord>? chunks = null;
                             IReadOnlyList<SymbolRecord>? symbols = null;
                             IReadOnlyList<ReferenceRecord>? references = null;
@@ -3484,7 +3485,7 @@ public static class IndexCommandRunner
                             if (parallelizeExtraction)
                             {
                                 chunks = ChunkSplitter.Split(0, content);
-                                symbols = SymbolExtractor.Extract(0, record.Lang, content, filePath, Path.GetFullPath(options.ProjectPath!));
+                                symbols = SymbolExtractor.Extract(0, record.Lang, content, filePath, Path.GetFullPath(options.ProjectPath!), cancellationToken);
                                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                                 references = ReferenceExtractor.Extract(
                                     0,
@@ -3492,7 +3493,8 @@ public static class IndexCommandRunner
                                     content,
                                     symbols,
                                     record.Path,
-                                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null);
+                                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                                    cancellationToken);
                                 issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
                             }
                             extractionResults.Add(
@@ -3656,7 +3658,7 @@ public static class IndexCommandRunner
                         : ReassignChunkFileIds(item.Chunks, fileId);
                     writer.InsertChunks(chunks);
                     var symbols = item.Symbols == null
-                        ? SymbolExtractor.Extract(fileId, record.Lang, item.Content!, item.FilePath, Path.GetFullPath(options.ProjectPath!))
+                        ? SymbolExtractor.Extract(fileId, record.Lang, item.Content!, item.FilePath, Path.GetFullPath(options.ProjectPath!), cancellationToken)
                         : ReassignSymbolFileIds(item.Symbols, fileId);
                     if (item.Symbols == null)
                         SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(item.FilePath, record.Lang));
@@ -3674,7 +3676,8 @@ public static class IndexCommandRunner
                             item.Content!,
                             symbols,
                             record.Path,
-                            record.Lang == "csharp" ? csharpWorkspace.Symbols : null)
+                            record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                            cancellationToken)
                         : ReassignReferenceFileIds(item.References, fileId);
                     postExtractionHooks.OnReferencesExtracted(fileContext, AsMutableList(references));
                     writer.InsertReferences(references);
@@ -4243,14 +4246,14 @@ public static class IndexCommandRunner
             try
             {
                 reportCurrentFile?.Invoke(relativePath);
-                var (record, content, _, _) = indexer.BuildRecordWithRawBytes(absolutePath);
+                var (record, content, _, _) = indexer.BuildRecordWithRawBytes(absolutePath, cancellationToken);
                 if (record.Lang != "csharp")
                     continue;
 
                 if (!MayContainCSharpStaticInterfaceContract(content))
                     continue;
 
-                pendingSymbols.AddRange(SymbolExtractor.Extract(0, record.Lang, content, record.Path));
+                pendingSymbols.AddRange(SymbolExtractor.Extract(0, record.Lang, content, record.Path, cancellationToken: cancellationToken));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
             {

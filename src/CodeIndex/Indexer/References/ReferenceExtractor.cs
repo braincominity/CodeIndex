@@ -905,8 +905,10 @@ public static partial class ReferenceExtractor
         string content,
         IReadOnlyList<SymbolRecord> symbols,
         string? path = null,
-        IReadOnlyList<SymbolRecord>? workspaceSymbols = null)
+        IReadOnlyList<SymbolRecord>? workspaceSymbols = null,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var requestedLanguage = lang;
         var pluginLanguage = NormalizePluginLanguage(lang);
         if (!TryGetExtractor(lang, out var extractor))
@@ -921,6 +923,7 @@ public static partial class ReferenceExtractor
             if (content.Contains('\r'))
                 content = content.Replace("\r\n", "\n").Replace("\r", "\n");
             content = FileIndexer.StripLineLeadingInvisibles(content);
+            cancellationToken.ThrowIfCancellationRequested();
 
             return pluginExtractor.Extract(
                     fileId,
@@ -938,11 +941,13 @@ public static partial class ReferenceExtractor
             symbols,
             path,
             workspaceSymbols,
-            requestedLanguage));
+            requestedLanguage,
+            cancellationToken));
     }
 
     internal static List<ReferenceRecord> ExtractCore(ReferenceExtractionContext request)
     {
+        request.CancellationToken.ThrowIfCancellationRequested();
         var fileId = request.FileId;
         var language = request.Language;
         var content = request.Content;
@@ -955,6 +960,7 @@ public static partial class ReferenceExtractor
 
         if (!TryPrepareReferenceLines(language, content, isRazorFile, out var preparedInput))
             return [];
+        request.CancellationToken.ThrowIfCancellationRequested();
 
         content = preparedInput.Content;
         var lines = preparedInput.Lines;
@@ -1155,6 +1161,9 @@ public static partial class ReferenceExtractor
 
         for (int i = 0; i < lines.Length; i++)
         {
+            if ((i & 0x3f) == 0)
+                request.CancellationToken.ThrowIfCancellationRequested();
+
             var lineNumber = i + 1;
             var originalLine = lines[i];
             var preparedLine = luaPreparedLines?[i] ?? lispReferenceLines?[i] ?? preparedLines[i];
