@@ -2266,6 +2266,7 @@ public class FileIndexerTests
             Assert.Equal(7, scanResult.Errors.Count);
             Assert.All(scanResult.Errors, error => Assert.Contains(".gitignore:", error.Path, StringComparison.Ordinal));
             Assert.All(scanResult.Errors, error => Assert.Contains("Invalid ignore rule skipped", error.Message, StringComparison.Ordinal));
+            Assert.Contains(scanResult.Errors, error => error.Message == "Invalid ignore rule skipped: reversed character class range");
             Assert.All(scanResult.Errors, error => Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, error.Severity));
         }
         finally

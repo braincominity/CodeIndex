@@ -845,6 +845,9 @@ public class FileIndexer
 
         private static bool TryAppendCharacterClassRange(StringBuilder builder, char start, char end, bool ignoreCase)
         {
+            if (start > end)
+                throw new ArgumentException("reversed character class range");
+
             builder.Append(EscapeCharacterClassLiteral(start));
             builder.Append('-');
             builder.Append(EscapeCharacterClassLiteral(end));
