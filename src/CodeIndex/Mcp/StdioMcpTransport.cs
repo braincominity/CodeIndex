@@ -32,7 +32,12 @@ internal sealed class StdioMcpTransport : IMcpTransport
             new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true),
             detectEncodingFromByteOrderMarks: false,
             bufferSize: bufferSize);
-        _writer = new StreamWriter(_stdout, new UTF8Encoding(false), bufferSize: bufferSize) { AutoFlush = true };
+        _writer = new StreamWriter(_stdout, new UTF8Encoding(false), bufferSize: bufferSize)
+        {
+            AutoFlush = true,
+            // JSON-RPC stdio is line-delimited with LF on every host.
+            NewLine = "\n",
+        };
     }
 
     public string Name => "stdio";
