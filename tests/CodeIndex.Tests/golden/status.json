@@ -81,6 +81,9 @@
   "db_pragma_settings": {
     "journal_mode": "wal",
     "synchronous": "NORMAL",
-    "wal_autocheckpoint": 1000
+    "wal_autocheckpoint": 1000,
+    "page_count": "\u003CCOUNT\u003E",
+    "freelist_count": 0,
+    "page_size": 4096
   }
 }

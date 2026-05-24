@@ -406,6 +406,9 @@ public class FileIndexer
     private readonly string _ignoreRuleRoot;
     private readonly IReadOnlyList<string> _ancestorIgnoreDirectories;
     private readonly bool _ignoreCase;
+    private readonly Func<string, bool?> _directoryIgnoreCaseProbe;
+    private readonly Func<string, IEnumerable<string>> _enumerateFiles;
+    private readonly Dictionary<string, bool> _directoryIgnoreCaseCache;
     private readonly long _maxFileSizeBytes;
     // Submodule working-tree paths declared in <ignoreRuleRoot>/.gitmodules, relative to
     // _projectRoot and slash-normalized. Used to override SkipDirs so that submodules
@@ -908,11 +911,25 @@ public class FileIndexer
     }
 
     public FileIndexer(string projectRoot, bool ignoreCase, string? ignoreRuleRoot, long? maxFileSizeBytes = null)
+        : this(projectRoot, ignoreCase, ignoreRuleRoot, maxFileSizeBytes, directoryIgnoreCaseProbe: null)
+    {
+    }
+
+    internal FileIndexer(
+        string projectRoot,
+        bool ignoreCase,
+        string? ignoreRuleRoot,
+        long? maxFileSizeBytes,
+        Func<string, bool?>? directoryIgnoreCaseProbe,
+        Func<string, IEnumerable<string>>? enumerateFiles = null)
     {
         _projectRoot = Path.GetFullPath(projectRoot);
         _ignoreRuleRoot = NormalizeIgnoreRuleRoot(ignoreRuleRoot);
         _ancestorIgnoreDirectories = BuildAncestorIgnoreDirectories(_ignoreRuleRoot, _projectRoot);
         _ignoreCase = ignoreCase;
+        _directoryIgnoreCaseProbe = directoryIgnoreCaseProbe ?? ProbeExistingDirectoryIgnoreCase;
+        _enumerateFiles = enumerateFiles ?? (dir => Directory.EnumerateFiles(LongPath.EnsureWindowsPrefix(dir)));
+        _directoryIgnoreCaseCache = new Dictionary<string, bool>(StringComparer.Ordinal);
         _maxFileSizeBytes = ResolveMaxFileSizeBytes(maxFileSizeBytes);
         var pathComparer = _ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         (_submodulePaths, _submoduleAncestorPaths) = LoadGitSubmodulePaths(_ignoreRuleRoot, _projectRoot, pathComparer);
@@ -1008,6 +1025,32 @@ public class FileIndexer
 
         variant = path;
         return false;
+    }
+
+    private static bool? ProbeExistingDirectoryIgnoreCase(string directory)
+    {
+        try
+        {
+            var normalizedDirectory = Path.GetFullPath(directory);
+            return TryCreateCaseVariant(normalizedDirectory, out var variant)
+                ? Directory.Exists(LongPath.EnsureWindowsPrefix(variant))
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private bool DirectoryUsesIgnoreCase(string directory)
+    {
+        var fullPath = Path.GetFullPath(directory);
+        if (_directoryIgnoreCaseCache.TryGetValue(fullPath, out var ignoreCase))
+            return ignoreCase;
+
+        ignoreCase = _directoryIgnoreCaseProbe(fullPath) ?? _ignoreCase;
+        _directoryIgnoreCaseCache[fullPath] = ignoreCase;
+        return ignoreCase;
     }
 
     /// <summary>
@@ -1653,10 +1696,21 @@ public class FileIndexer
             // 当該ディレクトリの直下ファイルおよび submodule と無関係なサブディレクトリには
             // SkipDirs を適用しつつ、submodule 方向にだけ降りる。
             var passthrough = IsSubmoduleAncestorPassthrough(dir);
+            var directoryIgnoreCase = DirectoryUsesIgnoreCase(dir);
+            if (directoryIgnoreCase != _ignoreCase)
+            {
+                errors.Add(new ScanError(
+                    ToRelativePath(dir),
+                    "Filesystem case-sensitivity differs from the project root; deduplicating file paths for this directory.",
+                    ScanIssueSeverity.Warning));
+            }
 
             if (!passthrough)
             {
-                foreach (var enumeratedFile in Directory.EnumerateFiles(LongPath.EnsureWindowsPrefix(dir)))
+                var seenFilePaths = directoryIgnoreCase
+                    ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                    : null;
+                foreach (var enumeratedFile in _enumerateFiles(dir))
                 {
                     // Strip any \\?\ prefix returned by EnumerateFiles when we passed a long-path
                     // directory, so downstream relative-path math (which compares against the
@@ -1671,6 +1725,17 @@ public class FileIndexer
                             "Skipped file because its path contains NUL or control characters.",
                             ScanIssueSeverity.Warning));
                         nonIndexablePaths.Add(FormatPathForScanIssue(file));
+                        continue;
+                    }
+
+                    if (seenFilePaths is not null && !seenFilePaths.Add(Path.GetFullPath(file)))
+                    {
+                        var relativePath = ToRelativePath(file);
+                        errors.Add(new ScanError(
+                            relativePath,
+                            "Skipped duplicate file path that differs only by case on a case-insensitive directory.",
+                            ScanIssueSeverity.Warning));
+                        nonIndexablePaths.Add(relativePath);
                         continue;
                     }
 

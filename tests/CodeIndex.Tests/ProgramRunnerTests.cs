@@ -85,19 +85,76 @@ public class ProgramRunnerTests
     [InlineData("${HOME}/cdidx-logs", "cdidx-logs")]
     public void GlobalToolLog_OverrideDirectory_ExpandsHomeShorthand(string overrideValue, string childDirectory)
     {
-        var originalLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_GLOBAL_TOOL_LOG_DIR",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_RUNTIME_DIR");
+        env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", overrideValue);
+        env.Set("XDG_STATE_HOME", null);
+        env.Set("XDG_CACHE_HOME", null);
+        env.Set("XDG_RUNTIME_DIR", null);
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        var resolved = GlobalToolLog.ResolveLogDirectoryForReport();
+
+        Assert.Equal(Path.GetFullPath(Path.Combine(home, childDirectory)), resolved);
+    }
+
+    [Theory]
+    [InlineData("XDG_STATE_HOME", "state-home")]
+    [InlineData("XDG_CACHE_HOME", "cache-home")]
+    [InlineData("XDG_RUNTIME_DIR", "runtime-dir")]
+    public void GlobalToolLog_XdgDirectory_UsesFirstConfiguredTier(string variableName, string directoryName)
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_GLOBAL_TOOL_LOG_DIR",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_RUNTIME_DIR");
+        env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", null);
+        env.Set("XDG_STATE_HOME", null);
+        env.Set("XDG_CACHE_HOME", null);
+        env.Set("XDG_RUNTIME_DIR", null);
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_xdg_{Guid.NewGuid():N}");
+        var selected = Path.Combine(root, directoryName);
         try
         {
-            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", overrideValue);
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            env.Set(variableName, selected);
 
             var resolved = GlobalToolLog.ResolveLogDirectoryForReport();
 
-            Assert.Equal(Path.GetFullPath(Path.Combine(home, childDirectory)), resolved);
+            Assert.Equal(Path.Combine(selected, "cdidx", "logs"), resolved);
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", originalLogDir);
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void GlobalToolLog_XdgDirectory_HonorsDocumentedPrecedence()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_GLOBAL_TOOL_LOG_DIR",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_RUNTIME_DIR");
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_xdg_precedence_{Guid.NewGuid():N}");
+        try
+        {
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", null);
+            env.Set("XDG_STATE_HOME", Path.Combine(root, "state"));
+            env.Set("XDG_CACHE_HOME", Path.Combine(root, "cache"));
+            env.Set("XDG_RUNTIME_DIR", Path.Combine(root, "runtime"));
+
+            var resolved = GlobalToolLog.ResolveLogDirectoryForReport();
+
+            Assert.Equal(Path.Combine(root, "state", "cdidx", "logs"), resolved);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
         }
     }
 
@@ -131,6 +188,51 @@ public class ProgramRunnerTests
             Assert.Contains("args=definitely-not-a-command", log);
             Assert.Contains("Unknown command: definitely-not-a-command", log);
             Assert.Contains("command_complete exit_code=1", log);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(logDir);
+        }
+    }
+
+    [Fact]
+    public void Run_ForcedGlobalToolLogging_OnUnix_HardensExistingAndCurrentLogFiles()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_permissions_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(logDir);
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+            "CDIDX_DISABLE_PERSISTENT_LOG",
+            "CDIDX_GLOBAL_TOOL_LOG_DIR");
+
+        try
+        {
+            var oldLogPath = Path.Combine(logDir, "stderr-20240101.log");
+            File.WriteAllText(oldLogPath, "old log");
+            File.SetUnixFileMode(oldLogPath,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite |
+                UnixFileMode.GroupRead |
+                UnixFileMode.OtherRead);
+
+            env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["definitely-not-a-command"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("Unknown command: definitely-not-a-command", stderr);
+
+            var expectedMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            Assert.Equal(expectedMode, File.GetUnixFileMode(oldLogPath));
+
+            var currentLogPath = Directory.GetFiles(logDir, $"stderr-{DateTime.UtcNow:yyyyMMdd}.log", SearchOption.TopDirectoryOnly).Single();
+            Assert.Equal(expectedMode, File.GetUnixFileMode(currentLogPath));
         }
         finally
         {

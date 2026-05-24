@@ -59,6 +59,11 @@ internal static class JsonOutputSnapshotHelper
         "data_dir_mode",
     };
 
+    private static readonly HashSet<string> VolatileCountKeys = new(StringComparer.Ordinal)
+    {
+        "page_count",
+    };
+
     public static void AssertMatches(
         string goldenName,
         string actualJson,
@@ -147,6 +152,8 @@ internal static class JsonOutputSnapshotHelper
                         obj[key] = "<PROJECT_ROOT>";
                     else if (ScoreKeys.Contains(key) && value is JsonValue scoreValue && scoreValue.TryGetValue(out double score))
                         obj[key] = "<SCORE>"; // BM25 scores are SQLite-FTS5-implementation-sensitive; pin only the field's presence.
+                    else if (VolatileCountKeys.Contains(key))
+                        obj[key] = "<COUNT>";
                     else
                         Normalize(value);
                 }

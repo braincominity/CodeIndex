@@ -21,11 +21,13 @@ internal static class GlobalToolLog
 
             var logDirectory = ResolveLogDirectory();
             Directory.CreateDirectory(logDirectory);
+            HardenLogFiles(logDirectory);
             var logPath = Path.Combine(logDirectory, $"stderr-{DateTime.UtcNow:yyyyMMdd}.log");
             var writer = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), new UTF8Encoding(false))
             {
                 AutoFlush = true,
             };
+            SetLogFilePermissions(logPath);
             PruneOldLogs(logDirectory);
 
             var session = new Session(writer, logPath);
@@ -168,6 +170,18 @@ internal static class GlobalToolLog
         if (!string.IsNullOrWhiteSpace(overrideDirectory))
             return Path.GetFullPath(ExpandUserLogDirectory(overrideDirectory));
 
+        var xdgStateHome = Environment.GetEnvironmentVariable("XDG_STATE_HOME");
+        if (!string.IsNullOrWhiteSpace(xdgStateHome))
+            return Path.Combine(xdgStateHome, "cdidx", "logs");
+
+        var xdgCacheHome = Environment.GetEnvironmentVariable("XDG_CACHE_HOME");
+        if (!string.IsNullOrWhiteSpace(xdgCacheHome))
+            return Path.Combine(xdgCacheHome, "cdidx", "logs");
+
+        var xdgRuntimeDir = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
+        if (!string.IsNullOrWhiteSpace(xdgRuntimeDir))
+            return Path.Combine(xdgRuntimeDir, "cdidx", "logs");
+
         if (OperatingSystem.IsWindows())
         {
             var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
@@ -178,10 +192,6 @@ internal static class GlobalToolLog
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (OperatingSystem.IsMacOS() && !string.IsNullOrWhiteSpace(home))
             return Path.Combine(home, "Library", "Logs", "cdidx");
-
-        var xdgStateHome = Environment.GetEnvironmentVariable("XDG_STATE_HOME");
-        if (!string.IsNullOrWhiteSpace(xdgStateHome))
-            return Path.Combine(xdgStateHome, "cdidx", "logs");
 
         if (!string.IsNullOrWhiteSpace(home))
             return Path.Combine(home, ".local", "state", "cdidx", "logs");
@@ -241,6 +251,37 @@ internal static class GlobalToolLog
 
             foreach (var file in oldLogs)
                 file.Delete();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best-effort only / ベストエフォートのみ
+        }
+    }
+
+    private static void HardenLogFiles(string logDirectory)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        try
+        {
+            foreach (var file in new DirectoryInfo(logDirectory).EnumerateFiles("stderr-*.log", SearchOption.TopDirectoryOnly))
+                SetLogFilePermissions(file.FullName);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best-effort only / ベストエフォートのみ
+        }
+    }
+
+    private static void SetLogFilePermissions(string logPath)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        try
+        {
+            File.SetUnixFileMode(logPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
