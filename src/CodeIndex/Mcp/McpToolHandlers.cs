@@ -422,8 +422,8 @@ public partial class McpServer
     {
         if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
-        if (query.Length > MaxQueryLength)
-            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+        if (query.Length > QueryLimits.MaxQueryLength)
+            return CreateToolErrorResponse(id, QueryLimits.FormatQueryTooLongError());
 
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
@@ -492,8 +492,8 @@ public partial class McpServer
     private JsonNode ExecuteSymbols(JsonNode? id, JsonNode? args)
     {
         var query = args?["query"]?.GetValue<string>();
-        if (query != null && query.Length > MaxQueryLength)
-            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+        if (query != null && query.Length > QueryLimits.MaxQueryLength)
+            return CreateToolErrorResponse(id, QueryLimits.FormatQueryTooLongError());
 
         // Validate the raw `names` node before normalization so we can distinguish "property absent"
         // from "property present but malformed/empty". ReadStringList alone silently drops both
@@ -508,8 +508,8 @@ public partial class McpServer
         var names = ReadStringList(args, "names");
         foreach (var n in names)
         {
-            if (n.Length > MaxQueryLength)
-                return CreateToolErrorResponse(id, $"names entry too long (max {MaxQueryLength} characters)");
+            if (n.Length > QueryLimits.MaxQueryLength)
+                return CreateToolErrorResponse(id, $"names entry too long (max {QueryLimits.MaxQueryLength} characters)");
         }
         if (namesProvided && names.Count == 0)
             return CreateToolErrorResponse(id, "'names' is present but contains no usable entries (all were empty or whitespace).");
@@ -603,8 +603,8 @@ public partial class McpServer
     {
         if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
-        if (query.Length > MaxQueryLength)
-            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+        if (query.Length > QueryLimits.MaxQueryLength)
+            return CreateToolErrorResponse(id, QueryLimits.FormatQueryTooLongError());
         if (IsBareVerbatimQueryToken(query))
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
@@ -660,8 +660,8 @@ public partial class McpServer
     {
         if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
-        if (query.Length > MaxQueryLength)
-            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+        if (query.Length > QueryLimits.MaxQueryLength)
+            return CreateToolErrorResponse(id, QueryLimits.FormatQueryTooLongError());
         if (IsBareVerbatimQueryToken(query))
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
@@ -724,8 +724,8 @@ public partial class McpServer
     {
         if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
-        if (query.Length > MaxQueryLength)
-            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+        if (query.Length > QueryLimits.MaxQueryLength)
+            return CreateToolErrorResponse(id, QueryLimits.FormatQueryTooLongError());
         if (IsBareVerbatimQueryToken(query))
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
@@ -790,8 +790,8 @@ public partial class McpServer
     {
         if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
-        if (query.Length > MaxQueryLength)
-            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+        if (query.Length > QueryLimits.MaxQueryLength)
+            return CreateToolErrorResponse(id, QueryLimits.FormatQueryTooLongError());
         if (IsBareVerbatimQueryToken(query))
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
@@ -855,8 +855,8 @@ public partial class McpServer
     private JsonNode ExecuteFiles(JsonNode? id, JsonNode? args)
     {
         var query = args?["query"]?.GetValue<string>();
-        if (query != null && query.Length > MaxQueryLength)
-            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+        if (query != null && query.Length > QueryLimits.MaxQueryLength)
+            return CreateToolErrorResponse(id, QueryLimits.FormatQueryTooLongError());
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var pathPatterns = ReadScopedPathList(args);
@@ -934,8 +934,8 @@ public partial class McpServer
     {
         if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
-        if (query.Length > MaxQueryLength)
-            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+        if (query.Length > QueryLimits.MaxQueryLength)
+            return CreateToolErrorResponse(id, QueryLimits.FormatQueryTooLongError());
         if (IsBareVerbatimQueryToken(query))
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
@@ -1326,8 +1326,8 @@ public partial class McpServer
     {
         if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
-        if (query.Length > MaxQueryLength)
-            return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+        if (query.Length > QueryLimits.MaxQueryLength)
+            return CreateToolErrorResponse(id, QueryLimits.FormatQueryTooLongError());
 
         var pathPatterns = ReadScopedPathList(args);
         if (pathPatterns == null || pathPatterns.Count == 0)

@@ -665,7 +665,7 @@ public static class ConsoleUi
         Console.WriteLine("  --limit <n>, --top <n>     Max results to return (default: 20)");
         Console.WriteLine("  --lang <lang>              Filter by language (aliases: bat, cmd, cshtml, razor, ts, tsx, cts, mts)");
         Console.WriteLine("  --path <glob>              Restrict matches to glob-style path patterns (* and ?)");
-        Console.WriteLine("  --query <query>            Pass a query literal, useful when the query starts with '-'");
+        Console.WriteLine($"  --query <query>            Pass a query literal, useful when the query starts with '-' (`search` max {QueryLimits.MaxQueryLength} chars)");
         Console.WriteLine("  --exclude-path <glob>      Exclude glob-style path patterns (* and ?) (repeatable)");
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
         Console.WriteLine("  --include-generated        Include generated files in query results");
@@ -675,7 +675,7 @@ public static class ConsoleUi
         Console.WriteLine("  --focus-line <line>        excerpt: line whose focused column should stay visible (requires --focus-column)");
         Console.WriteLine("  --focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)");
         Console.WriteLine("  --focus-length <n>         excerpt: width of the focused span (default: 1, requires --focus-column)");
-        Console.WriteLine($"  --fts                      Use raw FTS5 query syntax for search (max {DbReader.MaxRawFtsQueryLength} chars, {DbReader.MaxRawFtsBooleanOperators} boolean ops, {DbReader.MaxRawFtsNearOperators} NEAR ops; trailing * is a prefix shorthand in literal-safe mode)");
+        Console.WriteLine($"  --fts                      Use raw FTS5 query syntax for search (search query max {QueryLimits.MaxQueryLength} chars; raw FTS parser max {DbReader.MaxRawFtsQueryLength} chars, {DbReader.MaxRawFtsBooleanOperators} boolean ops, {DbReader.MaxRawFtsNearOperators} NEAR ops; trailing * is a prefix shorthand in literal-safe mode)");
         Console.WriteLine("  --exact                    Backward-compatible shorthand. Prefer --exact-substring for search, keep --exact for find, and prefer --exact-name for symbols/definition/references/callers/callees/inspect. Pass at most one of --exact, --exact-substring, --exact-name; combining two or more is rejected.");
         Console.WriteLine("  --exact-substring          Search only: case-sensitive exact substring (no FTS5)");
         Console.WriteLine("  --exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match (legacy/stale-fold DBs fall back to ASCII NOCASE; use `cdidx backfill-fold` or check `status --json` fold_ready)");
