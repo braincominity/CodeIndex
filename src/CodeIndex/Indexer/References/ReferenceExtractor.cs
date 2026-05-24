@@ -3119,6 +3119,15 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitDataclassFieldReferences(
+                    preparedLines,
+                    lines,
+                    i,
+                    references,
+                    seen,
+                    fileId,
+                    container,
+                    name => IsIgnoredCallName(language, name));
                 PythonReferenceExtractor.EmitAttrsFieldsReferences(
                     preparedLine,
                     references,

@@ -100,7 +100,16 @@ internal static class PythonReferenceExtractor
         @"\b(?:typing|typing_extensions)\.get_type_hints\s*\(\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)",
         RegexOptions.Compiled);
     private static readonly Regex DataclassesFieldsTargetRegex = new(
-        @"\bdataclasses\.fields\s*\(\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)",
+        @"(?<!\.)\bfields\s*\(\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)|\bdataclasses\.fields\s*\(\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)",
+        RegexOptions.Compiled);
+    private static readonly Regex DataclassFieldCallRegex = new(
+        @"^\s*[_\p{L}]\w*\s*(?::\s*[^=]+)?=\s*(?:(?:dataclasses\.)?field)\s*\(",
+        RegexOptions.Compiled);
+    private static readonly Regex DataclassFieldDefaultFactoryRegex = new(
+        @"\bdefault_factory\s*=\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{L}]\w*)",
+        RegexOptions.Compiled);
+    private static readonly Regex DataclassFieldMetadataRegex = new(
+        @"\bmetadata\s*=\s*(?<values>\{)",
         RegexOptions.Compiled);
     private static readonly Regex AttrsFieldsTargetRegex = new(
         @"\b(?:attr|attrs)\.fields\s*\(\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)",
@@ -906,6 +915,234 @@ internal static class PythonReferenceExtractor
                 lineNumber,
                 container,
                 "python");
+        }
+    }
+
+    public static void EmitDataclassFieldReferences(
+        string[] preparedLines,
+        string[] originalLines,
+        int lineIndex,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        SymbolRecord? container,
+        Func<string, bool> isIgnoredName)
+    {
+        var preparedLine = preparedLines[lineIndex];
+        if (!DataclassFieldCallRegex.IsMatch(preparedLine))
+            return;
+
+        var depth = 0;
+        var sawFieldCall = false;
+        var inString = false;
+        var quoteChar = '\0';
+
+        for (var currentLineIndex = lineIndex; currentLineIndex < preparedLines.Length; currentLineIndex++)
+        {
+            var currentPreparedLine = preparedLines[currentLineIndex];
+            var currentOriginalLine = originalLines[currentLineIndex];
+            var currentContext = currentOriginalLine.Trim();
+            var currentLineNumber = currentLineIndex + 1;
+
+            EmitDataclassFieldDefaultFactoryReferences(
+                currentPreparedLine,
+                references,
+                seen,
+                fileId,
+                currentContext,
+                currentLineNumber,
+                container,
+                isIgnoredName);
+            EmitDataclassFieldMetadataReferences(
+                originalLines,
+                currentLineIndex,
+                references,
+                seen,
+                fileId,
+                container,
+                isIgnoredName);
+
+            for (var column = 0; column < currentPreparedLine.Length; column++)
+            {
+                var ch = currentPreparedLine[column];
+                if (inString)
+                {
+                    if (ch == '\\')
+                    {
+                        column++;
+                        continue;
+                    }
+
+                    if (ch == quoteChar)
+                        inString = false;
+                    continue;
+                }
+
+                if (ch == '#')
+                    break;
+                if (ch is '\'' or '"')
+                {
+                    inString = true;
+                    quoteChar = ch;
+                    continue;
+                }
+
+                if (ch == '(')
+                {
+                    depth++;
+                    sawFieldCall = true;
+                }
+                else if (ch == ')' && depth > 0)
+                {
+                    depth--;
+                    if (sawFieldCall && depth == 0)
+                        return;
+                }
+            }
+
+            if (sawFieldCall && depth <= 0)
+                return;
+        }
+    }
+
+    private static void EmitDataclassFieldDefaultFactoryReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        Func<string, bool> isIgnoredName)
+    {
+        foreach (Match match in DataclassFieldDefaultFactoryRegex.Matches(preparedLine))
+        {
+            var name = match.Groups["name"].Value;
+            if (isIgnoredName(name))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                name,
+                match.Groups["name"].Index,
+                "call",
+                context,
+                lineNumber,
+                container,
+                "python");
+        }
+    }
+
+    private static void EmitDataclassFieldMetadataReferences(
+        string[] originalLines,
+        int lineIndex,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        SymbolRecord? container,
+        Func<string, bool> isIgnoredName)
+    {
+        var metadataMatch = DataclassFieldMetadataRegex.Match(originalLines[lineIndex]);
+        if (!metadataMatch.Success)
+            return;
+
+        var currentLineIndex = lineIndex;
+        var currentColumn = metadataMatch.Groups["values"].Index;
+        var depth = 0;
+        var inString = false;
+        var quoteChar = '\0';
+        var stringStartColumn = -1;
+
+        while (currentLineIndex < originalLines.Length)
+        {
+            var currentLine = originalLines[currentLineIndex];
+            if (currentColumn >= currentLine.Length)
+            {
+                if (depth <= 0 && !inString)
+                    break;
+
+                currentLineIndex++;
+                currentColumn = 0;
+                continue;
+            }
+
+            var ch = currentLine[currentColumn];
+            if (inString)
+            {
+                if (ch == '\\' && currentColumn + 1 < currentLine.Length)
+                {
+                    currentColumn += 2;
+                    continue;
+                }
+
+                if (ch == quoteChar)
+                {
+                    var afterStringColumn = currentColumn + 1;
+                    while (afterStringColumn < currentLine.Length && char.IsWhiteSpace(currentLine[afterStringColumn]))
+                        afterStringColumn++;
+
+                    if (afterStringColumn < currentLine.Length && currentLine[afterStringColumn] == ':')
+                    {
+                        var name = currentLine[stringStartColumn..currentColumn].Trim();
+                        if (name.Length > 0 && !isIgnoredName(name))
+                        {
+                            ReferenceExtractor.AddReference(
+                                references,
+                                seen,
+                                fileId,
+                                name,
+                                stringStartColumn,
+                                "annotation",
+                                currentLine.Trim(),
+                                currentLineIndex + 1,
+                                container,
+                                "python");
+                        }
+                    }
+
+                    inString = false;
+                    quoteChar = '\0';
+                    stringStartColumn = -1;
+                    currentColumn++;
+                    continue;
+                }
+
+                currentColumn++;
+                continue;
+            }
+
+            if (ch == '#')
+                break;
+
+            if (ch is '\'' or '"')
+            {
+                inString = true;
+                quoteChar = ch;
+                stringStartColumn = currentColumn + 1;
+                currentColumn++;
+                continue;
+            }
+
+            if (ch is '{' or '[' or '(')
+            {
+                depth++;
+                currentColumn++;
+                continue;
+            }
+
+            if (ch is '}' or ']' or ')')
+            {
+                if (depth > 0)
+                    depth--;
+                currentColumn++;
+                if (depth <= 0)
+                    break;
+                continue;
+            }
+
+            currentColumn++;
         }
     }
 
