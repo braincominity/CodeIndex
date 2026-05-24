@@ -162,6 +162,7 @@ public static class QueryCommandRunner
         "--version",
         "-V",
         "--verbose",
+        "--by-bucket",
         "--group-by-name",
         "--with-paths",
         "--bytes",
@@ -3081,6 +3082,7 @@ public static class QueryCommandRunner
 
     public static int RunUnused(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var byBucket = cmdArgs.Any(arg => arg == "--by-bucket");
         var previewOptionError = ValidatePreviewOptions("unused", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
@@ -3124,6 +3126,8 @@ public static class QueryCommandRunner
                         ["count"] = countSummary.Count,
                         ["files"] = countSummary.FileCount,
                         ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(new Dictionary<string, int>(), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
+                        ["summary"] = BuildUnusedSummaryJson(Array.Empty<UnusedSymbolResult>(), jsonOptions),
+                        ["bucket_taxonomy"] = BuildUnusedBucketTaxonomyJson(),
                         ["graph_supported"] = graphSupported,
                         ["graph_support_reason"] = graphSupportReason,
                         ["graph_table_available"] = reader._hasReferencesTable,
@@ -3175,7 +3179,7 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, sqlGraphSignal, reader._hasReferencesTable, jsonOptions));
+                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, sqlGraphSignal, reader._hasReferencesTable, jsonOptions, byBucket: byBucket));
             }
             else
             {
@@ -3206,7 +3210,7 @@ public static class QueryCommandRunner
         });
     }
 
-    private static readonly string[] OrderedUnusedBuckets =
+    internal static readonly string[] OrderedUnusedBuckets =
     [
         "likely_unused_private",
         "maybe_unused_nonpublic",
@@ -3214,7 +3218,7 @@ public static class QueryCommandRunner
         "reflection_or_config_suspect",
     ];
 
-    private static Dictionary<string, int> BuildUnusedBucketCounts(IEnumerable<UnusedSymbolResult> results)
+    internal static Dictionary<string, int> BuildUnusedBucketCounts(IEnumerable<UnusedSymbolResult> results)
     {
         var grouped = results
             .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
@@ -3228,7 +3232,60 @@ public static class QueryCommandRunner
         return ordered;
     }
 
-    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions = null)
+    internal static Dictionary<string, int> BuildUnusedConfidenceCounts(IEnumerable<UnusedSymbolResult> results)
+        => results
+            .GroupBy(result => result.UnusedConfidence, StringComparer.Ordinal)
+            .OrderBy(group => GetUnusedConfidenceOrder(group.Key))
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+
+    internal static JsonObject BuildUnusedSummaryJson(IEnumerable<UnusedSymbolResult> results, JsonSerializerOptions jsonOptions)
+    {
+        var resultList = results as List<UnusedSymbolResult> ?? results.ToList();
+        return new JsonObject
+        {
+            ["by_bucket"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
+            ["by_confidence"] = JsonSerializer.SerializeToNode(BuildUnusedConfidenceCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
+        };
+    }
+
+    internal static JsonObject BuildUnusedBucketTaxonomyJson()
+    {
+        var taxonomy = new JsonObject();
+        foreach (var bucket in OrderedUnusedBuckets)
+            taxonomy[bucket] = new JsonObject
+            {
+                ["confidence"] = GetUnusedBucketConfidence(bucket),
+                ["description"] = GetUnusedBucketDescription(bucket),
+            };
+        return taxonomy;
+    }
+
+    private static int GetUnusedConfidenceOrder(string confidence) => confidence switch
+    {
+        "medium" => 0,
+        "low" => 1,
+        _ => 2,
+    };
+
+    private static string GetUnusedBucketConfidence(string bucket) => bucket switch
+    {
+        "likely_unused_private" => "medium",
+        "maybe_unused_nonpublic" => "low",
+        "public_or_exported_no_refs" => "low",
+        "reflection_or_config_suspect" => "low",
+        _ => "unknown",
+    };
+
+    private static string GetUnusedBucketDescription(string bucket) => bucket switch
+    {
+        "likely_unused_private" => "Private symbols with no indexed references; usually the highest-signal unused candidates.",
+        "maybe_unused_nonpublic" => "Internal, protected, or otherwise non-public symbols with no indexed references; review call paths and framework entry points before removal.",
+        "public_or_exported_no_refs" => "Public or exported symbols with no indexed references; may still be external API surface.",
+        "reflection_or_config_suspect" => "Symbols with no indexed references that look reachable through reflection, attributes, config, or binding conventions.",
+        _ => "Unknown unused-symbol bucket.",
+    };
+
+    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions = null, bool byBucket = false)
     {
         var resultList = results as List<UnusedSymbolResult> ?? results.ToList();
         var payload = new JsonObject
@@ -3237,8 +3294,12 @@ public static class QueryCommandRunner
             ["graph_supported"] = graphSupported,
             ["graph_support_reason"] = graphSupportReason,
             ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
+            ["summary"] = BuildUnusedSummaryJson(resultList, jsonOptions),
+            ["bucket_taxonomy"] = BuildUnusedBucketTaxonomyJson(),
             ["symbols"] = JsonSerializer.SerializeToNode(resultList, CliJsonSerializerContextFactory.Create(jsonOptions).ListUnusedSymbolResult)
         };
+        if (byBucket)
+            payload["by_bucket"] = BuildUnusedResultsByBucketJson(resultList, jsonOptions);
 
         if (!hasReferencesTable)
         {
@@ -3251,6 +3312,22 @@ public static class QueryCommandRunner
         if (queryOptions != null)
             payload["query_context"] = BuildQueryContextJson(queryOptions, jsonOptions);
         return payload.ToJsonString(jsonOptions);
+    }
+
+    private static JsonObject BuildUnusedResultsByBucketJson(IEnumerable<UnusedSymbolResult> results, JsonSerializerOptions jsonOptions)
+    {
+        var grouped = results
+            .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+        var byBucket = new JsonObject();
+        foreach (var bucket in OrderedUnusedBuckets)
+        {
+            if (grouped.TryGetValue(bucket, out var bucketResults))
+                byBucket[bucket] = JsonSerializer.SerializeToNode(bucketResults, CliJsonSerializerContextFactory.Create(jsonOptions).ListUnusedSymbolResult);
+            else
+                byBucket[bucket] = new JsonArray();
+        }
+        return byBucket;
     }
 
     private static string GetUnusedBucketHeading(string bucket) => bucket switch
@@ -3676,6 +3753,8 @@ public static class QueryCommandRunner
                     break;
                 case "--count":
                     countOnly = true;
+                    break;
+                case "--by-bucket":
                     break;
                 case "--no-dedup":
                     noDedup = true;
@@ -4730,6 +4809,7 @@ public static class QueryCommandRunner
         "operator",
         "procedure",
         "property",
+        "protocol",
         "record",
         "reference",
         "route",

@@ -6784,6 +6784,10 @@ public class McpServerTests : IDisposable
         Assert.Equal(1, structured["returned_bucket_counts"]!["maybe_unused_nonpublic"]!.GetValue<int>());
         Assert.Equal(6, structured["returned_bucket_counts"]!["public_or_exported_no_refs"]!.GetValue<int>());
         Assert.Equal(1, structured["returned_bucket_counts"]!["reflection_or_config_suspect"]!.GetValue<int>());
+        Assert.Equal(1, structured["summary"]!["by_bucket"]!["likely_unused_private"]!.GetValue<int>());
+        Assert.Equal(8, structured["summary"]!["by_confidence"]!["low"]!.GetValue<int>());
+        Assert.Equal("low", structured["bucket_taxonomy"]!["reflection_or_config_suspect"]!["confidence"]!.GetValue<string>());
+        Assert.Contains("reflection", structured["bucket_taxonomy"]!["reflection_or_config_suspect"]!["description"]!.GetValue<string>());
         Assert.Equal("Hidden", symbols[0]!["name"]!.GetValue<string>());
         Assert.Equal("likely_unused_private", symbols[0]!["unusedBucket"]!.GetValue<string>());
         Assert.Equal("medium", symbols[0]!["unusedConfidence"]!.GetValue<string>());
