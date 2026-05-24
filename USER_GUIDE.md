@@ -951,6 +951,7 @@ cdidx report --output report.tgz --json
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude glob-style path patterns. `*` and `?` are wildcards (repeatable) |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude likely test files and prefer production code |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots` | Include files detected as generated code; generated files are excluded from query results by default |
+| `--workspace-db <path>` | `deps` | Add another CodeIndex database to the file-dependency query. Repeat it to aggregate multiple workspace member DBs; JSON edges include `source_db` and `target_db` so same relative paths can be disambiguated. |
 | `--snippet-lines <n>` | `search` | Search snippet length for human-readable output and JSON/MCP snippets (default: 8, max: 20) |
 | `--snippet-focus <leftmost\|quality\|proximity>` | `search` | Choose how long search-result lines pick the visible focus when clamped. `quality` (default) prefers full-query matches and strong tokens; `proximity` favors dense multi-token clusters; `leftmost` keeps legacy earliest-match behavior. |
 | `--max-line-width <n>` | `search`, `references`, `find`, `excerpt`, `inspect` | Clamp very long single-line snippet/reference/excerpt payloads around the relevant match (`0` disables clamping; default: 512, max: 4096) |
@@ -2860,6 +2861,7 @@ cdidx report --output report.tgz --json
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | 指定タイムスタンプ以降に変更されたファイルのみ（ISO 8601）。オフセットなしの値（例: `2024-01-01T00:00:00`）は UTC として解釈されるため、どのタイムゾーンから呼び出しても同じ UTC 時点になります。明示したい場合は末尾に `Z` または `+09:00` 等のオフセットを付与してください。 |
 | `--no-dedup` | `search` | オーバーラップチャンク重複排除を無効化 |
 | `--reverse` | `deps` | 逆引き: 指定パスに依存しているファイルを表示 |
+| `--workspace-db <path>` | `deps` | file dependency query に別の CodeIndex DB を追加する。複数 member DB を集約する場合は繰り返し指定でき、JSON edge には同じ相対パスを区別できるよう `source_db` / `target_db` が含まれる。 |
 | `--top <n>` | クエリ系 | `--limit` のエイリアス |
 | `--color <when>` | 全コマンド | ANSI カラー出力の制御。`auto`（既定）、`always`、`never` を受け付ける。優先順位: `--color` フラグ > `CLICOLOR_FORCE` > `NO_COLOR` > `CLICOLOR=0` > 端末能力の自動判定。auto では redirected stdout と StringWriter 風のテスト capture を非 ANSI とみなし、Windows では ConPTY / Windows Terminal の virtual-terminal 対応と `WT_SESSION`、`WT_PROFILE_ID`、`TERM_PROGRAM`、非 `dumb` の `TERM` などの端末ヒントも見る。`cdidx symbols Foo \| less -R` のような pager pipe でも色を維持したい場合は `--color=always`、TTY 上でも ANSI を抑止したい場合は `--color=never`（または `NO_COLOR=1`）を指定する。 |
 | `--palette <name>` | 全コマンド | カラー出力が有効なときに用いる ANSI パレットを選択する。`basic`（標準8色 SGR 30–37、最小 SSH/CI 端末向けの既定フォールバック）、`256`（256色 `\x1b[38;5;Nm`）、`truecolor`（24ビット RGB `\x1b[38;2;R;G;Bm`）を受け付ける。優先順位: `--palette` フラグ > `CDIDX_COLOR_PALETTE` 環境変数 > `COLORTERM` / `TERM` 自動判定。`basic` パレットは最小端末で読みにくい `\x1b[90m`（暗灰 / dim）を避ける。 |

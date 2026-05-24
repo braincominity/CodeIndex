@@ -852,6 +852,10 @@ public class FileDependencyResult
     public string? ResultKind { get; set; }
     public string SourcePath { get; set; } = string.Empty;
     public string TargetPath { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SourceDb { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TargetDb { get; set; }
     public int ReferenceCount { get; set; }
     public string Symbols { get; set; } = string.Empty;
 }
