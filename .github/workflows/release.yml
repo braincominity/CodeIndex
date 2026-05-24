@@ -609,3 +609,37 @@ jobs:
           dotnet nuget push nupkg/*.nupkg
           --api-key ${{ secrets.NUGET_API_KEY }}
           --source https://api.nuget.org/v3/index.json
+
+  publish-homebrew:
+    if: github.repository == 'Widthdom/CodeIndex'
+    runs-on: ubuntu-latest
+    needs: create-release
+    environment: homebrew-production
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag_name || github.ref }}
+
+      - name: Extract release tag
+        id: release
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag_name || github.ref_name }}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Release tag must be a v-prefixed SemVer version, got: ${TAG}" >&2
+            exit 1
+          fi
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Bump Homebrew formula
+        uses: dawidd6/action-homebrew-bump-formula@v5
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          tap: Widthdom/homebrew-tap
+          formula: codeindex
+          tag: ${{ steps.release.outputs.tag }}
+          revision: ${{ steps.release.outputs.revision }}

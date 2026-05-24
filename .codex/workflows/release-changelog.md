@@ -155,8 +155,8 @@ the tag in place.
 
 ### Partial-failure recovery
 
-The `Release` workflow has three post-tag jobs: the `release` build/publish
-matrix and two jobs that depend on it (`create-release`, `publish-nuget`).
+The `Release` workflow has four post-tag jobs: the `release` build/publish
+matrix, `create-release`, `publish-nuget`, and `publish-homebrew`.
 Failures usually only affect one of them.
 
 - **One `release` matrix lane (Linux/Windows/macOS publish) failed.**
@@ -179,6 +179,16 @@ Failures usually only affect one of them.
   re-running the publish job. For transient network/API failures before publish,
   re-run `publish-nuget` from the GitHub Actions UI after confirming the package
   version is still absent.
+- **`publish-homebrew` failed but the GitHub release succeeded.**
+  First check the job log. The job runs after `create-release` and requires the
+  `homebrew-production` environment plus `HOMEBREW_TAP_TOKEN` access to update
+  the `Widthdom/homebrew-tap` `codeindex` formula. Do not delete and re-tag for
+  a Homebrew-only failure — the GitHub release is already public and the tag is
+  the source of truth for direct installers and NuGet. If the formula update
+  already landed, verify the tap instead of re-running the job. For transient
+  GitHub/API failures before the tap changes, re-run `publish-homebrew` from the
+  GitHub Actions UI. For a formula conflict or bad generated formula, fix the
+  tap with an auditable follow-up commit/PR and reference the release tag.
 - **Install-verification step failed (e.g. `cdidx --version` mismatch, missing
   asset).** This means the published release is *not* usable. Investigate
   before announcing. If the cause is a transient CDN/network blip, re-run the
