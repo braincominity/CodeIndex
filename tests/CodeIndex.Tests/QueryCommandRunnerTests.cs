@@ -30584,6 +30584,46 @@ jobs:
     }
 
     [Theory]
+    [InlineData("route", "/products/{id:int}")]
+    [InlineData("implements", "IDisposable")]
+    [InlineData("attribute", "Authorize")]
+    [InlineData("layout", "MainLayout")]
+    public void RunSymbols_AcceptsRazorDirectiveKindFilters(string kind, string expectedName)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_razor_kind_filter");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "Pages/Product.razor",
+                "csharp",
+                """
+                @page "/products/{id:int}"
+                @implements IDisposable
+                @attribute [Authorize]
+                @layout MainLayout
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--kind", kind, "--json"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout).Select(document => document.RootElement).ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(rows);
+            Assert.Equal(kind, rows[0].GetProperty("kind").GetString());
+            Assert.Equal(expectedName, rows[0].GetProperty("name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
     [InlineData("tsql")]
     [InlineData("t-sql")]
     [InlineData("mssql")]
