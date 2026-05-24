@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.25.1] - 2026-05-25
+
+#### Fixed
+
+- **NuGet publishing no longer pushes symbol packages twice** - the release workflow now disables automatic symbol publishing during the main package push and uploads the `.snupkg` explicitly once, avoiding the NuGet 409 conflict after a successful package publish.
+
 ### [1.25.0] - 2026-05-25
 
 #### Added
@@ -2809,6 +2815,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.25.1] - 2026-05-25
+
+#### 修正
+
+- **NuGet 公開で symbol package を二重 push しないようになりました** - release workflow はメイン package の push 時に自動 symbol 公開を無効化し、`.snupkg` を明示的に 1 回だけ upload するため、package 公開成功後の NuGet 409 conflict を回避します。
+
 ### [1.25.0] - 2026-05-25
 
 #### 追加
@@ -5596,7 +5608,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.25.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.25.1...HEAD
+[1.25.1]: https://github.com/Widthdom/CodeIndex/compare/v1.25.0...v1.25.1
 [1.25.0]: https://github.com/Widthdom/CodeIndex/compare/v1.24.5...v1.25.0
 [1.24.5]: https://github.com/Widthdom/CodeIndex/compare/v1.24.4...v1.24.5
 [1.24.4]: https://github.com/Widthdom/CodeIndex/compare/v1.24.3...v1.24.4
