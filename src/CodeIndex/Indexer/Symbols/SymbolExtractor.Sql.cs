@@ -74,33 +74,16 @@ public static partial class SymbolExtractor
 
             var masked = MaskSqlLineForBodyScan(raw, ref blockCommentDepth);
 
-            // Detect any unpaired dollar-quote opening on this line. Paired openings on the same
-            // line (e.g. `AS $$ SELECT 1 $$`) are consumed without opening cross-line state.
-            // 同一行でペアにならない dollar-quote 開きを検出する。同じ行で開閉が揃う（`AS $$ SELECT 1 $$`）
-            // 場合はクロス行状態を開かずそのまま消費する。
-            var dollarMatches = SqlDollarTagRegex.Matches(masked);
-            if (dollarMatches.Count > 0)
+            // Detect an unpaired dollar-quote opening on this line. Once a tag opens, only the same
+            // tag text can close it; different tags inside the body are literal text in PostgreSQL
+            // and must not terminate the procedure body early.
+            // 同一行でペアにならない dollar-quote 開きを検出する。いったん開いたら同じタグ文字列だけで閉じる。
+            // 本体内の異なるタグは PostgreSQL ではリテラルなので、プロシージャ本体を早期終了させない。
+            openDollarTag = FindUnclosedSqlDollarTag(masked);
+            if (openDollarTag != null)
             {
-                var tagCounts = new Dictionary<string, int>(StringComparer.Ordinal);
-                foreach (Match m in dollarMatches)
-                    tagCounts[m.Value] = tagCounts.TryGetValue(m.Value, out var c) ? c + 1 : 1;
-
-                string? stillOpen = null;
-                foreach (var kv in tagCounts)
-                {
-                    if (kv.Value % 2 != 0)
-                    {
-                        stillOpen = kv.Key;
-                        break;
-                    }
-                }
-
-                if (stillOpen != null)
-                {
-                    openDollarTag = stillOpen;
-                    endLine = i + 1;
-                    continue;
-                }
+                endLine = i + 1;
+                continue;
             }
 
             if (i > startIndex)
@@ -133,6 +116,27 @@ public static partial class SymbolExtractor
         }
 
         return (endLine, bodyStartLine, endLine);
+    }
+
+    private static string? FindUnclosedSqlDollarTag(string maskedLine)
+    {
+        int searchFrom = 0;
+
+        while (searchFrom < maskedLine.Length)
+        {
+            var open = SqlDollarTagRegex.Match(maskedLine, searchFrom);
+            if (!open.Success)
+                return null;
+
+            string tag = open.Value;
+            int closeIndex = maskedLine.IndexOf(tag, open.Index + open.Length, StringComparison.Ordinal);
+            if (closeIndex < 0)
+                return tag;
+
+            searchFrom = closeIndex + tag.Length;
+        }
+
+        return null;
     }
 
     /// <summary>

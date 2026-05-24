@@ -93,6 +93,7 @@ public static class ConsoleUi
         ("languages", "cdidx languages [--json]"),
         ("batch", "cdidx batch [--db <path>]  # reads JSON string arrays from stdin, one query command per line"),
         ("mcp", "cdidx mcp [--db <path>]"),
+        ("completions", "cdidx completions <shell>"),
         ("license", "cdidx license"),
     ];
 
@@ -794,6 +795,35 @@ public static class ConsoleUi
         return null;
     }
 
+    public static bool PrintCommandUsage(string command)
+    {
+        var usages = GetCommandUsageLines(command);
+        if (usages.Count == 0)
+            return false;
+
+        Console.WriteLine("Usage:");
+        foreach (var usage in usages)
+            Console.WriteLine($"  {usage}");
+        Console.WriteLine();
+        Console.WriteLine("Run `cdidx --help` to show all commands and shared options.");
+        return true;
+    }
+
+    private static IReadOnlyList<string> GetCommandUsageLines(string command)
+    {
+        var usages = new List<string>();
+        foreach (var (name, usage) in CommandUsageLines)
+        {
+            if (string.Equals(name, command, StringComparison.Ordinal)
+                || string.Equals(command, "index", StringComparison.Ordinal) && name.StartsWith("index-", StringComparison.Ordinal))
+            {
+                usages.Add(usage);
+            }
+        }
+
+        return usages;
+    }
+
     // --- Did-you-mean / もしかして ---
 
     /// <summary>
@@ -910,7 +940,7 @@ public static class ConsoleUi
     [
         "index", "backfill-fold", "optimize", "search", "definition", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "db", "vacuum", "report", "license",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license",
     ];
 
     /// <summary>
