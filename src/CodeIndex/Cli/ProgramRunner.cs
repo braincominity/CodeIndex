@@ -93,8 +93,16 @@ internal static class ProgramRunner
             return CommandExitCodes.Success;
         }
 
-        if (args[0] == "--completions")
+        if (args[0] is "--completions" or "completions")
         {
+            if (args[0] == "completions" && args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
+            {
+                ConsoleUi.PrintCommandUsage("completions");
+                GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} subcommand_help=true");
+                EmitCommandMetric("completions", args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
+                return CommandExitCodes.Success;
+            }
+
             var exitCode = RunCompletions(args[1..]);
             GlobalToolLog.Info($"command_complete exit_code={exitCode} command=completions");
             EmitCommandMetric("completions", args, commandStartTimestamp, commandStopwatch, exitCode);
@@ -103,7 +111,8 @@ internal static class ProgramRunner
 
         if (args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
         {
-            ConsoleUi.PrintUsage(showBanner: true);
+            if (!ConsoleUi.PrintCommandUsage(args[0]))
+                ConsoleUi.PrintUsage(showBanner: true);
             GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} subcommand_help=true");
             EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
             return CommandExitCodes.Success;
