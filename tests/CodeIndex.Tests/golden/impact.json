@@ -16,6 +16,7 @@
   "callers": [],
   "file_impacts": [
     {
+      "result_kind": "file_heuristic",
       "source_path": "src/App.cs",
       "target_path": "src/FolderDiffService.cs",
       "reference_count": 2,

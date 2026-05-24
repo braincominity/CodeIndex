@@ -11,6 +11,183 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.24.0] - 2026-05-25
+
+#### Added
+
+- **`status --log-path` now prints the active persistent log directory (#1477)** — users can inspect the resolved lifecycle-log location without opening an index database, with JSON output available via `--json`; the user guide now documents the full override, XDG, platform, and fallback resolution chain.
+- **`--version` now hints when a newer release is available (#1626)** — `cdidx --version` performs a best-effort, once-per-day GitHub release check and appends a newer-release hint when the installed version is stale.
+- **Unused-symbol JSON now documents and summarizes buckets (#1633)** — `unused --json` and MCP `unused_symbols` now include `summary.by_bucket`, `summary.by_confidence`, and `bucket_taxonomy`; CLI users can also pass `--by-bucket` to group returned symbols by bucket.
+- **Homebrew release publishing is now wired into tagged releases (#1652)** — tagged releases now bump the `Widthdom/homebrew-tap` `codeindex` formula after GitHub release assets are published, and the install docs list the Homebrew path for macOS/Linux users.
+- **Added post-extraction indexer hooks (#1764)** — `cdidx` now discovers `IPostExtractionHook` implementations from `~/.config/cdidx/hooks/*.dll` or `CDIDX_HOOKS_DIR`, lets them enrich symbols and references before persistence, and exposes loaded hooks in `status --json` / MCP status.
+- **Global quiet mode for script-friendly query pipelines (#1805)** — `--quiet`, `-q`, `--silent`, and `CDIDX_QUIET=1` now suppress informational stderr text while preserving error lines.
+- **CLI query commands can emit opt-in structured traces (#1901)** — read-side commands now accept `--trace=stderr|file|none` to write one sanitized JSON trace line with elapsed time, result-count field, exit code, and error status for CI and pipeline diagnostics.
+- **Added index-time symbol-kind filters (#1939)** — `cdidx index` now accepts `--include-symbol-kind` and `--exclude-symbol-kind`, honors matching `.cdidxrc.json` `indexing.includeKinds` / `indexing.excludeKinds` defaults, and reports the resolved policy plus dropped-symbol count in index JSON.
+- **PowerShell completion script generation is now supported (#1960)** — `cdidx --completions powershell` emits a native `Register-ArgumentCompleter` script with subcommand, flag, language, kind, and path-like value completions.
+- **HTML `data-*` and `aria-*` attributes are now indexed as property symbols (#2106)** — HTML symbol extraction now records semantic attribute names such as `data-testid` and `aria-label`, including boolean and multiline attributes, without reading attribute-like text inside quoted values.
+
+#### Fixed
+
+- **MCP index rejects symlink escapes from the workspace (#1407)** — the MCP `index` tool now resolves directory symlinks before enforcing the current-working-directory boundary, while preserving case-insensitive path comparison on Windows and macOS.
+- **GitHub suggestion submission no longer waits on the .NET 100-second default timeout (#1408)** — the shared GitHub HTTP client now uses a 15-second timeout so slow or unreachable GitHub calls spend less time inside the suggestion-store submission path.
+- **GitHub suggestion scrubbing now removes fenced code blocks before inline code spans (#1409)** — outbound Issue titles and bodies no longer leave stray triple-backticks around removed fenced examples.
+- **Suggestion storage now flushes temp files before replacement (#1410)** — local suggestion writes serialize to a temp file, flush it to disk before renaming, and preserve zero-byte stores as `.bak` files instead of silently treating them as empty.
+- **MCP `batch_query` now caps aggregate response size (#1416)** — `batch_query` stops appending slot results once the aggregate JSON payload would exceed the response byte limit and reports `truncated` metadata so clients can split large batches.
+- **Backfill cancellation now cooperates with Ctrl-C (#1419)** — `backfill-fold` now threads cancellation through folded-name row reads and updates, returning the interrupted exit code instead of waiting for the full backfill loop to finish.
+- **`backfill-fold` now honors cancellation during folded-column rewrites (#1420)** — folded-name backfill checks Ctrl-C / SIGTERM cancellation while reading and updating symbol and reference rows, returns the interrupted exit code, and rolls back partial rewrite transactions.
+- **Stopped spinner delays from blocking thread-pool workers (#1421)** - `ConsoleUi.StartSpinner` now awaits between frames instead of synchronously waiting inside the background task.
+- **Wrapped exact-match help text to fit 80-column terminals (#1426)** — `--exact`, `--exact-substring`, and `--exact-name` usage text now avoids unpredictable mid-word wrapping in narrow terminals and CI logs.
+- **GitHub issue submission now honors cooperative cancellation (#1427)** — `GitHubIssueReporter.TryCreateIssueDetailedAsync` no longer converts caller cancellation or `OutOfMemoryException` into best-effort submission failures, while still treating uncanceled `TaskCanceledException` timeout failures as non-fatal.
+- **Rust raw-string attributes no longer emit phantom imports (#1441)** — Rust reference extraction now masks attribute bodies before scanning `use` statements, so `#[doc = r"use foo::bar;"]` no longer creates a false import/reference.
+- **PostgreSQL dollar-quoted function bodies now ignore nested different tags (#1442)** — SQL body range detection now closes a dollar-quoted procedure body only on the same opening tag text, so `$inner$ ... $inner$` literals inside a `$body$ ... $body$` function no longer truncate symbol ranges or drop trailing reference containers.
+- **SQL foreign-key reference coverage is now regression-tested for ALTER TABLE ADD CONSTRAINT (#1443)** — the SQL reference extractor test suite now locks inline and ALTER-style foreign-key references to the referenced table.
+- **Serialized concurrent installer writes (#1448)** — `install.sh` now takes a per-install-dir lock before inspecting or replacing the installed files, using `flock` when available and a lock directory fallback otherwise.
+- **Writable DB opens now reject newer `user_version` stamps (#1451)** — older `cdidx` binaries fail with `E003_SCHEMA_TOO_NEW` instead of silently writing to indexes stamped by a newer binary.
+- **Release JSON smoke checks now use the GitHub Actions runner temp directory (#1464)** — the published-release verification writes `status --json` capture files under `$RUNNER_TEMP` and fails immediately when the command cannot produce JSON.
+- **CLI search now enforces the shared 1000-character query cap (#1468)** — `cdidx search` rejects oversized queries before opening the database, matching the MCP query guard and documenting the limit in help output.
+- **`index --verbose --json` now keeps stdout parseable (#1471)** — verbose index status lines are written to stderr when JSON output is requested, so stdout remains a clean JSON stream for machine consumers.
+- **Persistent log directory overrides now expand home shorthands (#1476)** — `CDIDX_GLOBAL_TOOL_LOG_DIR` now expands `~`, `~/...`, `$HOME/...`, and `${HOME}/...` before resolving the log directory, so overrides no longer create a literal `~` directory under the current working directory.
+- **`status --json` now explains C# metadata-target degradation (#1487)** — `csharp_metadata_target_ready=false` now distinguishes a missing `symbols.is_metadata_target` column from a missing or stale metadata-target stamp, with matching remediation guidance.
+- **Hotspot family restamps are crash-safe during partial updates (#1488)** — update-mode maintenance now commits hotspot-family readiness metadata in the same SQLite transaction as the maintenance pass, so an interrupted restamp does not leave partial family data marked ready.
+- **Incremental skips now honor file size when checksum is unavailable (#1489)** — unchanged-file reuse now requires matching modified time and size when callers do not have a checksum, avoiding stale reuse for same-timestamp content changes.
+- **Incremental `--files` removes stale extension-renamed paths (#1491)** - `cdidx index --files` now purges a deleted old path when an extension-changing rename is supplied with the new path.
+- **Incremental reuse no longer trusts equal mtimes over changed checksums (#1492)** - when a checksum is available, unchanged-file detection now requires the checksum to match before reusing an indexed file.
+- **NuGet package metadata is now complete (#1600)** — the `cdidx` package now declares repository type, release notes, README, tags, project/repository URLs, and an embedded package icon so NuGet registry pages and downstream package tooling receive the expected metadata.
+- **Git HEAD resolution now reports distinct states (#1623)** — callers can distinguish branch HEADs, detached HEADs, non-repositories, unborn HEADs, bare repositories, and unexpected git execution errors instead of receiving the same null result.
+- **Serialized spinner and warning terminal writes (#1627)** — spinner/progress updates and warning emission now share a terminal lock so warnings are not overwritten or visually interleaved with spinner frames.
+- **GitHub suggestion submission now uses the platform default proxy (#1628)** — the GitHub client honors standard proxy environment variables through .NET default proxy handling, and connection-failure diagnostics point operators at the proxy settings.
+- **SQLite index databases can now reclaim free pages (#1631)** — new databases enable incremental auto-vacuum, `cdidx vacuum` reclaims existing writable DBs including legacy no-autovacuum DBs, and `status --json` reports page count, free-list count, and page size.
+- **Index completion now refreshes SQLite planner statistics (#1645)** — successful index runs now run full `ANALYZE` for newly created databases and `PRAGMA optimize` for existing databases, improving planner choices for large-repository search and graph queries.
+- **SQLite pool-sensitive tests now clear pooled handles at collection boundaries (#1668)** — the serialized xUnit collection now owns a cleanup fixture that clears SQLite pools before and after the collection, reducing stale pooled-handle leakage after failed tests.
+- **CI now runs the test suite on .NET 8 and .NET 9 (#1670)** — the GitHub Actions build matrix tests both `net8.0` and `net9.0` while keeping the production `cdidx` binary on `net8.0`.
+- **NuGet restore now uses a repository-local trust policy (#1676)** — `nuget.config` restricts restores to nuget.org, requires signed packages, and pins the NuGet.org repository and approved author signers so untrusted feeds, unsigned packages, and unknown package signers are rejected.
+- **MCP write tools now emit progress notifications (#1684)** — `index` and `backfill_fold` now honor `tools/call.params._meta.progressToken` and send `notifications/progress` during long-running work over stdio and HTTP `/events`, so clients can keep connections alive without changing the final tool result shape.
+- **SQLite indexes now carry a cdidx application id (#1689)** - writable database opens set `PRAGMA application_id=0x43444958` (`CDIX`) so file-type detection tools can identify CodeIndex databases.
+- **Schema migrations now serialize concurrent DDL (#1690)** — legacy database migrations now use immediate transactions around schema setup so competing `cdidx` processes do not race while adding missing columns.
+- **Subcommand help now prints command-specific usage (#1693)** — `cdidx <command> --help` now shows the matching command's synopsis instead of the full top-level help block.
+- **SQLite connections now apply read-performance PRAGMAs (#1697)** - `DbContext` configures a 64 MiB SQLite cache, a 256 MiB mmap window on 64-bit processes, and in-memory temp storage, with `CDIDX_SQLITE_CACHE_KB` and `CDIDX_SQLITE_MMAP_BYTES` overrides for operators.
+- **FTS5 maintenance now runs after incremental indexing accumulates writes (#1698)** — incremental updates track FTS5 mutations, optimize when the maintenance threshold is reached, and expose manual `cdidx optimize` / `index --optimize` commands for long-lived indexes.
+- **DbReader now reuses schema snapshots across DbContext instances for the same database (#1701)** — schema discovery caches `PRAGMA table_info`, `PRAGMA index_list`, and table-existence results by normalized DB path, reducing repeated reader startup work while invalidating on SQLite schema-version changes.
+- **`index --rebuild` now requires explicit confirmation (#1706)** — interactive terminals prompt before deleting the existing index, while non-interactive runs must pass `--yes` or `--force` and otherwise fail with exit code 64.
+- **Console output is synchronized before spinner/progress rendering (#1734)** — `cdidx` now wraps stdout and stderr with synchronized writers at startup so spinner frames and main-thread progress lines are emitted as whole writes instead of interleaving characters.
+- **Batch inserts now skip only bad chunk or symbol rows (#1754)** — `DbWriter` falls back to per-row savepoints when a chunk or symbol batch fails, increments `BatchRowsSkipped`, and warns about the skipped row while committing the rest of the batch.
+- **Reference-line writes preserve distinct same-line contexts (#1755)** — `reference_lines` now keys rows by file, line, and context and inserts idempotently, so overlapping writer batches no longer overwrite a different reference context for the same file and line.
+- **Fold readiness now uses one SQLite snapshot (#1758)** — `AllFoldedColumnsBackfilled` now evaluates missing and stale folded-name rows inside a single read transaction, preventing transient `fold_ready` flips while fold data is being refreshed.
+- **SQLite storage can now be moved with data-directory overrides (#1765)** — `--data-dir`, `CDIDX_DATA_DIR`, and `XDG_DATA_HOME` now provide workspace-external default locations for `codeindex.db`, and `status --json` reports the effective `data_dir` and `data_dir_source`.
+- **SQLite permission errors now include Linux MAC diagnostics (#1768)** — `cdidx` detects AppArmor / SELinux context when SQLite reports permission-style open or write failures, adds confinement-specific recovery hints, and exposes the best-effort `mac_profile` field in `status --json`.
+- **Line clamping now measures terminal display columns (#1769)** — search, reference, find, excerpt, and inspect snippets now account for CJK wide characters, emoji, and combining accents when enforcing `--max-line-width`.
+- **Impact results now identify graph rows and heuristic fallback hints (#1779)** — `impact` / MCP `impact_analysis` now stamp graph callers with `result_kind: "graph"` and file-level fallback hints with `result_kind: "file_heuristic"` so consumers can split authoritative hop-depth results from heuristic dependency hints deterministically.
+- **Partial `--files` updates now skip unchanged files before opening them (#1787)** — `cdidx index --files` compares stored modified time and size first, avoiding checksum reads and extraction for files whose stat data already proves unchanged.
+- **Binary files with NULL bytes no longer leave partial index rows (#1790)** — indexing now rejects non-UTF-16 files containing NULL bytes before chunk, symbol, or reference extraction can persist partial data.
+- **CodeIndex now locks down `.cdidx` data directories on POSIX (#1793)** — New `.cdidx` data directories are forced to `0700`, and `status --json` reports the inspected mode as `data_dir_mode` when available.
+- **TransactionScope finalization now uses atomic state transitions (#1804)** — concurrent commit, rollback, and dispose paths no longer race through bare flags and surface unrelated SQLite double-finalization errors.
+- **Shell completions now cover common flag values (#1807)** — generated bash, zsh, and fish completions suggest supported `--lang` values, symbol/reference `--kind` values, and file paths for path-like options.
+- **Required schema foreign keys are now enforced during migration (#1828)** — legacy indexes with nullable `file_id` columns in chunks, reference lines, symbols, symbol references, or file issues are cleaned up and rebuilt with `NOT NULL` constraints.
+- **SQLite connections now optimize after write work (#1831)** — writable index sessions run SQLite's recommended `PRAGMA optimize` setup on open and execute `PRAGMA optimize` before close after schema or index writes.
+- **Search JSON output now documents and supports array mode (#1850)** — `search --json` is documented as newline-delimited JSON, and `search --json=array` emits one top-level JSON array for consumers that require a single JSON value.
+- **MCP stdio now rejects malformed UTF-8 explicitly (#1884)** — stdin decoding uses strict UTF-8 without BOM-based encoding switching, and invalid byte sequences return JSON-RPC `-32700` with an encoding hint instead of silently corrupting the frame.
+- **Line-number trust now rejects CRLF/BOM drift (#1890)** — indexing records physical source line counts before normalization, rejects unchanged-file reuse when stored line counts differ, and validates extracted symbol ranges before writing them so outline, definition, and inspect line references do not silently trust stale rows.
+- **Persistent lifecycle logs now honor cache and runtime XDG directories (#1894)** — the global tool log directory resolver now checks `CDIDX_GLOBAL_TOOL_LOG_DIR`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, and `XDG_RUNTIME_DIR` before falling back to platform defaults, so container and CI deployments can choose a discoverable log tier without a cdidx-specific override.
+- Added `--verbose` support to query commands so they emit redacted query debug diagnostics without polluting normal stdout; JSON mode appends a `_debug` object.
+- **Ignore parsing now trims trailing tabs like Git (#1907)** — `.gitignore` and `.cdidxignore` patterns now drop unescaped trailing tabs as whitespace while preserving literal leading whitespace and escaped trailing whitespace.
+- **Gitignore bracket negation now matches Git for leading caret classes (#1909)** — `[^a]` is treated as a negated character class like `[!a]`, while `^` remains literal in the middle of a class or when escaped at the start.
+- **Generated source files are excluded from query results by default (#1912)** — `cdidx` now detects common generated-code headers and filenames, stores the generated marker in the index, and lets callers opt back in with `--include-generated`.
+- **Ignore files are now read as UTF-8 (#1917)** — `.gitignore` and `.cdidxignore` patterns with non-ASCII characters now match consistently across platforms instead of depending on the system default encoding.
+- **Reduced hotspot CTE row width (#1928)** — hotspot candidate filtering now lists only the columns consumed downstream, avoiding `SELECT *` temp rows in large cross-file definition analyses.
+- **Suggestion GitHub submission no longer holds the store lock (#1932)** — `suggest_improvement` now reserves local submission state under the file lock, performs slow GitHub I/O outside the lock with a configurable 10-second default timeout, and briefly re-locks only to persist the result.
+- **GitHub suggestion submission now records rate-limit retry windows (#1935)** — `429` and exhausted `403` responses persist `next_retry_at`, include a human-readable pause message, and suppress duplicate retries until the window has passed.
+- **MCP suggestion submission now fuzzy-deduplicates near-duplicate descriptions (#1938)** — suggestions in the same category and language are compared by normalized description tokens before GitHub submission, duplicate responses include the matched hash and score, and the threshold can be configured with `cdidx mcp --suggestion-dedup-threshold`, `CDIDX_SUGGESTION_DEDUP_THRESHOLD`, or `.cdidxrc.json` `suggestion_dedup_threshold`.
+- **MCP stdio responses now always use LF line endings (#1949)** — JSON-RPC responses no longer depend on the host platform's newline setting, so Windows `cdidx mcp` output stays compatible with strict line-delimited clients.
+- **MCP result arrays no longer buffer projected JSON payloads before response construction (#1950)** — search, graph, symbol-analysis, impact, and hotspot tool responses now append result entries to `JsonArray` one item at a time instead of serializing projected enumerables in bulk.
+- **Structural protocols now use the `protocol` symbol kind (#1967)** — Go interfaces, Rust traits, and Swift protocols are now indexed as `protocol`, while nominal interfaces such as C#, Java, and TypeScript remain `interface`.
+- **Long raw FTS queries now demote low-coverage partial matches (#1970)** — `search --fts` now ranks chunks covering at least half of the query tokens ahead of narrower matches before applying BM25, reducing noisy top hits for broad OR-style queries.
+- **Malformed `--db file:` URIs now fail with path-specific diagnostics (#1990)** — query commands report invalid SQLite file URI parsing and include the resolved `--db` path when a valid URI points at a missing database.
+- **Search deduplication now preserves overlapping chunks with new line coverage (#2001)** — `search` no longer drops a lower-ranked chunk merely because it overlaps a previous chunk when that chunk also covers additional lines that may contain distinct matches.
+- **MCP response write failures are now reported as write-stage failures (#2009)** — `ProcessLineAsync` logs response write errors separately so diagnostics distinguish client connection failures from request parsing and handling failures.
+- **MCP response serialization failures now return a minimal JSON-RPC error (#2017)** — failures from the response serializer are logged and fall back to serializer-independent JSON so clients receive an internal error when possible.
+- **MCP line response writes are now guarded (#2018)** — closed or unavailable client output no longer cascades into the outer request recovery path after the oversized-message or normal response path has already produced a response.
+- **MCP request ids are retained before handler errors (#2019)** — `ProcessFrame` now captures the response id before dispatch and returns `id: null` for malformed non-object JSON values when error recovery needs a response.
+- **Nested project ignore inheritance now audits the full ancestor chain (#2024)** — `FileIndexer` now walks real parent directories from the ignore-rule root to the project root, fails closed when an ancestor ignore directory cannot be read, and exposes the resolved ancestor list in `ScanFilesResult` for troubleshooting.
+- **Razor directive symbols are now indexed (#2031)** — `.razor` and `.cshtml` files now expose `@page`, `@implements`, `@attribute`, and `@layout` directives as searchable symbols while preserving existing C# extraction.
+- **Environment variable cleanup in tests is centralized (#2032)** — tests that mutate process environment now use a shared disposable scope to restore original values even when setup or assertions fail.
+- **Test console capture now restores redirected streams on exceptions (#2033)** — shared test helpers now dispose captured `Console.Out` and `Console.Error` state reliably so one failing test cannot leak redirected streams into later tests.
+- **SQLite pool cleanup in tests is centralized and idempotent (#2035)** — Windows-only pool release now flows through a shared test helper so fixture disposal can run safely without scattering process-global `ClearAllPools()` calls.
+- **Duplicate single-value flag warnings now spell out precedence (#2038)** - repeated single-value query flags now warn that the rightmost CLI value wins over earlier CLI values and any environment or `.cdidxrc.json` default.
+- **CLI exception logs now preserve inner exception chains (#2039)** - persistent tool logs and debug dumps now include wrapped exception types and messages so root causes remain visible while user-facing stderr stays sanitized.
+- **NuGet publishing now validates release versions before pushing (#2042)** — the release workflow now rejects malformed tags, `version.json` mismatches, already-published NuGet versions, and unexpected package filenames before `dotnet nuget push` runs.
+- **Concurrent file deletions no longer fail indexing (#2044)** — files deleted after directory enumeration are now treated as non-fatal warnings and stale index rows are removed when possible.
+- **Skipped unsafe control-character file paths during indexing (#2045)** — `cdidx` now rejects paths containing NUL or other control characters before path normalization or record creation, and reports skipped files as non-fatal scan warnings.
+- **Directory scans now deduplicate case-only file paths on mixed-sensitivity filesystems (#2046)** — `cdidx index` probes each scanned directory for case-insensitive behavior, warns when it differs from the project root, and skips duplicate file entries that differ only by case.
+- **Rust associated type defaults are now indexed as property symbols (#2051)** — trait entries such as `type Output = ();` and `type Error: std::error::Error = String;` now produce navigable property symbols while preserving type references from bounds and default implementations.
+- **Rust const generics now get dedicated references (#2054)** — Rust generic parameter lists and where clauses now emit `const_generic_reference` rows for const generic names and `annotation` rows for their declared scalar types.
+- **Python dynamic import literals are now indexed (#2056)** — `importlib.import_module(...)`, `importlib.util.find_spec(...)`, and `__import__(...)` string-literal module names now produce import symbols and references, while `importlib` calls remain visible in the reference graph.
+- **Python dataclass field metadata is now indexed (#2057)** — `field(...)` class attributes are distinguished as dataclass fields, metadata keys are indexed, default factories are referenced, and imported `fields(MyClass)` introspection now links back to the dataclass.
+- **Python metaclass and `__init_subclass__` references are now emitted (#2058)** — mixed class headers such as `class Derived(Base, Mixin, metaclass=Meta)` now emit references for both base classes and the metaclass, and `super().__init_subclass__()` now records a call edge to the lifecycle hook.
+- **Python type-hint references now cover ParamSpec and TypeVarTuple edge cases (#2059)** — Python reference extraction now traverses comma-containing Callable annotations, multiline TypeVar constraints, ParamSpec bounds, TypeVarTuple unpacking, and nested Literal union operands.
+- **C# caller and impact queries now follow polymorphic dispatch to concrete implementations (#2060)** — exact graph traversal expands implementation method queries through inherited abstract base methods and implemented interface methods, so callers of the static base/interface target are reachable from the concrete override.
+- **C# lambda captures now emit capture references (#2061)** — C# lambdas that read an enclosing local variable now add a `capture` reference edge so reference and impact workflows can see closure dependencies.
+- **C# generic invocation type arguments now participate in graph queries (#2062)** — explicit calls such as `Process<IFoo>(value)` now add a graph edge for `IFoo`, so callers and impact analysis can follow concrete generic type arguments.
+- **Impact analysis now keeps same-caller edges distinct by reference kind (#2063)** — `impact_analysis` and transitive caller traversal no longer collapse a `call` and a `subscribe` edge from the same caller to the same target into one visited row.
+- **SQL window `OVER` clauses now emit column references (#2099)** — `PARTITION BY` and `ORDER BY` identifiers inside window functions are recorded as `column_reference` edges instead of being lost among window-frame syntax.
+- **SQL MERGE actions now emit column-level reference edges (#2100)** — `MERGE` extraction now records `column_reference` edges from `UPDATE SET`, `INSERT (...)`, and `VALUES (...)` action bodies, plus `join_condition_reference` edges from the `ON` predicate, so lineage and impact queries can follow MERGE-driven transformations more completely.
+- **SQL quoted qualified names now respect dialect matching rules (#2101)** — schema-qualified SQL references keep MySQL backtick and T-SQL bracket matching case-insensitive while preserving PostgreSQL double-quoted identifier case sensitivity.
+- **SQL generated/computed columns are now indexed (#2102)** — `CREATE TABLE` and `ALTER TABLE ... ADD` generated/computed columns emit column symbols and dependency references for generation and `DEFAULT NEXT VALUE FOR` expressions.
+- **HTML class attributes are indexed as individual references (#2103)** — `class` and `className` values now split on whitespace so utility classes such as `btn`, `mx-2`, and Tailwind variants can be searched individually.
+- **Markdown fenced code blocks are now navigable symbols (#2104)** — fenced Markdown code examples are indexed as `code` symbols using the fence language tag or `code` fallback, including heading context and block ranges.
+- **CSS media features are now searchable as symbols (#2105)** — `@media` feature names such as `min-width`, `prefers-color-scheme`, `orientation`, range-style `width`, and custom media feature names are indexed as `property` symbols while literal values and boolean operators are skipped.
+- **HTML slot declarations and projections are now indexed (#2107)** — `<slot name="...">` declarations are emitted as `property` symbols, unnamed default slots use `"(default)"`, and `slot="..."` projections are emitted as `reference` symbols.
+- **Scan retries now checkpoint completed directories (#2108)** — full indexing records successfully scanned directories after directory scan errors and uses `.cdidx/scan-checkpoint.json` on same-HEAD retries to skip work that already completed.
+- **Index write batches now leave a crash-recovery marker (#2109)** — `cdidx` stamps an in-progress batch marker before mutating index rows and clears it atomically with the committing transaction, so the next writable DB open demotes readiness and warns users to rebuild when a prior batch crashed before completing.
+- **Full index refresh now rolls back interrupted writes (#2366)** — full-scan indexing keeps its database write phase in one transaction and handles SIGTERM as a graceful interruption, so a killed refresh no longer leaves the existing index with cleared readiness metadata or partial writes.
+- **GitHubIssueReporter create-failure coverage now preserves the current idempotency request flow (#2395, #2398)** — the diagnostic failure path remains pinned to the three-request search, list, and create sequence.
+- **Stabilized the HTTP MCP request logger regression test (#2419)** — the test now gives the asynchronous request log callback a longer full-suite grace period and reports the records it observed on timeout.
+- **HttpMcpTransport request-logger coverage is order-independent (#2432)** — the request logger regression test now asserts the recorded request contents without depending on asynchronous callback ordering.
+- **HTTP MCP request logger test waits for async log delivery (#2434)** — the request logger coverage now documents and validates the brief async delay between an HTTP response and its best-effort log callback.
+- **C# enum extraction no longer treats XML documentation prose as enum members (#2437)** — enum member recovery now skips XML doc comment lines, preventing `unused` and symbol queries from reporting words in documentation as phantom enum symbols.
+- **Scala braceless classes no longer swallow following declarations (#2446)** — Scala `class Config(value: String)` declarations without an explicit body now stay as one-line top-level symbols, so a following `object Config { ... }` remains a top-level companion.
+- **SQLite connection setup no longer fails when synchronous mode is blocked by an active transaction (#2451)** — `DbContext` now keeps the connection usable when SQLite rejects `PRAGMA synchronous=NORMAL` with the known "Safety level may not be changed inside a transaction" error during concurrent access.
+- **IndexWatchRunner cancellation coverage is less scheduler-sensitive (#2470)** — the watch-loop cancellation regression test now runs the watcher on a dedicated long-running task so full-suite ThreadPool load does not consume the shutdown timeout.
+- **Commit-scoped refreshes now satisfy `status --check` HEAD freshness (#2473)** — after `cdidx index . --commits <current-head-sha> --json` stamps `indexed_head_sha` to the current HEAD, `status --check --json` no longer reports a stale `head_changed` result from the older full-scan-only stamp.
+- **FIFO dry-run regression coverage is less flaky on macOS (#2478)** — the subprocess timeout now leaves room for busy full-suite startup, while the scanner test explicitly verifies FIFO paths are rejected before indexing.
+- **InstallScript C# symbol extraction runaway guard is less sensitive to transient Release full-suite load (#2482)** — The coarse performance guard now keeps a wider runaway budget while still asserting the realistic fixture extracts successfully.
+- **Index refresh no longer stalls on large C# test files with many references (#2528)** — `cdidx index` now uses folded-name reverse-call indexes when refreshing mutual-recursion flags, avoiding expensive full reference-table scans after files such as `QueryCommandRunnerTests.cs`.
+- **Console stream tests no longer race with shared capture helpers (#2548)** — tests that temporarily redirect `Console.Error` now use the shared serialized capture path or `TestConsoleLock.Gate`, preventing parallel test runs from restoring the wrong global writer.
+- **Legacy schema cleanup no longer rewrites dependent foreign keys to temporary tables (#2560)** — nullable `file_id` cleanup now preserves references to rebuilt tables while enforcing the new NOT NULL constraints.
+- **Legacy nullable `file_id` schema migrations no longer rewrite child foreign keys to temporary table names (#2561)** — migration now preserves foreign-key targets while rebuilding old tables, preventing Linux CI and affected SQLite runtimes from failing with missing `_reference_lines_nullable_file_id` tables.
+- **Avoided the macOS arm64 ILLink crash in the trimmed CLI publish test (#2570)** — the trimmed `backfill-fold` serialization test now skips the known crashing SDK/ILLink path on macOS arm64 while preserving coverage on other runtimes.
+- **CodeIndex.Tests locked restore now includes net9.0 direct test dependencies (#2577)** — the test project lock file is synchronized with the net9.0 `System.Net.Http` and `System.Text.RegularExpressions` package references so CI locked restore can pass.
+- **Synchronized the test project lock file for .NET 9 restore (#2580)** — the `net9.0` lock-file entries now include the direct `System.Net.Http` and `System.Text.RegularExpressions` test references, keeping locked CI restores green.
+- **Trimmed backfill-fold publish smoke tests now execute the apphost when present (#2584)** — the test helper no longer runs a runtime-specific self-contained publish through the wrong `dotnet` runtime when the SDK emits both `cdidx` and `cdidx.dll`.
+- **Documented the macOS arm64 ILLink crash skip under the tracked issue (#2586)** — the trimmed `backfill-fold` publish smoke test now reports the current SDK/ILLink crash guard against the issue that tracks the macOS AccessViolation failure.
+- **Rust trait associated type defaults are emitted again (#2603)** — associated type defaults in Rust `trait` bodies now scan the existing `protocol` trait symbols, restoring `property` symbols for declarations such as `type Output = ();`.
+- **Full scans after a Git HEAD change parallelize extraction (#2605)** — `cdidx index` now uses the parallel extraction path when the existing index was stamped from a different commit, preventing branch-refresh full scans from spending long single-threaded stretches on large C# test files before they can finish or report normal interruption diagnostics.
+- **macOS arm64 trimmed publish alias coverage is skipped while ILLink crashes (#2606)** — the C# Razor alias trimmed publish test now reports as skipped on macOS arm64 instead of failing before `cdidx` can run.
+- **Schema read migrations now respect existing SQLite transactions (#2607)** — `TryMigrateForRead` no longer starts a nested transaction when it is invoked inside an already-active SQLite transaction, avoiding intermittent `cannot start a transaction within a transaction` failures in concurrent freshness snapshot reads.
+- **Rust associated type defaults inside traits are now indexed as properties (#2609)** — The Rust symbol extractor now scans `protocol` trait containers when adding associated type default property symbols, matching the existing Rust trait kind and restoring `type Name = Value;` entries inside traits.
+- **Rust associated type defaults are indexed under trait containers again (#2611)** — the post-processing pass now handles Rust traits stored as `protocol` symbols, so defaults such as `type Output = ();` produce property symbols with the correct trait container.
+
+#### Security
+
+- **GitHub Actions now pin third-party actions to immutable SHAs (#1673)** — CI, CodeQL, and release workflows use full action commit SHAs with version comments, and the repository documents the SHA-pinning policy for future workflow edits.
+- **CI now audits NuGet vulnerabilities (#1675)** — the build workflow runs transitive vulnerable-package checks and fails on High or Critical advisories, with Dependabot enabled for weekly NuGet and GitHub Actions update PRs.
+- **Global tool stderr logs are now owner-only on POSIX (#1797)** — `cdidx` forces persistent global stderr log files, including existing date-stamped logs, to `0600` permissions whenever logging starts.
+- **Installer staging directories now use strict permissions (#1800)** — `install.sh` now immediately restricts install staging and backup directories to `0700`, preventing other local users from reading in-flight release artifacts during installation.
+- **Test dependency audit no longer reports High NuGet advisories (#2526)** — the test project now pins patched `System.Net.Http` and `System.Text.RegularExpressions` packages so solution-wide vulnerable-package audits stay clean.
+
+#### Documentation
+
+- **Documented .NET 9 test coverage** — README, USER_GUIDE, DEVELOPER_GUIDE, and TESTING_GUIDE now distinguish the `net8.0` production tool target from the `net8.0` / `net9.0` test matrix.
+- **Documented the MCP write-tool threat model (#1431)** — `SECURITY.md` now describes the local MCP trust boundary, stdio and HTTP authorization assumptions, write-shaped MCP tools, and the GitHub-token network boundary.
+- **Documented the SQLite WAL copy and recovery contract (#1450)** — `DEVELOPER_GUIDE.md` now explains the `.db` / `.db-wal` / `.db-shm` file set, checkpoint cadence, crash recovery expectations, and read-only fallback behavior.
+- **Documented `.cdidxignore` precedence over `.gitignore` (#1490)** — the user and developer guides now state that `.gitignore` is loaded before `.cdidxignore` in the same directory, and later `!` rules can re-include earlier ignored paths.
+- **Shell completions are now discoverable from help and the user guide (#1639)** — `cdidx --help` now advertises both completion entry points and all supported shells, while `USER_GUIDE.md` includes Bash, Zsh, Fish, and PowerShell install snippets.
+- **Clarified the supported .NET line for NuGet tool installs (#1904)** — README and USER_GUIDE now consistently describe .NET 8.x as the supported SDK/runtime line for the published tool instead of mixing exact `.NET 8.0` and permissive `.NET 8+` wording.
+- **MCP tool descriptions now include concrete usage examples (#1972)** — `search`, `definition`, `references`, `callers`, `callees`, and `symbols` advertise compact English/Japanese example calls directly in `tools/list`.
+
+#### Internal
+
+- **Locked regression coverage for GitHub issue code scrubbing (#1428)** — `GitHubIssueReporter` tests now cover bare, language-labeled, indented, and mixed fenced-code scrubbing cases.
+
 ### [1.23.1] - 2026-05-20
 
 #### Fixed
@@ -2566,6 +2743,183 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.24.0] - 2026-05-25
+
+#### 追加
+
+- **`status --log-path` が有効な永続ログディレクトリを表示するようになりました (#1477)** — index database を開かずに解決済み lifecycle-log の場所を確認でき、`--json` で JSON 出力も利用できます。ユーザーガイドには override、XDG、platform、fallback の解決順を記載しました。
+- **`--version` が新しいリリースの存在を通知するようになりました (#1626)** — `cdidx --version` は GitHub release を 1 日 1 回まで best-effort で確認し、インストール済みバージョンが古い場合に新しいリリースのヒントを追記します。
+- **未使用 symbol JSON が bucket の説明と集計を返すようになりました (#1633)** — `unused --json` と MCP `unused_symbols` は `summary.by_bucket`、`summary.by_confidence`、`bucket_taxonomy` を返します。CLI では `--by-bucket` により返却 symbol を bucket ごとに grouping できます。
+- **タグ付きリリースで Homebrew formula を更新するようになりました (#1652)** — GitHub release asset の公開後に `Widthdom/homebrew-tap` の `codeindex` formula を更新し、macOS/Linux ユーザー向けの Homebrew install 経路をドキュメントに追加しました。
+- **indexer の post-extraction hook を追加しました (#1764)** — `cdidx` は `~/.config/cdidx/hooks/*.dll` または `CDIDX_HOOKS_DIR` から `IPostExtractionHook` 実装を検出し、永続化前のシンボルと参照を拡張できるようにし、読み込まれた hook を `status --json` / MCP status に表示します。
+- **スクリプト向け query pipeline 用の global quiet mode を追加しました (#1805)** — `--quiet`、`-q`、`--silent`、`CDIDX_QUIET=1` により、error 行を残したまま informational stderr text を抑制できます。
+- **CLI query command が opt-in の構造化 trace を出力できるようになりました (#1901)** — read 系コマンドは `--trace=stderr|file|none` を受け付け、CI や pipeline 診断向けに sanitise 済み JSON trace を 1 行出力します。trace には経過時間、result count field、exit code、error 状態が含まれます。
+- **index 時の symbol-kind filter を追加しました (#1939)** — `cdidx index` が `--include-symbol-kind` / `--exclude-symbol-kind` を受け付け、`.cdidxrc.json` の `indexing.includeKinds` / `indexing.excludeKinds` 既定値を反映し、解決済み policy と除外 symbol 数を index JSON に出力するようになりました。
+- **PowerShell 向け補完スクリプト生成に対応しました (#1960)** — `cdidx --completions powershell` が native `Register-ArgumentCompleter` script を出力し、subcommand、flag、language、kind、path 系 value の補完に対応しました。
+- **HTML の `data-*` / `aria-*` 属性を property シンボルとして索引するようになりました (#2106)** — HTML のシンボル抽出が `data-testid` や `aria-label` などの意味を持つ属性名を記録するようになり、boolean 属性や複数行属性にも対応しつつ、引用符付き値の中にある属性風テキストは拾いません。
+
+#### 修正
+
+- **MCP index がワークスペース外へ出る symlink を拒否するようになりました (#1407)** — MCP `index` ツールはカレントディレクトリ境界を判定する前にディレクトリ symlink を解決し、Windows / macOS では大文字小文字を区別しないパス比較を維持します。
+- **GitHub 提案送信が .NET 既定の 100 秒 timeout に依存しなくなりました (#1408)** — 共有 GitHub HTTP クライアントは 15 秒 timeout を使うため、遅いまたは到達不能な GitHub 呼び出しが suggestion store の送信経路内に留まる時間を短縮します。
+- **GitHub 提案の scrubber が inline code span より先に fenced code block を除去するようになりました (#1409)** — 外部送信される Issue タイトルと本文で、除去済みの fenced example の周囲に triple backtick が残らなくなりました。
+- **提案ストアが置換前に一時ファイルをディスクへ flush するようになりました (#1410)** — ローカル提案の書き込みは一時ファイルへ serialize して rename 前にディスクへ flush し、zero-byte のストアは空として黙って扱わず `.bak` として退避します。
+- **MCP `batch_query` が集約レスポンスサイズを制限するようになりました (#1416)** — `batch_query` は集約 JSON payload がレスポンス byte 上限を超える前に slot 結果の追加を止め、クライアントが大きな batch を分割できるよう `truncated` メタデータを返します。
+- **backfill のキャンセルが Ctrl-C と協調するようになりました (#1419)** — `backfill-fold` は folded-name 行の読み取りと更新にキャンセルを伝播し、backfill ループ全体の完了を待たずに interrupted 終了コードを返すようになりました。
+- **`backfill-fold` が folded 列の再書き込み中にキャンセルを反映するようになりました (#1420)** — folded-name backfill は symbol / reference 行の読み取りと更新中に Ctrl-C / SIGTERM のキャンセルを確認し、中断用 exit code を返して途中までの再書き込み transaction を rollback します。
+- **スピナー待機がスレッドプール worker をブロックしないようにしました (#1421)** - `ConsoleUi.StartSpinner` はバックグラウンドタスク内で同期 wait せず、フレーム間を await するようになりました。
+- **exact-match 系ヘルプを 80 カラム端末に収まるよう折り返しました (#1426)** — `--exact`、`--exact-substring`、`--exact-name` の usage 表示が、狭い端末や CI ログで単語途中に折り返されにくくなりました。
+- **GitHub Issue 送信が協調キャンセルを尊重するようになりました (#1427)** — `GitHubIssueReporter.TryCreateIssueDetailedAsync` は呼び出し元のキャンセルや `OutOfMemoryException` を best-effort の送信失敗に変換しなくなり、キャンセル済みでない `TaskCanceledException` の timeout 失敗は引き続き非致命的に扱います。
+- **Rust の raw string 属性から phantom import が生成されないようになりました (#1441)** — Rust の参照抽出は `use` 文スキャン前に属性本文をマスクするため、`#[doc = r"use foo::bar;"]` が誤った import/reference を生成しなくなりました。
+- **PostgreSQL の dollar-quoted 関数本体が内側の別タグを無視するようになりました (#1442)** — SQL 本体範囲の検出は開きタグと同じ文字列だけで dollar-quoted プロシージャ本体を閉じるため、`$body$ ... $body$` 関数内の `$inner$ ... $inner$` リテラルでシンボル範囲が途中で切れたり、後続参照のコンテナが落ちたりしなくなりました。
+- **SQL foreign key reference の ALTER TABLE ADD CONSTRAINT 対応を回帰テストで固定しました (#1443)** — SQL reference extractor のテストで、inline と ALTER 形式の foreign key が参照先 table を参照として拾うことを固定しました。
+- **同時実行された installer の書き込みを直列化しました (#1448)** — `install.sh` はインストール済みファイルの確認や置換の前に install dir 単位の lock を取得し、利用可能な場合は `flock`、無い場合は lock directory fallback を使うようになりました。
+- **書き込み可能な DB open が新しい `user_version` stamp を拒否するようになりました (#1451)** — 古い `cdidx` binary は、新しい binary が stamp した index に黙って書き込まず、`E003_SCHEMA_TOO_NEW` で失敗します。
+- **リリースの JSON smoke check が GitHub Actions の runner temp directory を使うようになりました (#1464)** — 公開済みリリース検証は `status --json` の capture file を `$RUNNER_TEMP` 配下へ書き込み、JSON を生成できない場合は即座に失敗します。
+- **CLI search が共有の 1000 文字クエリ上限を適用するようになりました (#1468)** — `cdidx search` はデータベースを開く前に過大なクエリを拒否し、MCP のクエリガードと挙動を揃え、help 出力にも上限を記載しました。
+- **`index --verbose --json` の stdout が parse 可能なままになりました (#1471)** — JSON 出力が指定された場合、verbose な index status 行は stderr に出力されるため、機械処理向けの stdout は純粋な JSON stream として保たれます。
+- **永続ログディレクトリ override が home shorthand を展開するようになりました (#1476)** — `CDIDX_GLOBAL_TOOL_LOG_DIR` は log directory の解決前に `~`、`~/...`、`$HOME/...`、`${HOME}/...` を展開するため、カレントディレクトリ配下にリテラルな `~` ディレクトリを作らなくなりました。
+- **`status --json` が C# metadata-target の縮退理由を説明するようになりました (#1487)** — `csharp_metadata_target_ready=false` は `symbols.is_metadata_target` 列の欠落と metadata-target stamp の欠落 / stale を区別し、それぞれに合った復旧手順を返します。
+- **partial update 中の hotspot family restamp がクラッシュセーフになりました (#1488)** — update mode の maintenance は hotspot-family readiness metadata を maintenance pass と同じ SQLite transaction で commit するため、中断された restamp が部分的な family data を ready として残さなくなりました。
+- **checksum が無い incremental skip でファイルサイズも確認するようになりました (#1489)** — 呼び出し側が checksum を持たない場合、変更なし判定は更新時刻とサイズの一致を必須にし、同一 timestamp の内容変更を古い index として再利用しないようにしました。
+- **Incremental `--files` が拡張子変更リネーム後の古いパスを削除するようになりました (#1491)** - `cdidx index --files` は、拡張子変更を伴うリネーム後に新しいパスが指定された場合、削除済みの古いパスを purge するようになりました。
+- **Incremental reuse が checksum 変更時に同一 mtime だけを信用しなくなりました (#1492)** - checksum が利用できる場合、indexed file の再利用には checksum の一致が必要になりました。
+- **NuGet パッケージ metadata を補完しました (#1600)** — `cdidx` パッケージに repository type、release notes、README、tags、project/repository URL、埋め込み package icon を宣言し、NuGet registry ページと下流の package tooling が期待する metadata を受け取れるようにしました。
+- **Git HEAD 解決が状態を区別して返すようになりました (#1623)** — 呼び出し元は branch HEAD、detached HEAD、非リポジトリ、unborn HEAD、bare repository、予期しない git 実行エラーを同じ null 結果に潰さず判定できます。
+- **spinner と warning の端末書き込みを直列化しました (#1627)** — spinner/progress 更新と warning 出力が端末用 lock を共有するようになり、warning が spinner frame に上書きされたり視覚的に混在したりしないようになりました。
+- **GitHub 提案送信が platform default proxy を使うようになりました (#1628)** — GitHub クライアントは .NET の既定 proxy 処理を通じて標準 proxy 環境変数を尊重し、接続失敗の診断では proxy 設定の確認を案内します。
+- **SQLite index DB の free page を回収できるようになりました (#1631)** — 新規 DB では incremental auto-vacuum を有効化し、legacy no-autovacuum DB を含む既存の writable DB は `cdidx vacuum` で回収でき、`status --json` は page count / free-list count / page size を報告します。
+- **index 完了時に SQLite planner 統計を更新するようになりました (#1645)** — 成功した index run は新規 DB では full `ANALYZE`、既存 DB では `PRAGMA optimize` を実行し、大規模リポジトリでの search / graph query の planner 選択を改善します。
+- **SQLite pool sensitive テストが collection 境界で pooled handle を解放するようになりました (#1668)** — 直列化された xUnit collection が cleanup fixture を持ち、collection の前後で SQLite pool を clear するため、失敗したテスト後に stale な pooled handle が残るリスクを減らします。
+- **CI が .NET 8 と .NET 9 の両方でテストスイートを実行するようになりました (#1670)** — GitHub Actions の build matrix は `net8.0` と `net9.0` の両方をテストしつつ、製品版の `cdidx` バイナリは `net8.0` のまま維持します。
+- **NuGet restore がリポジトリ内の信頼ポリシーを使うようになりました (#1676)** — `nuget.config` で restore 元を nuget.org に限定し、署名付きパッケージを必須化し、NuGet.org repository signer と承認済み author signer を pin することで、未信頼フィード、未署名パッケージ、未知の package signer を拒否します。
+- **MCP の書き込みツールが progress notification を送るようになりました (#1684)** — `index` と `backfill_fold` は `tools/call.params._meta.progressToken` を受け取り、stdio と HTTP `/events` で長時間処理中に `notifications/progress` を送るため、最終 tool result の形を変えずにクライアントが接続を維持しやすくなりました。
+- **SQLite index に cdidx の application id を設定するようになりました (#1689)** - 書き込み可能なデータベース open 時に `PRAGMA application_id=0x43444958` (`CDIX`) を設定し、file-type detection tools が CodeIndex database を識別できるようにしました。
+- **スキーマ移行が同時 DDL を直列化するようになりました (#1690)** — レガシー DB の migration は schema setup を immediate transaction 内で実行し、複数の `cdidx` プロセスが欠損カラム追加で競合しないようにしました。
+- **サブコマンド help がコマンド別の usage を表示するようになりました (#1693)** — `cdidx <command> --help` はトップレベル help 全体ではなく、対象コマンドの synopsis を表示するようになりました。
+- **SQLite connection に読み取り性能向け PRAGMA を適用するようになりました (#1697)** - `DbContext` は 64 MiB の SQLite cache、64-bit process で 256 MiB の mmap window、memory temp storage を設定し、運用者向けに `CDIDX_SQLITE_CACHE_KB` と `CDIDX_SQLITE_MMAP_BYTES` で上書きできます。
+- **差分 indexing で書き込みが蓄積した後に FTS5 maintenance を実行するようになりました (#1698)** — 差分更新は FTS5 mutation を記録し、しきい値到達時に optimize します。長期間使う index 向けに手動の `cdidx optimize` / `index --optimize` も追加しました。
+- **同じ database の DbContext 間で DbReader が schema snapshot を再利用するようになりました (#1701)** — schema discovery は正規化済み DB path ごとに `PRAGMA table_info`、`PRAGMA index_list`、table existence 結果を cache し、SQLite schema-version 変更時には invalidate します。
+- **`index --rebuild` は明示的な確認を要求するようになりました (#1706)** — interactive terminal では既存 index の削除前に確認し、non-interactive 実行では `--yes` または `--force` がない場合に終了コード 64 で失敗します。
+- **スピナー / 進捗表示の前にコンソール出力を同期するようになりました (#1734)** — `cdidx` は起動時に stdout / stderr を同期 writer で包むため、スピナーフレームとメインスレッドの進捗行が文字単位で混ざらず、まとまった書き込みとして出力されます。
+- **バッチ挿入で不正な chunk / symbol 行だけをスキップするようになりました (#1754)** — `DbWriter` は chunk / symbol バッチ失敗時に行単位の savepoint にフォールバックし、`BatchRowsSkipped` を増やしてスキップした行を警告しつつ残りの行をコミットします。
+- **同一行の異なる参照コンテキストを保持するようになりました (#1755)** — `reference_lines` は file / line / context をキーにし、冪等な insert を行うため、重なった writer batch が同じ file / line の別コンテキストを上書きしなくなりました。
+- **fold readiness が単一の SQLite snapshot を使うようになりました (#1758)** — `AllFoldedColumnsBackfilled` は missing / stale の folded-name 行判定を 1 つの read transaction 内で評価し、fold data 更新中の一時的な `fold_ready` 反転を防ぎます。
+- **data directory override で SQLite 保存先を移動できるようになりました (#1765)** — `--data-dir`、`CDIDX_DATA_DIR`、`XDG_DATA_HOME` により `codeindex.db` の既定保存先を workspace 外へ移せるようになり、`status --json` は有効な `data_dir` と `data_dir_source` を返します。
+- **SQLite の権限エラーに Linux MAC 診断を追加しました (#1768)** — SQLite が open / write 時の権限系エラーを返した場合、`cdidx` は AppArmor / SELinux の context を検出して confinement 固有の復旧ヒントを出し、`status --json` に best-effort の `mac_profile` field を公開します。
+- **行の切り詰めが端末の表示幅を基準にするようになりました (#1769)** — search / references / find / excerpt / inspect の snippet は、`--max-line-width` 適用時に CJK の全角文字、絵文字、結合アクセントを考慮するようになりました。
+- **impact 結果が graph 行と heuristic fallback hint を識別できるようになりました (#1779)** — `impact` / MCP `impact_analysis` は graph caller に `result_kind: "graph"`、file-level fallback hint に `result_kind: "file_heuristic"` を付けるため、利用側は authoritative な hop-depth 結果と heuristic dependency hint を決定的に分離できます。
+- **部分的な `--files` 更新が未変更ファイルを開く前にスキップするようになりました (#1787)** — `cdidx index --files` は保存済みの更新時刻とサイズを先に比較し、stat 情報で未変更と判断できるファイルでは checksum 読み取りと抽出を避けます。
+- **NULL バイトを含むバイナリファイルが部分的な index 行を残さなくなりました (#1790)** — index は UTF-16 ではない NULL バイト入りファイルを chunk / symbol / reference 抽出前に拒否し、部分データの永続化を防ぎます。
+- **POSIX 上の `.cdidx` データディレクトリをロックダウンしました (#1793)** — 新規作成する `.cdidx` データディレクトリを `0700` に強制し、取得できる場合は `status --json` が `data_dir_mode` として実効 mode を返します。
+- **TransactionScope の終了処理を atomic な状態遷移に変更しました (#1804)** — commit / rollback / dispose が bare flag を競合更新して無関係な SQLite の二重終了エラーを出す問題を防ぎます。
+- **shell completion が主要な flag 値も補完するようになりました (#1807)** — 生成される bash / zsh / fish 補完が `--lang` の対応言語、symbol / reference の `--kind` 値、path 系 option のファイルパスを提示するようになりました。
+- **必須スキーマ外部キーを migration 時にも強制するようになりました (#1828)** — chunks / reference lines / symbols / symbol references / file issues に nullable `file_id` 列が残っている legacy index は、NULL 行を掃除して `NOT NULL` 制約付きで再構築されます。
+- **SQLite 接続が書き込み後に optimize するようになりました (#1831)** — 書き込み可能な index セッションは open 時に SQLite 推奨の `PRAGMA optimize` 設定を行い、schema / index 書き込み後の close 前に `PRAGMA optimize` を実行します。
+- **search の JSON 出力契約を文書化し array mode を追加しました (#1850)** — `search --json` が newline-delimited JSON であることを明記し、単一の JSON 値を必要とする consumer 向けに `search --json=array` が top-level JSON array を出力するようになりました。
+- **MCP stdio が不正な UTF-8 を明示的に拒否するようになりました (#1884)** — stdin のデコードを BOM による encoding 切替なしの strict UTF-8 にし、不正なバイト列はフレームを黙って壊さず、encoding ヒント付きの JSON-RPC `-32700` を返します。
+- **CRLF/BOM による行番号ずれを検知して拒否するようになりました (#1890)** — インデックス作成は正規化前の物理ソース行数を記録し、保存済み行数が異なる場合は unchanged-file reuse を拒否し、書き込み前に抽出済みシンボル範囲を検証するため、outline / definition / inspect の行参照が古い行を黙って信頼しないようになりました。
+- **永続 lifecycle log が cache / runtime の XDG ディレクトリも尊重するようになりました (#1894)** — global tool log のディレクトリ解決は platform default の前に `CDIDX_GLOBAL_TOOL_LOG_DIR`、`XDG_STATE_HOME`、`XDG_CACHE_HOME`、`XDG_RUNTIME_DIR` を確認するため、コンテナや CI 配備で cdidx 専用 override なしでも発見可能なログ階層を選べるようになりました。
+- query command で `--verbose` をサポートし、通常 stdout を汚さずに redacted query debug 診断を出すようにしました。JSON mode では `_debug` object を追加します。
+- **ignore 解析が Git と同様に末尾 tab を削除するようになりました (#1907)** — `.gitignore` と `.cdidxignore` の pattern は、行頭空白と escape 済み末尾空白を literal として保ちながら、未エスケープの末尾 tab を空白として削除するようになりました。
+- **gitignore の bracket negation が先頭 caret class で Git と一致するようになりました (#1909)** — `[^a]` は `[!a]` と同じ negated character class として扱い、class の途中または先頭で escape された `^` は literal のまま扱います。
+- **生成ソースファイルを既定でクエリ結果から除外するようになりました (#1912)** — `cdidx` は一般的な生成コードヘッダーとファイル名を検出して index に生成マーカーを保存し、必要な場合は `--include-generated` で再び含められるようになりました。
+- **ignore ファイルを UTF-8 として読み込むようになりました (#1917)** — 非 ASCII 文字を含む `.gitignore` / `.cdidxignore` のパターンが、システム既定 encoding に依存せず platform 間で一貫して一致するようになりました。
+- **hotspot CTE の行幅を削減しました (#1928)** — hotspot の候補フィルタリングで downstream が使う列だけを明示し、大規模な cross-file definition analysis で `SELECT *` による一時行の肥大化を避けるようにしました。
+- **提案の GitHub 送信がストアロックを保持しなくなりました (#1932)** — `suggest_improvement` はローカル送信状態の予約だけをファイルロック内で行い、遅い GitHub I/O は設定可能な既定 10 秒 timeout 付きでロック外に移し、結果の永続化時だけ短く再ロックするようになりました。
+- **GitHub 提案送信が rate-limit の再試行時刻を記録するようになりました (#1935)** — `429` と quota 枯渇時の `403` 応答では `next_retry_at` を永続化し、読みやすい一時停止メッセージを出し、時刻を過ぎるまで重複再試行を抑止します。
+- **MCP 提案送信が近い説明文を fuzzy 重複排除するようになりました (#1938)** — 同じ category / language の提案は GitHub 送信前に正規化済み description token で比較され、重複レスポンスには一致先 hash と score が含まれます。しきい値は `cdidx mcp --suggestion-dedup-threshold`、`CDIDX_SUGGESTION_DEDUP_THRESHOLD`、または `.cdidxrc.json` の `suggestion_dedup_threshold` で設定できます。
+- **MCP stdio 応答が常に LF 改行を使うようになりました (#1949)** — JSON-RPC 応答がホスト環境の改行設定に依存しなくなり、Windows の `cdidx mcp` 出力も厳密な行区切りクライアントと互換になります。
+- **MCP の結果配列がレスポンス構築前に投影済み JSON payload をまとめて保持しないようになりました (#1950)** — search / graph / symbol-analysis / impact / hotspot の各ツール応答は、投影済み enumerable を一括 serialize せず、結果 entry を 1 件ずつ `JsonArray` に追加します。
+- **構造的プロトコルが `protocol` symbol kind を使うようになりました (#1967)** — Go interface、Rust trait、Swift protocol は `protocol` としてインデックスされ、C#、Java、TypeScript などの nominal interface は引き続き `interface` のままです。
+- **長い raw FTS クエリで低カバレッジの部分一致を降格するようになりました (#1970)** — `search --fts` は BM25 を適用する前に、クエリトークンの半数以上を含むチャンクを狭い一致より優先し、OR を含む広いクエリでノイズの多い上位結果を減らします。
+- **壊れた `--db file:` URI がパス固有の診断で失敗するようになりました (#1990)** — query コマンドは SQLite file URI の parse 失敗を明示し、有効な URI が存在しない database を指す場合は解決後の `--db` パスを表示します。
+- **検索の重複排除が新しい行範囲を持つ重複チャンクを保持するようになりました (#2001)** — `search` は、後続チャンクが既存チャンクと重なっていても、別のマッチを含みうる追加行をカバーしている場合は低順位という理由だけで破棄しなくなりました。
+- **MCP 応答書き込み失敗を write 段階の失敗として報告するようになりました (#2009)** — `ProcessLineAsync` は応答書き込みエラーを個別に記録し、クライアント接続失敗をリクエストの parse / handle 失敗と区別できるようになりました。
+- **MCP 応答 serialization 失敗時に最小 JSON-RPC error を返すようになりました (#2017)** — 応答 serializer の失敗を記録し、serializer に依存しない JSON へフォールバックすることで、可能な場合はクライアントが internal error を受け取れるようになりました。
+- **MCP line 応答の書き込みを保護するようになりました (#2018)** — oversized message や通常応答の生成後にクライアント出力が閉じていても、outer request recovery path へ連鎖しないようになりました。
+- **MCP request id を handler error 前に保持するようになりました (#2019)** — `ProcessFrame` は dispatch 前に応答 id を退避し、non-object JSON のような不正入力でも error recovery が必要な場合は `id: null` を返します。
+- **ネストしたプロジェクトの ignore 継承が ancestor chain 全体を監査するようになりました (#2024)** — `FileIndexer` は ignore-rule root から project root まで実際の親ディレクトリを辿り、ancestor ignore directory を読めない場合は安全側で失敗し、調査用に解決済み ancestor list を `ScanFilesResult` に公開します。
+- **Razor directive を symbol として index するようにしました (#2031)** — `.razor` / `.cshtml` ファイルで `@page`、`@implements`、`@attribute`、`@layout` directive が検索可能な symbol として出るようになり、既存の C# 抽出も維持されます。
+- **テストの環境変数 cleanup を集中管理しました (#2032)** — process 環境を変更するテストで共通の disposable scope を使い、setup や assertion が失敗しても元の値へ戻すようにしました。
+- **テストの console capture が例外時にもリダイレクト済み stream を復元するようになりました (#2033)** — 共有テスト helper が `Console.Out` / `Console.Error` の capture 状態を確実に破棄し、失敗したテストが後続テストへリダイレクト済み stream を漏らさないようにしました。
+- **テストの SQLite pool cleanup を集中管理し、冪等にしました (#2035)** — Windows 限定の pool 解放を共通 test helper 経由にし、fixture dispose が安全に複数回呼ばれても process-global な `ClearAllPools()` 呼び出しが分散しないようにしました。
+- **単一値フラグ重複時の警告で優先順位を明示するようになりました (#2038)** - query 系の単一値フラグを重複指定した場合、右端の CLI 値がそれ以前の CLI 値や環境変数 / `.cdidxrc.json` の既定値より優先されることを警告で示します。
+- **CLI 例外ログが InnerException チェーンを保持するようになりました (#2039)** - persistent tool log と debug dump にラップされた例外の型とメッセージを出し、ユーザー向け stderr のサニタイズは維持したまま根本原因を追えるようにしました。
+- **NuGet publish が push 前に release version を検証するようになりました (#2042)** — release workflow は `dotnet nuget push` 実行前に、壊れた tag、`version.json` の不一致、既に公開済みの NuGet version、想定外の package file name を拒否します。
+- **並行削除されたファイルで index が失敗しないようにしました (#2044)** — directory enumeration 後に削除されたファイルは非致命的な warning として扱い、可能な場合は古い index 行を削除します。
+- **制御文字を含む危険なファイルパスを索引時にスキップするようにしました (#2045)** — `cdidx` は NUL などの制御文字を含むパスを path normalization や record 作成の前に拒否し、スキップしたファイルを非致命的な scan warning として報告します。
+- **大文字小文字の扱いが混在するファイルシステムで directory scan が case-only の重複ファイルを除外するようになりました (#2046)** — `cdidx index` は走査ディレクトリごとに case-insensitive 挙動を確認し、project root と異なる場合は警告し、大文字小文字だけが異なる重複ファイルエントリをスキップします。
+- **Rust の associated type default を property symbol として index するようになりました (#2051)** — `type Output = ();` や `type Error: std::error::Error = String;` のような trait 内エントリが navigable な property symbol になり、bounds と default implementation の型参照も維持されます。
+- **Rust const generics に専用参照を付与するようになりました (#2054)** — Rust の generic parameter list と where clause で const generic 名を `const_generic_reference`、宣言された scalar type を `annotation` として記録するようにしました。
+- **Python の dynamic import literal を index するようになりました (#2056)** — `importlib.import_module(...)`、`importlib.util.find_spec(...)`、`__import__(...)` の文字列 literal モジュール名が import symbol / reference として記録され、`importlib` 呼び出しも reference graph に残るようになりました。
+- **Python dataclass field metadata を index するようにしました (#2057)** — `field(...)` class attribute を dataclass field として区別し、metadata key、default factory 参照、import 済み `fields(MyClass)` introspection から dataclass への参照を取得します。
+- **Python の metaclass と `__init_subclass__` 参照を出力するようになりました (#2058)** — `class Derived(Base, Mixin, metaclass=Meta)` のような混在 class header で base class と metaclass の両方を参照として出し、`super().__init_subclass__()` から lifecycle hook への call edge も記録します。
+- **Python の型ヒント参照が ParamSpec と TypeVarTuple の端ケースを扱うようになりました (#2059)** — Python reference extraction は、カンマを含む Callable annotation、複数行 TypeVar constraint、ParamSpec bound、TypeVarTuple unpacking、ネストした Literal union operand を走査するようになりました。
+- **C# の callers / impact が polymorphic dispatch を具象実装まで追跡するようになりました (#2060)** — exact graph traversal で実装メソッドの検索時に継承元の abstract base method と実装 interface method へ展開し、静的な base / interface target を呼ぶ caller が具象 override から到達可能になります。
+- **C# lambda のキャプチャが capture 参照を出すようになりました (#2061)** — 外側のローカル変数を読む C# lambda が `capture` 参照エッジを追加するようになり、references / impact 系の workflow でクロージャ依存を確認できます。
+- **C# の generic 呼び出しの型引数が graph query に参加するようになりました (#2062)** — `Process<IFoo>(value)` のような明示的呼び出しで `IFoo` への graph edge を追加し、callers と impact analysis が具体的な generic 型引数を辿れるようにしました。
+- **Impact analysis が同じ caller の edge を reference kind 別に保持するようになりました (#2063)** — `impact_analysis` と推移 caller traversal は、同じ caller から同じ target への `call` と `subscribe` edge を visited 判定で 1 行に潰さなくなりました。
+- **SQL window `OVER` 句が column reference を出力するようになりました (#2099)** — window 関数内の `PARTITION BY` / `ORDER BY` 識別子を window frame 構文に埋もれさせず、`column_reference` edge として記録します。
+- **SQL MERGE action が列レベルの reference edge を出すようになりました (#2100)** — `MERGE` 抽出は `UPDATE SET`、`INSERT (...)`、`VALUES (...)` の action body から `column_reference` edge を、`ON` 条件から `join_condition_reference` edge を記録するようになり、MERGE による変換の lineage / impact query がより完全に追跡できます。
+- **SQL の引用付き qualified name が dialect ごとの照合規則を尊重するようになりました (#2101)** — schema 修飾された SQL 参照では MySQL のバッククォートと T-SQL のブラケットは大文字小文字を区別しない照合を維持しつつ、PostgreSQL の二重引用符付き識別子は大文字小文字を区別します。
+- **SQL の generated/computed column を index するようにしました (#2102)** — `CREATE TABLE` と `ALTER TABLE ... ADD` の生成/計算列で列シンボルを出し、生成式と `DEFAULT NEXT VALUE FOR` 式の依存参照も抽出します。
+- **HTML の class 属性を個別の reference としてインデックスするようになりました (#2103)** — `class` と `className` の値を空白で分割し、`btn`、`mx-2`、Tailwind の variant などを個別に検索できるようにしました。
+- **Markdown fenced code block を navigable symbol として扱うようにしました (#2104)** — Markdown の fenced code example を、fence の language tag または `code` fallback を使った `code` symbol として index し、heading context と block range も保持します。
+- **CSS media feature を symbol として検索できるようにしました (#2105)** — `@media` 内の `min-width`、`prefers-color-scheme`、`orientation`、range 形式の `width`、custom media feature 名を `property` symbol として index し、値リテラルや boolean operator は除外します。
+- **HTML の slot 宣言と投影参照を index するようになりました (#2107)** — `<slot name="...">` 宣言は `property` symbol、名前なしの default slot は `"(default)"`、`slot="..."` の投影先は `reference` symbol として出力します。
+- **scan retry で完了済みディレクトリを checkpoint するようになりました (#2108)** — full index 中にディレクトリ走査エラーが起きた場合、成功済みディレクトリを記録し、同じ HEAD の再実行では `.cdidx/scan-checkpoint.json` を使って完了済みの作業を読み飛ばします。
+- **index write batch が crash recovery marker を残すようになりました (#2109)** — `cdidx` は index 行を変更する前に in-progress batch marker を stamp し、commit する transaction と同時に clear するため、前回 batch が完了前に crash した DB を次回 writable open したとき readiness を落として rebuild を促す警告を出します。
+- **full index refresh の中断時 write を rollback するようになりました (#2366)** — full-scan indexing の database write phase を 1 つの transaction にまとめ、SIGTERM を graceful interruption として扱うことで、kill された refresh が既存 index の readiness metadata を消したり partial write を残したりしないようにしました。
+- **GitHubIssueReporter の create failure カバレッジが現在の冪等性リクエスト順を維持します (#2395, #2398)** — diagnostic failure 経路は search、list、create の 3 リクエスト順に固定されています。
+- **HTTP MCP request logger の回帰テストを安定化しました (#2419)** — 非同期 request log callback にフルスイート実行時の猶予を長めに取り、timeout 時には観測済み record を表示するようにしました。
+- **HttpMcpTransport の request logger カバレッジが順序に依存しなくなりました (#2432)** — request logger の回帰テストは、非同期 callback の順序に依存せず記録内容を検証するようになりました。
+- **HTTP MCP request logger テストが非同期ログ配送を待つことを明示しました (#2434)** — HTTP 応答と best-effort ログ callback の短い非同期遅延をテスト上で明示し、検証するようにしました。
+- **C# enum 抽出が XML ドキュメント本文を enum member として扱わなくなりました (#2437)** — enum member の回復処理で XML doc コメント行を除外し、`unused` や symbol 系クエリがドキュメント中の単語を phantom enum symbol として報告しないようにしました。
+- **Scala の body なし class が後続宣言を飲み込まないようになりました (#2446)** — 明示的な body を持たない Scala の `class Config(value: String)` 宣言を 1 行の top-level symbol として扱うことで、後続の `object Config { ... }` が top-level companion として維持されます。
+- **active transaction により synchronous mode 設定が拒否されても SQLite 接続初期化が失敗しなくなりました (#2451)** — 並行アクセス中に SQLite が `PRAGMA synchronous=NORMAL` を既知の "Safety level may not be changed inside a transaction" エラーで拒否した場合でも、`DbContext` は接続を利用可能なまま維持します。
+- **IndexWatchRunner の cancellation カバレッジが scheduler の影響を受けにくくなりました (#2470)** — watch loop の cancellation 回帰テストは dedicated long-running task で watcher を実行し、full suite の ThreadPool 負荷で停止 timeout を使い切らないようになりました。
+- **commit-scoped refresh 後の `status --check` が HEAD freshness を満たすようになりました (#2473)** — `cdidx index . --commits <current-head-sha> --json` が `indexed_head_sha` を現在の HEAD に更新した後、古い full-scan 専用 stamp だけを根拠に `status --check --json` が `head_changed` stale を返さなくなりました。
+- **macOS の FIFO dry-run 回帰テストを安定化しました (#2478)** — subprocess の timeout に full suite 実行中の起動余裕を持たせ、scanner テストでは FIFO path が indexing 前に拒否されることを明示的に確認します。
+- **InstallScript の C# シンボル抽出 runaway guard が Release フルスイート中の一時的な負荷で失敗しにくくなりました (#2482)** — 現実的な fixture の抽出成功を引き続き確認しつつ、粗い性能ガードの runaway budget を広げました。
+- **参照数の多い大きな C# テストファイルで index 更新が止まったように見える問題を修正 (#2528)** — `cdidx index` は相互再帰フラグ更新時に折り畳み名の逆呼び出し index を使うようになり、`QueryCommandRunnerTests.cs` のようなファイル更新後の高コストな参照テーブル全体走査を避けます。
+- **Console stream のテストが共有 capture helper と競合しないようになりました (#2548)** — `Console.Error` を一時的に差し替えるテストは共有の直列化された capture 経路または `TestConsoleLock.Gate` を使うようになり、並列テスト実行で誤った global writer を復元する競合を防ぎます。
+- **legacy schema cleanup が dependent foreign key を一時テーブルへ書き換えないようにしました (#2560)** — nullable `file_id` の cleanup で、新しい NOT NULL 制約を適用しながら rebuilt table への参照を維持します。
+- **legacy nullable `file_id` スキーマ移行で子外部キーが一時テーブル名へ書き換わらなくなりました (#2561)** — 古いテーブルを再構築する間も外部キーの参照先を維持し、Linux CI や該当 SQLite runtime で `_reference_lines_nullable_file_id` 不在エラーが出る問題を防ぎます。
+- **trimmed CLI publish テストで macOS arm64 の ILLink クラッシュを回避しました (#2570)** — trimmed `backfill-fold` serialization テストは、macOS arm64 で既知の SDK/ILLink クラッシュ経路だけをスキップし、他の runtime では従来どおりのカバレッジを維持します。
+- **CodeIndex.Tests の locked restore が net9.0 の直接 test dependency を含むようになりました (#2577)** — test project の lock file が net9.0 の `System.Net.Http` / `System.Text.RegularExpressions` package reference と同期され、CI の locked restore が通るようになりました。
+- **.NET 9 restore 向けにテストプロジェクトの lock file を同期しました (#2580)** — `net9.0` の lock-file entries に direct test reference の `System.Net.Http` と `System.Text.RegularExpressions` を含め、CI の locked restore が通る状態を維持します。
+- **trimmed publish した backfill-fold の smoke test は apphost があればそれを実行するようになりました (#2584)** — SDK が `cdidx` と `cdidx.dll` の両方を出力する場合に、runtime 固有の self-contained publish を誤った `dotnet` runtime 経由で実行しないようにしました。
+- **macOS arm64 の ILLink crash skip を追跡 Issue に紐づけました (#2586)** — trimmed `backfill-fold` publish smoke test の SDK/ILLink crash 回避が、macOS AccessViolation failure を追跡する Issue を示すようになりました。
+- **Rust trait の associated type default を再び出力するようになりました (#2603)** — Rust の `trait` 本体にある associated type default が既存の `protocol` trait symbol を走査するようになり、`type Output = ();` などの `property` symbol が復元されました。
+- **Git HEAD 変更後の full scan で抽出を並列化しました (#2605)** — 既存 index が別 commit で stamp されている場合、`cdidx index` は parallel extraction 経路を使うようになり、branch refresh 後の full scan が大きな C# test file で長時間直列処理に留まって完了や通常の中断診断へ進めなくなる問題を防ぎます。
+- **macOS arm64 の trimmed publish alias カバレッジを ILLink クラッシュ中は skip するようにしました (#2606)** — C# Razor alias の trimmed publish テストは、`cdidx` 実行前に失敗する代わりに macOS arm64 で skipped として報告されます。
+- **読み取り用 schema migration が既存の SQLite transaction を尊重するようになりました (#2607)** — `TryMigrateForRead` は既存の SQLite transaction 内で呼ばれた場合に nested transaction を開始しなくなり、concurrent freshness snapshot 読み取りで断続的に発生していた `cannot start a transaction within a transaction` 失敗を回避します。
+- **Rust trait 内の associated type default が property として index されるようになりました (#2609)** — Rust symbol extractor は associated type default の property symbol を追加するとき、既存の Rust trait kind である `protocol` container を走査するようになり、trait 内の `type Name = Value;` entry を取りこぼさなくなりました。
+- **Rust associated type default を trait container 配下で再び index するようにしました (#2611)** — 後処理が `protocol` symbol として保存された Rust trait も対象にするようになり、`type Output = ();` のような default が正しい trait container を持つ property symbol になります。
+
+#### セキュリティ
+
+- **GitHub Actions の third-party action を不変 SHA に固定しました (#1673)** — CI / CodeQL / release workflow は version comment 付きの完全な action commit SHA を使うようになり、今後の workflow 編集向けに SHA 固定ポリシーも文書化しました。
+- **CI で NuGet 脆弱性を監査するようになりました (#1675)** — build workflow が推移依存を含む vulnerable-package check を実行し、High / Critical advisory で失敗します。あわせて NuGet と GitHub Actions の週次 Dependabot PR を有効化しました。
+- **POSIX 環境の global tool stderr log を所有者専用にしました (#1797)** — `cdidx` は persistent global stderr log を開始するたびに、既存の日付付き log も含めて `0600` 権限へ補正します。
+- **インストーラーの staging directory を厳格な権限にしました (#1800)** — `install.sh` は install 用 staging / backup directory を作成直後に `0700` へ制限し、インストール中の release artifact を他のローカルユーザーが読めないようにしました。
+- **テスト依存の監査で High の NuGet advisory が出ないようになりました (#2526)** — テストプロジェクトで修正版の `System.Net.Http` と `System.Text.RegularExpressions` を固定し、ソリューション全体の脆弱パッケージ監査が clean になるようにしました。
+
+#### ドキュメント
+
+- **.NET 9 のテストカバレッジを文書化しました** — README、USER_GUIDE、DEVELOPER_GUIDE、TESTING_GUIDE で、製品版ツールの `net8.0` target と `net8.0` / `net9.0` の test matrix を区別して説明するようにしました。
+- **MCP 書き込み系ツールの脅威モデルを文書化しました (#1431)** — `SECURITY.md` にローカル MCP の信頼境界、stdio / HTTP の認可前提、書き込み系 MCP ツール、GitHub token のネットワーク境界を追記しました。
+- **SQLite WAL の copy / recovery contract を文書化しました (#1450)** — `DEVELOPER_GUIDE.md` に `.db` / `.db-wal` / `.db-shm` の file set、checkpoint cadence、crash recovery の期待動作、read-only fallback の挙動を追記しました。
+- **`.gitignore` に対する `.cdidxignore` の優先順を文書化しました (#1490)** — user / developer guide に、同じディレクトリでは `.gitignore` を先に読み `.cdidxignore` を後から読み、後続の `!` ルールで先に除外された path を再包含できることを明記しました。
+- **シェル補完を help と user guide から見つけられるようにしました (#1639)** — `cdidx --help` が補完用 entry point と対応 shell を案内し、`USER_GUIDE.md` に Bash / Zsh / Fish / PowerShell の install 例を追加しました。
+- **NuGet ツールインストールでサポートする .NET 系列を明確化しました (#1904)** — README と USER_GUIDE は、`.NET 8.0` と `.NET 8+` の混在表記ではなく、公開ツールでサポートする SDK/runtime 系列を .NET 8.x として一貫して説明するようになりました。
+- **MCP tool description に具体的な使用例を追加しました (#1972)** — `search`、`definition`、`references`、`callers`、`callees`、`symbols` が `tools/list` 内で日英併記の短い呼び出し例を示すようになりました。
+
+#### 内部変更
+
+- **GitHub Issue 送信用コード除去の回帰テストを強化しました (#1428)** — `GitHubIssueReporter` のテストで、言語指定なし、言語指定あり、インデント付き、inline と fenced code の混在ケースを確認するようにしました。
+
 ### [1.23.1] - 2026-05-20
 
 #### 修正
@@ -5110,7 +5464,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.23.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.24.0...HEAD
+[1.24.0]: https://github.com/Widthdom/CodeIndex/compare/v1.23.1...v1.24.0
 [1.23.1]: https://github.com/Widthdom/CodeIndex/compare/v1.23.0...v1.23.1
 [1.23.0]: https://github.com/Widthdom/CodeIndex/compare/v1.22.3...v1.23.0
 [1.22.3]: https://github.com/Widthdom/CodeIndex/compare/v1.22.2...v1.22.3

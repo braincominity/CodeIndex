@@ -253,6 +253,7 @@ public class CalleeResult
 
 public class ImpactResult
 {
+    public string ResultKind { get; set; } = ImpactResultKinds.Graph;
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
     public string? CallerKind { get; set; }
@@ -278,6 +279,12 @@ public class ImpactResult
     // 同一 caller に対して保持上限を超える別経路が存在する場合に true。
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool PathsTruncated { get; set; }
+}
+
+public static class ImpactResultKinds
+{
+    public const string Graph = "graph";
+    public const string FileHeuristic = "file_heuristic";
 }
 
 public class ImpactAnalysisResult
@@ -841,6 +848,8 @@ internal sealed class RepoFileStat
 
 public class FileDependencyResult
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ResultKind { get; set; }
     public string SourcePath { get; set; } = string.Empty;
     public string TargetPath { get; set; } = string.Empty;
     public int ReferenceCount { get; set; }

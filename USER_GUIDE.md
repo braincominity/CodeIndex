@@ -10,7 +10,7 @@ AI/MCP setup, language list, and troubleshooting details.
 [![CodeQL](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/codeql.yml)
 [![Release](https://github.com/Widthdom/CodeIndex/actions/workflows/release.yml/badge.svg)](https://github.com/Widthdom/CodeIndex/actions/workflows/release.yml)
 
-![.NET 8.x](https://img.shields.io/badge/.NET-8.x-512BD4?logo=dotnet&logoColor=white)
+![.NET 8.x / 9.x tests](https://img.shields.io/badge/.NET-8.x%20%2F%209.x%20tests-512BD4?logo=dotnet&logoColor=white)
 ![C#](https://img.shields.io/badge/C%23-12-239120?logo=csharp&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![License](https://img.shields.io/badge/License-FSL--1.1--ALv2-orange)
@@ -144,15 +144,34 @@ file statuses. Use incremental refreshes after the first run; see
 ## Shell completion
 
 Generate completion scripts with `cdidx --completions <bash|zsh|fish|powershell>`.
+The same generator is also available as `cdidx completions <shell>`.
+Supported shells are Bash, Zsh, Fish, and PowerShell.
 The generated scripts complete subcommands, flags, and common flag values.
 `--lang` suggests supported languages, `--kind` suggests symbol/reference kinds,
 and path-like options such as `--db`, `--path`, and `--output` use shell file
 completion.
 
+Install the script in the startup file or completion directory for your shell:
+
+```bash
+# Bash: append to your interactive shell startup file
+cdidx --completions bash >> ~/.bashrc
+
+# Zsh: write an fpath entry, then enable compinit from your ~/.zshrc
+mkdir -p ~/.zfunc
+cdidx --completions zsh > ~/.zfunc/_cdidx
+printf '%s\n' 'fpath=(~/.zfunc $fpath)' 'autoload -Uz compinit && compinit' >> ~/.zshrc
+
+# Fish: write to the standard per-user completions directory
+mkdir -p ~/.config/fish/completions
+cdidx --completions fish > ~/.config/fish/completions/cdidx.fish
+```
+
 For PowerShell, add the generated `Register-ArgumentCompleter` script to your
 profile after installing `cdidx`:
 
 ```powershell
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PROFILE)
 cdidx --completions powershell >> $PROFILE
 . $PROFILE
 ```
@@ -451,9 +470,9 @@ RUN export CDIDX_INSTALL_DIR=/usr/local/bin \
 ### Option B: NuGet Global Tool
 
 Requires the [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
-CodeIndex targets `net8.0`; .NET 8.x is the supported and tested SDK/runtime
-line. Newer major .NET releases are outside the supported/tested matrix until
-CI covers them.
+CodeIndex targets `net8.0`; .NET 8.x is the supported SDK/runtime line for the
+published tool, while the CI test suite also covers the test project on
+`net9.0`.
 
 ```bash
 dotnet tool install -g cdidx
@@ -1876,7 +1895,7 @@ The short version: `version.json` is the single source of truth, and the maintai
 <a id="cdidx日本語"></a>
 # cdidx（日本語）
 
-![.NET 8.x](https://img.shields.io/badge/.NET-8.x-512BD4?logo=dotnet&logoColor=white)
+![.NET 8.x / 9.x tests](https://img.shields.io/badge/.NET-8.x%20%2F%209.x%20tests-512BD4?logo=dotnet&logoColor=white)
 ![C#](https://img.shields.io/badge/C%23-12-239120?logo=csharp&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![License](https://img.shields.io/badge/License-FSL--1.1--ALv2-orange)
@@ -2305,9 +2324,9 @@ RUN export CDIDX_INSTALL_DIR=/usr/local/bin \
 ### 方法B: NuGet グローバルツール
 
 [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0) が必要です。
-CodeIndex は `net8.0` を対象にしており、.NET 8.x がサポート済みかつ
-テスト済みの SDK/runtime 系列です。CI で対象になるまでは、より新しい
-メジャー .NET リリースはサポート・テスト対象外です。
+CodeIndex は `net8.0` を対象にしており、公開ツールのサポート対象
+SDK/runtime 系列は .NET 8.x です。一方で、CI のテストスイートは
+テストプロジェクトを `net9.0` でも検証します。
 
 ```bash
 dotnet tool install -g cdidx
@@ -2373,6 +2392,40 @@ PATH追加後はターミナルを再起動してください。
 
 ```bash
 cdidx --version
+```
+
+## シェル補完
+
+`cdidx --completions <bash|zsh|fish|powershell>` で補完スクリプトを生成できます。
+同じ generator は `cdidx completions <shell>` でも利用できます。対応シェルは
+Bash、Zsh、Fish、PowerShell です。生成されたスクリプトは subcommand、flag、
+よく使う flag value を補完し、`--lang` は対応言語、`--kind` は symbol/reference
+kind、`--db` / `--path` / `--output` のような path 系 option は shell の file
+completion を使います。
+
+使っている shell の startup file または completion directory に保存してください:
+
+```bash
+# Bash: interactive shell startup file に追記
+cdidx --completions bash >> ~/.bashrc
+
+# Zsh: fpath 用の directory に書き出し、~/.zshrc で compinit を有効化
+mkdir -p ~/.zfunc
+cdidx --completions zsh > ~/.zfunc/_cdidx
+printf '%s\n' 'fpath=(~/.zfunc $fpath)' 'autoload -Uz compinit && compinit' >> ~/.zshrc
+
+# Fish: ユーザー別 completion directory に書き出し
+mkdir -p ~/.config/fish/completions
+cdidx --completions fish > ~/.config/fish/completions/cdidx.fish
+```
+
+PowerShell では、`cdidx` のインストール後に生成された
+`Register-ArgumentCompleter` script を profile に追加します:
+
+```powershell
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PROFILE)
+cdidx --completions powershell >> $PROFILE
+. $PROFILE
 ```
 
 ## クイックスタート

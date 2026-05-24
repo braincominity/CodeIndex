@@ -1762,6 +1762,7 @@ public partial class DbReader
                 reader.GetInt32(5) == 1,
                 new FileDependencyResult
                 {
+                    ResultKind = ImpactResultKinds.FileHeuristic,
                     SourcePath = reader.GetString(1),
                     TargetPath = reader.GetString(2),
                     ReferenceCount = reader.GetInt32(3),
