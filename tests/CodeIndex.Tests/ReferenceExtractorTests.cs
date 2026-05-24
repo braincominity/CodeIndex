@@ -31289,6 +31289,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustMutableReferenceTypes_CaptureReferencedType()
+    {
+        const string content = """
+            fn demo(buffer: &mut Buffer) {
+                let next: &mut crate::io::Cursor = todo!();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Buffer" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "crate::io::Cursor" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "mut" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_RustLifetimeParameters_CaptureExplicitLifetimeReferences()
     {
         const string content = """

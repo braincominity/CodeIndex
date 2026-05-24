@@ -40,6 +40,9 @@ internal static class RustReferenceExtractor
     private static readonly Regex StructLiteralRegex = new(
         $@"(?<![\w$])(?<name>{RustIdentifierPattern}(?:::{RustIdentifierPattern})*)(?:::\s*<(?<args>[^>\n]+)>)?\s*\{{",
         RegexOptions.Compiled);
+    private static readonly Regex MutableReferenceTypeRegex = new(
+        $@"&\s*mut\s+(?<type>{RustIdentifierPattern}(?:::{RustIdentifierPattern})*)",
+        RegexOptions.Compiled);
 
     // Rust macro calls use `!` plus one of `()`, `[]`, or `{}` instead of the shared trailing `(`.
     // Capture path-qualified macro names so `std::println!`, `log::info!`, and `my_macro!`
@@ -532,7 +535,37 @@ internal static class RustReferenceExtractor
         EmitAssociatedValueReceiverTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitStructLiteralInstantiationReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, enumContainer);
         EmitImplAndTraitTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitMutableReferenceTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+    }
+
+    private static void EmitMutableReferenceTypeReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (Match match in MutableReferenceTypeRegex.Matches(preparedLine))
+        {
+            var typeGroup = match.Groups["type"];
+            var typeName = NormalizeIdentifier(typeGroup.Value);
+            if (typeName == "self" || typeName == "Self")
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                typeName,
+                typeGroup.Index,
+                "type_reference",
+                context,
+                lineNumber,
+                resolveContainerForColumn(typeGroup.Index));
+        }
     }
 
     private static void EmitLifetimeReferences(
