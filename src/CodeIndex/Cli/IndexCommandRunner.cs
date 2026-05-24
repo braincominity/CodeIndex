@@ -1766,6 +1766,7 @@ public static class IndexCommandRunner
                 StartUpdateSpinnerIfNeeded();
                 currentUpdatePath = relPath;
                 var absPath = Path.Combine(projectRoot, relPath.Replace('/', Path.DirectorySeparatorChar));
+                var fileBatchMarked = false;
                 try
                 {
                     if (!File.Exists(LongPath.EnsureWindowsPrefix(absPath)))
@@ -1853,6 +1854,37 @@ public static class IndexCommandRunner
 
                 var indexability = FileIndexer.GetFileIndexability(absPath);
                 var detection = FileIndexer.TryDetectLanguage(absPath);
+                if (indexability == FileIndexer.FileProbeStatus.Missing || detection.Status == FileIndexer.FileProbeStatus.Missing)
+                {
+                    var message = $"{relPath}: skipped because it was deleted during indexing.";
+                    warnings++;
+                    warningList.Add(new CliJsonMessage(relPath, message));
+                    if (!options.Json && !options.Quiet)
+                    {
+                        PauseUpdateSpinnerForConsoleWrite();
+                        ConsoleUi.PrintWarning(message);
+                        ResumeUpdateSpinnerAfterConsoleWrite();
+                    }
+
+                    if (writer.HasFileAtPath(relPath))
+                    {
+                        DemoteReadinessOnce();
+                        using var deleteTxn = writer.BeginTransaction();
+                        if (writer.DeleteFileByPath(relPath))
+                        {
+                            WriteProjectRootOnce();
+                            deleteTxn.Commit();
+                            removed++;
+                            ftsMutated = true;
+                        }
+                    }
+                    else
+                    {
+                        skipped++;
+                    }
+                    continue;
+                }
+
                 if (indexability == FileIndexer.FileProbeStatus.ProbeFailed || detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
                 {
                     DemoteReadinessOnce();
@@ -2041,6 +2073,8 @@ public static class IndexCommandRunner
                 }
 
                 DemoteReadinessOnce();
+                writer.MarkBatchInProgress();
+                fileBatchMarked = true;
                 using var txn = writer.BeginTransaction();
                 writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
                 if (projectRootWritten)
@@ -2068,6 +2102,7 @@ public static class IndexCommandRunner
                 // Validate content for encoding issues / エンコーディング問題を検証
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
                 writer.InsertIssues(fileId, issues);
+                writer.ClearBatchInProgress();
                 txn.Commit();
 
                 updated++;
@@ -2107,7 +2142,43 @@ public static class IndexCommandRunner
                     continue;
                 }
 
+                if (ex is FileNotFoundException or DirectoryNotFoundException)
+                {
+                    if (fileBatchMarked)
+                        writer.ClearBatchInProgress();
+
+                    var message = $"{relPath}: skipped because it was deleted during indexing.";
+                    warnings++;
+                    warningList.Add(new CliJsonMessage(relPath, message));
+                    if (!options.Json && !options.Quiet)
+                    {
+                        PauseUpdateSpinnerForConsoleWrite();
+                        ConsoleUi.PrintWarning(message);
+                        ResumeUpdateSpinnerAfterConsoleWrite();
+                    }
+
+                    if (writer.HasFileAtPath(relPath))
+                    {
+                        DemoteReadinessOnce();
+                        using var deleteTxn = writer.BeginTransaction();
+                        if (writer.DeleteFileByPath(relPath))
+                        {
+                            WriteProjectRootOnce();
+                            deleteTxn.Commit();
+                            removed++;
+                            ftsMutated = true;
+                        }
+                    }
+                    else
+                    {
+                        skipped++;
+                    }
+                    continue;
+                }
+
                 DemoteReadinessOnce();
+                if (fileBatchMarked)
+                    writer.ClearBatchInProgress();
                 GlobalToolLog.Error($"index_update_file_failed path={CollapseLineBreaks(relPath)}\n{GlobalToolLog.FormatExceptionChain(ex)}");
 
                 errors++;
@@ -2167,6 +2238,8 @@ public static class IndexCommandRunner
                 priorFoldFingerprint == currentFoldFingerprint);
         if (readinessDemoted && errors == 0)
         {
+            writer.MarkBatchInProgress();
+            using var readinessTxn = writer.BeginTransaction();
             // Restore each readiness bit independently based on what the DB carried BEFORE
             // ClearReadyFlags wiped them. A pre-#86 DB (user_version=3, i.e. Graph+Issues but
             // no Fold) must keep Graph+Issues after a successful partial update, even though
@@ -2251,6 +2324,8 @@ public static class IndexCommandRunner
             }
             writer.WriteCdidxWriterVersion(ConsoleUi.LoadVersion());
             writer.SetMeta(SymbolKindFilterMetaKey, options.SymbolKindFilter.Signature);
+            writer.ClearBatchInProgress();
+            readinessTxn.Commit();
         }
         if (errors == 0)
         {
@@ -3085,6 +3160,7 @@ public static class IndexCommandRunner
         // full-scan の書き込み全体を outer transaction に入れ、中断時に readiness clear /
         // purge / per-file write をまとめて rollback する。
         ThrowIfFullScanCancelled(0, files.Count);
+        writer.MarkBatchInProgress();
         using var fullScanTxn = writer.BeginTransaction();
         writer.ClearReadyFlags();
         writer.ClearHotspotFamilyReady();
@@ -3389,6 +3465,13 @@ public static class IndexCommandRunner
                         catch (FileIndexer.BinaryFileSkippedException ex)
                         {
                             extractionResults.Add(FullScanFileWorkItem.Skipped(filePath, ex.Message), cancellationToken);
+                        }
+                        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+                        {
+                            var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, filePath));
+                            extractionResults.Add(
+                                FullScanFileWorkItem.Skipped(filePath, $"{relativePath}: skipped because it was deleted during indexing."),
+                                cancellationToken);
                         }
                         catch (Exception ex)
                         {
@@ -3722,6 +3805,7 @@ public static class IndexCommandRunner
             // ここで stamp する。full scan / partial update を問わず最新の HEAD を保存する。
             StampIndexedHeadMetadata(writer, projectRoot);
         }
+        writer.ClearBatchInProgress();
         fullScanTxn.Commit();
         stopwatch.Stop();
         // Detect cwd drift between option-parsing and finalize. See RunUpdateMode for the

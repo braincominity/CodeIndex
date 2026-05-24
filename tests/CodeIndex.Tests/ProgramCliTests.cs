@@ -90,6 +90,66 @@ public class ProgramCliTests
         Assert.DoesNotContain("██████╗", stderr);
     }
 
+    [Theory]
+    [InlineData("--quiet")]
+    [InlineData("-q")]
+    [InlineData("--silent")]
+    public void QueryQuietFlag_SuppressesInformationalStderrOnZeroResults(string quietFlag)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_program_quiet_zero");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
+
+            var (exitCode, stdout, stderr) = RunCliInSubprocess([quietFlag, "search", "definitely_missing_query", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void QueryQuietEnvironment_SuppressesVerboseStderr()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_program_quiet_env");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
+
+            var (exitCode, stdout, stderr) = RunCliInSubprocess(
+                ["search", "definitely_missing_query", "--verbose", "--db", dbPath],
+                new Dictionary<string, string?> { [ProgramRunner.QuietEnvironmentVariable] = "1" });
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void QueryQuietFlag_PreservesErrorLines()
+    {
+        var missingDbPath = Path.Combine(Path.GetTempPath(), $"cdidx_missing_{Guid.NewGuid():N}.db");
+
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["--quiet", "search", "Run", "--db", missingDbPath]);
+
+        Assert.NotEqual(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains($"Error [{CommandErrorCodes.DbNotFound}]:", stderr);
+        Assert.DoesNotContain("Hint:", stderr);
+    }
+
     [Fact]
     public void Completions_HelpLikeValueReturnsCompletionsError()
     {
@@ -126,6 +186,55 @@ public class ProgramCliTests
         Assert.Contains("powershell", stderr);
         Assert.Contains("Usage: cdidx --completions <shell>", stderr);
         Assert.DoesNotContain("Unknown shell", stderr);
+    }
+
+    [Theory]
+    [InlineData("index", "cdidx index <projectPath>")]
+    [InlineData("search", "cdidx search <query>")]
+    [InlineData("references", "cdidx references <query>")]
+    [InlineData("callers", "cdidx callers <query>")]
+    [InlineData("callees", "cdidx callees <query>")]
+    [InlineData("impact", "cdidx impact <query>")]
+    [InlineData("unused", "cdidx unused")]
+    [InlineData("validate", "cdidx validate")]
+    [InlineData("backfill-fold", "cdidx backfill-fold")]
+    [InlineData("outline", "cdidx outline <path>")]
+    [InlineData("inspect", "cdidx inspect <query>")]
+    [InlineData("definition", "cdidx definition <query>")]
+    [InlineData("find", "cdidx find <query>")]
+    [InlineData("excerpt", "cdidx excerpt <path>")]
+    [InlineData("hotspots", "cdidx hotspots")]
+    [InlineData("deps", "cdidx deps")]
+    [InlineData("map", "cdidx map")]
+    [InlineData("status", "cdidx status")]
+    [InlineData("completions", "cdidx completions <shell>")]
+    [InlineData("license", "cdidx license")]
+    public void SubcommandHelp_PrintsCommandSpecificUsage(string command, string expectedUsage)
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([command, "--help"]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Usage:", stdout);
+        Assert.Contains(expectedUsage, stdout);
+        Assert.Contains("Run `cdidx --help`", stdout);
+        Assert.DoesNotContain("Commands:", stdout);
+        Assert.DoesNotContain("Index and update options:", stdout);
+        Assert.DoesNotContain("██████╗", stdout);
+    }
+
+    [Theory]
+    [InlineData("completions")]
+    [InlineData("completions", "--json")]
+    [InlineData("completions", "bash", "extra")]
+    public void CompletionsCommand_ErrorsUseCommandUsage(params string[] args)
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(args);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("Usage: cdidx completions <shell>", stderr);
+        Assert.DoesNotContain("Usage: cdidx --completions <shell>", stderr);
     }
 
     [Fact]
@@ -244,7 +353,7 @@ public class ProgramCliTests
         Assert.DoesNotContain("Add parser support", stdout);
     }
 
-    private static (int ExitCode, string StdOut, string StdErr) RunCliInSubprocess(string[] args)
+    private static (int ExitCode, string StdOut, string StdErr) RunCliInSubprocess(string[] args, IReadOnlyDictionary<string, string?>? environment = null)
     {
         var psi = new System.Diagnostics.ProcessStartInfo
         {
@@ -259,6 +368,16 @@ public class ProgramCliTests
         psi.ArgumentList.Add(GetBuiltCliDllPath());
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
+        if (environment != null)
+        {
+            foreach (var (key, value) in environment)
+            {
+                if (value == null)
+                    psi.Environment.Remove(key);
+                else
+                    psi.Environment[key] = value;
+            }
+        }
 
         using var process = System.Diagnostics.Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start cdidx subprocess / cdidx サブプロセスの起動に失敗");

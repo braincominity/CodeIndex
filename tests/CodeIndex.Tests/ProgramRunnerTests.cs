@@ -11,6 +11,85 @@ namespace CodeIndex.Tests;
 public class ProgramRunnerTests
 {
     [Fact]
+    public void TryConsumeQueryTraceFlag_StripsTraceAndPreservesEscapedQuery()
+    {
+        string[] args = ["needle", "--trace=stderr", "--lang", "csharp", "--", "--trace=file"];
+
+        var ok = ProgramRunner.TryConsumeQueryTraceFlag(ref args, out var mode, out var error);
+
+        Assert.True(ok);
+        Assert.Empty(error);
+        Assert.Equal("stderr", mode);
+        Assert.Equal(["needle", "--lang", "csharp", "--", "--trace=file"], args);
+    }
+
+    [Fact]
+    public void Run_QueryTraceStderr_EmitsStructuredSanitizedLine()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("query-trace");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void Needle() { } }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "Needle", "--db", dbPath, "--trace=stderr", "--count", "--lang", "csharp", "--limit", "7", "--path", "src/**"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            var traceLine = stderr.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Single(line => line.StartsWith('{'));
+            using var document = JsonDocument.Parse(traceLine);
+            var root = document.RootElement;
+            Assert.Equal("search", root.GetProperty("tool").GetString());
+            Assert.Equal("cli_query", root.GetProperty("source").GetString());
+            Assert.Equal(1, root.GetProperty("result_count").GetInt32());
+            Assert.Equal(0, root.GetProperty("exit_code").GetInt32());
+            Assert.Equal("csharp", root.GetProperty("parameters").GetProperty("lang").GetString());
+            Assert.Equal("7", root.GetProperty("parameters").GetProperty("limit").GetString());
+            Assert.Contains("src/**", root.GetProperty("parameters").GetProperty("path")[0].GetString());
+            Assert.DoesNotContain("Needle", traceLine);
+            Assert.DoesNotContain(dbPath, traceLine);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_QueryTraceFile_AppendsDailyJsonl()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("query-trace-file");
+        var logRoot = Path.Combine(Path.GetTempPath(), $"cdidx_query_trace_{Guid.NewGuid():N}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void Needle() { } }");
+            using var env = EnvironmentVariableScope.Capture("CDIDX_GLOBAL_TOOL_LOG_DIR");
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logRoot);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "Needle", "--db", dbPath, "--trace=file"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.DoesNotContain('{', stderr);
+            var tracePath = Path.Combine(logRoot, $"query-trace-{DateTime.UtcNow:yyyyMMdd}.jsonl");
+            Assert.True(File.Exists(tracePath));
+            var line = File.ReadAllLines(tracePath).Single();
+            using var document = JsonDocument.Parse(line);
+            Assert.Equal("search", document.RootElement.GetProperty("tool").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            if (Directory.Exists(logRoot))
+                Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public void TryConsumeSuggestionDedupThresholdFlag_SetsEnvironmentAndRemovesFlag()
     {
         using var env = EnvironmentVariableScope.Capture(SuggestionStore.DedupThresholdEnvironmentVariable);

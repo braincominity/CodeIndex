@@ -756,7 +756,11 @@ public static partial class SymbolExtractor
         return GetCSharpQuoteRunLength(line, index) >= requiredLength;
     }
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindCSharpBraceRange(string[] lines, int startIndex, int startColumn = 0)
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindCSharpBraceRange(
+        string[] lines,
+        int startIndex,
+        int startColumn = 0,
+        bool linesAreSanitized = false)
     {
         int depth = 0;
         bool opened = false;
@@ -793,9 +797,17 @@ public static partial class SymbolExtractor
 
         for (int i = startIndex; i < lines.Length; i++)
         {
-            var lexedLine = LexCSharpLine(lines[i], lexState);
-            lexState = lexedLine.EndState;
-            var sanitizedLine = lexedLine.SanitizedLine;
+            string sanitizedLine;
+            if (linesAreSanitized)
+            {
+                sanitizedLine = lines[i];
+            }
+            else
+            {
+                var lexedLine = LexCSharpLine(lines[i], lexState);
+                lexState = lexedLine.EndState;
+                sanitizedLine = lexedLine.SanitizedLine;
+            }
             var scanLine = i == startIndex && startColumn > 0 && startColumn < sanitizedLine.Length
                 ? sanitizedLine[startColumn..]
                 : i == startIndex && startColumn >= sanitizedLine.Length

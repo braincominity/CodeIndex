@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Net;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
 using CodeIndex.Mcp;
@@ -10,6 +12,8 @@ namespace CodeIndex.Cli;
 
 internal static class ProgramRunner
 {
+    internal const string QuietEnvironmentVariable = "CDIDX_QUIET";
+
     internal static int Run(
         string[] args,
         JsonSerializerOptions? jsonOptions = null,
@@ -37,6 +41,9 @@ internal static class ProgramRunner
         if (configResult.Loaded)
             GlobalToolLog.Info($"config_file_loaded path={configResult.Path}");
         jsonOptions ??= CreateDefaultJsonOptions();
+
+        var quiet = TryConsumeQuietFlag(ref args) || IsTruthyEnvironmentVariable(QuietEnvironmentVariable);
+        using var quietScope = quiet ? QuietStderrScope.Start() : null;
 
         if (!TryConsumeColorFlag(ref args, out var colorError))
         {
@@ -87,15 +94,31 @@ internal static class ProgramRunner
 
         if (args[0] is "--license" or "license")
         {
+            if (args[0] == "license" && args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
+            {
+                ConsoleUi.PrintCommandUsage("license");
+                GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} subcommand_help=true");
+                EmitCommandMetric("license", args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
+                return CommandExitCodes.Success;
+            }
+
             ConsoleUi.PrintLicenseSummary();
             GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} license_only=true");
             EmitCommandMetric("license", args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
             return CommandExitCodes.Success;
         }
 
-        if (args[0] == "--completions")
+        if (args[0] is "--completions" or "completions")
         {
-            var exitCode = RunCompletions(args[1..]);
+            if (args[0] == "completions" && args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
+            {
+                ConsoleUi.PrintCommandUsage("completions");
+                GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} subcommand_help=true");
+                EmitCommandMetric("completions", args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
+                return CommandExitCodes.Success;
+            }
+
+            var exitCode = RunCompletions(args[1..], args[0] == "completions" ? "completions" : "--completions");
             GlobalToolLog.Info($"command_complete exit_code={exitCode} command=completions");
             EmitCommandMetric("completions", args, commandStartTimestamp, commandStopwatch, exitCode);
             return exitCode;
@@ -103,7 +126,8 @@ internal static class ProgramRunner
 
         if (args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
         {
-            ConsoleUi.PrintUsage(showBanner: true);
+            if (!ConsoleUi.PrintCommandUsage(args[0]))
+                ConsoleUi.PrintUsage(showBanner: true);
             GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} subcommand_help=true");
             EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
             return CommandExitCodes.Success;
@@ -161,9 +185,19 @@ internal static class ProgramRunner
             int exitCode;
             if (queryRunner is not null)
             {
+                if (!TryConsumeQueryTraceFlag(ref subArgs, out var traceMode, out var traceError))
+                {
+                    CommandErrorWriter.Write(StripErrorPrefix(traceError), "use one of `none`, `stderr`, or `file`.");
+                    GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.InvalidArgument} command={commandName} trace_flag_invalid=true");
+                    EmitCommandMetric(commandName, args, commandStartTimestamp, commandStopwatch, CommandExitCodes.InvalidArgument);
+                    return CommandExitCodes.InvalidArgument;
+                }
+
+                using var traceCapture = QueryTraceOutputCapture.TryStart(traceMode, subArgs);
                 exitCode = JsonEnvelopeWrapper.ShouldWrap(commandName, subArgs)
                     ? JsonEnvelopeWrapper.RunWrapped(commandName, subArgs, appVersion, jsonOptions, queryRunner)
                     : queryRunner(subArgs);
+                EmitQueryTrace(traceMode, commandName, subArgs, commandStartTimestamp, commandStopwatch, exitCode, traceCapture?.ResultCount);
             }
             else
             {
@@ -224,6 +258,51 @@ internal static class ProgramRunner
     internal static bool IsProjectPathArg(string arg) =>
         !arg.StartsWith('-') && (Directory.Exists(arg) || arg.Contains('/') || arg.Contains('\\') || arg == ".");
 
+    internal static bool TryConsumeQuietFlag(ref string[] args)
+    {
+        if (args.Length == 0)
+            return false;
+
+        var kept = new List<string>(args.Length);
+        var quiet = false;
+        var passthrough = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (passthrough)
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--")
+            {
+                passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+            if (arg is "--quiet" or "-q" or "--silent")
+            {
+                quiet = true;
+                continue;
+            }
+
+            kept.Add(arg);
+        }
+
+        args = kept.ToArray();
+        return quiet;
+    }
+
+    private static bool IsTruthyEnvironmentVariable(string name)
+    {
+        var value = Environment.GetEnvironmentVariable(name);
+        return value != null
+               && !string.Equals(value, "0", StringComparison.OrdinalIgnoreCase)
+               && !string.Equals(value, "false", StringComparison.OrdinalIgnoreCase)
+               && !string.Equals(value, "no", StringComparison.OrdinalIgnoreCase)
+               && !string.Equals(value, "off", StringComparison.OrdinalIgnoreCase);
+    }
+
     internal static int MapCodeIndexExceptionExitCode(string code) => code switch
     {
         CommandErrorCodes.DbNotFound => CommandExitCodes.NotFound,
@@ -239,6 +318,85 @@ internal static class ProgramRunner
         CommandErrorCodes.Interrupted => CommandExitCodes.CancelledBySignal,
         _ => CommandExitCodes.DatabaseError,
     };
+
+    private sealed class QuietStderrScope : IDisposable
+    {
+        private readonly TextWriter _originalError;
+
+        private QuietStderrScope(TextWriter originalError)
+        {
+            _originalError = originalError;
+        }
+
+        public static QuietStderrScope Start()
+        {
+            var originalError = Console.Error;
+            Console.SetError(new ErrorOnlyTextWriter(originalError));
+            return new QuietStderrScope(originalError);
+        }
+
+        public void Dispose()
+        {
+            Console.Error.Flush();
+            Console.SetError(_originalError);
+        }
+    }
+
+    private sealed class ErrorOnlyTextWriter(TextWriter inner) : TextWriter
+    {
+        private readonly StringBuilder _lineBuffer = new();
+
+        public override Encoding Encoding => inner.Encoding;
+
+        public override void Write(char value)
+        {
+            if (value == '\r')
+                return;
+
+            if (value == '\n')
+            {
+                FlushBufferedLine();
+                return;
+            }
+
+            _lineBuffer.Append(value);
+        }
+
+        public override void Write(string? value)
+        {
+            if (value == null)
+                return;
+
+            foreach (var ch in value)
+                Write(ch);
+        }
+
+        public override void WriteLine(string? value)
+        {
+            Write(value);
+            FlushBufferedLine();
+        }
+
+        public override void Flush()
+        {
+            FlushBufferedLine();
+            inner.Flush();
+        }
+
+        private void FlushBufferedLine()
+        {
+            if (_lineBuffer.Length == 0)
+                return;
+
+            var line = _lineBuffer.ToString();
+            _lineBuffer.Clear();
+            if (IsErrorLine(line))
+                inner.WriteLine(line);
+        }
+
+        private static bool IsErrorLine(string line)
+            => line.StartsWith("Error", StringComparison.Ordinal);
+    }
 
     internal static bool TryConsumeColorFlag(ref string[] args, out string error)
     {
@@ -510,6 +668,288 @@ internal static class ProgramRunner
         path = requested;
         args = kept.ToArray();
         return true;
+    }
+
+    internal static bool TryConsumeQueryTraceFlag(ref string[] args, out string traceMode, out string error)
+    {
+        traceMode = "none";
+        error = string.Empty;
+        if (args.Length == 0)
+            return true;
+
+        var kept = new List<string>(args.Length);
+        var passthrough = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (passthrough)
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--")
+            {
+                passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+
+            string? rawValue = null;
+            if (arg == "--trace")
+            {
+                if (i + 1 >= args.Length)
+                {
+                    error = "Error: --trace requires a value (use `--trace stderr`, `--trace file`, `--trace none`, or `--trace=<mode>`).";
+                    return false;
+                }
+                rawValue = args[++i];
+            }
+            else if (arg.StartsWith("--trace=", StringComparison.Ordinal))
+            {
+                rawValue = arg.Substring("--trace=".Length);
+            }
+            else
+            {
+                kept.Add(arg);
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(rawValue))
+            {
+                error = "Error: --trace requires a non-empty value.";
+                return false;
+            }
+            if (rawValue is not ("none" or "stderr" or "file"))
+            {
+                error = $"Error: --trace must be one of `none`, `stderr`, or `file`, got `{rawValue}`.";
+                return false;
+            }
+            traceMode = rawValue;
+        }
+
+        args = kept.ToArray();
+        return true;
+    }
+
+    private static void EmitQueryTrace(string mode, string commandName, string[] subArgs, DateTimeOffset startTimestamp, Stopwatch stopwatch, int exitCode, int? resultCount)
+    {
+        if (mode == "none")
+            return;
+
+        try
+        {
+            var elapsedMs = stopwatch.Elapsed.TotalMilliseconds;
+            var payload = BuildQueryTraceJson(commandName, subArgs, startTimestamp, elapsedMs, exitCode, resultCount);
+            if (mode == "stderr")
+            {
+                Console.Error.WriteLine(payload);
+                return;
+            }
+
+            var directory = GlobalToolLog.ResolveLogDirectoryForStatus();
+            Directory.CreateDirectory(directory);
+            var path = Path.Combine(directory, $"query-trace-{DateTime.UtcNow:yyyyMMdd}.jsonl");
+            File.AppendAllText(path, payload + Environment.NewLine);
+        }
+        catch
+        {
+            // Best-effort only: trace output must never change query command behavior.
+        }
+    }
+
+    private static string BuildQueryTraceJson(string commandName, string[] subArgs, DateTimeOffset timestamp, double elapsedMs, int exitCode, int? resultCount)
+    {
+        var payload = new JsonObject
+        {
+            ["timestamp"] = timestamp.ToString("O", CultureInfo.InvariantCulture),
+            ["tool"] = commandName,
+            ["source"] = "cli_query",
+            ["parameters"] = BuildQueryTraceParameters(subArgs),
+            ["elapsed_ms"] = Math.Round(elapsedMs, 3),
+            ["result_count"] = resultCount,
+            ["exit_code"] = exitCode,
+        };
+        if (exitCode != CommandExitCodes.Success)
+            payload["error"] = "command_failed";
+        return payload.ToJsonString(CreateDefaultJsonOptions());
+    }
+
+    private static JsonObject BuildQueryTraceParameters(string[] args)
+    {
+        var parameters = new JsonObject
+        {
+            ["json"] = false,
+            ["count"] = false,
+        };
+        var paths = new List<string>();
+        var excludePaths = new List<string>();
+        var passthrough = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (passthrough)
+                continue;
+            if (arg == "--")
+            {
+                passthrough = true;
+                continue;
+            }
+
+            string? inlineValue = null;
+            var optionName = arg;
+            var equals = arg.IndexOf('=');
+            if (equals > 0)
+            {
+                optionName = arg[..equals];
+                inlineValue = arg[(equals + 1)..];
+            }
+
+            string? value = inlineValue;
+            if (value == null && optionName is "--lang" or "--limit" or "--top" or "--path" or "--exclude-path")
+            {
+                if (i + 1 < args.Length)
+                    value = args[++i];
+            }
+
+            switch (optionName)
+            {
+                case "--json":
+                    parameters["json"] = true;
+                    if (!string.IsNullOrWhiteSpace(value))
+                        parameters["json_format"] = value;
+                    break;
+                case "--count":
+                    parameters["count"] = true;
+                    break;
+                case "--lang" when !string.IsNullOrWhiteSpace(value):
+                    parameters["lang"] = value;
+                    break;
+                case "--limit" when !string.IsNullOrWhiteSpace(value):
+                case "--top" when !string.IsNullOrWhiteSpace(value):
+                    parameters["limit"] = value;
+                    break;
+                case "--path" when !string.IsNullOrWhiteSpace(value):
+                    paths.Add(value);
+                    break;
+                case "--exclude-path" when !string.IsNullOrWhiteSpace(value):
+                    excludePaths.Add(value);
+                    break;
+            }
+        }
+        if (paths.Count > 0)
+            parameters["path"] = new JsonArray(paths.Select(path => JsonValue.Create(path)).ToArray());
+        if (excludePaths.Count > 0)
+            parameters["exclude_path"] = new JsonArray(excludePaths.Select(path => JsonValue.Create(path)).ToArray());
+        return parameters;
+    }
+
+    private sealed class QueryTraceOutputCapture : TextWriter
+    {
+        private readonly TextWriter _inner;
+        private readonly bool _countNumericOutput;
+        private readonly bool _countJsonLines;
+        private bool _disposed;
+
+        private QueryTraceOutputCapture(TextWriter inner, bool countNumericOutput, bool countJsonLines)
+        {
+            _inner = inner;
+            _countNumericOutput = countNumericOutput;
+            _countJsonLines = countJsonLines;
+        }
+
+        public override Encoding Encoding => _inner.Encoding;
+        public int? ResultCount { get; private set; }
+
+        public static QueryTraceOutputCapture? TryStart(string traceMode, string[] args)
+        {
+            if (traceMode == "none")
+                return null;
+
+            var capture = new QueryTraceOutputCapture(
+                Console.Out,
+                HasFlag(args, "--count"),
+                HasFlag(args, "--json") && !HasInlineValue(args, "--json", "array"));
+            Console.SetOut(capture);
+            return capture;
+        }
+
+        public override void Write(char value) => _inner.Write(value);
+        public override void Write(string? value) => _inner.Write(value);
+
+        public override void WriteLine(string? value)
+        {
+            _inner.WriteLine(value);
+            ObserveLine(value);
+        }
+
+        public override void WriteLine()
+        {
+            _inner.WriteLine();
+            ObserveLine(string.Empty);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (!_disposed && disposing)
+            {
+                Console.SetOut(_inner);
+                _disposed = true;
+            }
+            base.Dispose(disposing);
+        }
+
+        private void ObserveLine(string? value)
+        {
+            if (value == null)
+                return;
+
+            var trimmed = value.Trim();
+            if (_countNumericOutput && int.TryParse(trimmed, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count) && count >= 0)
+            {
+                ResultCount = count;
+                return;
+            }
+
+            if (_countJsonLines && trimmed.StartsWith('{'))
+                ResultCount = (ResultCount ?? 0) + 1;
+        }
+
+        private static bool HasFlag(string[] args, string name)
+        {
+            var passthrough = false;
+            foreach (var arg in args)
+            {
+                if (passthrough)
+                    continue;
+                if (arg == "--")
+                {
+                    passthrough = true;
+                    continue;
+                }
+                if (arg == name || arg.StartsWith(name + "=", StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool HasInlineValue(string[] args, string name, string value)
+        {
+            var expected = name + "=" + value;
+            var passthrough = false;
+            foreach (var arg in args)
+            {
+                if (passthrough)
+                    continue;
+                if (arg == "--")
+                {
+                    passthrough = true;
+                    continue;
+                }
+                if (arg == expected)
+                    return true;
+            }
+            return false;
+        }
     }
 
     internal static void EmitCommandMetric(string tool, string[] args, DateTimeOffset startTimestamp, Stopwatch stopwatch, int exitCode, string? error = null)
@@ -1078,28 +1518,29 @@ internal static class ProgramRunner
         return $"cdidx v{metadata.Version} (commit {commit}, built {buildDate}, {dirty}){suffix}";
     }
 
-    private static int RunCompletions(string[] cmdArgs)
+    private static int RunCompletions(string[] cmdArgs, string commandName = "--completions")
     {
+        var usage = $"cdidx {commandName} <shell>";
         if (cmdArgs.Length == 0)
             return CommandErrorWriter.Write(
-                "--completions requires a shell value.",
+                $"{commandName} requires a shell value.",
                 CommandExitCodes.UsageError,
                 "rerun with one of `bash`, `zsh`, `fish`, or `powershell`.",
-                "cdidx --completions <shell>");
+                usage);
 
         if (cmdArgs[0].StartsWith("-", StringComparison.Ordinal))
             return CommandErrorWriter.Write(
-                $"--completions requires a shell value, got option-like token '{cmdArgs[0]}'.",
+                $"{commandName} requires a shell value, got option-like token '{cmdArgs[0]}'.",
                 CommandExitCodes.UsageError,
                 "rerun with one of `bash`, `zsh`, `fish`, or `powershell`.",
-                "cdidx --completions <shell>");
+                usage);
 
         if (cmdArgs.Length > 1)
             return CommandErrorWriter.Write(
-                $"--completions accepts exactly one shell value, got extra {ConsoleUi.Counted(cmdArgs.Length - 1, "argument")}: {string.Join(", ", cmdArgs.Skip(1).Select(arg => $"`{arg}`"))}.",
+                $"{commandName} accepts exactly one shell value, got extra {ConsoleUi.Counted(cmdArgs.Length - 1, "argument")}: {string.Join(", ", cmdArgs.Skip(1).Select(arg => $"`{arg}`"))}.",
                 CommandExitCodes.UsageError,
                 "rerun with exactly one shell name: `bash`, `zsh`, `fish`, or `powershell`.",
-                "cdidx --completions <shell>");
+                usage);
 
         if (ConsoleUi.PrintCompletions(cmdArgs[0]))
             return CommandExitCodes.Success;
@@ -1108,7 +1549,7 @@ internal static class ProgramRunner
             $"unsupported completion shell `{cmdArgs[0]}`.",
             CommandExitCodes.UsageError,
             "rerun with one of `bash`, `zsh`, `fish`, or `powershell`.",
-            "cdidx --completions <shell>");
+            usage);
     }
 
     private static string StripErrorPrefix(string message)

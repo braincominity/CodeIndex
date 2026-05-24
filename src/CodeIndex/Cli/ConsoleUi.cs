@@ -93,6 +93,7 @@ public static class ConsoleUi
         ("languages", "cdidx languages [--json]"),
         ("batch", "cdidx batch [--db <path>]  # reads JSON string arrays from stdin, one query command per line"),
         ("mcp", "cdidx mcp [--db <path>]"),
+        ("completions", "cdidx completions <shell>"),
         ("license", "cdidx license"),
     ];
 
@@ -103,6 +104,8 @@ public static class ConsoleUi
     private const int SpinnerStopDelayMs = 20;
     private const int ConsoleLineMargin = 1;
     private static readonly object TerminalLock = new();
+    private static TextWriter? _synchronizedOut;
+    private static TextWriter? _synchronizedError;
     private static readonly string[] ByteUnits = ["bytes", "KiB", "MiB", "GiB", "TiB", "PiB"];
 
     private static readonly string[] DefaultBrailleSpinnerFrames =
@@ -126,6 +129,26 @@ public static class ConsoleUi
         return count == 0
             ? $"No {plural} found."
             : $"Found {Counted(count, singular, plural)}.";
+    }
+
+    internal static void EnsureConsoleWritersSynchronized()
+    {
+        lock (TerminalLock)
+        {
+            var output = Console.Out;
+            if (!ReferenceEquals(output, _synchronizedOut))
+            {
+                _synchronizedOut = TextWriter.Synchronized(output);
+                Console.SetOut(_synchronizedOut);
+            }
+
+            var error = Console.Error;
+            if (!ReferenceEquals(error, _synchronizedError))
+            {
+                _synchronizedError = TextWriter.Synchronized(error);
+                Console.SetError(_synchronizedError);
+            }
+        }
     }
 
     // --- Spinner / スピナー ---
@@ -185,6 +208,8 @@ public static class ConsoleUi
     /// </summary>
     public static CancellationTokenSource? StartSpinner(string message, string[] frames)
     {
+        EnsureConsoleWritersSynchronized();
+
         // Braille frames are single-char; themed frames are longer strings containing the display text
         // ブレイルフレームは1文字、テーマフレームは表示テキストを含む長い文字列
         bool isThemed = frames.Length > 0 && frames[0].Length > 2;
@@ -197,7 +222,7 @@ public static class ConsoleUi
 
         var cts = new CancellationTokenSource();
         var ct = cts.Token;
-        Task.Run(() =>
+        _ = Task.Run(async () =>
         {
             int i = 0;
             while (!ct.IsCancellationRequested)
@@ -210,7 +235,7 @@ public static class ConsoleUi
                     Console.Out.Flush();
                 }
                 i++;
-                try { Task.Delay(SpinnerFrameDelayMs, ct).Wait(ct); } catch (OperationCanceledException) { break; }
+                try { await Task.Delay(SpinnerFrameDelayMs, ct).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
             }
         }, ct);
         return cts;
@@ -631,6 +656,7 @@ public static class ConsoleUi
         Console.WriteLine("  --dry-run                  Scan files without writing to the database");
         Console.WriteLine("  --force                    Bypass the per-database index lock; only use when no other cdidx index is active");
         Console.WriteLine("  --json                     Output results as JSON (for AI/machine use)");
+        Console.WriteLine("  --quiet, -q, --silent      Suppress informational stderr output; errors still print (also honors CDIDX_QUIET=1)");
         Console.WriteLine("  --duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms");
         Console.WriteLine("  --max-file-bytes <bytes>  Index only files up to this size (default: 4MiB; also honors CDIDX_MAX_FILE_BYTES; accepts K/M/G suffixes)");
         Console.WriteLine("  --parallelism <n>         Full-scan extraction workers (default: CPU count capped at 16; also honors CDIDX_INDEX_PARALLELISM)");
@@ -662,6 +688,7 @@ public static class ConsoleUi
         Console.WriteLine("  --db <path>                Database file path (default: .cdidx/codeindex.db in current directory)");
         Console.WriteLine("  --json                     Output as JSON (search streams ndjson by default; use search --json=array for one array)");
         Console.WriteLine("  --verbose                  Query commands: emit debug diagnostics to stderr; with --json, append an _debug JSON object");
+        Console.WriteLine("  --quiet, -q, --silent      Query commands: suppress informational stderr output, including zero-result hints and summaries; errors still print. Overrides --verbose stderr text.");
         Console.WriteLine("  --profile                  Read commands: append SQL timing, row-count, and EXPLAIN QUERY PLAN JSON after the normal result");
         Console.WriteLine("  --slow-query-ms <n>        Read commands: log profiled SQL statements that take at least <n> ms (use 0 to log every statement)");
         Console.WriteLine("  --limit <n>, --top <n>     Max results to return (default: 20)");
@@ -768,6 +795,35 @@ public static class ConsoleUi
         }
 
         return null;
+    }
+
+    public static bool PrintCommandUsage(string command)
+    {
+        var usages = GetCommandUsageLines(command);
+        if (usages.Count == 0)
+            return false;
+
+        Console.WriteLine("Usage:");
+        foreach (var usage in usages)
+            Console.WriteLine($"  {usage}");
+        Console.WriteLine();
+        Console.WriteLine("Run `cdidx --help` to show all commands and shared options.");
+        return true;
+    }
+
+    private static IReadOnlyList<string> GetCommandUsageLines(string command)
+    {
+        var usages = new List<string>();
+        foreach (var (name, usage) in CommandUsageLines)
+        {
+            if (string.Equals(name, command, StringComparison.Ordinal)
+                || string.Equals(command, "index", StringComparison.Ordinal) && name.StartsWith("index-", StringComparison.Ordinal))
+            {
+                usages.Add(usage);
+            }
+        }
+
+        return usages;
     }
 
     // --- Did-you-mean / もしかして ---
@@ -886,7 +942,7 @@ public static class ConsoleUi
     [
         "index", "backfill-fold", "optimize", "search", "definition", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "db", "vacuum", "report", "license",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license",
     ];
 
     /// <summary>
