@@ -9069,6 +9069,16 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void HandleMessage_ScalarBatchItem_ReturnsInvalidRequestWithNullId()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse("""[1]""")!)!.AsArray();
+
+        Assert.Single(response);
+        Assert.Equal(-32600, response[0]!["error"]!["code"]!.GetValue<int>());
+        AssertJsonNullId(response[0]!);
+    }
+
+    [Fact]
     public void BuildData_ExtraDataCannotShadowCanonicalKeys()
     {
         // Defense-in-depth: if a category-specific call passes `extraData` with the same key

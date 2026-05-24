@@ -947,6 +947,13 @@ public partial class McpServer : IDisposable
                     suggestion: "JSON-RPC batch items must be request objects, not nested arrays.",
                     retrySafe: false);
             }
+            else if (item is not JsonObject)
+            {
+                response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: expected JSON object",
+                    category: McpErrorEnvelope.CategoryInvalidRequest,
+                    suggestion: "Each JSON-RPC batch item must be a request object.",
+                    retrySafe: false);
+            }
             else
             {
                 response = HandleMessage(item);
