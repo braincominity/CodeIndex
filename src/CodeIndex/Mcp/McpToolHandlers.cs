@@ -1752,16 +1752,6 @@ public partial class McpServer
                 continue;
             }
 
-            if (ValidateCommonListArguments(toolArgs) is JsonObject listArgumentError)
-            {
-                AppendSlotError(toolName, toolArgs, slotStopwatch,
-                    listArgumentError["message"]?.GetValue<string>() ?? "Invalid list argument",
-                    category: McpErrorEnvelope.CategoryInvalidArgument,
-                    suggestion: "Tool argument validation failed. Inspect the tool's `inputSchema` via tools/list and adjust the call.",
-                    retrySafe: false);
-                continue;
-            }
-
             // Throttle each inner slot too, otherwise a single allowed batch_query call could
             // still drive N inner searches through and defeat the per-(tool, caller) limiter
             // the outer dispatch enforces. The decision is per (inner-tool, caller) so an
