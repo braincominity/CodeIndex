@@ -278,6 +278,14 @@ public static class IndexCommandRunner
                 }
             }
 
+            int WriteDryRunInterrupted() => WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "Interrupted before dry-run scan completed.",
+                CommandExitCodes.Interrupted,
+                "Rerun `cdidx index --dry-run` when you are ready to inspect the candidate files again.",
+                CommandErrorCodes.Interrupted);
+
             if (options.UpdateFiles.Count > 0)
             {
                 // --files: only the specified files / --files: 指定ファイルのみ
@@ -285,7 +293,15 @@ public static class IndexCommandRunner
                 var updatePaths = NormalizeUpdateFileTargets(options.ProjectPath, options.UpdateFiles, options.Json);
                 if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(updatePaths))
                 {
-                    var scanResult = dryIndexer.ScanFilesDetailed();
+                    FileIndexer.ScanFilesResult scanResult;
+                    try
+                    {
+                        scanResult = dryIndexer.ScanFilesDetailed(cancellationToken: indexCancellation.Token);
+                    }
+                    catch (OperationCanceledException) when (indexCancellation.IsCancellationRequested)
+                    {
+                        return WriteDryRunInterrupted();
+                    }
                     dryCandidates = scanResult.Files;
                     RecordDryRunScanErrors(scanResult.Errors);
                 }
@@ -340,7 +356,15 @@ public static class IndexCommandRunner
 
                 if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(changedFiles))
                 {
-                    var scanResult = dryIndexer.ScanFilesDetailed();
+                    FileIndexer.ScanFilesResult scanResult;
+                    try
+                    {
+                        scanResult = dryIndexer.ScanFilesDetailed(cancellationToken: indexCancellation.Token);
+                    }
+                    catch (OperationCanceledException) when (indexCancellation.IsCancellationRequested)
+                    {
+                        return WriteDryRunInterrupted();
+                    }
                     dryCandidates = scanResult.Files;
                     RecordDryRunScanErrors(scanResult.Errors);
                 }
@@ -354,7 +378,15 @@ public static class IndexCommandRunner
             }
             else
             {
-                var scanResult = dryIndexer.ScanFilesDetailed();
+                FileIndexer.ScanFilesResult scanResult;
+                try
+                {
+                    scanResult = dryIndexer.ScanFilesDetailed(cancellationToken: indexCancellation.Token);
+                }
+                catch (OperationCanceledException) when (indexCancellation.IsCancellationRequested)
+                {
+                    return WriteDryRunInterrupted();
+                }
                 dryCandidates = scanResult.Files;
                 RecordDryRunScanErrors(scanResult.Errors);
             }
@@ -1715,7 +1747,7 @@ public static class IndexCommandRunner
             var expandHeartbeat = StartJsonPhaseHeartbeat("expanding C# update set for static interface contracts");
             try
             {
-                foreach (var filePath in indexer.ScanFilesDetailed().Files)
+                foreach (var filePath in indexer.ScanFilesDetailed(cancellationToken: cancellationToken).Files)
                 {
                     var detection = FileIndexer.TryDetectLanguage(filePath);
                     if (detection.Status == FileIndexer.FileProbeStatus.Supported
@@ -3188,7 +3220,7 @@ public static class IndexCommandRunner
         try
         {
             ThrowIfFullScanCancelled(0, null);
-            scanResult = indexer.ScanFilesDetailed(checkpointedDirectories, continueOnError: true);
+            scanResult = indexer.ScanFilesDetailed(checkpointedDirectories, continueOnError: true, cancellationToken: cancellationToken);
             ThrowIfFullScanCancelled(0, null);
         }
         finally
