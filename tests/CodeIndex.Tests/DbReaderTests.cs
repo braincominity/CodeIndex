@@ -163,6 +163,15 @@ public class DbReaderTests : IDisposable
             }
             """);
 
+        var defaultCaller = Assert.Single(_reader.GetCallers(
+            "IFoo",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["generic_type_argument_fixture"]));
+
+        Assert.Equal("Run", defaultCaller.CallerName);
+        Assert.Equal("generic_type_argument", defaultCaller.ReferenceKind);
+
         var caller = Assert.Single(_reader.GetCallers(
             "IFoo",
             lang: "csharp",
