@@ -85,6 +85,7 @@ public partial class DbReader
 
         lang = NormalizeQueryLanguage(lang);
         var normalizedQuery = rawQuery ? query : NormalizeLiteralSearchQuery(query, lang);
+        var coverageTokens = exact ? new List<string>() : GetSearchCoverageTokens(normalizedQuery, rawQuery);
         using var cmd = _conn.CreateCommand();
         string sql;
 
@@ -124,7 +125,7 @@ public partial class DbReader
             sql += " AND f.modified >= @since";
 
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {GetSearchOrderSql()} LIMIT @limit";
+        sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count)} LIMIT @limit";
 
         cmd.CommandText = sql;
         if (exact)
@@ -132,6 +133,7 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@rankingQuery", normalizedQuery.Trim());
         cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(normalizedQuery.Trim())}%");
         cmd.Parameters.AddWithValue("@visibilityRank", visibilityRank ? 1 : 0);
+        AddSearchCoverageParameters(cmd, coverageTokens);
         cmd.Parameters.AddWithValue("@limit", limit);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
@@ -171,6 +173,7 @@ public partial class DbReader
 
         lang = NormalizeQueryLanguage(lang);
         var normalizedQuery = rawQuery ? query : NormalizeLiteralSearchQuery(query, lang);
+        var coverageTokens = exact ? new List<string>() : GetSearchCoverageTokens(normalizedQuery, rawQuery);
         using var cmd = _conn.CreateCommand();
         string sql;
 
@@ -206,7 +209,7 @@ public partial class DbReader
             sql += " AND f.modified >= @since";
 
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY {GetSearchOrderSql()}";
+        sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count)}";
 
         cmd.CommandText = sql;
         if (exact)
@@ -214,6 +217,7 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@rankingQuery", normalizedQuery.Trim());
         cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(normalizedQuery.Trim())}%");
         cmd.Parameters.AddWithValue("@visibilityRank", visibilityRank ? 1 : 0);
+        AddSearchCoverageParameters(cmd, coverageTokens);
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
@@ -653,9 +657,112 @@ public partial class DbReader
         }
     }
 
-    private static string GetSearchOrderSql()
+    private static string GetSearchOrderSql(int coverageTokenCount)
     {
-        return $"{PathBucketOrder}, {ExactSymbolMatchOrder}, {PrefixSymbolMatchOrder}, {SearchVisibilityOrder}, {PathTextMatchOrder}, {ChunkTextMatchOrder}, rank, f.modified DESC, f.path, c.id ASC";
+        var coverageOrder = GetSearchCoverageOrderSql(coverageTokenCount);
+        return $"{PathBucketOrder}, {ExactSymbolMatchOrder}, {PrefixSymbolMatchOrder}, {SearchVisibilityOrder}, {PathTextMatchOrder}, {ChunkTextMatchOrder}, {coverageOrder}rank, f.modified DESC, f.path, c.id ASC";
+    }
+
+    private static string GetSearchCoverageOrderSql(int coverageTokenCount)
+    {
+        if (coverageTokenCount <= 1)
+            return string.Empty;
+
+        var matchedTerms = string.Join(" + ", Enumerable.Range(0, coverageTokenCount)
+            .Select(i => $"CASE WHEN instr(lower(c.content), @coverageToken{i}) > 0 THEN 1 ELSE 0 END"));
+        return $"CASE WHEN (({matchedTerms}) * 2) >= {coverageTokenCount} THEN 0 ELSE 1 END, ";
+    }
+
+    private static List<string> GetSearchCoverageTokens(string query, bool rawQuery)
+    {
+        var tokens = rawQuery ? ExtractRawFtsCoverageTokens(query) : query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length <= 1)
+            return [];
+
+        return tokens
+            .Select(GetSearchCoverageToken)
+            .Where(token => token.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static string GetSearchCoverageToken(string token)
+    {
+        var literalToken = token.Length > 1 && token.EndsWith('*') ? token[..^1] : token.Trim('"');
+        return literalToken.ToLowerInvariant();
+    }
+
+    private static string[] ExtractRawFtsCoverageTokens(string query)
+    {
+        var tokens = new List<string>();
+        for (var i = 0; i < query.Length; i++)
+        {
+            var ch = query[i];
+            if (ch == '"')
+            {
+                var start = ++i;
+                while (i < query.Length)
+                {
+                    if (query[i] == '"' && i + 1 < query.Length && query[i + 1] == '"')
+                    {
+                        i += 2;
+                        continue;
+                    }
+                    if (query[i] == '"')
+                        break;
+                    i++;
+                }
+
+                if (i > start)
+                    tokens.Add(query[start..i].Replace("\"\"", "\"", StringComparison.Ordinal));
+                continue;
+            }
+
+            if (!IsFtsIdentifierStart(ch))
+                continue;
+
+            var startIdentifier = i;
+            i++;
+            while (i < query.Length && IsFtsIdentifierPart(query[i]))
+                i++;
+
+            var token = query[startIdentifier..i];
+            if (!IsRawFtsOperatorToken(token) && !IsRawFtsColumnQualifierToken(query, startIdentifier, i))
+                tokens.Add(token);
+            i--;
+        }
+
+        return tokens.ToArray();
+    }
+
+    private static bool IsRawFtsColumnQualifierToken(string query, int tokenStart, int tokenEnd)
+    {
+        var afterToken = SkipWhitespace(query, tokenEnd);
+        if (afterToken < query.Length && query[afterToken] == ':')
+            return true;
+
+        var columnListStart = query.LastIndexOf('{', tokenStart);
+        if (columnListStart < 0)
+            return false;
+
+        var columnListEnd = query.IndexOf('}', tokenEnd);
+        if (columnListEnd < 0)
+            return false;
+
+        var afterColumnList = SkipWhitespace(query, columnListEnd + 1);
+        return afterColumnList < query.Length && query[afterColumnList] == ':';
+    }
+
+    private static bool IsRawFtsOperatorToken(string token)
+        => string.Equals(token, "AND", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(token, "OR", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(token, "NOT", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(token, "NEAR", StringComparison.OrdinalIgnoreCase);
+
+    private static void AddSearchCoverageParameters(SqliteCommand cmd, IReadOnlyList<string> coverageTokens)
+    {
+        for (var i = 0; i < coverageTokens.Count; i++)
+            cmd.Parameters.AddWithValue($"@coverageToken{i}", coverageTokens[i]);
     }
 
     private static string SearchVisibilityOrder => @"
