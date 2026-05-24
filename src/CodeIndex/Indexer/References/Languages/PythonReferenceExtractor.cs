@@ -108,11 +108,8 @@ internal static class PythonReferenceExtractor
     private static readonly Regex DataclassFieldDefaultFactoryRegex = new(
         @"\bdefault_factory\s*=\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{L}]\w*)",
         RegexOptions.Compiled);
-    private static readonly Regex DataclassFieldMetadataKeyRegex = new(
-        @"\bmetadata\s*=\s*\{(?<body>[^}\n]*)\}",
-        RegexOptions.Compiled);
-    private static readonly Regex PythonStringDictionaryKeyRegex = new(
-        @"(?<quote>['""])(?<name>[^'""]+)\k<quote>\s*:",
+    private static readonly Regex DataclassFieldMetadataRegex = new(
+        @"\bmetadata\s*=\s*(?<values>\{)",
         RegexOptions.Compiled);
     private static readonly Regex AttrsFieldsTargetRegex = new(
         @"\b(?:attr|attrs)\.fields\s*\(\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)",
@@ -957,12 +954,11 @@ internal static class PythonReferenceExtractor
                 container,
                 isIgnoredName);
             EmitDataclassFieldMetadataReferences(
-                currentOriginalLine,
+                originalLines,
+                currentLineIndex,
                 references,
                 seen,
                 fileId,
-                currentContext,
-                currentLineNumber,
                 container,
                 isIgnoredName);
 
@@ -1040,36 +1036,113 @@ internal static class PythonReferenceExtractor
     }
 
     private static void EmitDataclassFieldMetadataReferences(
-        string originalLine,
+        string[] originalLines,
+        int lineIndex,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
-        string context,
-        int lineNumber,
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
-        foreach (Match metadataMatch in DataclassFieldMetadataKeyRegex.Matches(originalLine))
-        {
-            var body = metadataMatch.Groups["body"];
-            foreach (Match keyMatch in PythonStringDictionaryKeyRegex.Matches(body.Value))
-            {
-                var name = keyMatch.Groups["name"].Value;
-                if (isIgnoredName(name))
-                    continue;
+        var metadataMatch = DataclassFieldMetadataRegex.Match(originalLines[lineIndex]);
+        if (!metadataMatch.Success)
+            return;
 
-                ReferenceExtractor.AddReference(
-                    references,
-                    seen,
-                    fileId,
-                    name,
-                    body.Index + keyMatch.Groups["name"].Index,
-                    "annotation",
-                    context,
-                    lineNumber,
-                    container,
-                    "python");
+        var currentLineIndex = lineIndex;
+        var currentColumn = metadataMatch.Groups["values"].Index;
+        var depth = 0;
+        var inString = false;
+        var quoteChar = '\0';
+        var stringStartColumn = -1;
+
+        while (currentLineIndex < originalLines.Length)
+        {
+            var currentLine = originalLines[currentLineIndex];
+            if (currentColumn >= currentLine.Length)
+            {
+                if (depth <= 0 && !inString)
+                    break;
+
+                currentLineIndex++;
+                currentColumn = 0;
+                continue;
             }
+
+            var ch = currentLine[currentColumn];
+            if (inString)
+            {
+                if (ch == '\\' && currentColumn + 1 < currentLine.Length)
+                {
+                    currentColumn += 2;
+                    continue;
+                }
+
+                if (ch == quoteChar)
+                {
+                    var afterStringColumn = currentColumn + 1;
+                    while (afterStringColumn < currentLine.Length && char.IsWhiteSpace(currentLine[afterStringColumn]))
+                        afterStringColumn++;
+
+                    if (afterStringColumn < currentLine.Length && currentLine[afterStringColumn] == ':')
+                    {
+                        var name = currentLine[stringStartColumn..currentColumn].Trim();
+                        if (name.Length > 0 && !isIgnoredName(name))
+                        {
+                            ReferenceExtractor.AddReference(
+                                references,
+                                seen,
+                                fileId,
+                                name,
+                                stringStartColumn,
+                                "annotation",
+                                currentLine.Trim(),
+                                currentLineIndex + 1,
+                                container,
+                                "python");
+                        }
+                    }
+
+                    inString = false;
+                    quoteChar = '\0';
+                    stringStartColumn = -1;
+                    currentColumn++;
+                    continue;
+                }
+
+                currentColumn++;
+                continue;
+            }
+
+            if (ch == '#')
+                break;
+
+            if (ch is '\'' or '"')
+            {
+                inString = true;
+                quoteChar = ch;
+                stringStartColumn = currentColumn + 1;
+                currentColumn++;
+                continue;
+            }
+
+            if (ch is '{' or '[' or '(')
+            {
+                depth++;
+                currentColumn++;
+                continue;
+            }
+
+            if (ch is '}' or ']' or ')')
+            {
+                if (depth > 0)
+                    depth--;
+                currentColumn++;
+                if (depth <= 0)
+                    break;
+                continue;
+            }
+
+            currentColumn++;
         }
     }
 
