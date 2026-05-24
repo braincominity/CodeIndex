@@ -1065,15 +1065,39 @@ jobs:
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
-            var query = new string('a', DbReader.MaxRawFtsQueryLength + 1);
+            var query = new string('a', QueryLimits.MaxQueryLength + 1);
 
             var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 [query, "--db", dbPath, "--fts"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("raw FTS5 query is too long", stderr);
-            Assert.Contains("literal-safe search", stderr);
+            Assert.Contains(QueryLimits.FormatQueryTooLongError(), stderr);
+            Assert.Contains("Usage:", stderr);
+            Assert.DoesNotContain("database error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_TooLongQueryReturnsUsageError_Issue1468()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_query_too_long");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var query = new string('a', QueryLimits.MaxQueryLength + 1);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [query, "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains(QueryLimits.FormatQueryTooLongError(), stderr);
+            Assert.Contains("Shorten the search text", stderr);
             Assert.DoesNotContain("database error:", stderr);
         }
         finally

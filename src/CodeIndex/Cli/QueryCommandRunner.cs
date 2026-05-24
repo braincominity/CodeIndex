@@ -345,6 +345,14 @@ public static class QueryCommandRunner
                 "Add the text you want to search for after the command, for example: `cdidx search authenticate`.");
             return CommandExitCodes.UsageError;
         }
+        if (options.Query.Length > QueryLimits.MaxQueryLength)
+        {
+            WriteUsageError(
+                QueryLimits.FormatQueryTooLongError(),
+                GetUsageLineOrThrow("search"),
+                "Shorten the search text or split generated input into smaller queries before running `cdidx search`.");
+            return CommandExitCodes.UsageError;
+        }
         if (TryWriteUnexpectedExtraPositionals("search", options))
             return CommandExitCodes.UsageError;
 
