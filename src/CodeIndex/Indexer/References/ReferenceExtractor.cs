@@ -391,6 +391,12 @@ public static partial class ReferenceExtractor
         + @"\s*(?:(?:\.|::)\s*"
         + CSharpIdentifierPattern
         + @")*)(?:\s*<[^)\];{}]+>)?(?:\s*\[[^\]\n]*\])*";
+    private static readonly Regex CSharpLocalDeclarationRegex = new(
+        $@"(?<![\w@])(?:var|{CSharpTypeExpressionPattern})\s+(?<name>{CSharpIdentifierPattern})\s*(?=[=;,\)])",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpLambdaRegex = new(
+        $@"(?<params>\([^)]*\)|{CSharpIdentifierPattern})\s*=>\s*(?<body>.*)$",
+        RegexOptions.Compiled);
     // The `(?:\?\.)?` segment captures JavaScript / TypeScript optional chaining calls such as
     // `callback?.()` and `callback?.<T>()`. Without it the `?.` stops the regex from reaching the
     // trailing `(`, and the call reference to `callback` is silently dropped. Other supported
@@ -1137,6 +1143,9 @@ public static partial class ReferenceExtractor
         }
         var pendingCSharpMultiLineTypePattern = default(CSharpMultiLineTypePatternState);
         var pendingCSharpWhereConstraint = language == "csharp" ? new CSharpWhereConstraintState() : null;
+        var csharpLocalNamesByFunction = language == "csharp"
+            ? new Dictionary<string, HashSet<string>>(StringComparer.Ordinal)
+            : null;
         var sqlState = language == "sql" ? SqlReferenceExtractor.CreateState() : null;
         var csharpInDelimitedDocComment = false;
         var jvmInDelimitedDocComment = false;
@@ -1874,6 +1883,16 @@ public static partial class ReferenceExtractor
 
             if (language == "csharp")
             {
+                EmitCSharpLambdaCaptureReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container,
+                    csharpLocalNamesByFunction);
+
                 CSharpReferenceExtractor.EmitTypePositionReferences(
                     preparedLine,
                     originalLine,
@@ -1901,6 +1920,8 @@ public static partial class ReferenceExtractor
                 {
                     CSharpReferenceExtractor.StartWaitingForMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
                 }
+
+                TrackCSharpLocalDeclarations(preparedLine, container, csharpLocalNamesByFunction);
             }
             else if (language == "java")
             {
@@ -1976,8 +1997,9 @@ public static partial class ReferenceExtractor
                 var rustEnumContainer = rustEnumCandidates != null
                     ? FindInnermostContainer(rustEnumCandidates, lineNumber)
                     : null;
+                var rustTypePositionLine = RustReferenceExtractor.MaskAttributeBodies(preparedLine);
                 RustReferenceExtractor.EmitTypePositionReferences(
-                    preparedLine,
+                    rustTypePositionLine,
                     references,
                     seen,
                     fileId,
@@ -3164,6 +3186,15 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitDynamicImportReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
                 if (pythonHeaderMap.HasValue)
                     RemapPythonLogicalHeaderReferences(references, pythonReferenceStart, pythonHeaderMap.Value, lines);
             }
@@ -3413,6 +3444,112 @@ public static partial class ReferenceExtractor
         var languageSegment = string.IsNullOrWhiteSpace(language) ? "-" : language;
         return $"{fileId}:{languageSegment}:{lineNumber}:{column}:{referenceKind}:{name}";
     }
+
+    private static void EmitCSharpLambdaCaptureReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        Dictionary<string, HashSet<string>>? localNamesByFunction)
+    {
+        if (container?.Kind != "function"
+            || localNamesByFunction == null
+            || !localNamesByFunction.TryGetValue(GetCSharpContainerLocalScopeKey(container), out var localNames)
+            || localNames.Count == 0)
+        {
+            return;
+        }
+
+        foreach (Match lambda in CSharpLambdaRegex.Matches(preparedLine))
+        {
+            var body = lambda.Groups["body"].Value;
+            if (string.IsNullOrWhiteSpace(body))
+                continue;
+
+            var parameterNames = CollectCSharpLambdaParameterNames(lambda.Groups["params"].Value);
+            foreach (var localName in localNames)
+            {
+                if (parameterNames.Contains(localName))
+                    continue;
+                if (!ContainsCSharpIdentifier(body, localName, out var bodyRelativeIndex))
+                    continue;
+
+                AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    localName,
+                    lambda.Groups["body"].Index + bodyRelativeIndex,
+                    "capture",
+                    context,
+                    lineNumber,
+                    container,
+                    "csharp");
+            }
+        }
+    }
+
+    private static HashSet<string> CollectCSharpLambdaParameterNames(string parameterText)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (Match match in Regex.Matches(parameterText, CSharpIdentifierPattern))
+        {
+            var name = NormalizeAtPrefixedIdentifier(match.Value);
+            if (!IsIgnoredCallName("csharp", name))
+                names.Add(name);
+        }
+
+        return names;
+    }
+
+    private static bool ContainsCSharpIdentifier(string text, string name, out int index)
+    {
+        index = -1;
+        var normalizedName = NormalizeAtPrefixedIdentifier(name);
+        foreach (Match match in Regex.Matches(text, CSharpIdentifierPattern))
+        {
+            if (string.Equals(NormalizeAtPrefixedIdentifier(match.Value), normalizedName, StringComparison.Ordinal))
+            {
+                index = match.Index;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void TrackCSharpLocalDeclarations(
+        string preparedLine,
+        SymbolRecord? container,
+        Dictionary<string, HashSet<string>>? localNamesByFunction)
+    {
+        if (container?.Kind != "function" || localNamesByFunction == null)
+            return;
+        if (preparedLine.Contains("=>", StringComparison.Ordinal))
+            return;
+
+        foreach (Match match in CSharpLocalDeclarationRegex.Matches(preparedLine))
+        {
+            var name = NormalizeAtPrefixedIdentifier(match.Groups["name"].Value);
+            if (IsIgnoredCallName("csharp", name))
+                continue;
+
+            var scopeKey = GetCSharpContainerLocalScopeKey(container);
+            if (!localNamesByFunction.TryGetValue(scopeKey, out var localNames))
+            {
+                localNames = new HashSet<string>(StringComparer.Ordinal);
+                localNamesByFunction[scopeKey] = localNames;
+            }
+
+            localNames.Add(name);
+        }
+    }
+
+    private static string GetCSharpContainerLocalScopeKey(SymbolRecord container)
+        => $"{container.Kind}:{container.ContainerQualifiedName}:{container.ContainerKind}:{container.ContainerName}:{container.Name}:{container.StartLine}:{container.EndLine}:{container.BodyStartLine}:{container.BodyEndLine}:{container.StartColumn}";
 
     private static void MarkMutualRecursionReferences(List<ReferenceRecord> references)
     {

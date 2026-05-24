@@ -56,6 +56,130 @@ internal static class RustReferenceExtractor
         @"(?<![\w$])(?<name>(?:(?:r#)?\w+::)*r#\w+(?:::(?:r#)?\w+)*)(?:<[^>\n]+>)?\s*\(",
         RegexOptions.Compiled);
 
+    public static string MaskAttributeBodies(string line)
+    {
+        var masked = default(char[]);
+        for (var index = 0; index < line.Length; index++)
+        {
+            if (line[index] != '#')
+                continue;
+
+            var cursor = index + 1;
+            while (cursor < line.Length && char.IsWhiteSpace(line[cursor]))
+                cursor++;
+            if (cursor < line.Length && line[cursor] == '!')
+            {
+                cursor++;
+                while (cursor < line.Length && char.IsWhiteSpace(line[cursor]))
+                    cursor++;
+            }
+
+            if (cursor >= line.Length || line[cursor] != '[')
+                continue;
+
+            masked ??= line.ToCharArray();
+            var end = FindAttributeEnd(line, cursor);
+            ReplaceWithSpaces(masked, index, end > cursor ? end - index + 1 : line.Length - index);
+            index = end > cursor ? end : line.Length;
+        }
+
+        return masked == null ? line : new string(masked);
+    }
+
+    private static int FindAttributeEnd(string line, int openBracket)
+    {
+        var depth = 0;
+        for (var index = openBracket; index < line.Length; index++)
+        {
+            var c = line[index];
+            if (c == 'r')
+            {
+                var rawEnd = TrySkipRawString(line, index);
+                if (rawEnd > index)
+                {
+                    index = rawEnd;
+                    continue;
+                }
+            }
+
+            if (c == '"' || c == '\'')
+            {
+                index = SkipQuotedString(line, index, c);
+                continue;
+            }
+
+            if (c == '[')
+            {
+                depth++;
+                continue;
+            }
+
+            if (c != ']')
+                continue;
+
+            depth--;
+            if (depth == 0)
+                return index;
+        }
+
+        return -1;
+    }
+
+    private static int TrySkipRawString(string line, int start)
+    {
+        var cursor = start + 1;
+        while (cursor < line.Length && line[cursor] == '#')
+            cursor++;
+        if (cursor >= line.Length || line[cursor] != '"')
+            return -1;
+
+        var hashCount = cursor - start - 1;
+        for (var index = cursor + 1; index < line.Length; index++)
+        {
+            if (line[index] == '"' && HasHashRun(line, index + 1, hashCount))
+                return index + hashCount;
+        }
+
+        return line.Length - 1;
+    }
+
+    private static bool HasHashRun(string line, int start, int hashCount)
+    {
+        if (start + hashCount > line.Length)
+            return false;
+        for (var offset = 0; offset < hashCount; offset++)
+        {
+            if (line[start + offset] != '#')
+                return false;
+        }
+
+        return true;
+    }
+
+    private static int SkipQuotedString(string line, int start, char quote)
+    {
+        for (var index = start + 1; index < line.Length; index++)
+        {
+            if (line[index] == '\\')
+            {
+                index++;
+                continue;
+            }
+
+            if (line[index] == quote)
+                return index;
+        }
+
+        return line.Length - 1;
+    }
+
+    private static void ReplaceWithSpaces(char[] chars, int start, int length)
+    {
+        var end = Math.Min(chars.Length, start + length);
+        for (var index = start; index < end; index++)
+            chars[index] = ' ';
+    }
+
     public static void EmitAdditionalCallReferences(string preparedLine, Action<string, int> addCallLikeReference)
     {
         foreach (Match match in RawIdentifierCallRegex.Matches(preparedLine))

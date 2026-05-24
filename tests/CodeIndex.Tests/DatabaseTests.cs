@@ -487,6 +487,78 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void TryMigrateForRead_InsideExistingTransaction_DoesNotStartNestedTransaction()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_nested_migration_test_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TABLE files (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        path TEXT NOT NULL UNIQUE
+                    );
+                    CREATE TABLE symbols (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                        kind TEXT,
+                        name TEXT,
+                        line INTEGER
+                    );
+                    CREATE TABLE symbol_references (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                        symbol_name TEXT,
+                        reference_kind TEXT,
+                        line INTEGER,
+                        column_number INTEGER,
+                        context TEXT,
+                        container_kind TEXT,
+                        container_name TEXT
+                    );
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            using var db = new DbContext(dbPath);
+            using var transaction = db.Connection.BeginTransaction(deferred: true);
+
+            db.TryMigrateForRead();
+
+            using var check = db.Connection.CreateCommand();
+            check.Transaction = transaction;
+            check.CommandText = "SELECT COUNT(*) FROM pragma_table_info('symbols') WHERE name = 'signature'";
+            Assert.Equal(1L, (long)check.ExecuteScalar()!);
+
+            transaction.Rollback();
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+            {
+                try
+                {
+                    File.Delete(dbPath);
+                }
+                catch (IOException) when (OperatingSystem.IsWindows())
+                {
+                    SqliteConnection.ClearAllPools();
+                    File.Delete(dbPath);
+                }
+                catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
+                {
+                    SqliteConnection.ClearAllPools();
+                    File.Delete(dbPath);
+                }
+            }
+        }
+    }
+
+    [Fact]
     public void TryMigrateForRead_EnforcesForeignKeysAfterAddingReferenceLineColumn()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_legacy_fk_test_{Guid.NewGuid():N}.db");

@@ -1,16 +1,17 @@
 using Microsoft.Data.Sqlite;
+using System.Collections.Concurrent;
 
 namespace CodeIndex.Database;
 
 /// <summary>
-/// Connection-scoped cache for SQLite schema discovery (`PRAGMA table_info`,
+/// Process-level cache for SQLite schema discovery (`PRAGMA table_info`,
 /// `PRAGMA index_list`, and `sqlite_master` table existence checks).
 ///
 /// `DbReader` discovered these on every construction, so MCP sessions that
-/// reuse a `DbContext` across tool calls were re-running the same PRAGMAs per
-/// invocation (issue #1565). Caching them at the `DbContext` level pays the
-/// scan once per session and serves subsequent `DbReader` instances from
-/// memory.
+/// create or reuse `DbContext` instances for the same DB path were re-running
+/// the same PRAGMAs per invocation (issues #1565 / #1701). Caching them at a
+/// DB-path level pays the scan once per process and serves subsequent
+/// `DbReader` instances from memory.
 ///
 /// In-process migrations (`InitializeSchema`, `TryMigrateForRead`, `DropAll`)
 /// call <see cref="Refresh"/> directly. To also catch DDL run through a
@@ -23,7 +24,20 @@ namespace CodeIndex.Database;
 /// </summary>
 public sealed class DbSchemaCache
 {
+    private sealed class SharedState
+    {
+        public readonly object Lock = new();
+        public readonly Dictionary<string, HashSet<string>> Columns = new(StringComparer.OrdinalIgnoreCase);
+        public readonly Dictionary<string, HashSet<string>> Indexes = new(StringComparer.OrdinalIgnoreCase);
+        public readonly Dictionary<string, bool> TableExists = new(StringComparer.OrdinalIgnoreCase);
+        public long? LastSchemaVersion;
+        public bool VersionStale;
+    }
+
+    private static readonly ConcurrentDictionary<string, SharedState> SharedStates = new(StringComparer.Ordinal);
+
     private readonly SqliteConnection _connection;
+    private readonly SharedState? _sharedState;
     private readonly object _lock = new();
     private readonly Dictionary<string, HashSet<string>> _columns = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, HashSet<string>> _indexes = new(StringComparer.OrdinalIgnoreCase);
@@ -40,9 +54,11 @@ public sealed class DbSchemaCache
     // この sentinel が立っている間に追加されたエントリは次の成功時に必ず破棄する。
     private bool _versionStale;
 
-    public DbSchemaCache(SqliteConnection connection)
+    public DbSchemaCache(SqliteConnection connection, string? sharedCacheKey = null)
     {
         _connection = connection ?? throw new ArgumentNullException(nameof(connection));
+        if (!string.IsNullOrWhiteSpace(sharedCacheKey))
+            _sharedState = SharedStates.GetOrAdd(sharedCacheKey, static _ => new SharedState());
     }
 
     public HashSet<string> GetColumns(string tableName)
@@ -50,6 +66,17 @@ public sealed class DbSchemaCache
         lock (_lock)
         {
             EnsureFreshUnlocked();
+            if (_sharedState != null)
+            {
+                lock (_sharedState.Lock)
+                {
+                    if (_sharedState.Columns.TryGetValue(tableName, out var sharedCached))
+                        return sharedCached;
+                    var sharedFresh = LoadColumns(_connection, tableName);
+                    _sharedState.Columns[tableName] = sharedFresh;
+                    return sharedFresh;
+                }
+            }
             if (_columns.TryGetValue(tableName, out var cached))
                 return cached;
             var fresh = LoadColumns(_connection, tableName);
@@ -63,6 +90,17 @@ public sealed class DbSchemaCache
         lock (_lock)
         {
             EnsureFreshUnlocked();
+            if (_sharedState != null)
+            {
+                lock (_sharedState.Lock)
+                {
+                    if (_sharedState.Indexes.TryGetValue(tableName, out var sharedCached))
+                        return sharedCached;
+                    var sharedFresh = LoadIndexes(_connection, tableName, HasTableUnlocked(tableName));
+                    _sharedState.Indexes[tableName] = sharedFresh;
+                    return sharedFresh;
+                }
+            }
             if (_indexes.TryGetValue(tableName, out var cached))
                 return cached;
             var fresh = LoadIndexes(_connection, tableName, HasTableUnlocked(tableName));
@@ -94,6 +132,13 @@ public sealed class DbSchemaCache
 
     private void ClearUnlocked()
     {
+        if (_sharedState != null)
+        {
+            lock (_sharedState.Lock)
+            {
+                ClearSharedUnlocked(_sharedState);
+            }
+        }
         _columns.Clear();
         _indexes.Clear();
         _tableExists.Clear();
@@ -132,10 +177,32 @@ public sealed class DbSchemaCache
             // DB mid-DDL and would otherwise get version-stamped as current.
             // PRAGMA schema_version 取得に失敗した場合は安全側に倒し、現エントリを破棄して
             // sentinel を立てる。失敗中に読み込んだ値は次回成功時に必ず破棄される。
-            _columns.Clear();
-            _indexes.Clear();
-            _tableExists.Clear();
-            _versionStale = true;
+            if (_sharedState != null)
+            {
+                lock (_sharedState.Lock)
+                {
+                    _sharedState.Columns.Clear();
+                    _sharedState.Indexes.Clear();
+                    _sharedState.TableExists.Clear();
+                    _sharedState.VersionStale = true;
+                }
+            }
+            else
+            {
+                _columns.Clear();
+                _indexes.Clear();
+                _tableExists.Clear();
+                _versionStale = true;
+            }
+            return;
+        }
+
+        if (_sharedState != null)
+        {
+            lock (_sharedState.Lock)
+            {
+                EnsureSharedFreshUnlocked(_sharedState, current);
+            }
             return;
         }
 
@@ -172,10 +239,35 @@ public sealed class DbSchemaCache
     /// failure window. Production code never calls this; only the regression
     /// test for the stale-sentinel path uses it.
     /// </summary>
-    internal void MarkVersionStaleForTest() { lock (_lock) { _versionStale = true; } }
+    internal void MarkVersionStaleForTest()
+    {
+        lock (_lock)
+        {
+            if (_sharedState != null)
+            {
+                lock (_sharedState.Lock)
+                {
+                    _sharedState.VersionStale = true;
+                }
+                return;
+            }
+            _versionStale = true;
+        }
+    }
 
     private bool HasTableUnlocked(string tableName)
     {
+        if (_sharedState != null)
+        {
+            lock (_sharedState.Lock)
+            {
+                if (_sharedState.TableExists.TryGetValue(tableName, out var sharedCached))
+                    return sharedCached;
+                var sharedExists = QueryHasTable(_connection, tableName);
+                _sharedState.TableExists[tableName] = sharedExists;
+                return sharedExists;
+            }
+        }
         if (_tableExists.TryGetValue(tableName, out var cached))
             return cached;
         var exists = QueryHasTable(_connection, tableName);
@@ -217,5 +309,41 @@ public sealed class DbSchemaCache
         cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=@name";
         cmd.Parameters.AddWithValue("@name", tableName);
         return cmd.ExecuteScalar() != null;
+    }
+
+    private static void EnsureSharedFreshUnlocked(SharedState state, long current)
+    {
+        if (state.VersionStale)
+        {
+            state.Columns.Clear();
+            state.Indexes.Clear();
+            state.TableExists.Clear();
+            state.LastSchemaVersion = current;
+            state.VersionStale = false;
+            return;
+        }
+
+        if (state.LastSchemaVersion is null)
+        {
+            state.LastSchemaVersion = current;
+            return;
+        }
+
+        if (state.LastSchemaVersion.Value == current)
+            return;
+
+        state.Columns.Clear();
+        state.Indexes.Clear();
+        state.TableExists.Clear();
+        state.LastSchemaVersion = current;
+    }
+
+    private static void ClearSharedUnlocked(SharedState state)
+    {
+        state.Columns.Clear();
+        state.Indexes.Clear();
+        state.TableExists.Clear();
+        state.LastSchemaVersion = null;
+        state.VersionStale = false;
     }
 }

@@ -29,6 +29,7 @@ public class DbContext : IDisposable
 
     private readonly SqliteConnection _connection;
     private readonly bool _isReadOnly;
+    private readonly string? _schemaCacheKey;
     private SqliteTransaction? _activeMigrationTransaction;
     private DbSchemaCache? _schemaCache;
     private PreparedCommandCache? _preparedCommands;
@@ -46,13 +47,13 @@ public class DbContext : IDisposable
         => SymbolExtractorVersionMetaPrefix + lang;
 
     /// <summary>
-    /// Connection-scoped schema cache. Created lazily so a `DbContext` that
-    /// never opens a reader pays nothing. Subsequent `DbReader` instances on
-    /// the same `DbContext` reuse the cached `PRAGMA table_info` /
-    /// `PRAGMA index_list` / `sqlite_master` results instead of re-running
-    /// the scan on every construction (issue #1565).
+    /// DB-path-scoped schema cache. Created lazily so a `DbContext` that
+    /// never opens a reader pays nothing. Subsequent `DbReader` instances for
+    /// the same database reuse cached `PRAGMA table_info` / `PRAGMA index_list`
+    /// / `sqlite_master` results instead of re-running the scan on every
+    /// construction (issues #1565 / #1701).
     /// </summary>
-    public DbSchemaCache SchemaCache => _schemaCache ??= new DbSchemaCache(_connection);
+    public DbSchemaCache SchemaCache => _schemaCache ??= new DbSchemaCache(_connection, _schemaCacheKey);
 
     /// <summary>
     /// Drop cached schema state so subsequent reads observe DDL that ran
@@ -164,6 +165,8 @@ public class DbContext : IDisposable
 
     public DbContext(string dbPath)
     {
+        _schemaCacheKey = TryCreateSchemaCacheKey(dbPath);
+
         // Explicit URI form (file:///abs/path?immutable=1 etc.) — the user has opted into
         // a read-only open with SQLite-specific URI flags. Skip the writable-open attempt
         // and all write-oriented pragmas. This is the CLI escape hatch for sandboxes where
@@ -203,7 +206,10 @@ public class DbContext : IDisposable
             // immutable/mode=ro 指定のない file: URI はローカルパスに戻して通常経路で開く。
             var normalized = TryGetLocalPath(dbPath);
             if (normalized != null)
+            {
                 dbPath = normalized;
+                _schemaCacheKey = TryCreateSchemaCacheKey(dbPath);
+            }
         }
 
         // Use SqliteConnectionStringBuilder to prevent connection string injection
@@ -272,6 +278,29 @@ public class DbContext : IDisposable
         }
 
         _suppressWriteWorkTracking = false;
+    }
+
+    private static string? TryCreateSchemaCacheKey(string dbPath)
+    {
+        if (string.IsNullOrWhiteSpace(dbPath))
+            return null;
+
+        if (dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        {
+            var localPath = TryGetLocalPath(dbPath);
+            if (localPath == null)
+                return null;
+            dbPath = localPath;
+        }
+
+        try
+        {
+            return Path.GetFullPath(dbPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
     }
 
     private void WarnIfBatchInProgress()
@@ -1690,10 +1719,22 @@ public class DbContext : IDisposable
         try
         {
             EnsureForeignKeysEnabled();
-            SqliteTransaction transaction;
+            SqliteTransaction? transaction;
             try
             {
                 transaction = _connection.BeginTransaction(deferred: false);
+            }
+            catch (SqliteException ex) when (IsNestedTransactionError(ex))
+            {
+                if (RunReadMigrationSteps())
+                    EnsureForeignKeysEnabled();
+                return;
+            }
+            catch (InvalidOperationException ex) when (IsNestedTransactionError(ex))
+            {
+                if (RunReadMigrationSteps())
+                    EnsureForeignKeysEnabled();
+                return;
             }
             catch (SqliteException ex) when (IsReadOnlyOpenError(ex))
             {
@@ -1703,43 +1744,13 @@ public class DbContext : IDisposable
 
             using (transaction)
             {
-            _activeMigrationTransaction = transaction;
-
-            try
-            {
-                foreach (var (description, action) in BuildReadMigrationSteps())
-                {
-                    try
-                    {
-                        action();
-                    }
-                    catch (SqliteException ex)
-                    {
-                        RecordMigrationFailure(description, ex);
-
-                        // Read-only DB / filesystem / sandbox — stop further steps and degrade.
-                        // Catches SQLITE_READONLY (8), SQLITE_IOERR (10), and SQLITE_CANTOPEN (14):
-                        // some restricted environments report CANTOPEN when SQLite tries to create
-                        // -journal side files for the DDL. DbReader.LoadColumns() / table-detection
-                        // will drive the degraded read path; later read queries that hit a still-
-                        // missing column will now have a single clear preceding diagnostic to refer to.
-                        // 読み取り専用 DB・FS・サンドボックスでの DDL 失敗は縮退扱いで打ち切る。
-                        if (IsReadOnlyOpenError(ex)) return;
-
-                        // Other SQLite errors (e.g. corruption, full disk) are not opportunistic-
-                        // migration concerns — preserve the existing surface-the-exception behavior.
-                        // それ以外の SQLite エラーは従来通り上位に伝播させる。
-                        throw;
-                    }
-                }
-
+                _activeMigrationTransaction = transaction;
+                if (!RunReadMigrationSteps())
+                    return;
                 transaction.Commit();
             }
-            finally
-            {
-                _activeMigrationTransaction = null;
-            }
-            }
+
+            _activeMigrationTransaction = null;
 
             EnsureForeignKeysEnabled();
         }
@@ -1751,6 +1762,51 @@ public class DbContext : IDisposable
             _schemaCache?.Refresh();
         }
     }
+
+    private bool RunReadMigrationSteps()
+    {
+        try
+        {
+            foreach (var (description, action) in BuildReadMigrationSteps())
+            {
+                try
+                {
+                    action();
+                }
+                catch (SqliteException ex)
+                {
+                    RecordMigrationFailure(description, ex);
+
+                    // Read-only DB / filesystem / sandbox — stop further steps and degrade.
+                    // Catches SQLITE_READONLY (8), SQLITE_IOERR (10), and SQLITE_CANTOPEN (14):
+                    // some restricted environments report CANTOPEN when SQLite tries to create
+                    // -journal side files for the DDL. DbReader.LoadColumns() / table-detection
+                    // will drive the degraded read path; later read queries that hit a still-
+                    // missing column will now have a single clear preceding diagnostic to refer to.
+                    // 読み取り専用 DB・FS・サンドボックスでの DDL 失敗は縮退扱いで打ち切る。
+                    if (IsReadOnlyOpenError(ex)) return false;
+
+                    // Other SQLite errors (e.g. corruption, full disk) are not opportunistic-
+                    // migration concerns — preserve the existing surface-the-exception behavior.
+                    // それ以外の SQLite エラーは従来通り上位に伝播させる。
+                    throw;
+                }
+            }
+
+            return true;
+        }
+        finally
+        {
+            _activeMigrationTransaction = null;
+        }
+    }
+
+    private static bool IsNestedTransactionError(SqliteException exception) =>
+        exception.SqliteErrorCode == 1 &&
+        exception.Message.Contains("cannot start a transaction within a transaction", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsNestedTransactionError(InvalidOperationException exception) =>
+        exception.Message.Contains("does not support nested transactions", StringComparison.OrdinalIgnoreCase);
 
     private void RecordMigrationFailure(string description, SqliteException exception)
     {
