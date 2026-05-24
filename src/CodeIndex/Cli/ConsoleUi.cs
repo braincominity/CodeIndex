@@ -222,7 +222,7 @@ public static class ConsoleUi
 
         var cts = new CancellationTokenSource();
         var ct = cts.Token;
-        Task.Run(() =>
+        _ = Task.Run(async () =>
         {
             int i = 0;
             while (!ct.IsCancellationRequested)
@@ -235,7 +235,7 @@ public static class ConsoleUi
                     Console.Out.Flush();
                 }
                 i++;
-                try { Task.Delay(SpinnerFrameDelayMs, ct).Wait(ct); } catch (OperationCanceledException) { break; }
+                try { await Task.Delay(SpinnerFrameDelayMs, ct).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
             }
         }, ct);
         return cts;
