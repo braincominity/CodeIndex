@@ -1516,7 +1516,7 @@ public static class IndexCommandRunner
         var ftsMutated = false;
         var purgedRefs = 0;
         var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
-        var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
+        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
         var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var currentFoldFingerprint = NameFold.Fingerprint();
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -3185,7 +3185,7 @@ public static class IndexCommandRunner
         string? currentJsonIndexFile = null;
         CancellationTokenSource? jsonHeartbeatCts = null;
         Task? jsonHeartbeatTask = null;
-        var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
+        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
         var extractionParallelism = Math.Max(1, options.Parallelism);
         var hasPostExtractionHooks = postExtractionHooks.Hooks.Count > 0;
         var parallelizeExtraction = (options.Rebuild || writer.GetCounts().files == 0 || headChangeDetected)

@@ -451,6 +451,9 @@ public class IndexCommandRunnerTests
             Environment.SetEnvironmentVariable("CDIDX_HOOKS_DIR", originalHooksDir);
             IndexCommandRunner.FullScanExtractionSchedulingForTesting = null;
             SqliteConnection.ClearAllPools();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
             DeleteDirectory(projectRoot);
         }
     }
