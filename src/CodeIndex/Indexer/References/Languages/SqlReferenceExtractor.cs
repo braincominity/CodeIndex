@@ -285,6 +285,18 @@ internal static class SqlReferenceExtractor
     private static readonly Regex CreateTempRoutineRegex = new(
         $@"(?<![\w$])CREATE(?:\s+OR\s+(?:REPLACE|ALTER))?(?:\s+(?:TEMP|TEMPORARY))?\s+(?:PROC(?:EDURE)?|FUNCTION)\b(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{TempIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex GeneratedColumnMarkerRegex = new(
+        @"\b(?:GENERATED\s+(?:ALWAYS\s+)?AS|NEXT\s+VALUE\s+FOR)\b|(?<![\w$])AS\s*\(",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex GeneratedColumnExpressionStartRegex = new(
+        @"\b(?:GENERATED\s+(?:ALWAYS\s+)?AS|AS)\s*\(",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DefaultNextValueForExpressionRegex = new(
+        $@"\bDEFAULT\s+NEXT\s+VALUE\s+FOR\s+(?<name>{QualifiedIdentifierNoCapturePattern})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlExpressionIdentifierRegex = new(
+        $@"(?<name>{QualifiedIdentifierNoCapturePattern})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex TrailingTempIdentifierRegex = new(
         $@"^(?:(?:ONLY)\b\s+)?(?<item>(?:{TempIdentifierPattern}|{QualifiedIdentifierNoCapturePattern}))(?:\s+(?:AS\s+)?(?:{QuotedIdentifierPattern}|{BareIdentifierPattern}))?\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -508,6 +520,19 @@ internal static class SqlReferenceExtractor
             seen,
             fileId,
             resolveContainerForCall);
+
+        EmitGeneratedColumnDependencyReferences(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
 
         EmitSourceCaptureReferences(
             FromSourceListRegex.Matches(statement),
@@ -1545,6 +1570,133 @@ internal static class SqlReferenceExtractor
                 resolveContainerForCall,
                 shouldIgnoreName);
         }
+    }
+
+    private static void EmitGeneratedColumnDependencyReferences(
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName)
+    {
+        if (!GeneratedColumnMarkerRegex.IsMatch(statement))
+            return;
+
+        foreach (Match match in GeneratedColumnExpressionStartRegex.Matches(statement))
+        {
+            if (match.Index < statementLineOffset || IsInsideDoubleQuotedRegion(statement, match.Index))
+                continue;
+            if (match.Value.TrimStart().StartsWith("AS", StringComparison.OrdinalIgnoreCase)
+                && !IsLikelyComputedColumnAsExpression(statement, match.Index))
+            {
+                continue;
+            }
+
+            var openParenIndex = statement.IndexOf('(', match.Index + match.Length - 1);
+            if (openParenIndex < 0)
+                continue;
+
+            var closeParenIndex = FindMatchingParen(statement, openParenIndex);
+            if (closeParenIndex <= openParenIndex)
+                continue;
+
+            EmitSqlExpressionIdentifierDependencies(
+                statement,
+                openParenIndex + 1,
+                closeParenIndex,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
+
+        foreach (Match match in DefaultNextValueForExpressionRegex.Matches(statement))
+        {
+            if (match.Index < statementLineOffset || IsInsideDoubleQuotedRegion(statement, match.Index))
+                continue;
+
+            var sequence = match.Groups["name"];
+            EmitSqlExpressionIdentifierDependencies(
+                statement,
+                sequence.Index,
+                sequence.Index + sequence.Length,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
+    }
+
+    private static void EmitSqlExpressionIdentifierDependencies(
+        string statement,
+        int startIndex,
+        int endIndexExclusive,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName)
+    {
+        var expression = statement[startIndex..endIndexExclusive];
+        foreach (Match match in SqlExpressionIdentifierRegex.Matches(expression))
+        {
+            var rawIndex = startIndex + match.Index;
+            if (rawIndex < statementLineOffset || IsInsideDoubleQuotedRegion(statement, rawIndex))
+                continue;
+
+            var rawName = match.Value;
+            NormalizeIdentifier(rawName, rawIndex, out var resolvedName, out var nameIndex, out var wasQuoted);
+            if (!wasQuoted && (shouldIgnoreName(resolvedName) || IsGeneratedColumnDependencyKeyword(resolvedName)))
+                continue;
+
+            var nameColumn = nameIndex + statementStart - lineOffset;
+            var container = resolveContainerForCall(rawIndex);
+            ReferenceExtractor.AddReference(references, seen, fileId, resolvedName, nameColumn, "generated_column_dependency", context, lineNumber, container);
+        }
+    }
+
+    private static bool IsGeneratedColumnDependencyKeyword(string name)
+        => name.Equals("GENERATED", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("ALWAYS", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("AS", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("DEFAULT", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("NEXT", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("VALUE", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("FOR", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("STORED", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("VIRTUAL", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("PERSISTED", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("NULL", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("NOT", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsLikelyComputedColumnAsExpression(string statement, int asIndex)
+    {
+        var prefix = statement[..asIndex];
+        return Regex.IsMatch(prefix, @"(?<![\w$])ALTER\s+TABLE\b[\s\S]*\bADD\b", RegexOptions.IgnoreCase)
+            || Regex.IsMatch(prefix, @"(?<![\w$])CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP|TEMPORARY)\s+|UNLOGGED\s+)?TABLE\b", RegexOptions.IgnoreCase);
     }
 
     private static void EmitSourceReference(

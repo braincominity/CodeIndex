@@ -361,6 +361,18 @@ public static partial class SymbolExtractor
     private static readonly Regex SqlCteDefinitionRegex = new(
         $@"(?<![\w$])(?:WITH\s+(?:RECURSIVE\s+)?|,\s*)(?<name>{SqlQualifiedIdentifierSegmentPattern})(?:\s*\([^)]*\))?\s+AS\s*\(",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex SqlAlterTableAddGeneratedColumnRegex = new(
+        $@"(?<![\w$])ALTER\s+TABLE\s+(?<table>{SqlQualifiedIdentifierPattern})\s+ADD(?:\s+COLUMN)?\s+(?!CONSTRAINT\b)(?<name>{SqlQualifiedIdentifierSegmentPattern})\b(?=[^;]*?\b(?:GENERATED\s+(?:ALWAYS\s+)?AS|AS\s*\(|DEFAULT\s+NEXT\s+VALUE\s+FOR)\b)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex SqlCreateTableBodyRegex = new(
+        $@"(?<![\w$])CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP|TEMPORARY)\s+|UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<table>{SqlQualifiedIdentifierPattern})\s*\((?<body>[\s\S]*?)\)\s*;",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex SqlGeneratedColumnDefinitionMarkerRegex = new(
+        @"\b(?:GENERATED\s+(?:ALWAYS\s+)?AS|AS\s*\(|DEFAULT\s+NEXT\s+VALUE\s+FOR)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex SqlColumnDefinitionNameRegex = new(
+        $@"^\s*(?<name>{SqlQualifiedIdentifierSegmentPattern})\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex SqlReturnsTableRegex = new(
         @"\bRETURNS\s+TABLE\s*\((?<columns>(?:[^()]|\([^()]*\))*)\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline);
@@ -3937,6 +3949,7 @@ public static partial class SymbolExtractor
             ExtractSqlCteSymbols(fileId, lines, symbols);
             ExtractSqlDefinerSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols);
             ExtractSqlRoutineResultColumnSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols);
+            ExtractSqlGeneratedColumnSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols);
         }
         if (IsRazorLanguage(originalLang) || IsRazorFilePath(filePath))
             ExtractRazorDirectiveSymbols(fileId, lines, symbols);
@@ -4042,6 +4055,119 @@ public static partial class SymbolExtractor
             return index + 1;
 
         return ~index;
+    }
+
+    private static void ExtractSqlGeneratedColumnSymbols(long fileId, string[] lines, string[] structuralLines, List<SymbolRecord> symbols)
+    {
+        var structuralContent = string.Join('\n', structuralLines);
+        if (structuralContent.IndexOf("GENERATED", StringComparison.OrdinalIgnoreCase) < 0
+            && structuralContent.IndexOf("NEXT VALUE FOR", StringComparison.OrdinalIgnoreCase) < 0
+            && structuralContent.IndexOf(" AS ", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            return;
+        }
+
+        var lineStarts = BuildLineStarts(structuralContent);
+        foreach (Match match in SqlAlterTableAddGeneratedColumnRegex.Matches(structuralContent))
+        {
+            var nameGroup = match.Groups["name"];
+            AddSqlGeneratedColumnSymbol(
+                fileId,
+                lines,
+                lineStarts,
+                new GroupProxy(nameGroup.Value, nameGroup.Index),
+                match.Groups["table"].Value,
+                symbols);
+        }
+
+        foreach (Match tableMatch in SqlCreateTableBodyRegex.Matches(structuralContent))
+        {
+            var tableName = tableMatch.Groups["table"].Value;
+            var bodyGroup = tableMatch.Groups["body"];
+            foreach (var column in EnumerateSqlColumnDefinitions(bodyGroup.Value, bodyGroup.Index))
+            {
+                if (!SqlGeneratedColumnDefinitionMarkerRegex.IsMatch(column.Text))
+                    continue;
+
+                var nameMatch = SqlColumnDefinitionNameRegex.Match(column.Text);
+                if (!nameMatch.Success)
+                    continue;
+
+                AddSqlGeneratedColumnSymbol(
+                    fileId,
+                    lines,
+                    lineStarts,
+                    new GroupProxy(nameMatch.Groups["name"].Value, column.StartIndex + nameMatch.Groups["name"].Index),
+                    tableName,
+                    symbols);
+            }
+        }
+    }
+
+    private static void AddSqlGeneratedColumnSymbol(
+        long fileId,
+        string[] lines,
+        List<int> lineStarts,
+        IGroupLike nameGroup,
+        string rawTableName,
+        List<SymbolRecord> symbols)
+    {
+        var name = NormalizeSqlIdentifierSegment(nameGroup.Value);
+        if (string.IsNullOrWhiteSpace(name))
+            return;
+
+        var lineNumber = GetLineNumberFromOffset(lineStarts, nameGroup.Index);
+        AddSymbolRecord(
+            symbols,
+            null,
+            lineNumber,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                SubKind = "generated_column",
+                Name = name,
+                Line = lineNumber,
+                StartLine = lineNumber,
+                StartColumn = nameGroup.Index - lineStarts[lineNumber - 1],
+                EndLine = lineNumber,
+                Signature = lines[lineNumber - 1].Trim(),
+                ContainerKind = "class",
+                ContainerName = NormalizeSqlIdentifierSegment(SqlNameResolver.GetLeafName(rawTableName)),
+            },
+            lines[lineNumber - 1]);
+    }
+
+    private interface IGroupLike
+    {
+        string Value { get; }
+        int Index { get; }
+    }
+
+    private readonly record struct GroupProxy(string Value, int Index) : IGroupLike;
+
+    private readonly record struct SqlColumnDefinitionSlice(string Text, int StartIndex);
+
+    private static IEnumerable<SqlColumnDefinitionSlice> EnumerateSqlColumnDefinitions(string body, int bodyStartIndex)
+    {
+        var start = 0;
+        var depth = 0;
+        for (var i = 0; i <= body.Length; i++)
+        {
+            if (i == body.Length || (body[i] == ',' && depth == 0))
+            {
+                var text = body[start..i].Trim();
+                if (text.Length > 0)
+                    yield return new SqlColumnDefinitionSlice(text, bodyStartIndex + start + body[start..i].Length - body[start..i].TrimStart().Length);
+                start = i + 1;
+                continue;
+            }
+
+            if (body[i] == '(')
+                depth++;
+            else if (body[i] == ')' && depth > 0)
+                depth--;
+        }
     }
 
     private static string NormalizeSqlIdentifierSegment(string value)

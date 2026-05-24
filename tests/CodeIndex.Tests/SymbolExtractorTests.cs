@@ -1157,6 +1157,54 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlGeneratedColumns_DetectsColumnSymbols()
+    {
+        var content = """
+            CREATE TABLE dbo.Orders (
+                subtotal int,
+                tax int,
+                total int GENERATED ALWAYS AS (subtotal + tax) STORED,
+                invoice_no int DEFAULT NEXT VALUE FOR billing.invoice_seq,
+                created_at timestamp DEFAULT CURRENT_TIMESTAMP
+            );
+            ALTER TABLE dbo.Orders ADD COLUMN net_total int GENERATED ALWAYS AS (total - tax) STORED;
+            ALTER TABLE dbo.Orders ADD computed_total AS (subtotal + tax) PERSISTED;
+            ALTER TABLE dbo.Orders ADD CONSTRAINT df_orders_created DEFAULT 0 FOR created_at;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.SubKind == "generated_column"
+            && s.Name == "total"
+            && s.ContainerName == "Orders");
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.SubKind == "generated_column"
+            && s.Name == "invoice_no"
+            && s.ContainerName == "Orders");
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.SubKind == "generated_column"
+            && s.Name == "net_total"
+            && s.ContainerName == "Orders");
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.SubKind == "generated_column"
+            && s.Name == "computed_total"
+            && s.ContainerName == "Orders");
+        Assert.DoesNotContain(symbols, s =>
+            s.Kind == "property"
+            && s.SubKind == "generated_column"
+            && s.Name == "created_at");
+        Assert.DoesNotContain(symbols, s =>
+            s.Kind == "property"
+            && s.SubKind == "generated_column"
+            && s.Name == "CONSTRAINT");
+    }
+
+    [Fact]
     public void Extract_CobolProgramId_DetectsProgramSymbol()
     {
         const string content = """
