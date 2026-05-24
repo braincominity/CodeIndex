@@ -3223,6 +3223,10 @@ public static class IndexCommandRunner
             scanResult = indexer.ScanFilesDetailed(checkpointedDirectories, continueOnError: true, cancellationToken: cancellationToken);
             ThrowIfFullScanCancelled(0, null);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new IndexInterruptedException(0, null);
+        }
         finally
         {
             StopJsonPhaseHeartbeat(scanHeartbeat);
