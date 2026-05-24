@@ -65,7 +65,10 @@ public class ReferenceExtractorTests
 
             @dataclass
             class Job:
-                callback: Callable[[Payload], Result] = field(default_factory=list, metadata={"wire_name": "callback"})
+                callback: Callable[[Payload], Result] = field(
+                    default_factory=list,
+                    metadata={"wire_name": "callback"},
+                )
 
             def inspect_job():
                 return fields(Job)

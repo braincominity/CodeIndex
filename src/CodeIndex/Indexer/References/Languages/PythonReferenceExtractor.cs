@@ -922,8 +922,95 @@ internal static class PythonReferenceExtractor
     }
 
     public static void EmitDataclassFieldReferences(
+        string[] preparedLines,
+        string[] originalLines,
+        int lineIndex,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        SymbolRecord? container,
+        Func<string, bool> isIgnoredName)
+    {
+        var preparedLine = preparedLines[lineIndex];
+        if (!DataclassFieldCallRegex.IsMatch(preparedLine))
+            return;
+
+        var depth = 0;
+        var sawFieldCall = false;
+        var inString = false;
+        var quoteChar = '\0';
+
+        for (var currentLineIndex = lineIndex; currentLineIndex < preparedLines.Length; currentLineIndex++)
+        {
+            var currentPreparedLine = preparedLines[currentLineIndex];
+            var currentOriginalLine = originalLines[currentLineIndex];
+            var currentContext = currentOriginalLine.Trim();
+            var currentLineNumber = currentLineIndex + 1;
+
+            EmitDataclassFieldDefaultFactoryReferences(
+                currentPreparedLine,
+                references,
+                seen,
+                fileId,
+                currentContext,
+                currentLineNumber,
+                container,
+                isIgnoredName);
+            EmitDataclassFieldMetadataReferences(
+                currentOriginalLine,
+                references,
+                seen,
+                fileId,
+                currentContext,
+                currentLineNumber,
+                container,
+                isIgnoredName);
+
+            for (var column = 0; column < currentPreparedLine.Length; column++)
+            {
+                var ch = currentPreparedLine[column];
+                if (inString)
+                {
+                    if (ch == '\\')
+                    {
+                        column++;
+                        continue;
+                    }
+
+                    if (ch == quoteChar)
+                        inString = false;
+                    continue;
+                }
+
+                if (ch == '#')
+                    break;
+                if (ch is '\'' or '"')
+                {
+                    inString = true;
+                    quoteChar = ch;
+                    continue;
+                }
+
+                if (ch == '(')
+                {
+                    depth++;
+                    sawFieldCall = true;
+                }
+                else if (ch == ')' && depth > 0)
+                {
+                    depth--;
+                    if (sawFieldCall && depth == 0)
+                        return;
+                }
+            }
+
+            if (sawFieldCall && depth <= 0)
+                return;
+        }
+    }
+
+    private static void EmitDataclassFieldDefaultFactoryReferences(
         string preparedLine,
-        string originalLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -932,9 +1019,6 @@ internal static class PythonReferenceExtractor
         SymbolRecord? container,
         Func<string, bool> isIgnoredName)
     {
-        if (!DataclassFieldCallRegex.IsMatch(preparedLine))
-            return;
-
         foreach (Match match in DataclassFieldDefaultFactoryRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -953,7 +1037,18 @@ internal static class PythonReferenceExtractor
                 container,
                 "python");
         }
+    }
 
+    private static void EmitDataclassFieldMetadataReferences(
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        Func<string, bool> isIgnoredName)
+    {
         foreach (Match metadataMatch in DataclassFieldMetadataKeyRegex.Matches(originalLine))
         {
             var body = metadataMatch.Groups["body"];
