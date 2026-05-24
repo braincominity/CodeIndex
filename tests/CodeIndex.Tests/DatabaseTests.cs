@@ -45,6 +45,60 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InitializeSchema_CreatesFoldedMutualReferenceIndex()
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_symbol_refs_mutual_folded'";
+
+        Assert.Equal("idx_symbol_refs_mutual_folded", (string?)cmd.ExecuteScalar());
+    }
+
+    [Fact]
+    public void InsertReferences_UsesFoldedNamesForMutualRecursion()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/app.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 4,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = "abc",
+        });
+
+        _writer.InsertReferences(
+        [
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Run",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 1,
+                Context = "Start();",
+                ContainerKind = "function",
+                ContainerName = "Start",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Start",
+                ReferenceKind = "call",
+                Line = 2,
+                Column = 1,
+                Context = "Run();",
+                ContainerKind = "function",
+                ContainerName = "Run",
+            },
+        ]);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE is_mutual_recursion = 1";
+
+        Assert.Equal(2L, (long)cmd.ExecuteScalar()!);
+    }
+
+    [Fact]
     public void OptimizeFts_ResetsIncrementalWriteCounterAndStampsTime()
     {
         Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
@@ -69,6 +123,70 @@ public class DatabaseTests : IDisposable
         Assert.Equal(2, _writer.RecordFtsIncrementalWrite());
         Assert.True(_writer.OptimizeFtsIfIncrementalWriteThresholdReached(threshold: 2));
         Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
+    }
+
+    [Fact]
+    public void DbContext_OpenWithBatchInProgress_Warns()
+    {
+        _writer.MarkBatchInProgress();
+
+        var stderr = ConsoleCapture.CaptureError(() =>
+        {
+            using var reopened = new DbContext(_dbPath);
+        });
+
+        Assert.Contains("Last batch did not complete", stderr);
+        Assert.Contains("cdidx index --rebuild", stderr);
+    }
+
+    [Fact]
+    public void DbContext_OpenWithBatchInProgress_DemotesReadiness()
+    {
+        _writer.MarkGraphReady();
+        _writer.MarkIssuesReady();
+        _writer.MarkBatchInProgress();
+
+        using (var reopened = new DbContext(_dbPath))
+        {
+            Assert.Equal(0, reopened.GetUserVersion());
+        }
+    }
+
+    [Fact]
+    public void BatchInProgress_ClearInsideCommittedTransaction_PersistsCleanState()
+    {
+        _writer.MarkBatchInProgress();
+
+        using (var txn = _writer.BeginTransaction())
+        {
+            _writer.ClearBatchInProgress();
+            txn.Commit();
+        }
+
+        var stderr = ConsoleCapture.CaptureError(() =>
+        {
+            using var reopened = new DbContext(_dbPath);
+        });
+
+        Assert.DoesNotContain("Last batch did not complete", stderr);
+    }
+
+    [Fact]
+    public void BatchInProgress_ClearInsideRolledBackTransaction_LeavesRecoveryWarning()
+    {
+        _writer.MarkBatchInProgress();
+
+        using (var txn = _writer.BeginTransaction())
+        {
+            _writer.ClearBatchInProgress();
+        }
+
+        var stderr = ConsoleCapture.CaptureError(() =>
+        {
+            using var reopened = new DbContext(_dbPath);
+        });
+
+        Assert.Contains("Last batch did not complete", stderr);
     }
 
     [Fact]
