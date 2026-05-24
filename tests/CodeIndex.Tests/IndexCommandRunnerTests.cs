@@ -7542,6 +7542,46 @@ public class IndexCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunStatusCheck_AfterCommitScopedRefreshAtHead_DoesNotReportHeadChanged()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "add run");
+            var currentHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+
+            var (refreshExitCode, _) = RunAndCaptureJson([projectRoot, "--commits", currentHead, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+
+            var check = statusJson.GetProperty("workspace_check");
+            Assert.False(check.GetProperty("head_changed").GetBoolean());
+            Assert.True(check.GetProperty("matches_workspace").GetBoolean());
+            Assert.Equal("matched", check.GetProperty("reason").GetString());
+            Assert.Equal(currentHead, statusJson.GetProperty("indexed_head_sha").GetString());
+            Assert.Equal(0, statusJson.GetProperty("commits_ahead_of_indexed_head").GetInt32());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
     private (int ExitCode, JsonElement Json) RunAndCaptureJson(string[] args)
     {
         lock (TestConsoleLock.Gate)
