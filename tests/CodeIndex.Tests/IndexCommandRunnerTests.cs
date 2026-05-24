@@ -3512,7 +3512,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_WithIndexingErrors_PrintsRecoveryWarning()
+    public void Run_FullScan_WithOversizedFile_PrintsSkipWarningWithoutRecoveryWarning()
     {
         var projectRoot = CreateTempProject();
         try
@@ -3523,8 +3523,9 @@ public class IndexCommandRunnerTests
             var (exitCode, _, stderr) = RunCliInSubprocess([projectRoot], projectRoot);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains("Some files failed to index", stderr);
-            Assert.Contains("rerun `cdidx index", stderr);
+            Assert.Contains("[WARN] File too large", stderr);
+            Assert.DoesNotContain("Some files failed to index", stderr);
+            Assert.DoesNotContain("rerun `cdidx index", stderr);
         }
         finally
         {
@@ -3617,7 +3618,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_UpdateMode_WithIndexingErrors_PrintsRecoveryWarning()
+    public void Run_UpdateMode_WithOversizedFile_PrintsSkipWarningWithoutRecoveryWarning()
     {
         var projectRoot = CreateTempProject();
         try
@@ -3632,8 +3633,9 @@ public class IndexCommandRunnerTests
             var (exitCode, _, stderr) = RunCliInSubprocess([projectRoot, "--files", "huge.py"], projectRoot);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains("Some files failed to update", stderr);
-            Assert.Contains("rerun `cdidx index", stderr);
+            Assert.Equal(string.Empty, stderr);
+            Assert.DoesNotContain("Some files failed to update", stderr);
+            Assert.DoesNotContain("rerun `cdidx index", stderr);
         }
         finally
         {
@@ -6722,7 +6724,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_UpdateMode_ClearsHotspotFamilyTrustOnPartialFailure()
+    public void Run_UpdateMode_RestampsHotspotFamilyTrustOnOversizedFileSkip()
     {
         var projectRoot = CreateTempProject();
         try
@@ -6741,11 +6743,11 @@ public class IndexCommandRunnerTests
 
             var (exitCode2, json2) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
             Assert.Equal(CommandExitCodes.Success, exitCode2);
-            Assert.Equal("partial", json2.GetProperty("status").GetString());
-            Assert.Equal(1, json2.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal("success", json2.GetProperty("status").GetString());
+            Assert.Equal(0, json2.GetProperty("summary").GetProperty("errors").GetInt32());
 
             using var verifyDb = new DbContext(dbPath);
-            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+            Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
         }
         finally
         {

@@ -343,7 +343,7 @@ public class FileIndexerTests
 
             var indexer = new FileIndexer(tempDir, ignoreCase: false, ignoreRuleRoot: null, maxFileSizeBytes: 4);
 
-            var ex = Assert.Throws<InvalidOperationException>(() => indexer.BuildRecordWithRawBytes(path));
+            var ex = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(() => indexer.BuildRecordWithRawBytes(path));
             Assert.Contains("File too large", ex.Message);
             Assert.Contains("--max-file-bytes", ex.Message);
             Assert.Contains(FileIndexer.MaxFileSizeEnvironmentVariable, ex.Message);
@@ -3470,10 +3470,10 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void BuildRecord_ThrowsForOversizedFile()
+    public void BuildRecord_ThrowsFileTooLargeSkippedExceptionForOversizedFile()
     {
-        // Files exceeding the default cap should throw InvalidOperationException
-        // 既定上限を超えるファイルはInvalidOperationExceptionを投げる
+        // Files exceeding the default cap should carry structured skip metadata.
+        // 既定上限を超えるファイルは structured skip metadata を持つ例外を投げる。
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
         try
         {
@@ -3485,7 +3485,10 @@ public class FileIndexerTests
                 stream.SetLength(FileIndexer.DefaultMaxFileSizeBytes + 1);
 
             var indexer = new FileIndexer(tempDir);
-            Assert.Throws<InvalidOperationException>(() => indexer.BuildRecord(filePath));
+            var ex = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(() => indexer.BuildRecord(filePath));
+            Assert.Equal("large.py", ex.RelativePath);
+            Assert.Equal(FileIndexer.DefaultMaxFileSizeBytes + 1, ex.ActualBytes);
+            Assert.Equal(FileIndexer.DefaultMaxFileSizeBytes, ex.LimitBytes);
         }
         finally
         {
@@ -3512,7 +3515,7 @@ public class FileIndexerTests
             var indexer = new FileIndexer(tempDir);
             var before = GC.GetAllocatedBytesForCurrentThread();
 
-            var ex = Assert.Throws<InvalidOperationException>(() => indexer.BuildRecord(filePath));
+            var ex = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(() => indexer.BuildRecord(filePath));
 
             var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
             Assert.Contains("File too large", ex.Message);
