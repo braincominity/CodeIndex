@@ -25108,6 +25108,13 @@ public class ReferenceExtractorTests
         Assert.False(SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(postgresContext, "\"sales\".\"orders\"", postgresColumn));
         Assert.True(SqlNameResolver.ReferenceMatchesTargetAtColumn("Orders", postgresContext, null, postgresColumn, "Sales.Orders"));
         Assert.False(SqlNameResolver.ReferenceMatchesTargetAtColumn("Orders", postgresContext, null, postgresColumn, "sales.orders"));
+
+        const string mixedPostgresContext = "SELECT * FROM \"Sales\".orders;";
+        const int mixedPostgresColumn = 24;
+        Assert.True(SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(mixedPostgresContext, "\"Sales\".ORDERS", mixedPostgresColumn));
+        Assert.False(SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(mixedPostgresContext, "\"sales\".orders", mixedPostgresColumn));
+        Assert.True(SqlNameResolver.ReferenceMatchesTargetAtColumn("orders", mixedPostgresContext, null, mixedPostgresColumn, "\"Sales\".ORDERS"));
+        Assert.False(SqlNameResolver.ReferenceMatchesTargetAtColumn("orders", mixedPostgresContext, null, mixedPostgresColumn, "\"sales\".orders"));
     }
 
     [Fact]
