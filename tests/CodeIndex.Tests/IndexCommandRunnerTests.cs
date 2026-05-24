@@ -18,6 +18,15 @@ public sealed class SkipOnMacOsArm64FactAttribute : FactAttribute
     }
 }
 
+public sealed class SkipOnMacOsArm64TheoryAttribute : TheoryAttribute
+{
+    public SkipOnMacOsArm64TheoryAttribute()
+    {
+        if (OperatingSystem.IsMacOS() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
+            Skip = "macOS arm64 SDK/ILLink currently crashes before this test can exercise cdidx (#2606).";
+    }
+}
+
 /// <summary>
 /// Tests for indexing command argument handling.
 /// インデックスコマンドの引数処理テスト。
