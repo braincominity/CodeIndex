@@ -3490,7 +3490,8 @@ public static partial class ReferenceExtractor
         {
             var line = lines[lineIndex];
             var column = lineIndex == startLineIndex ? startColumn : FindFirstNonWhitespaceColumn(line);
-            if (column < line.Length)
+            var fragmentEndColumn = FindPythonCommentColumn(line, column);
+            if (column < fragmentEndColumn)
             {
                 if (builder.Length > 0)
                 {
@@ -3499,10 +3500,10 @@ public static partial class ReferenceExtractor
                     physicalColumns.Add(column);
                 }
 
-                for (var fragmentColumn = column; fragmentColumn < line.Length; fragmentColumn++)
+                for (var fragmentColumn = column; fragmentColumn < fragmentEndColumn; fragmentColumn++)
                 {
                     var fragmentChar = line[fragmentColumn];
-                    if (fragmentChar == '\\' && fragmentColumn == line.Length - 1)
+                    if (fragmentChar == '\\' && fragmentColumn == fragmentEndColumn - 1)
                         break;
 
                     builder.Append(fragmentChar);
@@ -3577,7 +3578,8 @@ public static partial class ReferenceExtractor
         {
             var line = lines[lineIndex];
             var column = lineIndex == startLineIndex ? startColumn : FindFirstNonWhitespaceColumn(line);
-            if (column < line.Length)
+            var fragmentEndColumn = FindPythonCommentColumn(line, column);
+            if (column < fragmentEndColumn)
             {
                 if (builder.Length > 0)
                 {
@@ -3586,10 +3588,10 @@ public static partial class ReferenceExtractor
                     physicalColumns.Add(column);
                 }
 
-                for (var fragmentColumn = column; fragmentColumn < line.Length; fragmentColumn++)
+                for (var fragmentColumn = column; fragmentColumn < fragmentEndColumn; fragmentColumn++)
                 {
                     var fragmentChar = line[fragmentColumn];
-                    if (fragmentChar == '\\' && fragmentColumn == line.Length - 1)
+                    if (fragmentChar == '\\' && fragmentColumn == fragmentEndColumn - 1)
                         break;
 
                     builder.Append(fragmentChar);
@@ -3639,6 +3641,40 @@ public static partial class ReferenceExtractor
 
         header = new PythonLogicalHeaderReferenceLine(builder.ToString(), physicalLines.ToArray(), physicalColumns.ToArray());
         return header.Text.Length > 0;
+    }
+
+    private static int FindPythonCommentColumn(string line, int startColumn)
+    {
+        var inString = false;
+        var quote = '\0';
+        for (var index = startColumn; index < line.Length; index++)
+        {
+            var ch = line[index];
+            if (inString)
+            {
+                if (ch == '\\')
+                {
+                    index++;
+                    continue;
+                }
+
+                if (ch == quote)
+                    inString = false;
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                inString = true;
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '#')
+                return index;
+        }
+
+        return line.Length;
     }
 
     private static int FindFirstNonWhitespaceColumn(string line)

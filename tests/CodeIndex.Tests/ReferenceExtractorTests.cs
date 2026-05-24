@@ -1417,6 +1417,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonTypeVarConstraints_MultilineDoesNotCaptureCommentTypeNames()
+    {
+        const string content = """
+            TAccount = TypeVar(
+                "TAccount",
+                models.Admin,  # models.User should stay a comment
+            )
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Admin"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Line == 3);
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_PythonParamSpecBound_CapturesNestedCallableTypeReferences()
     {
         const string content = """
