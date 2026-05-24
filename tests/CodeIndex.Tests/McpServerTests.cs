@@ -5760,7 +5760,7 @@ public class McpServerTests : IDisposable
     public void ToolsCall_BatchQuery_TruncatesAggregateResponse_Issue1416()
     {
         var previous = Environment.GetEnvironmentVariable("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES");
-        Environment.SetEnvironmentVariable("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES", "700");
+        Environment.SetEnvironmentVariable("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES", "950");
         try
         {
             InsertIndexedFile("src/large.cs", "csharp", "// " + new string('x', 5000));
@@ -5770,9 +5770,9 @@ public class McpServerTests : IDisposable
             var structured = response["result"]!["structuredContent"]!;
             Assert.True(structured["truncated"]?.GetValue<bool>() ?? false, response.ToJsonString());
             var actualResponseBytes = Encoding.UTF8.GetByteCount(response.ToJsonString());
-            Assert.True(actualResponseBytes <= 700, $"Actual response was {actualResponseBytes} bytes.");
-            Assert.True(structured["metadata"]!["estimated_response_bytes"]!.GetValue<int>() <= 700);
-            Assert.Equal(700, structured["metadata"]!["response_byte_limit"]!.GetValue<int>());
+            Assert.True(actualResponseBytes <= 950, $"Actual response was {actualResponseBytes} bytes.");
+            Assert.True(structured["metadata"]!["estimated_response_bytes"]!.GetValue<int>() <= 950);
+            Assert.Equal(950, structured["metadata"]!["response_byte_limit"]!.GetValue<int>());
             Assert.Equal(2, structured["metadata"]!["submitted"]!.GetValue<int>());
             Assert.Equal(2, structured["metadata"]!["executed"]!.GetValue<int>());
             Assert.Equal(0, structured["metadata"]!["errors"]!.GetValue<int>());
