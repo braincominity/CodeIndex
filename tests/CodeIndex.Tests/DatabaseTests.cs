@@ -86,6 +86,19 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void DbContext_OpenWithBatchInProgress_DemotesReadiness()
+    {
+        _writer.MarkGraphReady();
+        _writer.MarkIssuesReady();
+        _writer.MarkBatchInProgress();
+
+        using (var reopened = new DbContext(_dbPath))
+        {
+            Assert.Equal(0, reopened.GetUserVersion());
+        }
+    }
+
+    [Fact]
     public void BatchInProgress_ClearInsideCommittedTransaction_PersistsCleanState()
     {
         _writer.MarkBatchInProgress();

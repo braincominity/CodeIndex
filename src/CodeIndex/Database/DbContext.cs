@@ -278,7 +278,11 @@ public class DbContext : IDisposable
     {
         var raw = GetMetaString(BatchInProgressMetaKey);
         if (string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase))
+        {
             Console.Error.WriteLine("Warning: Last batch did not complete; run `cdidx index --rebuild` to re-index from a known clean state.");
+            if (!_isReadOnly)
+                Execute("PRAGMA user_version = 0");
+        }
     }
 
     private void ApplyConnectionPerformancePragmas()
