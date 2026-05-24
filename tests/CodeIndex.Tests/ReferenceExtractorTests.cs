@@ -1091,6 +1091,61 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonMixedBasesAndMetaclass_EmitsBaseAndMetaclassReferences()
+    {
+        const string content = """
+            class Derived(Base, Mixin, metaclass=Meta):
+                pass
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Base"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Mixin"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Meta"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "metaclass"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PythonSuperInitSubclass_EmitsHookCallReference()
+    {
+        const string content = """
+            class Base:
+                def __init_subclass__(cls) -> None:
+                    pass
+
+            class Child(Base):
+                def __init_subclass__(cls) -> None:
+                    super().__init_subclass__()
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        var hookCall = Assert.Single(references, reference =>
+            reference.SymbolName == "__init_subclass__"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "__init_subclass__"
+            && reference.Line == 7);
+        Assert.Equal(17, hookCall.Column);
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "super"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_PythonStringifiedAnnotations_CapturesNestedForwardReferences()
     {
         const string content = """
@@ -25189,6 +25244,35 @@ public class ReferenceExtractorTests
         var outsideCall = Assert.Single(innerCalls.Where(r => r.Line == 7));
         Assert.Null(outsideCall.ContainerKind);
         Assert.Null(outsideCall.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_SqlPostgresDollarQuotedBody_IgnoresNestedDifferentDollarTag()
+    {
+        // issue #1442: `$inner$ ... $inner$` text inside a `$body$ ... $body$` function body must
+        // not close the outer body range, or calls after the inner literal lose their container.
+        // issue #1442: `$body$ ... $body$` 関数本体内の `$inner$ ... $inner$` テキストで外側の
+        // 本体範囲を閉じると、後続の呼び出しがコンテナから外れるため、同一タグだけを閉じタグにする。
+        const string content = """
+            CREATE OR REPLACE FUNCTION public.fn_outer() RETURNS text LANGUAGE plpgsql AS $body$
+            DECLARE
+                s text := $inner$hello $inner$;
+            BEGIN
+                PERFORM public.fn_inner();
+                RETURN s;
+            END
+            $body$;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var bodyCall = Assert.Single(references.Where(r =>
+            r.SymbolName == "fn_inner" &&
+            r.ReferenceKind == "call" &&
+            r.Line == 5));
+        Assert.Equal("function", bodyCall.ContainerKind);
+        Assert.Equal("public.fn_outer", bodyCall.ContainerName);
     }
 
     [Fact]

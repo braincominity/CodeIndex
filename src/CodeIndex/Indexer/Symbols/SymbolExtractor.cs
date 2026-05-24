@@ -10238,7 +10238,7 @@ public static partial class SymbolExtractor
                             StartColumn = nameGroup.Index,
                             EndLine = lineNumber,
                             Signature = lines[lineIndex].Trim(),
-                            ContainerKind = "interface",
+                            ContainerKind = trait.Kind,
                             ContainerName = trait.Name,
                             ContainerQualifiedName = trait.ContainerQualifiedName,
                             Visibility = match.Groups["visibility"].Success ? match.Groups["visibility"].Value : null,
