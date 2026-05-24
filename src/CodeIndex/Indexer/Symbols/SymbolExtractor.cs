@@ -224,6 +224,9 @@ public static partial class SymbolExtractor
     private static readonly Regex GoInterfaceEmbeddedTypeRegex = new(
         @"^\s*(?:~\s*)?(?<name>[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)(?:\[[^\]\r\n]+\])?\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GoStructEmbeddedTypeRegex = new(
+        @"^\s*\*?\s*(?<name>[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)(?:\[[^\]\r\n]+\])?\s*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly HashSet<string> GoInterfaceEmbeddedTypeBlacklist = new(StringComparer.Ordinal)
     {
         "bool",

@@ -12306,6 +12306,27 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Go_DetectsEmbeddedGenericStructTypes()
+    {
+        var content = """
+            package demo
+
+            type Inline[T any] struct { Reader[T]; *pkg.Writer[U] }
+
+            type Container[T any, U any] struct {
+                Reader[T]
+                *pkg.Writer[U]
+                Named Field[T]
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Reader" && s.Signature == "Reader[T]");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "pkg.Writer" && s.Signature == "*pkg.Writer[U]");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "Named");
+    }
+
+    [Fact]
     public void Extract_Go_DetectsBuildDirectivesAndCgoImport()
     {
         var content = """
