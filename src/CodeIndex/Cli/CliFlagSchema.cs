@@ -108,6 +108,7 @@ internal static class CliFlagSchema
     ];
     private static readonly string[] RawKindsCommands = ["callers", "callees"];
     private static readonly string[] RankByCommands = ["callers", "callees"];
+    private static readonly string[] ByBucketCommands = ["unused"];
 
     private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files"];
     private static readonly string[] ByteFormatCommands = ["files", "map"];
@@ -194,6 +195,7 @@ internal static class CliFlagSchema
             new() { Name = "--kind", ValuePlaceholder = "<kind>", Description = "Filter by kind", Commands = Set(KindCommands) },
             new() { Name = "--visibility", ValuePlaceholder = "<visibility[,visibility]>", Description = "Filter by symbol visibility", Commands = Set(VisibilityCommands) },
             new() { Name = "--exclude-visibility", ValuePlaceholder = "<visibility[,visibility]>", Description = "Exclude symbol visibility", Commands = Set(VisibilityCommands) },
+            new() { Name = "--by-bucket", Description = "Unused: include per-bucket grouped result arrays in JSON output", Commands = Set(ByBucketCommands) },
             new() { Name = "--rank-by", ValuePlaceholder = "<weighted|count|kind>", Description = "Rank callers/callees by weighted structural score, raw count, or kind bucket", Commands = Set(RankByCommands) },
             new() { Name = "--raw-kinds", Description = "Show raw reference kinds instead of logical graph kinds", Commands = Set(RawKindsCommands) },
             new() { Name = "--count", Description = "Count only", Commands = Set(CountCommands) },

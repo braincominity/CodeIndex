@@ -9,6 +9,15 @@ using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
+public sealed class SkipOnMacOsArm64FactAttribute : FactAttribute
+{
+    public SkipOnMacOsArm64FactAttribute()
+    {
+        if (OperatingSystem.IsMacOS() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
+            Skip = "macOS arm64 SDK/ILLink currently crashes before this test can exercise cdidx (#2570).";
+    }
+}
+
 /// <summary>
 /// Tests for indexing command argument handling.
 /// インデックスコマンドの引数処理テスト。
@@ -700,19 +709,22 @@ public class IndexCommandRunnerTests
     [Fact]
     public void ParseArgs_MaxFileBytesInvalidValue_IsIgnored()
     {
-        var originalErr = Console.Error;
-        using var stderr = new StringWriter();
-        try
+        lock (TestConsoleLock.Gate)
         {
-            Console.SetError(stderr);
-            var options = IndexCommandRunner.ParseArgs([".", "--max-file-bytes", "0"]);
+            var originalErr = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                var options = IndexCommandRunner.ParseArgs([".", "--max-file-bytes", "0"]);
 
-            Assert.True(options.MaxFileSizeBytes is null or > 0);
-            Assert.Contains("invalid --max-file-bytes value", stderr.ToString());
-        }
-        finally
-        {
-            Console.SetError(originalErr);
+                Assert.True(options.MaxFileSizeBytes is null or > 0);
+                Assert.Contains("invalid --max-file-bytes value", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalErr);
+            }
         }
     }
 
@@ -791,18 +803,21 @@ public class IndexCommandRunnerTests
     [Fact]
     public void ParseArgs_DurationFormatFlag_InvalidValue_IsIgnored()
     {
-        var originalErr = Console.Error;
-        using var stderr = new StringWriter();
-        try
+        lock (TestConsoleLock.Gate)
         {
-            Console.SetError(stderr);
-            var options = IndexCommandRunner.ParseArgs([".", "--duration-format", "bogus"]);
-            Assert.Equal(DurationOutputFormat.Auto, options.DurationFormat);
-            Assert.Contains("invalid --duration-format value", stderr.ToString());
-        }
-        finally
-        {
-            Console.SetError(originalErr);
+            var originalErr = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+                var options = IndexCommandRunner.ParseArgs([".", "--duration-format", "bogus"]);
+                Assert.Equal(DurationOutputFormat.Auto, options.DurationFormat);
+                Assert.Contains("invalid --duration-format value", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalErr);
+            }
         }
     }
 
@@ -2053,7 +2068,7 @@ public class IndexCommandRunnerTests
         }
     }
 
-    [Fact]
+    [SkipOnMacOsArm64Fact]
     public void RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson()
     {
         var publishDir = Path.Combine(Path.GetTempPath(), $"cdidx_trimmed_publish_{Guid.NewGuid():N}");
@@ -7862,13 +7877,13 @@ public class IndexCommandRunnerTests
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"dotnet publish failed: {stdout}{stderr}".Trim());
 
-        var publishedDll = Path.Combine(outputDir, "cdidx.dll");
-        if (File.Exists(publishedDll))
-            return publishedDll;
-
         var publishedAppHost = Path.Combine(outputDir, OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
         if (File.Exists(publishedAppHost))
             return publishedAppHost;
+
+        var publishedDll = Path.Combine(outputDir, "cdidx.dll");
+        if (File.Exists(publishedDll))
+            return publishedDll;
 
         throw new InvalidOperationException(
             $"Published cdidx entry point not found. Expected {publishedDll} or {publishedAppHost}");

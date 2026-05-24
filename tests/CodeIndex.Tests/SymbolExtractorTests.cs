@@ -14358,6 +14358,45 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_RustTraitAssociatedTypeDefaults_RecordsPropertySymbols()
+    {
+        const string content = """
+            trait Builder {
+                fn before(&self) {
+                    println!("{");
+                }
+                type Output = ();
+                type Error: std::error::Error = String;
+                type Pending;
+                fn build(&self) {
+                    type Local = String;
+                }
+                fn helper<'a>(&self) {
+                    type Borrowed = &'a str;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.Name == "Output"
+            && s.ContainerKind == "interface"
+            && s.ContainerName == "Builder"
+            && s.ReturnType == "()");
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.Name == "Error"
+            && s.ContainerKind == "interface"
+            && s.ContainerName == "Builder"
+            && s.ReturnType == "String");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Pending");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Local");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Borrowed");
+    }
+
+    [Fact]
     public void Extract_Rust_DetectsGroupedUseTreePrefixes()
     {
         var content = """
@@ -22333,6 +22372,35 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my-button");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app-sidebar");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "div");
+    }
+
+    [Fact]
+    public void Extract_Html_CapturesSlotDeclarationsAndProjectionReferences()
+    {
+        var content = """
+            <template id="card-template">
+              <slot name="header">Untitled</slot>
+              <slot></slot>
+              <slot name='footer'><slot name="nested"></slot></slot>
+            </template>
+            <article>
+              <h2 slot="header">Title</h2>
+              <p>Default content</p>
+              <span slot='footer'>Actions</span>
+              <slot slot="footer" name="forwarded"></slot>
+            </article>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "header");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "(default)");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "footer");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "nested");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "forwarded");
+        Assert.Equal(2, symbols.Count(s => s.Kind == "reference" && s.Name == "footer"));
+        Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "header");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "slot");
     }
 
     [Fact]
