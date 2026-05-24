@@ -10,9 +10,10 @@ dotnet test
 dotnet run --project src/CodeIndex -- <command> [options]
 ```
 
-Development, CI, and NuGet tool packaging target `net8.0`. Use a .NET 8.x SDK
-for supported and tested builds; newer major .NET releases are outside the
-supported/tested matrix until CI covers them.
+The production CLI and NuGet tool packaging target `net8.0`. The test project
+multi-targets `net8.0;net9.0`, and CI runs the test suite on both frameworks
+across Linux, Windows, and macOS. Use a .NET SDK that can restore and run both
+target frameworks when validating the full CI-equivalent test matrix.
 
 For test suite structure, shared helpers, and test-writing conventions, see [TESTING_GUIDE.md](TESTING_GUIDE.md).
 
@@ -68,7 +69,7 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
   → Populate FTS5 index
 ```
 
-Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. Within each directory, `FileIndexer` loads `.gitignore` before `.cdidxignore`, appends both rule sets in that order, and honors later `!` patterns as re-includes. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
+Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. Before scanning a nested project root, `FileIndexer` loads ignore files from the resolved ignore-rule root through each existing ancestor directory down to the project root's parent, then loads the project directory's own rules during the normal walk. Within each directory, `FileIndexer` loads `.gitignore` before `.cdidxignore`, appends both rule sets in that order, and honors later `!` patterns as re-includes. If an ancestor ignore directory cannot be read, scanning fails closed with a scan error instead of silently skipping those rules; `ScanFilesResult.AncestorIgnoreDirectories` records the resolved ancestor list for troubleshooting. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
 
 Incremental refreshes that mutate `fts_chunks` increment `codeindex_meta.fts_incremental_writes_since_optimize`. When the counter reaches `DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold`, the update path runs `INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')`, resets the counter, and stamps `fts_last_optimized_at`. Users can run the same maintenance directly with `cdidx optimize --db <path>` or `cdidx index <projectPath> --optimize`; this may briefly hold the writer lock on large indexes.
 
@@ -1661,9 +1662,11 @@ dotnet test
 dotnet run --project src/CodeIndex -- <command> [options]
 ```
 
-開発、CI、NuGet ツールのパッケージングは `net8.0` を対象にしています。
-サポート済みかつテスト済みのビルドには .NET 8.x SDK を使ってください。
-CI で対象になるまでは、より新しいメジャー .NET リリースはサポート・テスト対象外です。
+製品版 CLI と NuGet ツールのパッケージングは `net8.0` を対象にしています。
+テストプロジェクトは `net8.0;net9.0` の multi-target で、CI は Linux、
+Windows、macOS の各 lane で両方の framework に対してテストスイートを実行します。
+CI 相当のフル検証を行う場合は、両方の target framework を restore / 実行できる
+.NET SDK を使ってください。
 
 テストスイートの構成、共有ヘルパー、テスト作法については [TESTING_GUIDE.md#テストガイド](TESTING_GUIDE.md#テストガイド) を参照してください。
 
