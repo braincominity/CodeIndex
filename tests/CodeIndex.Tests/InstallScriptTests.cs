@@ -936,6 +936,83 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void DownloadAndInstall_ReinstallReplacesExistingOptionalDirectories()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "replace_optional_target");
+        var payloadDir = Path.Combine(_tempRoot, "replace_optional_payload");
+        var archivePath = Path.Combine(_tempRoot, "replace_optional.tar.gz");
+        var checksumsPath = Path.Combine(_tempRoot, "replace_optional.sha256sums.txt");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            mkdir -p "{{Path.Combine(installDir, "LICENSES")}}"
+            cat > "{{Path.Combine(installDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "cdidx v1.24.6"
+            EOF
+            chmod +x "{{Path.Combine(installDir, "cdidx")}}"
+            printf '{"version":"1.24.6"}' > "{{Path.Combine(installDir, "version.json")}}"
+            printf 'old-lib' > "{{Path.Combine(installDir, "libe_sqlite3.so")}}"
+            printf 'stale' > "{{Path.Combine(installDir, "LICENSES", "stale.txt")}}"
+
+            mkdir -p "{{payloadDir}}"
+            mkdir -p "{{Path.Combine(payloadDir, "LICENSES")}}"
+            cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "cdidx v1.24.6"
+            EOF
+            chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
+            printf '{"version":"1.24.6"}' > "{{Path.Combine(payloadDir, "version.json")}}"
+            printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
+            printf 'new-license' > "{{Path.Combine(payloadDir, "LICENSES", "new.txt")}}"
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
+
+            checksum="$(calculate_sha256 "{{archivePath}}")"
+            printf '%s  CodeIndex-linux-x64.tar.gz\n' "$checksum" > "{{checksumsPath}}"
+
+            VERSION="v1.24.6"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o) output_path="$2"; shift 2 ;;
+                        -w) shift 2 ;;
+                        *) url="$1"; shift ;;
+                    esac
+                done
+                case "$url" in
+                    */sha256sums.txt) cp "{{checksumsPath}}" "$output_path" ;;
+                    *) cp "{{archivePath}}" "$output_path" ;;
+                esac
+                printf '200'
+                return 0
+            }
+
+            download_and_install
+            echo "REINSTALL_OK"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("REINSTALL_OK", stdout);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal("new-license", File.ReadAllText(Path.Combine(installDir, "LICENSES", "new.txt")));
+        Assert.False(File.Exists(Path.Combine(installDir, "LICENSES", "stale.txt")));
+        Assert.False(Directory.Exists(Path.Combine(installDir, "LICENSES", "LICENSES")));
+    }
+
+    [Fact]
     public void DownloadAndInstall_LegacyArchiveWithoutManifestStillInstalls()
     {
         if (OperatingSystem.IsWindows())

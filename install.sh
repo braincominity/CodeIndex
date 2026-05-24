@@ -662,7 +662,7 @@ promote_staged_install() {
     local backed_up_files=""
     local promoted_files=""
 
-    for asset in $required_files; do
+    for asset in ${BINARY_NAME} $required_assets; do
         if [ -e "${install_dir}/${asset}" ]; then
             if ! mv "${install_dir}/${asset}" "${backup_dir}/${asset}"; then
                 report_error "Failed to stage existing ${asset} into backup at ${backup_dir}. Install aborted before replacing the current install."
