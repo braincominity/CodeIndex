@@ -79,7 +79,8 @@ public static class IndexCommandRunner
         // operator. Failure to read cwd (e.g. it was deleted out from under us) is best-effort
         // -- we just skip the drift warning rather than block the run. Issue #1577.
         var initialCwd = TryCaptureCurrentDirectory();
-        var dbPath = DbPathResolver.ResolveForIndex(options.ProjectPath, options.DbPath);
+        var dbResolution = DbPathResolver.ResolveForIndex(options.ProjectPath, options.DbPath, options.DataDir);
+        var dbPath = dbResolution.DbPath;
         var stopwatch = Stopwatch.StartNew();
         var isUpdateMode = options.Commits.Count > 0 || options.ChangedBetweenSpecified || options.UpdateFiles.Count > 0;
         var mode = options.Rebuild ? "rebuild" : isUpdateMode ? "update" : "incremental";
@@ -887,6 +888,7 @@ public static class IndexCommandRunner
     {
         string? projectPath = null;
         string? dbPath = null;
+        string? dataDir = null;
         bool rebuild = false;
         bool verbose = false;
         bool json = false;
@@ -934,6 +936,12 @@ public static class IndexCommandRunner
             {
                 case "--db" when i + 1 < args.Length:
                     dbPath = args[++i];
+                    break;
+                case "--data-dir" when i + 1 < args.Length:
+                    dataDir = args[++i];
+                    break;
+                case var option when option.StartsWith("--data-dir=", StringComparison.Ordinal):
+                    dataDir = option["--data-dir=".Length..];
                     break;
                 case "--rebuild":
                     rebuild = true;
@@ -1114,6 +1122,7 @@ public static class IndexCommandRunner
             // オプション解析の境界で絶対化し、以降の cwd 変化で相対パス計算が崩れないようにする。
             ProjectPath = AbsolutizePathOption(projectPath),
             DbPath = AbsolutizeDbPathOption(dbPath),
+            DataDir = AbsolutizePathOption(dataDir),
             Rebuild = rebuild,
             Verbose = verbose,
             Json = json,
@@ -4537,6 +4546,7 @@ public sealed class IndexCommandOptions
     public bool ShowHelp { get; init; }
     public string? ProjectPath { get; init; }
     public string? DbPath { get; init; }
+    public string? DataDir { get; init; }
     public bool Rebuild { get; init; }
     public bool Verbose { get; init; }
     public bool Json { get; init; }
