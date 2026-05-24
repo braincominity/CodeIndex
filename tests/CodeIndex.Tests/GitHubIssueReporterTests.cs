@@ -124,7 +124,29 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
-    public void ScrubInlineCode_RemovesTripleBacktickFencedBlock()
+    public void ScrubInlineCode_StripsTripleBacktickFences()
+    {
+        var input = """
+        Before
+        ```
+        secret();
+        ```
+        After
+        """;
+
+        var result = GitHubIssueReporter.ScrubInlineCode(input);
+
+        Assert.Equal("""
+        Before
+        [code example removed]
+        After
+        """, result);
+        Assert.DoesNotContain("secret", result);
+        Assert.DoesNotContain("```", result);
+    }
+
+    [Fact]
+    public void ScrubInlineCode_StripsLanguageLabeledFences()
     {
         var input = """
         Before
@@ -146,11 +168,48 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
-    public void ScrubInlineCode_DoesNotTreatTripleBackticksAsInlineSpan()
+    public void ScrubInlineCode_StripsIndentedFences()
     {
-        var result = GitHubIssueReporter.ScrubInlineCode("Example ```code``` tail");
+        var input = """
+        Before
+            ```
+            secret();
+            ```
+        After
+        """;
 
-        Assert.Equal("Example [code example removed] tail", result);
+        var result = GitHubIssueReporter.ScrubInlineCode(input);
+
+        Assert.Equal("""
+        Before
+            [code example removed]
+        After
+        """, result);
+        Assert.DoesNotContain("secret", result);
+        Assert.DoesNotContain("```", result);
+    }
+
+    [Fact]
+    public void ScrubInlineCode_StripsMixedFenceAndInline()
+    {
+        var input = """
+        Before `inlineSecret()`
+        ```csharp
+        fencedSecret();
+        ```
+        After
+        """;
+
+        var result = GitHubIssueReporter.ScrubInlineCode(input);
+
+        Assert.Equal("""
+        Before [code example removed]
+        [code example removed]
+        After
+        """, result);
+        Assert.DoesNotContain("inlineSecret", result);
+        Assert.DoesNotContain("fencedSecret", result);
+        Assert.DoesNotContain("```", result);
     }
 
     [Fact]
