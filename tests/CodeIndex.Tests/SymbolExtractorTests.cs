@@ -14571,6 +14571,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Rust_DetectsUnsafeBlockInExpression()
+    {
+        const string content = """
+            fn demo() {
+                let value = unsafe {
+                    read_raw()
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+
+        var unsafeBlock = Assert.Single(symbols, s => s.Kind == "class" && s.Name == "unsafe");
+        Assert.Equal(2, unsafeBlock.Line);
+        Assert.Equal(2, unsafeBlock.BodyStartLine);
+        Assert.Equal(4, unsafeBlock.BodyEndLine);
+    }
+
+    [Fact]
     public void Extract_Rust_DetectsPubUseStatements()
     {
         var content = """

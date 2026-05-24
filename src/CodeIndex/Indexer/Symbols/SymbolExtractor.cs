@@ -1395,7 +1395,7 @@ public static partial class SymbolExtractor
             // fn with expanded modifiers: async, const, unsafe, default, extern (ABI optional) /
             // 拡張修飾子: async, const, unsafe, default, extern（ABI は省略可）
             new("function", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?(?:(?:async|const|unsafe|default|extern(?:\s+""[^""]+"")?)\s+)*fn\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("class",    new Regex(@"^\s*(?<name>unsafe)\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"\b(?<name>unsafe)\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
             new("struct",   new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?(?:struct|union)\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("enum",     new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?enum\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum variants / `Red`, `Ok(T)`, `Circle { radius: f64 }`, `Point`
