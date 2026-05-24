@@ -22,6 +22,8 @@ For test suite structure, shared helpers, and test-writing conventions, see [TES
 
 CI (`.github/workflows/dotnet.yml`, `release.yml`, `codeql.yml`) restores the solution with `--locked-mode`, so any drift between the committed lock files and the resolution graph fails the build instead of slipping into artifacts. Local development restores normally; the lock file is only enforced in CI.
 
+The normal build/test workflow also runs `dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive --no-restore` after locked restore and fails on any High or Critical NuGet advisory in direct or transitive runtime packages. Dependabot is configured for weekly NuGet and GitHub Actions update PRs in `.github/dependabot.yml`, so security fixes and routine dependency/action bumps are proposed before they become release surprises.
+
 The release `dotnet publish` (per-RID) and `dotnet pack` (NuGet packaging) steps intentionally do **not** set `RestoreLockedMode=true`. Those steps run runtime-specific restores that legitimately add lock entries that did not exist at solution-restore time (e.g. `net8.0/<rid>` runtime sections, `Microsoft.NET.ILLink.Tasks` for trimming). They still consume locked versions because `RestorePackagesWithLockFile=true` from `Directory.Build.props` forces every restore on the machine to resolve through the lock file. The supply-chain guarantee for `Microsoft.Data.Sqlite` and its `SQLitePCLRaw.*` graph is enforced by the solution-level locked restore that runs first.
 
 When you intentionally update a dependency (or add a new direct `PackageReference`), regenerate the lock files locally and commit the diff in the same change:
@@ -65,6 +67,8 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
 ```
 
 Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. Within each directory, `FileIndexer` loads `.gitignore` before `.cdidxignore`, appends both rule sets in that order, and honors later `!` patterns as re-includes. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
+
+Incremental refreshes that mutate `fts_chunks` increment `codeindex_meta.fts_incremental_writes_since_optimize`. When the counter reaches `DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold`, the update path runs `INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')`, resets the counter, and stamps `fts_last_optimized_at`. Users can run the same maintenance directly with `cdidx optimize --db <path>` or `cdidx index <projectPath> --optimize`; this may briefly hold the writer lock on large indexes.
 
 ### Extending the indexer
 
@@ -277,6 +281,11 @@ use `files(lang)` to resolve candidate files and then probe
 `JOIN files f ... WHERE f.lang = @lang AND s.kind = @kind`; on large indexes
 that shape can start from `idx_symbols_kind` and scan every symbol of the
 requested kind before checking file language (#1933).
+
+Large filtered CTEs must project only the columns consumed by downstream CTEs
+instead of using `SELECT *`. SQLite may materialize multi-use CTEs, so carrying
+unused symbol columns through hotspot-style query chains inflates temp rows and
+join width on large indexes (#1928).
 
 ### FTS5 sync triggers
 
@@ -797,6 +806,7 @@ Process exit codes are coarse (`0` success, `1` usage, `2` not-found, `3` db, `4
 
 - **No ORM** — Raw `Microsoft.Data.Sqlite` with parameterized queries. Keeps dependencies minimal and control explicit.
 - **Batch commits** — 500 records per transaction for write performance. Reduces fsync overhead.
+- **Partial batch failures** — `DbWriter` keeps the fast multi-row `INSERT` path for normal chunk and symbol batches. If SQLite rejects a batch, the writer rolls that batch back, retries rows under per-row `SAVEPOINT`s, commits the valid rows, skips only the failing rows, increments `BatchRowsSkipped`, and emits a warning containing the row identifier and SQLite error. This keeps one corrupt extracted row from discarding the rest of a large indexing batch (#1754).
 - **WAL mode + busy_timeout** — Write-Ahead Logging for concurrent read/write access and crash safety. 5-second busy timeout avoids immediate SQLITE_BUSY errors.
 - **Content-external FTS5 with triggers** — Avoids doubling storage by pointing to `chunks` table instead of storing a copy. Database triggers keep the FTS index in sync automatically.
 - **Reader snapshot isolation for bundled multi-statement reads** — Any read entry point that runs more than one SQL statement per call (`DbReader.GetStatus`, `DbReader.AnalyzeSymbol` for CLI `inspect` / MCP `analyze_symbol`, and `RepoMapBuilder.Build` for CLI `map` / MCP `repo_map`) wraps its body in a single `BEGIN DEFERRED` transaction so every sub-query resolves against the same WAL snapshot. Without this, a writer committing between two `COUNT(*)` statements can let a concurrent reader observe impossible mixed states (issue #180 exposed this as `files=836, refs=0` against a steady-state 44k-ref index). `DEFERRED` acquires only a `SHARED` lock on the first SELECT, so it does not block other writers, and the transaction is committed explicitly at the end to release that lock promptly. Sub-queries that open their own `SqliteDataReader` must scope the reader in an inner block so the handle closes before the outer `Commit()` — `SqliteTransaction.Commit()` fails if a reader on the same connection is still open. New multi-statement reader entry points should follow the same pattern; single-statement queries do not need it (SQLite auto-commit already gives statement-level snapshot isolation).
@@ -2167,6 +2177,8 @@ cdidx ./myproject --files src/app.cs        # 特定ファイルのみ
 
 `--commits` は `git diff-tree --no-commit-id -r --name-only` で変更ファイルパスを解決します。
 `--changed-between` は `git diff --name-status -M <old-ref> <new-ref>` を使い、rename の旧パスと新パスを両方含めるため、古い indexed path も purge できます。
+
+FTS5 を変更する差分更新は `codeindex_meta.fts_incremental_writes_since_optimize` を増やします。カウンタが `DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold` に達すると、更新経路は `INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')` を実行し、カウンタをリセットして `fts_last_optimized_at` を記録します。ユーザーは `cdidx optimize --db <path>` または `cdidx index <projectPath> --optimize` で同じ maintenance を手動実行できます。大きな index では短時間 writer lock を保持する可能性があります。
 
 VB.NET のコンテナ系パターンは `RegexOptions.IgnoreCase` と `VisualBasicEnd` ベースの範囲追跡を使うため、`Partial` の大小文字差や複数ファイルにまたがる型ファミリーでも、安定した定義範囲と `hotspots` 集計用メタデータを維持できる。
 
