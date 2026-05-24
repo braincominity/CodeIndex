@@ -282,6 +282,7 @@ jobs:
             sha256sum "$file"
           done > .MANIFEST.sha256.tmp
           mv .MANIFEST.sha256.tmp MANIFEST.sha256
+          touch -t 200001010000 MANIFEST.sha256
           find . -type f | sed 's#^\./##' | LC_ALL=C sort > "../artifacts/CodeIndex-${{ matrix.rid }}.members"
           tar czf "../artifacts/CodeIndex-${{ matrix.rid }}.tar.gz" -T "../artifacts/CodeIndex-${{ matrix.rid }}.members"
           tar tzf "../artifacts/CodeIndex-${{ matrix.rid }}.tar.gz" | LC_ALL=C sort > "../artifacts/CodeIndex-${{ matrix.rid }}.actual-members"
@@ -304,6 +305,7 @@ jobs:
             "$hash  $relative"
           }
           $manifestLines | Set-Content -NoNewline:$false -Encoding ascii publish\MANIFEST.sha256
+          (Get-Item publish\MANIFEST.sha256).LastWriteTimeUtc = $fixedTimestamp
           $files = Get-ChildItem publish -File -Recurse | Sort-Object FullName
           $relativeFiles = $files | ForEach-Object { [System.IO.Path]::GetRelativePath((Resolve-Path publish), $_.FullName) } | Sort-Object
           Push-Location publish
