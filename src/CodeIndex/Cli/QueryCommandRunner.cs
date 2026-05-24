@@ -1833,7 +1833,7 @@ public static class QueryCommandRunner
                     Console.WriteLine(JsonSerializer.Serialize(new QueryPathErrorJsonResult(filePath, "file not found in index"), CliJsonSerializerContextFactory.Create(jsonOptions).QueryPathErrorJsonResult));
                 else
                     Console.Error.WriteLine($"Error: '{filePath}' not found in index.");
-                return ZeroResultExitCode(options);
+                return CommandExitCodes.NotFound;
             }
 
             if (options.Json)

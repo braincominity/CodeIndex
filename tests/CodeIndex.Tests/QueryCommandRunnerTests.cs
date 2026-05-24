@@ -1987,7 +1987,7 @@ jobs:
             }
 
             var (outlineExitCode, outlineStdOut, outlineStdErr) = RunPublishedCli(publishedDll, publishDir, "outline", "src/missing.cs", "--db", dbPath, "--json");
-            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(CommandExitCodes.NotFound, outlineExitCode);
             Assert.Equal(string.Empty, outlineStdErr);
             using (var outlineJson = JsonDocument.Parse(outlineStdOut))
             {
