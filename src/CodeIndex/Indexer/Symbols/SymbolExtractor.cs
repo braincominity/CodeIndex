@@ -10038,7 +10038,7 @@ public static partial class SymbolExtractor
     private static void ExtractRustAssociatedTypeDefaultSymbols(long fileId, string[] lines, string[] structuralLines, List<SymbolRecord> symbols)
     {
         var traits = symbols
-            .Where(symbol => symbol.Kind == "interface"
+            .Where(symbol => symbol.Kind == "protocol"
                 && symbol.BodyStartLine is > 0
                 && symbol.BodyEndLine is > 0)
             .OrderBy(symbol => symbol.StartLine)
