@@ -160,6 +160,20 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void WrapHelpLine_VeryNarrowWidth_DoesNotEmitEmptyOrOverwideLines()
+    {
+        const string line = "  --include-symbol-kind <kind>[,<kind>]  Keep only matching symbol kinds during indexing";
+
+        var lines = ConsoleUi.WrapHelpLine(line, maxWidth: 12);
+
+        Assert.All(lines, wrapped =>
+        {
+            Assert.NotEmpty(wrapped);
+            Assert.True(wrapped.Length <= 12, wrapped);
+        });
+    }
+
+    [Fact]
     public void PrintUsage_QueryLinesMatchImplementedOptions()
     {
         var output = CaptureUsageOutput(showBanner: false);

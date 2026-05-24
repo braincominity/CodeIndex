@@ -818,18 +818,21 @@ public static class ConsoleUi
 
     private static IReadOnlyList<string> WrapLineByWords(string line, int maxWidth, string continuationIndent)
     {
+        maxWidth = Math.Max(1, maxWidth);
+        if (continuationIndent.Length >= maxWidth)
+            continuationIndent = new string(' ', Math.Max(0, Math.Min(2, maxWidth - 1)));
+
         var lines = new List<string>();
         var current = line;
         while (current.Length > maxWidth)
         {
             var breakAt = current.LastIndexOf(' ', Math.Min(maxWidth, current.Length - 1));
-            if (breakAt <= 0)
-                breakAt = current.IndexOf(' ', maxWidth);
-            if (breakAt <= 0)
-                break;
+            if (breakAt <= 0 || current[..breakAt].Trim().Length == 0)
+                breakAt = maxWidth;
 
             lines.Add(current[..breakAt].TrimEnd());
-            current = continuationIndent + current[(breakAt + 1)..].TrimStart();
+            var nextStart = breakAt < current.Length && current[breakAt] == ' ' ? breakAt + 1 : breakAt;
+            current = continuationIndent + current[nextStart..].TrimStart();
         }
 
         lines.Add(current);
