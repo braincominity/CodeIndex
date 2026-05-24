@@ -119,6 +119,38 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void RunFiles_FileAboveMaxFileBytes_PersistsFileTooLargeIssue()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var filePath = Path.Combine(projectRoot, "large.py");
+            File.WriteAllText(filePath, "print('start')\n" + new string('a', 256));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "large.py", "--max-file-bytes", "128", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(1, CountRows(dbPath, "files"));
+            Assert.Equal(0, CountRows(dbPath, "chunks"));
+            Assert.Equal(0, CountRows(dbPath, "symbols"));
+            Assert.Equal(0, CountRows(dbPath, "symbol_references"));
+
+            var issue = Assert.Single(ReadFileIssues(dbPath, "file_too_large"));
+            Assert.Equal("large.py", issue.Path);
+            Assert.Contains("File too large", issue.Message);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_NewIndexDatabase_RunsAnalyzeAfterSuccessfulIndex()
     {
         var projectRoot = CreateTempProject();
@@ -7878,6 +7910,35 @@ public class IndexCommandRunnerTests
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT COUNT(*) FROM {tableName}";
         return Convert.ToInt32(command.ExecuteScalar());
+    }
+
+    private static List<FileIssue> ReadFileIssues(string dbPath, string kind)
+    {
+        using var connection = new SqliteConnection($"Data Source={dbPath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT f.path, i.kind, i.line, i.message
+            FROM file_issues i
+            JOIN files f ON f.id = i.file_id
+            WHERE i.kind = @kind
+            ORDER BY f.path
+            """;
+        command.Parameters.AddWithValue("@kind", kind);
+        using var reader = command.ExecuteReader();
+        var issues = new List<FileIssue>();
+        while (reader.Read())
+        {
+            issues.Add(new FileIssue
+            {
+                Path = reader.GetString(0),
+                Kind = reader.GetString(1),
+                Line = reader.GetInt32(2),
+                Message = reader.GetString(3),
+            });
+        }
+
+        return issues;
     }
 
     private (int ExitCode, JsonElement Json, string Stderr) RunAndCaptureJsonWithStderr(string[] args)
