@@ -81,6 +81,33 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "Load");
     }
 
+    [Fact]
+    public void Extract_HtmlClassAttributes_IndexesIndividualClassReferences()
+    {
+        const string content = """
+            <div class="btn  btn-primary mx-2 md:flex hover:bg-red-500 [&>*]:mt-2"></div>
+            <span className='inline-flex  items-center'></span>
+            <section class="   "></section>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+        var classReferences = symbols
+            .Where(symbol => symbol.Kind == "reference")
+            .Select(symbol => (symbol.Name, symbol.Line))
+            .ToArray();
+
+        Assert.Contains(("btn", 1), classReferences);
+        Assert.Contains(("btn-primary", 1), classReferences);
+        Assert.Contains(("mx-2", 1), classReferences);
+        Assert.Contains(("md:flex", 1), classReferences);
+        Assert.Contains(("hover:bg-red-500", 1), classReferences);
+        Assert.Contains(("[&>*]:mt-2", 1), classReferences);
+        Assert.Contains(("inline-flex", 2), classReferences);
+        Assert.Contains(("items-center", 2), classReferences);
+        Assert.DoesNotContain(classReferences, symbol => string.IsNullOrWhiteSpace(symbol.Name));
+        Assert.DoesNotContain(("btn  btn-primary mx-2 md:flex hover:bg-red-500 [&>*]:mt-2", 1), classReferences);
+    }
+
     [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]
