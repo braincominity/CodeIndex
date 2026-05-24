@@ -490,15 +490,6 @@ public static class IndexCommandRunner
         // まだ clear しない。update モードの preflight が失敗しただけで healthy な DB を
         // 縮退状態に落とさないよう、clear は実際に書き込み直前で行う。
 
-        if (options.Rebuild)
-        {
-            db.ClearReadyFlags();
-            var rebuildWriter = new DbWriter(db);
-            rebuildWriter.ClearHotspotFamilyReady();
-            rebuildWriter.ClearMetadataTargetReady();
-            db.DropAll();
-        }
-
         db.InitializeSchema();
         AddToGitExclude(options.ProjectPath, dbPath);
 
