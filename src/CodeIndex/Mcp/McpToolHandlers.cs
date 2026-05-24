@@ -18,6 +18,8 @@ public partial class McpServer
 {
     private const int DefaultBatchQueryResponseByteLimit = MaxLineLength;
     private const string BatchQueryResponseByteLimitEnvVar = "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES";
+    internal const int MaxMcpArrayFilterCount = 100;
+    internal const int MaxMcpArrayFilterStringLength = 4096;
 
     // --- Tool implementations / ツール実装 ---
 
@@ -223,11 +225,97 @@ public partial class McpServer
     private static List<string> ReadStringList(JsonNode? args, string propertyName)
     {
         return args?[propertyName] is JsonArray array
-            ? array.Select(node => node?.GetValue<string>())
+            ? array.Select(node => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null)
                 .Where(value => !string.IsNullOrWhiteSpace(value))
                 .Cast<string>()
                 .ToList()
             : [];
+    }
+
+    private static JsonObject? ValidateCommonListArguments(JsonNode? args)
+    {
+        foreach (var propertyName in new[] { "path", "project", "excludePaths", "names" })
+        {
+            if (ValidateStringListArgument(args, propertyName) is JsonObject error)
+                return error;
+        }
+
+        return null;
+    }
+
+    private static JsonObject? ValidateStringListArgument(JsonNode? args, string propertyName)
+    {
+        var node = args?[propertyName];
+        if (node is null)
+            return null;
+
+        if (node is JsonArray array)
+        {
+            if (array.Count > MaxMcpArrayFilterCount)
+                return new JsonObject
+                {
+                    ["message"] = $"{propertyName} must contain at most {MaxMcpArrayFilterCount} entries.",
+                    ["invalid_count"] = array.Count - MaxMcpArrayFilterCount,
+                };
+
+            var invalidCount = 0;
+            var invalidSamples = new JsonArray();
+            for (var i = 0; i < array.Count; i++)
+            {
+                var element = array[i];
+                if (element is not JsonValue value || !value.TryGetValue<string>(out var text) || string.IsNullOrWhiteSpace(text))
+                {
+                    invalidCount++;
+                    if (invalidSamples.Count < 3)
+                        invalidSamples.Add($"[{i}]");
+                    continue;
+                }
+
+                if (text.Length > MaxMcpArrayFilterStringLength)
+                {
+                    invalidCount++;
+                    if (invalidSamples.Count < 3)
+                        invalidSamples.Add($"[{i}] length {text.Length}");
+                }
+            }
+
+            if (invalidCount > 0 && !(propertyName == "names" && invalidCount == array.Count))
+                return new JsonObject
+                {
+                    ["message"] = $"{propertyName} contains {invalidCount} invalid entr{(invalidCount == 1 ? "y" : "ies")}. Entries must be non-empty strings no longer than {MaxMcpArrayFilterStringLength} characters.",
+                    ["invalid_count"] = invalidCount,
+                    ["invalid_samples"] = invalidSamples,
+                };
+            return null;
+        }
+
+        if (node is JsonValue scalar && scalar.TryGetValue<string>(out var scalarText))
+        {
+            if (propertyName == "names")
+                return null;
+            if (propertyName == "path" && string.IsNullOrWhiteSpace(scalarText))
+                return null;
+            if (string.IsNullOrWhiteSpace(scalarText))
+                return new JsonObject
+                {
+                    ["message"] = $"{propertyName} cannot be empty or whitespace-only.",
+                    ["invalid_count"] = 1,
+                };
+            if (scalarText.Length > MaxMcpArrayFilterStringLength)
+                return new JsonObject
+                {
+                    ["message"] = $"{propertyName} must be no longer than {MaxMcpArrayFilterStringLength} characters.",
+                    ["invalid_count"] = 1,
+                    ["invalid_samples"] = new JsonArray { $"length {scalarText.Length}" },
+                };
+            return null;
+        }
+
+        return new JsonObject
+        {
+            ["message"] = $"{propertyName} must be a string or array of strings.",
+            ["invalid_count"] = 1,
+        };
     }
 
     private static bool TryResolveSearchExactArgument(JsonNode? args, out bool exact, out string? error)
@@ -1639,6 +1727,16 @@ public partial class McpServer
                 AppendSlotError(toolName, toolArgs, slotStopwatch, "batch_query cannot be nested inside batch_query.",
                     category: McpErrorEnvelope.CategoryInvalidArgument,
                     suggestion: "Flatten the nested batch_query into top-level slots.",
+                    retrySafe: false);
+                continue;
+            }
+
+            if (ValidateCommonListArguments(toolArgs) is JsonObject listArgumentError)
+            {
+                AppendSlotError(toolName, toolArgs, slotStopwatch,
+                    listArgumentError["message"]?.GetValue<string>() ?? "Invalid list argument",
+                    category: McpErrorEnvelope.CategoryInvalidArgument,
+                    suggestion: "Tool argument validation failed. Inspect the tool's `inputSchema` via tools/list and adjust the call.",
                     retrySafe: false);
                 continue;
             }

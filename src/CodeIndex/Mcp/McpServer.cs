@@ -1622,6 +1622,17 @@ public partial class McpServer : IDisposable
             return disabledResponse;
         }
 
+        if (ValidateCommonListArguments(args) is JsonObject listArgumentError)
+        {
+            var validationResponse = CreateToolErrorResponse(id, listArgumentError["message"]?.GetValue<string>() ?? "Invalid list argument",
+                category: McpErrorEnvelope.CategoryInvalidArgument,
+                suggestion: "Tool argument validation failed. Inspect the tool's `inputSchema` via tools/list and adjust the call.",
+                retrySafe: false,
+                extraData: listArgumentError);
+            TryEmitAudit(toolName, id, args, validationResponse, DateTimeOffset.UtcNow, 0.0, errorType: "invalid_argument");
+            return validationResponse;
+        }
+
         Database.DbDebug.ResetContext();
         var metricsStartedAt = DateTimeOffset.UtcNow;
         var metricsStopwatch = System.Diagnostics.Stopwatch.StartNew();
