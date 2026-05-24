@@ -16634,6 +16634,39 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_MergeActionsEmitColumnReferences()
+    {
+        // issue #2100: MERGE action bodies carry target/source column lineage in UPDATE SET,
+        // INSERT column lists, VALUES expressions, and the ON join condition.
+        // issue #2100: MERGE action body の UPDATE SET、INSERT column list、VALUES 式、
+        // ON join condition から target/source column lineage を落としてはいけない。
+        const string content = """
+            MERGE INTO audit_log AS t
+            USING staging_log AS s
+            ON t.id = s.id AND t.account_id = s.account_id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action, updated_at = COALESCE(s.updated_at, t.updated_at)
+            WHEN NOT MATCHED THEN
+                INSERT (id, action, updated_at)
+                VALUES (s.id, s.action, COALESCE(s.updated_at, CURRENT_TIMESTAMP));
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "id" && r.ReferenceKind == "join_condition_reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "account_id" && r.ReferenceKind == "join_condition_reference"));
+        Assert.Contains(references, r => r.SymbolName == "action" && r.ReferenceKind == "column_reference");
+        Assert.Contains(references, r => r.SymbolName == "updated_at" && r.ReferenceKind == "column_reference");
+        Assert.True(references.Count(r => r.SymbolName == "id" && r.ReferenceKind == "column_reference") >= 2);
+        Assert.True(references.Count(r => r.SymbolName == "action" && r.ReferenceKind == "column_reference") >= 3);
+        Assert.True(references.Count(r => r.SymbolName == "updated_at" && r.ReferenceKind == "column_reference") >= 4);
+        Assert.DoesNotContain(references, r => r.SymbolName == "CURRENT_TIMESTAMP" && r.ReferenceKind == "column_reference");
+    }
+
+    [Fact]
     public void Extract_SQL_HashCommentsDoNotLeakAsTempObjects()
     {
         // issue #653 / #656: after restoring temp-table support, MySQL-style `# comment` tails must
