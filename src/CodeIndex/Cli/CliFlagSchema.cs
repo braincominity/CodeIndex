@@ -54,7 +54,7 @@ internal static class CliFlagSchema
     [
         "index", "backfill-fold", "optimize", "search", "definition", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "db", "report", "license",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "db", "vacuum", "report", "license",
     ];
 
     // Commands that accept the `--` end-of-options marker so a user can pass a literal
@@ -144,7 +144,7 @@ internal static class CliFlagSchema
     [
         "index", "backfill-fold", "optimize", "search", "definition", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "db", "report", "batch", "mcp",
+        "validate", "deps", "impact", "unused", "hotspots", "db", "vacuum", "report", "batch", "mcp",
     ];
 
     private static readonly string[] DataDirCommands =
@@ -156,7 +156,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] JsonCommands =
     [
-        "index", "backfill-fold", "optimize", "search", "definition", "references", "callers", "callees",
+        "index", "backfill-fold", "optimize", "vacuum", "search", "definition", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
         "validate", "deps", "impact", "unused", "hotspots", "languages", "db", "report",
     ];

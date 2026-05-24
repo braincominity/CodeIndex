@@ -65,7 +65,7 @@ The test project mirrors the production areas closely.
 - `DbRecoveryTests.cs`
   Database corruption recovery and graceful degradation behavior. Filesystem setup failures for `cdidx index` (read-only DB files and unwritable DB parent directories) are covered in `IndexCommandRunnerTests.cs` so they exercise the same CLI JSON/stderr boundary users see.
 - `JsonOutputSnapshotTests.cs`, `JsonOutputSnapshotHelper.cs`
-  Golden-file regression fixtures for the CLI `--json` output contracts (issue #1548). Each test runs one command (`status`, `search`, `references`, `impact`, `excerpt`) against a deterministic in-memory fixture, normalizes volatile fields (timestamps, absolute paths, commit SHAs, FTS5 scores), and diffs against the matching file under `tests/CodeIndex.Tests/golden/`. Renames, removals, reordered arrays, or new keys fail the snapshot so the contract change is forced to land alongside an intentional golden update. See "JSON `--json` output snapshots" below for the update procedure.
+  Golden-file regression fixtures for the CLI `--json` output contracts (issue #1548). Each test runs one command (`status`, `search`, `references`, `impact`, `excerpt`) against a deterministic in-memory fixture, normalizes volatile fields (timestamps, absolute paths, commit SHAs, FTS5 scores, SQLite page counts), and diffs against the matching file under `tests/CodeIndex.Tests/golden/`. Renames, removals, reordered arrays, or new keys fail the snapshot so the contract change is forced to land alongside an intentional golden update. See "JSON `--json` output snapshots" below for the update procedure.
 - `PropertyBasedParserTests.cs`
   FsCheck-driven property tests for parser-heavy paths called out in issue #1572: `ArgHelper.WantsHelp` and `ProgramRunner.IsProjectPathArg` never throw on arbitrary inputs; `FileIndexer.NormalizePathSeparators` is idempotent under double application; the literal-safe FTS5 sanitizer (`DbReader.SanitizeFtsQuery`) always emits a query that a real in-memory FTS5 virtual table can parse. They complement, not replace, the example-based tests in `ArgHelperTests.cs` / `QueryCommandRunnerTests.cs`.
 - `TestProjectHelper.cs`, `TestConsoleLock.cs`
@@ -136,7 +136,7 @@ For boundary tests, use the smallest fixture that still crosses the boundary. If
 `JsonOutputSnapshotTests` and `JsonOutputSnapshotHelper` form a small golden-file harness that catches accidental shape drift in CLI `--json` output (renamed keys, removed keys, reordered top-level arrays, new keys without a contract update). Use them alongside the narrower assertion-style JSON tests in `QueryCommandRunnerTests`; they complement each other rather than replace it.
 
 - Goldens live at `tests/CodeIndex.Tests/golden/<command>.json` and are checked in to the source tree.
-- `JsonOutputSnapshotHelper` normalizes volatile fields before comparison: `indexed_at` / `latest_modified` / other timestamp keys → `<TIMESTAMP>`; `git_head` / `indexed_head_commit` / other commit-SHA keys → `<COMMIT_SHA>`; `project_root` → `<PROJECT_ROOT>`; `version` → `<VERSION>`; per-result `score` (BM25, FTS5-implementation-sensitive) → `<SCORE>`. Per-test temp paths are redacted via the helper's `BuildPathReplacements`.
+- `JsonOutputSnapshotHelper` normalizes volatile fields before comparison: `indexed_at` / `latest_modified` / other timestamp keys → `<TIMESTAMP>`; `git_head` / `indexed_head_commit` / other commit-SHA keys → `<COMMIT_SHA>`; `project_root` → `<PROJECT_ROOT>`; `version` → `<VERSION>`; per-result `score` (BM25, FTS5-implementation-sensitive) → `<SCORE>`; SQLite `page_count` → `<COUNT>`. Per-test temp paths are redacted via the helper's `BuildPathReplacements`.
 - When a shape change is intentional, regenerate the matching golden(s) by setting `UPDATE_SNAPSHOTS=1` and re-running only the snapshot tests, then review the diff before committing:
 
   ```bash
@@ -244,7 +244,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `DbRecoveryTests.cs`
   DB破損からの復旧とグレースフル劣化のテスト。`cdidx index` の filesystem setup failure（read-only DB file や書き込み不可の DB 親ディレクトリ）は、ユーザーが見る CLI JSON/stderr 境界を通すため `IndexCommandRunnerTests.cs` で扱います。
 - `JsonOutputSnapshotTests.cs`、`JsonOutputSnapshotHelper.cs`
-  CLI の `--json` 出力契約に対するゴールデンファイル回帰フィクスチャ (issue #1548)。各テストは `status` / `search` / `references` / `impact` / `excerpt` を決定的なインメモリ fixture に対して実行し、揺らぐフィールド（timestamp、絶対パス、commit SHA、FTS5 score など）を正規化したうえで `tests/CodeIndex.Tests/golden/` 配下のファイルと差分比較します。フィールドの rename / 削除 / 並び替え / 新規追加が起きると snapshot が失敗するため、契約変更は意図的な golden 更新と同じ PR で揃えざるを得ません。更新手順は下記「JSON `--json` 出力 snapshot」を参照してください。
+  CLI の `--json` 出力契約に対するゴールデンファイル回帰フィクスチャ (issue #1548)。各テストは `status` / `search` / `references` / `impact` / `excerpt` を決定的なインメモリ fixture に対して実行し、揺らぐフィールド（timestamp、絶対パス、commit SHA、FTS5 score、SQLite page count など）を正規化したうえで `tests/CodeIndex.Tests/golden/` 配下のファイルと差分比較します。フィールドの rename / 削除 / 並び替え / 新規追加が起きると snapshot が失敗するため、契約変更は意図的な golden 更新と同じ PR で揃えざるを得ません。更新手順は下記「JSON `--json` 出力 snapshot」を参照してください。
 - `PropertyBasedParserTests.cs`
   issue #1572 で挙げられたパーサー系経路に対する FsCheck 駆動の property テスト: `ArgHelper.WantsHelp` と `ProgramRunner.IsProjectPathArg` が任意入力で例外を投げないこと、`FileIndexer.NormalizePathSeparators` が二重適用で idempotent であること、literal-safe な FTS5 サニタイザ (`DbReader.SanitizeFtsQuery`) が常にインメモリ FTS5 仮想テーブルで parse 可能なクエリを出力すること。`ArgHelperTests.cs` / `QueryCommandRunnerTests.cs` の例ベーステストを置き換えるものではなく補完します。
 - `TestProjectHelper.cs`、`TestConsoleLock.cs`
@@ -314,7 +314,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 `JsonOutputSnapshotTests` と `JsonOutputSnapshotHelper` は CLI `--json` 出力の形状ドリフト（キーの rename、削除、トップレベル配列の並び替え、契約更新を伴わない新規キー）を検出する小さなゴールデンファイル harness です。既存の `QueryCommandRunnerTests` 内の絞り込みアサーション形式の JSON テストを置き換えるものではなく、補完するものとして併用してください。
 
 - ゴールデンファイルは `tests/CodeIndex.Tests/golden/<command>.json` に置かれ、ソースツリーに checked in されています。
-- `JsonOutputSnapshotHelper` は比較前に揺らぐフィールドを正規化します: `indexed_at` / `latest_modified` などの timestamp 系キー → `<TIMESTAMP>`、`git_head` / `indexed_head_commit` などの commit SHA 系キー → `<COMMIT_SHA>`、`project_root` → `<PROJECT_ROOT>`、`version` → `<VERSION>`、各 result の `score`（BM25、FTS5 実装依存）→ `<SCORE>`。テストごとの temp パスは helper の `BuildPathReplacements` で除去されます。
+- `JsonOutputSnapshotHelper` は比較前に揺らぐフィールドを正規化します: `indexed_at` / `latest_modified` などの timestamp 系キー → `<TIMESTAMP>`、`git_head` / `indexed_head_commit` などの commit SHA 系キー → `<COMMIT_SHA>`、`project_root` → `<PROJECT_ROOT>`、`version` → `<VERSION>`、各 result の `score`（BM25、FTS5 実装依存）→ `<SCORE>`、SQLite の `page_count` → `<COUNT>`。テストごとの temp パスは helper の `BuildPathReplacements` で除去されます。
 - 形状の変更が意図的な場合は、`UPDATE_SNAPSHOTS=1` を設定して snapshot テストだけを再実行し、生成された差分をレビューしてからコミットしてください:
 
   ```bash

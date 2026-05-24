@@ -2205,6 +2205,51 @@ public static class QueryCommandRunner
         });
     }
 
+    public static int RunVacuum(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        if (TryWriteUnsupportedOptionError("vacuum", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("vacuum")))
+            return CommandExitCodes.UsageError;
+        var explicitDbPathError = BuildExplicitDbPathParseError(options);
+        if (explicitDbPathError != null && explicitDbPathError.Contains(CommandErrorCodes.DbNotFound, StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine(explicitDbPathError);
+            Console.Error.WriteLine("Hint: point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one.");
+            return CommandExitCodes.NotFound;
+        }
+        if (TryWriteParseError(options, "vacuum"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteUnexpectedPositionals("vacuum", options))
+            return CommandExitCodes.UsageError;
+
+        if (!DbContext.TryValidateExistingCodeIndexDb(options.DbPath, out var validationMessage, out var isNotFound))
+        {
+            Console.Error.WriteLine($"Error [{(isNotFound ? CommandErrorCodes.DbNotFound : CommandErrorCodes.DbError)}]: {validationMessage}");
+            Console.Error.WriteLine(isNotFound
+                ? "Hint: point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one."
+                : "Hint: point `--db` at an existing CodeIndex database created by `cdidx index`, then retry `cdidx vacuum`.");
+            return isNotFound ? CommandExitCodes.NotFound : CommandExitCodes.DatabaseError;
+        }
+
+        using var db = new DbContext(options.DbPath);
+        var result = db.RunIncrementalVacuum();
+        if (options.Json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                result,
+                CliJsonSerializerContextFactory.Create(jsonOptions).VacuumResult));
+        }
+        else
+        {
+            Console.WriteLine($"Vacuum complete: reclaimed {result.PagesReclaimed:N0} page(s) ({result.BytesReclaimed:N0} bytes).");
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Page size", $"{result.PageSize:N0} bytes"));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Pages", $"{result.PageCountBefore:N0} -> {result.PageCountAfter:N0}"));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Freelist", $"{result.FreelistCountBefore:N0} -> {result.FreelistCountAfter:N0}"));
+        }
+
+        return CommandExitCodes.Success;
+    }
+
     public static int RunImpact(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var previewOptionError = ValidatePreviewOptions("impact", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);

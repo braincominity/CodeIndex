@@ -1,3 +1,4 @@
+using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
@@ -68,6 +69,103 @@ public class DatabaseTests : IDisposable
         Assert.Equal(2, _writer.RecordFtsIncrementalWrite());
         Assert.True(_writer.OptimizeFtsIfIncrementalWriteThresholdReached(threshold: 2));
         Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
+    }
+
+    [Fact]
+    public void Constructor_NewDatabaseEnablesIncrementalAutoVacuum()
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "PRAGMA auto_vacuum";
+
+        Assert.Equal(2L, (long)cmd.ExecuteScalar()!);
+    }
+
+    [Fact]
+    public void RunIncrementalVacuum_ReclaimsFreelistPages()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_vacuum_test_{Guid.NewGuid():N}.db");
+        try
+        {
+            VacuumResult result;
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                using (var cmd = db.Connection.CreateCommand())
+                {
+                    cmd.CommandText = @"
+                        CREATE TABLE vacuum_payload (id INTEGER PRIMARY KEY, payload BLOB);
+                        WITH RECURSIVE n(value) AS (
+                            SELECT 1
+                            UNION ALL
+                            SELECT value + 1 FROM n WHERE value < 128
+                        )
+                        INSERT INTO vacuum_payload (payload)
+                        SELECT randomblob(4096) FROM n;
+                        DELETE FROM vacuum_payload;";
+                    cmd.ExecuteNonQuery();
+                }
+
+                result = db.RunIncrementalVacuum();
+            }
+
+            Assert.Equal("ok", result.Status);
+            Assert.True(result.PageSize > 0);
+            Assert.True(result.FreelistCountBefore > 0);
+            Assert.True(result.FreelistCountAfter < result.FreelistCountBefore);
+            Assert.True(result.PagesReclaimed > 0);
+            Assert.True(result.BytesReclaimed > 0);
+        }
+        finally
+        {
+            DeleteDbFiles(dbPath);
+        }
+    }
+
+    [Fact]
+    public void RunIncrementalVacuum_ConvertsLegacyNoAutoVacuumDatabase()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_legacy_vacuum_test_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                    PRAGMA auto_vacuum=NONE;
+                    PRAGMA application_id=1128544600;
+                    CREATE TABLE files (id INTEGER PRIMARY KEY);
+                    CREATE TABLE chunks (id INTEGER PRIMARY KEY);
+                    CREATE TABLE symbols (id INTEGER PRIMARY KEY);
+                    CREATE TABLE vacuum_payload (id INTEGER PRIMARY KEY, payload BLOB);
+                    WITH RECURSIVE n(value) AS (
+                        SELECT 1
+                        UNION ALL
+                        SELECT value + 1 FROM n WHERE value < 128
+                    )
+                    INSERT INTO vacuum_payload (payload)
+                    SELECT randomblob(4096) FROM n;
+                    DELETE FROM vacuum_payload;";
+                cmd.ExecuteNonQuery();
+            }
+
+            VacuumResult result;
+            using (var db = new DbContext(dbPath))
+            {
+                result = db.RunIncrementalVacuum();
+                using var autoVacuumCmd = db.Connection.CreateCommand();
+                autoVacuumCmd.CommandText = "PRAGMA auto_vacuum";
+                Assert.Equal(2L, (long)autoVacuumCmd.ExecuteScalar()!);
+            }
+
+            Assert.True(result.FreelistCountBefore > 0);
+            Assert.Equal(0, result.FreelistCountAfter);
+            Assert.True(result.PagesReclaimed > 0);
+        }
+        finally
+        {
+            DeleteDbFiles(dbPath);
+        }
     }
 
     [Fact]

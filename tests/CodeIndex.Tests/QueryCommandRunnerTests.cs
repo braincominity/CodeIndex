@@ -152,6 +152,148 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatusJson_ReportsSqlitePageMetrics_Issue1631()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_page_metrics");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App { }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var settings = document.RootElement.GetProperty("db_pragma_settings");
+            Assert.True(settings.GetProperty("page_count").GetInt64() > 0);
+            Assert.True(settings.GetProperty("page_size").GetInt64() > 0);
+            Assert.True(settings.GetProperty("freelist_count").GetInt64() >= 0);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunVacuum_RejectsMissingDatabase_Issue1631()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_missing_db");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "missing.db");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(CommandErrorCodes.DbNotFound, stderr);
+            Assert.False(File.Exists(dbPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunVacuum_RejectsNonCodeIndexDatabase_Issue1631()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_foreign_db");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "foreign.db");
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "CREATE TABLE user_data(id INTEGER PRIMARY KEY, value TEXT);";
+                command.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(CommandErrorCodes.DbError, stderr);
+            Assert.Contains("not an existing CodeIndex DB", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunVacuum_RejectsLookalikeNonCodeIndexDatabase_Issue1631()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_lookalike_db");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "lookalike.db");
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = @"
+                    CREATE TABLE files (id INTEGER PRIMARY KEY);
+                    CREATE TABLE chunks (id INTEGER PRIMARY KEY);
+                    CREATE TABLE symbols (id INTEGER PRIMARY KEY);";
+                command.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(CommandErrorCodes.DbError, stderr);
+            Assert.Contains("not an existing CodeIndex DB", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunVacuum_RejectsReadOnlyUriWithNeutralWritableMessage_Issue1631()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_readonly_uri");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+                ["--db", dbUri],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(CommandErrorCodes.DbError, stderr);
+            Assert.Contains("database must be writable", stderr);
+            Assert.DoesNotContain("backfill-fold", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_EmitsVisibilityInJsonAndHumanOutput_Issue1868()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_visibility_output");
