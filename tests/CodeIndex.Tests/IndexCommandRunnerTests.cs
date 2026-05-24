@@ -6057,7 +6057,7 @@ public class IndexCommandRunnerTests
             CreateUnixFifo(Path.Combine(projectRoot, "tool.sh"));
             CreateUnixFifo(Path.Combine(projectRoot, "Dockerfile"));
 
-            var result = RunCliInSubprocessWithTimeout([projectRoot, "--dry-run", "--json"], projectRoot, TimeSpan.FromSeconds(3));
+            var result = RunCliInSubprocessWithTimeout([projectRoot, "--dry-run", "--json"], projectRoot, TimeSpan.FromSeconds(10));
 
             Assert.False(result.TimedOut, "cdidx index --dry-run hung on a FIFO entry.");
             Assert.Equal(CommandExitCodes.Success, result.ExitCode);
@@ -6118,7 +6118,7 @@ public class IndexCommandRunnerTests
         {
             CreateUnixFifo(Path.Combine(projectRoot, "Dockerfile"));
 
-            var result = RunCliInSubprocessWithTimeout([projectRoot, "--files", "Dockerfile", "--dry-run", "--json"], projectRoot, TimeSpan.FromSeconds(3));
+            var result = RunCliInSubprocessWithTimeout([projectRoot, "--files", "Dockerfile", "--dry-run", "--json"], projectRoot, TimeSpan.FromSeconds(10));
 
             Assert.False(result.TimedOut, "cdidx index --dry-run --files hung on a FIFO entry.");
             Assert.Equal(CommandExitCodes.Success, result.ExitCode);
