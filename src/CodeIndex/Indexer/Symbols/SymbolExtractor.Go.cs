@@ -96,7 +96,7 @@ public static partial class SymbolExtractor
         var kind = Regex.IsMatch(normalizedTypeText, @"\bstruct\b")
             ? "struct"
             : Regex.IsMatch(normalizedTypeText, @"\binterface\b")
-                ? "interface"
+                ? "protocol"
                 : "class";
         if (HasGoSymbol(symbols, fileId, lineIndex + 1, kind, name))
             return true;
@@ -121,7 +121,7 @@ public static partial class SymbolExtractor
             },
             rawLine);
 
-        if (kind is "struct" or "interface")
+        if (kind is "struct" or "protocol")
             goTypeBodyDepth = CountGoBraceDelta(typeText);
 
         return true;

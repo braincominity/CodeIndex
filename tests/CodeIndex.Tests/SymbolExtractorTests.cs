@@ -395,7 +395,7 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Foundation");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "SwiftUI");
-        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "StoreProtocol");
+        Assert.Contains(symbols, s => s.Kind == "protocol" && s.Name == "StoreProtocol");
         Assert.Contains(symbols, s => s.Kind == "associatedtype" && s.Name == "Element");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "UserStore");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "currentUser" && s.ContainerName == "UserStore");
@@ -1410,7 +1410,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Alias");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Score");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Node");
-        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Reader");
+        Assert.Contains(symbols, s => s.Kind == "protocol" && s.Name == "Reader");
     }
 
     [Fact]
@@ -12410,7 +12410,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "go", content);
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Stack");
-        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Container");
+        Assert.Contains(symbols, s => s.Kind == "protocol" && s.Name == "Container");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Alias");
     }
 
@@ -12444,7 +12444,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "go", content);
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Stack");
-        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Container");
+        Assert.Contains(symbols, s => s.Kind == "protocol" && s.Name == "Container");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Alias");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "MaxRetries");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DefaultTimeout");
@@ -12472,9 +12472,17 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "go", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Close");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "io.Reader");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "io.Writer");
+        var close = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "Close");
+        Assert.Equal("protocol", close.ContainerKind);
+        Assert.Equal("Reader", close.ContainerName);
+
+        var reader = Assert.Single(symbols, s => s.Kind == "import" && s.Name == "io.Reader");
+        Assert.Equal("protocol", reader.ContainerKind);
+        Assert.Equal("Reader", reader.ContainerName);
+
+        var writer = Assert.Single(symbols, s => s.Kind == "import" && s.Name == "io.Writer");
+        Assert.Equal("protocol", writer.ContainerKind);
+        Assert.Equal("Store", writer.ContainerName);
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Reader");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Store");
     }
@@ -14526,7 +14534,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Handler");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ID");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Callback");
-        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Logger");
+        Assert.Contains(symbols, s => s.Kind == "protocol" && s.Name == "Logger");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "MaxRetries");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "DefaultTimeout");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "GlobalConfig");
@@ -21155,13 +21163,13 @@ public class SymbolExtractorTests
     [InlineData("typescript", "export interface IFoo { }", "interface")]
     [InlineData("typescript", "export enum Status { A }", "enum")]
     [InlineData("go", "type Foo struct { }", "struct")]
-    [InlineData("go", "type Foo interface { }", "interface")]
+    [InlineData("go", "type Foo interface { }", "protocol")]
     [InlineData("rust", "pub struct Config { }", "struct")]
     [InlineData("rust", "pub enum Color { }", "enum")]
-    [InlineData("rust", "pub trait Foo { }", "interface")]
+    [InlineData("rust", "pub trait Foo { }", "protocol")]
     [InlineData("swift", "struct Config { }", "struct")]
     [InlineData("swift", "enum Color { }", "enum")]
-    [InlineData("swift", "protocol Foo { }", "interface")]
+    [InlineData("swift", "protocol Foo { }", "protocol")]
     [InlineData("c", "struct Config { };", "struct")]
     [InlineData("c", "enum Color { RED };", "enum")]
     [InlineData("cpp", "struct Config { };", "struct")]
