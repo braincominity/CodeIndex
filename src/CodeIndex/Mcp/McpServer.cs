@@ -90,6 +90,9 @@ public partial class McpServer : IDisposable
     // にする。`initialize` 毎に上書きすることで再接続時に caller identity が追随する。
     private string? _clientName;
     private string? _clientVersion;
+    private JsonNode? _clientCapabilities;
+    private JsonArray _clientRoots = [];
+    private string _mcpLogLevel = "info";
     // Opaque per-server-instance session id copied into suggestion attribution records (#1873).
     // #1873 の提案 attribution 用に保存する、サーバーインスタンス単位の不透明セッションID。
     private readonly string _sessionId = Guid.NewGuid().ToString("D");
@@ -900,10 +903,11 @@ public partial class McpServer : IDisposable
             "resources/read" => HandleResourcesRead(id, request["params"]),
             "prompts/list" => HandlePromptsList(id),
             "prompts/get" => HandlePromptsGet(id, request["params"]),
+            "logging/setLevel" => HandleLoggingSetLevel(id, request["params"]),
             "ping" => CreateSuccessResponse(hasId, id, new JsonObject()),
             _ => CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Method not found: {method}",
                 category: McpErrorEnvelope.CategoryMethodNotFound,
-                suggestion: "Supported methods: initialize, tools/list, tools/call, resources/list, resources/read, prompts/list, prompts/get, ping, notifications/initialized, notifications/cancelled, notifications/shutdown.",
+                suggestion: "Supported methods: initialize, tools/list, tools/call, resources/list, resources/read, prompts/list, prompts/get, logging/setLevel, ping, notifications/initialized, notifications/cancelled, notifications/shutdown.",
                 retrySafe: false),
         });
     }
@@ -1044,6 +1048,7 @@ public partial class McpServer : IDisposable
     private JsonNode HandleInitialize(JsonNode? id, JsonNode? _params)
     {
         CaptureClientInfo(_params);
+        CaptureClientSession(_params);
         // Caller stickiness: allow upgrading from the default "unknown" bucket to a named
         // identity, but reject re-initialize attempts that swap one named identity for
         // another. Otherwise a single networked session could reset its rate-limit bucket
@@ -1092,7 +1097,9 @@ public partial class McpServer : IDisposable
                 ["prompts"] = new JsonObject
                 {
                     ["listChanged"] = false
-                }
+                },
+                ["logging"] = new JsonObject(),
+                ["sampling"] = false
             },
             ["serverInfo"] = new JsonObject
             {
@@ -1146,6 +1153,40 @@ public partial class McpServer : IDisposable
         _clientName = TryReadStringMember(info, "name");
         _clientVersion = TryReadStringMember(info, "version");
     }
+
+    private void CaptureClientSession(JsonNode? initializeParams)
+    {
+        _clientCapabilities = null;
+        _clientRoots = [];
+        if (initializeParams is not JsonObject obj)
+            return;
+
+        if (obj.TryGetPropertyValue("clientCapabilities", out var capabilities) && capabilities is not null)
+            _clientCapabilities = JsonNode.Parse(capabilities.ToJsonString());
+
+        if (TryReadStringValue(obj["rootUri"]) is { Length: > 0 } rootUri)
+            _clientRoots.Add(rootUri);
+
+        if (obj["roots"] is JsonArray roots)
+        {
+            foreach (var root in roots)
+            {
+                var uri = TryReadStringValue(root?["uri"]) ?? TryReadStringValue(root);
+                if (!string.IsNullOrWhiteSpace(uri))
+                    _clientRoots.Add(uri);
+            }
+        }
+    }
+
+    internal JsonNode? ClientCapabilitiesForTests => _clientCapabilities is null ? null : JsonNode.Parse(_clientCapabilities.ToJsonString());
+
+    internal string[] ClientRootsForTests => _clientRoots
+        .Select(root => root?.GetValue<string>())
+        .Where(root => !string.IsNullOrWhiteSpace(root))
+        .Cast<string>()
+        .ToArray();
+
+    internal string McpLogLevelForTests => _mcpLogLevel;
 
     private static string? TryReadStringMember(JsonObject obj, string key)
     {
@@ -1291,6 +1332,21 @@ public partial class McpServer : IDisposable
         });
     }
 
+    private JsonNode HandleLoggingSetLevel(JsonNode? id, JsonNode? setLevelParams)
+    {
+        var level = TryReadStringValue(setLevelParams?["level"]);
+        if (!IsSupportedMcpLogLevel(level))
+            return CreateErrorResponse(hasId: true, id: id, code: -32602, message: "Invalid logging level",
+                category: McpErrorEnvelope.CategoryInvalidArgument,
+                suggestion: "logging/setLevel requires params.level to be one of: debug, info, notice, warning, error.",
+                retrySafe: false);
+
+        var previous = _mcpLogLevel;
+        _mcpLogLevel = level!;
+        EmitLogNotification("info", $"MCP logging level changed from {previous} to {_mcpLogLevel}.");
+        return CreateSuccessResponse(true, id, new JsonObject());
+    }
+
     private static JsonObject CreatePromptDefinition(string name, string description, string argumentName, string argumentDescription)
         => new()
         {
@@ -1334,6 +1390,9 @@ public partial class McpServer : IDisposable
 
     private static string? TryReadStringValue(JsonNode? node)
         => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
+    private static bool? TryReadBooleanValue(JsonNode? node)
+        => node is JsonValue value && value.TryGetValue<bool>(out var flag) ? flag : null;
 
     private static string GetResourceMimeType(string? lang)
         => lang?.ToLowerInvariant() switch
@@ -1692,7 +1751,7 @@ public partial class McpServer : IDisposable
 
     private void EmitProgressNotification(JsonNode? progressToken, long progress, long? total, string? message = null)
     {
-        if (progressToken is null || _currentOutOfBandFrameWriter.Value is not { } writer)
+        if (progressToken is null || !ClientSupportsProgressNotifications() || _currentOutOfBandFrameWriter.Value is not { } writer)
             return;
 
         var parameters = new JsonObject
@@ -1713,6 +1772,30 @@ public partial class McpServer : IDisposable
         };
         writer(notification.ToJsonString(_jsonOptions));
     }
+
+    private void EmitLogNotification(string level, string message)
+    {
+        if (_currentOutOfBandFrameWriter.Value is not { } writer)
+            return;
+
+        var notification = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["method"] = "notifications/message",
+            ["params"] = new JsonObject
+            {
+                ["level"] = level,
+                ["logger"] = "cdidx",
+                ["data"] = message,
+            },
+        };
+        writer(notification.ToJsonString(_jsonOptions));
+    }
+
+    private bool ClientSupportsProgressNotifications()
+        => TryReadBooleanValue(_clientCapabilities?["experimental"]?["progress"]) == true
+            || TryReadBooleanValue(_clientCapabilities?["progress"]) == true
+            || TryReadBooleanValue(_clientCapabilities?["notifications"]?["progress"]) == true;
 
     /// <summary>
     /// Emit a single audit record for the just-executed tool call. Inspects the wire
@@ -1916,6 +1999,9 @@ public partial class McpServer : IDisposable
 
     internal static string BuildUnknownNotificationLog(string method) =>
         $"[cdidx-mcp] Ignoring unknown notification: {method}";
+
+    internal static bool IsSupportedMcpLogLevel(string? level)
+        => level is "debug" or "info" or "notice" or "warning" or "error";
 
     // Wire-safe error body for the tool catch-all. Mentions the tool and the
     // exception type so the client can branch (retry vs. surface to user)

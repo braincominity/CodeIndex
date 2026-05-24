@@ -1257,8 +1257,25 @@ public partial class McpServer
             structured["sqlGraphContractReady"] = status.SqlGraphContractReady;
             if (status.SqlGraphContractDegradedReason != null)
                 structured["sqlGraphContractDegradedReason"] = status.SqlGraphContractDegradedReason;
+            structured["mcp_session"] = BuildMcpSessionStatus();
             return CreateToolResult(id, "Database stats returned.", structured);
         });
+    }
+
+    private JsonObject BuildMcpSessionStatus()
+    {
+        var roots = new JsonArray();
+        foreach (var root in _clientRoots)
+            roots.Add(root?.DeepClone());
+
+        var session = new JsonObject
+        {
+            ["log_level"] = _mcpLogLevel,
+            ["roots"] = roots,
+        };
+        if (_clientCapabilities is not null)
+            session["client_capabilities"] = _clientCapabilities.DeepClone();
+        return session;
     }
 
     private JsonNode ExecuteOutline(JsonNode? id, JsonNode? args)
