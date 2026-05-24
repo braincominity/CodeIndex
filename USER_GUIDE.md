@@ -1624,6 +1624,8 @@ OpenAI Codex CLI (`codex.json` or `~/.codex/config.json`):
 
 Once configured, the AI can directly call these tools:
 
+The MCP `tools/list` descriptions include compact English/Japanese usage examples for the primary search and navigation tools, so AI clients can discover valid argument shapes directly from the server response.
+
 | Tool | Description |
 |---|---|
 | `search` | Full-text search across code chunks |

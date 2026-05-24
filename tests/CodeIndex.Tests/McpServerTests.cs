@@ -1662,6 +1662,32 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsList_NavigationDescriptionsIncludeConcreteExamples()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var expectedExamples = new Dictionary<string, string[]>
+        {
+            ["search"] = ["Examples:", "例:", "search {\"query\":\"handleRequest\",\"lang\":\"csharp\"}", "\"prefix\":true"],
+            ["definition"] = ["Examples:", "例:", "definition {\"query\":\"McpServer\"}", "\"includeBody\":true", "\"exactName\":true"],
+            ["references"] = ["Examples:", "例:", "references {\"query\":\"Run\"}", "\"kind\":\"type_reference\""],
+            ["callers"] = ["Examples:", "例:", "callers {\"query\":\"HandleRequest\"}", "\"rankBy\":\"weighted\""],
+            ["callees"] = ["Examples:", "例:", "callees {\"query\":\"Run\"}", "\"kind\":\"instantiate\"", "\"limit\":10"],
+            ["symbols"] = ["Examples:", "例:", "symbols {\"query\":\"Service\"}", "\"kind\":\"function\"", "\"exactName\":true"],
+        };
+
+        foreach (var (name, fragments) in expectedExamples)
+        {
+            var tool = tools.First(t => t!["name"]!.GetValue<string>() == name)!;
+            var description = tool["description"]!.GetValue<string>();
+            foreach (var fragment in fragments)
+                Assert.Contains(fragment, description, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void ToolsList_ExactAliasParametersAreExposed()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
