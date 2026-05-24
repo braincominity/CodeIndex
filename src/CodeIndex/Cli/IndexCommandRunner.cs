@@ -3236,7 +3236,7 @@ public static class IndexCommandRunner
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
         var purged = 0;
         var retainedPaths = files
-            .Select(path => FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, path)))
+            .Select(path => FileIndexer.NormalizeIndexPath(Path.GetRelativePath(projectRoot, path)))
             .ToHashSet(StringComparer.Ordinal);
         if (scanResult.HadErrors)
         {

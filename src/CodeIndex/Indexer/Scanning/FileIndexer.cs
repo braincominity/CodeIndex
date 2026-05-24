@@ -1876,7 +1876,7 @@ public class FileIndexer
             foreach (var enumeratedSubDir in Directory.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir)))
             {
                 var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
-                if (IsNestedGitRepository(subDir))
+                if (IsNestedGitRepository(subDir) && !IsSubmoduleOrAncestor(subDir))
                 {
                     var subRelative = ToRelativePath(subDir);
                     listedDirectories.Add(subRelative);

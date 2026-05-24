@@ -2990,6 +2990,7 @@ public class FileIndexerTests
 
             var submoduleDir = Path.Combine(vendorDir, "foo");
             Directory.CreateDirectory(submoduleDir);
+            File.WriteAllText(Path.Combine(submoduleDir, ".git"), "gitdir: ../../.git/modules/foo\n");
             File.WriteAllText(Path.Combine(submoduleDir, "lib.py"), "def f(): pass");
             Directory.CreateDirectory(Path.Combine(submoduleDir, "src"));
             File.WriteAllText(Path.Combine(submoduleDir, "src", "nested.py"), "def g(): pass");
@@ -3006,6 +3007,39 @@ public class FileIndexerTests
         finally
         {
             Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void PurgeFilesOutsideRetainedSet_UsesNfcRetainedPaths()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var dbPath = TestProjectHelper.CreateProjectDb(tempDir);
+            var nfcPath = "Caf\u00e9.cs";
+            var nfdPath = "Cafe\u0301.cs";
+            TestProjectHelper.InsertIndexedFile(dbPath, nfcPath, "csharp", "class CafeFixture { }\n");
+
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            var retainedPaths = new[]
+                {
+                    Path.Combine(tempDir, nfdPath),
+                }
+                .Select(path => FileIndexer.NormalizeIndexPath(Path.GetRelativePath(tempDir, path)))
+                .ToHashSet(StringComparer.Ordinal);
+
+            var purged = writer.PurgeFilesOutsideRetainedSet(retainedPaths);
+
+            Assert.Equal(0, purged);
+            Assert.Equal(1, CountFiles(db.Connection));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -4178,5 +4212,12 @@ public class FileIndexerTests
     {
         Assert.False(FileIndexer.IsGeneratedCodeFile("src/Foo.cs", "class Foo { }\n"));
         Assert.False(FileIndexer.IsGeneratedCodeFile("src/Foo.cs", "// This file is not auto-generated.\nclass Foo { }\n"));
+    }
+
+    private static int CountFiles(SqliteConnection connection)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM files";
+        return Convert.ToInt32(cmd.ExecuteScalar());
     }
 }
