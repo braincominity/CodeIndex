@@ -94,6 +94,7 @@ public static class ConsoleUi
         ("batch", "cdidx batch [--db <path>]  # reads JSON string arrays from stdin, one query command per line"),
         ("mcp", "cdidx mcp [--db <path>]"),
         ("completions", "cdidx completions <shell>"),
+        ("--completions", "cdidx --completions <shell>"),
         ("license", "cdidx license"),
     ];
 
@@ -647,6 +648,7 @@ public static class ConsoleUi
         Console.WriteLine("  languages                  List supported languages and their capabilities");
         Console.WriteLine("  batch                      Run newline-delimited JSON query commands with one DB connection");
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
+        Console.WriteLine("  completions <shell>        Generate shell completions for bash, zsh, fish, or PowerShell");
         Console.WriteLine("  license                    Show licensing, trademark, and commercial-use summary");
         Console.WriteLine();
         Console.WriteLine("Index and update options:");
@@ -676,7 +678,7 @@ public static class ConsoleUi
         Console.WriteLine("  --help, -h                 Show this help message");
         Console.WriteLine("  --version, -V              Show version information");
         Console.WriteLine("  --license                  Show licensing, trademark, and commercial-use summary");
-        Console.WriteLine("  --completions <shell>      Generate shell completions (bash, zsh, fish)");
+        Console.WriteLine("  --completions <shell>      Generate shell completions (bash, zsh, fish, powershell)");
         Console.WriteLine();
         Console.WriteLine("Update workflows:");
         Console.WriteLine("  Use --commits with a project path after normal commits; git diff sees rename/delete paths too.");
@@ -705,9 +707,18 @@ public static class ConsoleUi
         Console.WriteLine("  --focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)");
         Console.WriteLine("  --focus-length <n>         excerpt: width of the focused span (default: 1, requires --focus-column)");
         Console.WriteLine($"  --fts                      Use raw FTS5 query syntax for search (search query max {QueryLimits.MaxQueryLength} chars; raw FTS parser max {DbReader.MaxRawFtsQueryLength} chars, {DbReader.MaxRawFtsBooleanOperators} boolean ops, {DbReader.MaxRawFtsNearOperators} NEAR ops; trailing * is a prefix shorthand in literal-safe mode)");
-        Console.WriteLine("  --exact                    Backward-compatible shorthand. Prefer --exact-substring for search, keep --exact for find, and prefer --exact-name for symbols/definition/references/callers/callees/inspect. Pass at most one of --exact, --exact-substring, --exact-name; combining two or more is rejected.");
-        Console.WriteLine("  --exact-substring          Search only: case-sensitive exact substring (no FTS5)");
-        Console.WriteLine("  --exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match (legacy/stale-fold DBs fall back to ASCII NOCASE; use `cdidx backfill-fold` or check `status --json` fold_ready)");
+        Console.WriteLine("  --exact                    Backward-compatible shorthand.");
+        Console.WriteLine("                              Prefer --exact-substring for search,");
+        Console.WriteLine("                              --exact for find,");
+        Console.WriteLine("                              and --exact-name for symbol/graph lookups.");
+        Console.WriteLine("                              Combining exact-match flags is rejected.");
+        Console.WriteLine("  --exact-substring          Search only: case-sensitive exact substring");
+        Console.WriteLine("                              (no FTS5)");
+        Console.WriteLine("  --exact-name               Exact name match for symbols, definition,");
+        Console.WriteLine("                              references, callers, callees, and inspect.");
+        Console.WriteLine("                              Uses NFKC + Unicode CaseFold when ready.");
+        Console.WriteLine("                              Legacy/stale-fold DBs fall back to ASCII NOCASE;");
+        Console.WriteLine("                              run `cdidx backfill-fold` or check fold_ready.");
         Console.WriteLine("  --kind <kind>              definition/symbols/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind");
         Console.WriteLine("  --visibility <v[,v]>       Filter symbols/definitions/unused/hotspots by visibility: public, protected, internal, private");
         Console.WriteLine("  --exclude-visibility <v[,v]> Exclude symbols/definitions/unused/hotspots by visibility");
@@ -770,6 +781,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx files --since 2024-01-01                 Files modified since a date");
         Console.WriteLine("  cdidx status --json                            DB stats as JSON");
         Console.WriteLine("  cdidx languages                                Show supported languages");
+        Console.WriteLine("  cdidx --completions zsh > ~/.zfunc/_cdidx      Generate a zsh completion script");
         Console.WriteLine("  cdidx license                                  Show licensing and commercial-use terms");
     }
 
