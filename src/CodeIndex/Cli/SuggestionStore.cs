@@ -174,6 +174,17 @@ public class SuggestionStore
     /// </param>
     public AddAndSubmitResult TryAddAndSubmit(SuggestionRecord record, Func<SuggestionRecord, SubmitAttemptResult>? submitToGitHub)
     {
+        return TryAddAndSubmitAsync(
+            record,
+            submitToGitHub == null
+                ? null
+                : r => Task.FromResult(submitToGitHub(r))).GetAwaiter().GetResult();
+    }
+
+    public async Task<AddAndSubmitResult> TryAddAndSubmitAsync(
+        SuggestionRecord record,
+        Func<SuggestionRecord, Task<SubmitAttemptResult>>? submitToGitHub)
+    {
         var reservation = WithFileLock(() =>
         {
             var existing = ReadUnlocked();
@@ -234,7 +245,7 @@ public class SuggestionStore
         SubmitAttemptResult submitResult;
         try
         {
-            submitResult = submitToGitHub(reservation.RecordToSubmit);
+            submitResult = await submitToGitHub(reservation.RecordToSubmit).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
         {
