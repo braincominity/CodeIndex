@@ -1035,6 +1035,8 @@ public class DbContext : IDisposable
     // bit 2 (FoldReadyFlag, #86): name_folded 列の完全バックフィル完了を示す。
     public const int FoldReadyFlag = 4;
     public const int CurrentSchemaVersion = GraphReadyFlag | IssuesReadyFlag | FoldReadyFlag; // 7 — full CLI readiness
+    public const int CodeIndexMetaSchemaVersion = 1;
+    public const string CodeIndexMetaSchemaVersionMetaKey = "codeindex_meta_schema_version";
     // Query-semantic readiness for hotspot family grouping. Stored in codeindex_meta instead of
     // PRAGMA user_version because this guards a higher-level interpretation contract
     // (`family_key` / `container_qualified_name` are authoritative for the whole DB), not
@@ -1243,6 +1245,22 @@ public class DbContext : IDisposable
         return raw is string s ? s : null;
     }
 
+    public bool TryValidateIsCodeIndexDb(out string? reason)
+    {
+        var requiredTables = new[] { "files", "symbols" };
+        foreach (var table in requiredTables)
+        {
+            if (!TableExists(table))
+            {
+                reason = $"missing required table `{table}`";
+                return false;
+            }
+        }
+
+        reason = null;
+        return true;
+    }
+
     private bool TableExists(string name)
     {
         using var cmd = _connection.CreateCommand();
@@ -1355,6 +1373,7 @@ public class DbContext : IDisposable
                 key    TEXT PRIMARY KEY NOT NULL,
                 value  TEXT
             )");
+        NormalizeCodeIndexMetaKeys();
 
         // Schema migrations for existing DBs / 既存DB向けスキーマ移行
         EnsureColumn("files", "checksum", "TEXT");
@@ -2072,8 +2091,19 @@ public class DbContext : IDisposable
 
     private void EnsureColumn(string tableName, string columnName, string definition)
     {
+        if (_activeMigrationTransaction != null)
+        {
+            DbColumnEnsurer.EnsureColumn(
+                () => ColumnExists(tableName, columnName),
+                () => Execute($"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition}"));
+            return;
+        }
+
         DbColumnEnsurer.EnsureColumn(
             () => ColumnExists(tableName, columnName),
+            beginImmediate: () => Execute("BEGIN IMMEDIATE"),
+            commit: () => Execute("COMMIT"),
+            rollback: () => Execute("ROLLBACK"),
             () => Execute($"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition}"));
     }
 
@@ -2100,6 +2130,33 @@ public class DbContext : IDisposable
             cmd.Transaction = _activeMigrationTransaction;
         cmd.CommandText = sql;
         return cmd.ExecuteScalar()?.ToString() ?? "";
+    }
+
+    private void NormalizeCodeIndexMetaKeys()
+    {
+        if (!TableExists("codeindex_meta"))
+            return;
+
+        using (var delete = _connection.CreateCommand())
+        {
+            if (_activeMigrationTransaction != null)
+                delete.Transaction = _activeMigrationTransaction;
+
+            delete.CommandText = @"
+                DELETE FROM codeindex_meta
+                WHERE key IN ('hotspot_family_version', 'hotspot_family_marker_fingerprint')
+                  AND value IS NULL";
+            delete.ExecuteNonQuery();
+        }
+
+        using var stamp = _connection.CreateCommand();
+        if (_activeMigrationTransaction != null)
+            stamp.Transaction = _activeMigrationTransaction;
+        stamp.CommandText = @"
+            INSERT INTO codeindex_meta (key, value) VALUES ('codeindex_meta_schema_version', @version)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+        stamp.Parameters.AddWithValue("@version", CodeIndexMetaSchemaVersion.ToString(CultureInfo.InvariantCulture));
+        stamp.ExecuteNonQuery();
     }
 
     internal void MarkWriteWork()
@@ -2167,14 +2224,38 @@ public sealed record DbMigrationFailure(
 
 internal static class DbColumnEnsurer
 {
-    internal static void EnsureColumn(Func<bool> columnExists, Action alterColumn)
+    internal static void EnsureColumn(
+        Func<bool> columnExists,
+        Action? beginImmediate,
+        Action? commit,
+        Action? rollback,
+        Action alterColumn)
     {
         if (columnExists())
             return;
 
+        var hasTransactionHooks = beginImmediate != null && commit != null && rollback != null;
+        var transactionStarted = false;
         try
         {
+            if (hasTransactionHooks)
+            {
+                beginImmediate!();
+                transactionStarted = true;
+                if (columnExists())
+                {
+                    commit!();
+                    transactionStarted = false;
+                    return;
+                }
+            }
+
             alterColumn();
+            if (transactionStarted)
+            {
+                commit!();
+                transactionStarted = false;
+            }
         }
         catch (SqliteException ex) when (IsDuplicateColumnRace(ex, columnExists))
         {
@@ -2184,8 +2265,24 @@ internal static class DbColumnEnsurer
             // or future wording changes still recover (#1532, #1690).
             // 列存在を PRAGMA 相当の状態で再確認し、SQLite の英語メッセージに依存せず
             // 「移行済み」を判定する (#1532)。
+            if (transactionStarted)
+            {
+                try { rollback!(); } catch (SqliteException) { }
+                transactionStarted = false;
+            }
+        }
+        catch
+        {
+            if (transactionStarted)
+            {
+                try { rollback!(); } catch (SqliteException) { }
+            }
+            throw;
         }
     }
+
+    internal static void EnsureColumn(Func<bool> columnExists, Action alterColumn)
+        => EnsureColumn(columnExists, beginImmediate: null, commit: null, rollback: null, alterColumn);
 
     private static bool IsDuplicateColumnRace(SqliteException exception, Func<bool> columnExists)
     {

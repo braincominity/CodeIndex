@@ -2827,6 +2827,9 @@ public class DbWriter
     /// </summary>
     public void SetMeta(string key, string? value)
     {
+        if (!HasMetaTable())
+            return;
+
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = @"INSERT INTO codeindex_meta (key, value) VALUES (@key, @value)
                             ON CONFLICT(key) DO UPDATE SET value = excluded.value";
@@ -2843,6 +2846,8 @@ public class DbWriter
         return cmd.ExecuteScalar() as string;
     }
     public void ClearReadyFlags()   => Execute("PRAGMA user_version = 0");
+
+    public bool HasMetaTable() => TableExists("codeindex_meta");
 
     private bool TableExists(string name)
     {

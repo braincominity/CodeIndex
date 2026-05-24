@@ -220,6 +220,9 @@ public static class QueryCommandRunner
         try
         {
             using var db = new DbContext(dbPath);
+            if (!db.TryValidateIsCodeIndexDb(out var validationReason))
+                return WriteInvalidCodeIndexDbError(dbPath, validationReason);
+
             db.TryMigrateForRead();
             s_batchReader = new DbReader(db);
             var firstFailure = CommandExitCodes.Success;
@@ -4683,6 +4686,8 @@ public static class QueryCommandRunner
             else
             {
                 db = new DbContext(dbPath);
+                if (!db.TryValidateIsCodeIndexDb(out var validationReason))
+                    return WriteInvalidCodeIndexDbError(dbPath, validationReason);
                 db.TryMigrateForRead();
                 reader = new DbReader(db);
             }
@@ -4750,6 +4755,13 @@ public static class QueryCommandRunner
                 Database.DbDebug.EndProfile();
             Database.DbDebug.ResetContext();
         }
+    }
+
+    private static int WriteInvalidCodeIndexDbError(string dbPath, string? validationReason)
+    {
+        Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: {dbPath} does not appear to be a valid CodeIndex database ({validationReason}).");
+        Console.Error.WriteLine("Hint: rebuild with `cdidx index <projectPath> --db <path>` to create a fresh database.");
+        return CommandExitCodes.DatabaseError;
     }
 
     private static string? GetDataDirectoryPath(string? dbPath)

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reflection;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -1450,6 +1451,102 @@ public class LegacySchemaMigrationTests : IDisposable
 
             Assert.Contains("synthetic non-duplicate failure", thrown.Message, StringComparison.Ordinal);
             Assert.False(ColumnExists(dbPath, "symbols", "start_line"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void EnsureColumn_RechecksAfterImmediateLockBeforeAlter_Issue1988()
+    {
+        var columnPresent = false;
+        var beginCalled = false;
+        var alterCalled = false;
+
+        DbColumnEnsurer.EnsureColumn(
+            () => columnPresent,
+            beginImmediate: () =>
+            {
+                beginCalled = true;
+                columnPresent = true;
+            },
+            commit: () => { },
+            rollback: () => { },
+            alterColumn: () => alterCalled = true);
+
+        Assert.True(beginCalled);
+        Assert.False(alterCalled);
+    }
+
+    [Fact]
+    public void SetMeta_MissingMetaTable_IsBestEffortNoOp_Issue2025()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_missing_meta_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var dbPath = Path.Combine(dir, "codeindex.db");
+        try
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString);
+            connection.Open();
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.CommandText = "CREATE TABLE files (id INTEGER PRIMARY KEY)";
+                cmd.ExecuteNonQuery();
+            }
+
+            var writer = new DbWriter(connection);
+            writer.SetMeta("fold_key_version", "1");
+
+            Assert.False(writer.HasMetaTable());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void InitializeSchema_PrunesKnownDeprecatedNullMetaKeysAndStampsMetaSchemaVersion_Issue2026()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_meta_schema_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var dbPath = Path.Combine(dir, "codeindex.db");
+        try
+        {
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = @"
+                    CREATE TABLE codeindex_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT);
+                    INSERT INTO codeindex_meta (key, value) VALUES ('fold_key_version', '1');
+                    INSERT INTO codeindex_meta (key, value) VALUES ('hotspot_family_version', NULL);
+                    INSERT INTO codeindex_meta (key, value) VALUES ('future_contract_version', '99');";
+                cmd.ExecuteNonQuery();
+            }
+
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+            }
+
+            using var verify = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString);
+            verify.Open();
+            using var check = verify.CreateCommand();
+            check.CommandText = "SELECT key, value FROM codeindex_meta ORDER BY key";
+            using var reader = check.ExecuteReader();
+            var values = new Dictionary<string, string?>(StringComparer.Ordinal);
+            while (reader.Read())
+                values[reader.GetString(0)] = reader.IsDBNull(1) ? null : reader.GetString(1);
+
+            Assert.Equal("1", values["fold_key_version"]);
+            Assert.Equal("99", values["future_contract_version"]);
+            Assert.Equal(DbContext.CodeIndexMetaSchemaVersion.ToString(CultureInfo.InvariantCulture), values[DbContext.CodeIndexMetaSchemaVersionMetaKey]);
+            Assert.DoesNotContain("hotspot_family_version", values.Keys);
         }
         finally
         {
