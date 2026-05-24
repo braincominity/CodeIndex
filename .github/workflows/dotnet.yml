@@ -159,6 +159,22 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore CodeIndex.sln --locked-mode
 
+      - name: Audit NuGet package vulnerabilities
+        shell: pwsh
+        run: |
+          $auditOutput = dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive --no-restore 2>&1
+          $auditExitCode = $LASTEXITCODE
+
+          $auditOutput | ForEach-Object { Write-Host $_ }
+
+          if ($auditExitCode -ne 0) {
+            exit $auditExitCode
+          }
+
+          if ($auditOutput -match '\b(High|Critical)\b') {
+            throw "High or critical NuGet vulnerability detected."
+          }
+
       - name: Build
         run: dotnet build CodeIndex.sln --configuration Release --no-restore
 
