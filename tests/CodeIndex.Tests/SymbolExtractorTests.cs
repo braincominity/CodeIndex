@@ -14358,6 +14358,45 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_RustTraitAssociatedTypeDefaults_RecordsPropertySymbols()
+    {
+        const string content = """
+            trait Builder {
+                fn before(&self) {
+                    println!("{");
+                }
+                type Output = ();
+                type Error: std::error::Error = String;
+                type Pending;
+                fn build(&self) {
+                    type Local = String;
+                }
+                fn helper<'a>(&self) {
+                    type Borrowed = &'a str;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.Name == "Output"
+            && s.ContainerKind == "interface"
+            && s.ContainerName == "Builder"
+            && s.ReturnType == "()");
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.Name == "Error"
+            && s.ContainerKind == "interface"
+            && s.ContainerName == "Builder"
+            && s.ReturnType == "String");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Pending");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Local");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Borrowed");
+    }
+
+    [Fact]
     public void Extract_Rust_DetectsGroupedUseTreePrefixes()
     {
         var content = """
