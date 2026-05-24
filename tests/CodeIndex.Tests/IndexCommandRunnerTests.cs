@@ -414,6 +414,48 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScanAfterHeadChange_WithPostExtractionHooksKeepsSequentialReferences()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_head_changed_hooks_sequential");
+        bool? parallelized = null;
+        var originalHooksDir = Environment.GetEnvironmentVariable("CDIDX_HOOKS_DIR");
+        try
+        {
+            var hooksDir = Path.Combine(projectRoot, "hooks");
+            Directory.CreateDirectory(hooksDir);
+            File.Copy(typeof(SamplePostExtractionHook).Assembly.Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+            Environment.SetEnvironmentVariable("CDIDX_HOOKS_DIR", hooksDir);
+
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            RunGit(projectRoot, "add", "app.cs");
+            RunGit(projectRoot, "commit", "-m", "initial");
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.AppendAllText(Path.Combine(projectRoot, "app.cs"), "public class Next { public void Run() { } }\n");
+            RunGit(projectRoot, "add", "app.cs");
+            RunGit(projectRoot, "commit", "-m", "next");
+
+            IndexCommandRunner.FullScanExtractionSchedulingForTesting = (enabled, _) => parallelized = enabled;
+
+            var (refreshExitCode, refreshJson) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            Assert.Contains(refreshJson.GetProperty("status").GetString(), ["success", "partial"]);
+            Assert.False(parallelized);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CDIDX_HOOKS_DIR", originalHooksDir);
+            IndexCommandRunner.FullScanExtractionSchedulingForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_Help_IncludesSymbolKindFilterFlags()
     {
         var (exitCode, stdout, stderr) = RunAndCaptureStreams(["--help"]);

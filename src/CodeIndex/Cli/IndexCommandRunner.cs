@@ -3187,8 +3187,10 @@ public static class IndexCommandRunner
         Task? jsonHeartbeatTask = null;
         var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
         var extractionParallelism = Math.Max(1, options.Parallelism);
+        var hasPostExtractionHooks = postExtractionHooks.Hooks.Count > 0;
         var parallelizeExtraction = (options.Rebuild || writer.GetCounts().files == 0 || headChangeDetected)
-            && !options.SymbolKindFilter.IsActive;
+            && !options.SymbolKindFilter.IsActive
+            && !hasPostExtractionHooks;
         FullScanExtractionSchedulingForTesting?.Invoke(
             parallelizeExtraction,
             headChangeDetected ? "head_changed" : null);
