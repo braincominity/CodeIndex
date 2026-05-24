@@ -153,11 +153,13 @@ public partial class DbReader
     // Reference kinds that participate in the call-graph (callers/callees/hotspots). Metadata
     // kinds such as `attribute` / `annotation` are excluded so they do not inflate the graph
     // with non-call edges (issue #293); React `consumes_hook` and C++ `friend` edges are retained
-    // because users expect them in dependency-oriented graph queries.
+    // because users expect them in dependency-oriented graph queries. C# generic type arguments
+    // are retained only when they are attached to an explicit invocation, so impact can follow
+    // `Process<IFoo>(x)` without promoting ordinary type annotations to call-graph edges (#2062).
     // call-graph (callers/callees/hotspots) に参加する reference kind。`attribute` / `annotation`
     // のようなメタデータ kind は非呼び出しエッジなのでここから除外する (issue #293)。
     // Razor の `razor_event_binding`、React の `consumes_hook`、C++ の `friend` は依存関係 graph query に含める。
-    internal const string CallGraphReferenceKindsSql = "('augmentation', 'call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding', 'friend', 'consumes_hook')";
+    internal const string CallGraphReferenceKindsSql = "('augmentation', 'call', 'instantiate', 'generic_type_argument', 'subscribe', 'unsubscribe', 'razor_event_binding', 'friend', 'consumes_hook')";
     private const string SyntheticTopLevelCallerName = "<top-level>";
     private const string SyntheticTopLevelCallerKind = "function";
 
