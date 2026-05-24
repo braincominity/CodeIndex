@@ -2420,6 +2420,7 @@ public partial class McpServer
 
         foreach (var filePath in files)
         {
+            var fileBatchMarked = false;
             try
             {
                 var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath);
@@ -2443,6 +2444,8 @@ public partial class McpServer
                     continue;
                 }
 
+                writer.MarkBatchInProgress();
+                fileBatchMarked = true;
                 using var txn = writer.BeginTransaction();
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
@@ -2466,6 +2469,7 @@ public partial class McpServer
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
                 writer.InsertIssues(fileId, issues);
                 WriteProjectRootOnce();
+                writer.ClearBatchInProgress();
                 txn.Commit();
             }
             catch (FileIndexer.BinaryFileSkippedException)
@@ -2488,6 +2492,8 @@ public partial class McpServer
             }
             catch
             {
+                if (fileBatchMarked)
+                    writer.ClearBatchInProgress();
                 errors++;
             }
             processed++;
@@ -2507,6 +2513,8 @@ public partial class McpServer
         _ = priorMetadataTargetCsharp;
         if (errors == 0)
         {
+            writer.MarkBatchInProgress();
+            using var readinessTxn = writer.BeginTransaction();
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
             writer.MarkSqlGraphContractReady();
@@ -2617,6 +2625,8 @@ public partial class McpServer
             {
                 // Best-effort; never fail an otherwise-successful index run.
             }
+            writer.ClearBatchInProgress();
+            readinessTxn.Commit();
         }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
 

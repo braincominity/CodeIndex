@@ -1574,6 +1574,10 @@ public class DbWriter
         return value;
     }
 
+    public void MarkBatchInProgress() => SetMeta(DbContext.BatchInProgressMetaKey, "true");
+
+    public void ClearBatchInProgress() => SetMeta(DbContext.BatchInProgressMetaKey, "false");
+
     public bool OptimizeFtsIfIncrementalWriteThresholdReached(int threshold = DefaultFtsOptimizeIncrementalWriteThreshold)
     {
         if (threshold <= 0)

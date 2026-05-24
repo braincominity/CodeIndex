@@ -189,6 +189,7 @@ public class DbContext : IDisposable
                     ApplyConnectionPerformancePragmas();
                     RegisterConnectionFunctionsWithRetry(_connection);
                     _isReadOnly = true;
+                    WarnIfBatchInProgress();
                     return;
                 }
                 catch
@@ -231,6 +232,7 @@ public class DbContext : IDisposable
             ExecuteSynchronousPragmaWithFallback(Execute);
             Execute($"PRAGMA wal_autocheckpoint={DefaultWalAutocheckpointPages}");
             Execute("PRAGMA optimize=0x10002");
+            WarnIfBatchInProgress();
         }
         catch (SqliteException ex) when (IsReadOnlyOpenError(ex))
         {
@@ -250,6 +252,7 @@ public class DbContext : IDisposable
                 ApplyConnectionPerformancePragmas();
                 RegisterConnectionFunctionsWithRetry(_connection);
                 _isReadOnly = true;
+                WarnIfBatchInProgress();
             }
             catch
             {
@@ -269,6 +272,13 @@ public class DbContext : IDisposable
         }
 
         _suppressWriteWorkTracking = false;
+    }
+
+    private void WarnIfBatchInProgress()
+    {
+        var raw = GetMetaString(BatchInProgressMetaKey);
+        if (string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase))
+            Console.Error.WriteLine("Warning: Last batch did not complete; run `cdidx index --rebuild` to re-index from a known clean state.");
     }
 
     private void ApplyConnectionPerformancePragmas()
@@ -1046,6 +1056,7 @@ public class DbContext : IDisposable
     // ファイル数。index 済み件数ではなく scan coverage の信号であり、現行 index が stamp
     // するまでは reader 側で省略する。
     public const string UnknownExtensionFileCountMetaKey = "unknown_extension_file_count";
+    public const string BatchInProgressMetaKey = "batch_in_progress";
     // Issue #1546: case-sensitivity of the workspace filesystem the most recent successful
     // index ran on, persisted as the string "true" / "false". Resolved via the probe in
     // `PathCasing` (which honors `core.ignorecase` when the project is a git workspace and
