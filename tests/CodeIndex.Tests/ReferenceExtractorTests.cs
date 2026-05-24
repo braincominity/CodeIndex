@@ -25125,6 +25125,35 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlPostgresDollarQuotedBody_IgnoresNestedDifferentDollarTag()
+    {
+        // issue #1442: `$inner$ ... $inner$` text inside a `$body$ ... $body$` function body must
+        // not close the outer body range, or calls after the inner literal lose their container.
+        // issue #1442: `$body$ ... $body$` 関数本体内の `$inner$ ... $inner$` テキストで外側の
+        // 本体範囲を閉じると、後続の呼び出しがコンテナから外れるため、同一タグだけを閉じタグにする。
+        const string content = """
+            CREATE OR REPLACE FUNCTION public.fn_outer() RETURNS text LANGUAGE plpgsql AS $body$
+            DECLARE
+                s text := $inner$hello $inner$;
+            BEGIN
+                PERFORM public.fn_inner();
+                RETURN s;
+            END
+            $body$;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var bodyCall = Assert.Single(references.Where(r =>
+            r.SymbolName == "fn_inner" &&
+            r.ReferenceKind == "call" &&
+            r.Line == 5));
+        Assert.Equal("function", bodyCall.ContainerKind);
+        Assert.Equal("public.fn_outer", bodyCall.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpAttribute_ClassifiedAsAttribute()
     {
         // issue #293: `[Obsolete("msg")]` must produce an `attribute` reference, not a phantom `call`.
