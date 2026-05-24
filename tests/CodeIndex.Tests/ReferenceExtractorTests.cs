@@ -893,6 +893,9 @@ public class ReferenceExtractorTests
                     return f
                 return wrap
 
+            def make_factory():
+                return target_func
+
             DEFAULT_TIMEOUT = 30
 
             @bare_decorator
@@ -912,6 +915,10 @@ public class ReferenceExtractorTests
             def configured_target():
                 pass
 
+            @cache_with(factory=make_factory())
+            def keyword_factory_target():
+                pass
+
             @staticmethod
             def method():
                 pass
@@ -928,7 +935,7 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "python", content);
         var references = ReferenceExtractor.Extract(1, "python", content, symbols);
 
-        Assert.Equal(8, references.Count(reference => reference.ReferenceKind == "decorator"));
+        Assert.Equal(9, references.Count(reference => reference.ReferenceKind == "decorator"));
         Assert.Contains(references, reference =>
             reference.SymbolName == "bare_decorator"
             && reference.ReferenceKind == "decorator");
@@ -959,6 +966,10 @@ public class ReferenceExtractorTests
             reference.SymbolName == "target_func"
             && reference.ReferenceKind == "reference"
             && reference.Context == "@cache_with(timeout=30)(memoize(target_func))");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "make_factory"
+            && reference.ReferenceKind == "call"
+            && reference.Context == "@cache_with(factory=make_factory())");
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "DEFAULT_TIMEOUT"
             && reference.ReferenceKind == "call");

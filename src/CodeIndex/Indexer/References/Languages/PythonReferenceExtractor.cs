@@ -313,7 +313,8 @@ internal static class PythonReferenceExtractor
                 continue;
             if (IsKeywordArgumentName(preparedLine, nameGroup.Index + nameGroup.Length))
                 continue;
-            if (IsKeywordArgumentValue(preparedLine, nameGroup.Index))
+            var isCallTarget = IsCallTarget(preparedLine, nameGroup.Index + nameGroup.Length);
+            if (IsKeywordArgumentValue(preparedLine, nameGroup.Index) && !isCallTarget)
                 continue;
 
             ReferenceExtractor.AddReference(
@@ -322,7 +323,7 @@ internal static class PythonReferenceExtractor
                 fileId,
                 name,
                 nameGroup.Index,
-                IsCallTarget(preparedLine, nameGroup.Index + nameGroup.Length) ? "call" : "reference",
+                isCallTarget ? "call" : "reference",
                 context,
                 lineNumber,
                 container,
