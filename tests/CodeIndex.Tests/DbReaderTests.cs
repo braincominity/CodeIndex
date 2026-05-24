@@ -7071,6 +7071,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void ReferenceKindMatrix_CallersIncludesCSharpLambdaCaptures()
+    {
+        InsertIndexedFile("src/CaptureDemo.cs", "csharp",
+            """
+            public class CaptureDemo
+            {
+                public void Run()
+                {
+                    var seed = 1;
+                    System.Func<int> next = () => seed + 1;
+                }
+            }
+            """);
+
+        var callers = _reader.GetCallers("seed", lang: "csharp", exact: true);
+
+        Assert.Contains(callers, caller =>
+            caller.CallerName == "Run"
+            && caller.ReferenceKind == "capture");
+    }
+
+    [Fact]
     public void GetFileDependencies_MatchesCSharpAttributeSuffixConvention()
     {
         // issue #293 follow-up: C# convention — a class `FooAttribute` is used in

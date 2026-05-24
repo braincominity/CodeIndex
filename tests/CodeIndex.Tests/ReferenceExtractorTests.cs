@@ -31648,6 +31648,53 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "./public-api" && r.ReferenceKind == "reference" && r.Line == 16);
     }
 
+    [Fact]
+    public void Extract_CSharpLambdaCapture_EmitsCaptureReferenceForEnclosingLocal()
+    {
+        const string content = """
+            class Demo
+            {
+                void Run()
+                {
+                    var seed = 1;
+                    System.Func<int> next = () => seed + 1;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var capture = Assert.Single(references.Where(r =>
+            r.SymbolName == "seed"
+            && r.ReferenceKind == "capture"));
+        Assert.Equal(6, capture.Line);
+        Assert.Equal("function", capture.ContainerKind);
+        Assert.Equal("Run", capture.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharpLambdaCapture_DoesNotCaptureLambdaParameterShadow()
+    {
+        const string content = """
+            class Demo
+            {
+                void Run()
+                {
+                    var seed = 1;
+                    System.Func<int, int> next = seed => seed + 1;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "seed"
+            && r.ReferenceKind == "capture");
+    }
+
     private static SymbolRecord Container(string name, string kind, int startLine, int endLine) =>
         new()
         {

@@ -876,13 +876,13 @@ Process exit codes are coarse (`0` success, `1` usage, `2` not-found, `3` db, `4
 
 ## Reference-kind filtering matrix
 
-Different graph entry points walk different `reference_kind` subsets by design. The split mirrors **call graph vs. dependency graph**: `callers`, `callees`, `hotspots`, and `impact`'s BFS layer model the runtime call graph and exclude metadata-only edges (`attribute` / `annotation`); `deps` and `impact`'s heuristic file-level fallback model the compile-time dependency graph and include metadata edges so that `[JsonConverter(typeof(User))]` and `@Inject(User.class)` still surface as real dependencies of `User`. Both directions of `deps` share the same SQL function (`DbReader.GetFileDependencies`), so forward and reverse walks always emit the same kind set.
+Different graph entry points walk different `reference_kind` subsets by design. The split mirrors **call graph vs. dependency graph**: `callers`, `callees`, `hotspots`, and `impact`'s BFS layer model the runtime call graph plus closure dependency edges (`capture`) and exclude metadata-only edges (`attribute` / `annotation`); `deps` and `impact`'s heuristic file-level fallback model the compile-time dependency graph and include metadata edges so that `[JsonConverter(typeof(User))]` and `@Inject(User.class)` still surface as real dependencies of `User`. Both directions of `deps` share the same SQL function (`DbReader.GetFileDependencies`), so forward and reverse walks always emit the same kind set.
 
 | Entry point | Direction | Reference kinds walked | Backing function |
 | --- | --- | --- | --- |
 | `references` (CLI / MCP) | symbol-centric | all `reference_kind` rows; narrowed by `--kind` when provided | `DbReader.GetReferences` |
-| `callers` / `callees` (default) | source ↔ container | `('call', 'instantiate', 'subscribe')` (= `CallGraphReferenceKindsSql`); metadata kinds rejected at CLI / MCP `--kind` boundary | `DbReader.GetCallers` / `DbReader.GetCallees` |
-| `impact` callers mode | transitive forward (BFS) | `('call', 'instantiate', 'subscribe')` via `GetCallersExact` | `DbReader.GetTransitiveCallers` |
+| `callers` / `callees` (default) | source ↔ container | `CallGraphReferenceKindsSql`, including runtime calls/events plus dependency-oriented `capture`, `friend`, `consumes_hook`, and `augmentation`; metadata kinds rejected at CLI / MCP `--kind` boundary | `DbReader.GetCallers` / `DbReader.GetCallees` |
+| `impact` callers mode | transitive forward (BFS) | `CallGraphReferenceKindsSql`, including `capture`, via `GetCallersExact` | `DbReader.GetTransitiveCallers` |
 | `impact` file-hint fallback | reverse (definition file → dependent files) | all kinds; metadata-only rows gated by `IsMetadataTargetUnambiguous` + structured-type evidence | `DbReader.GetFileDependencyHintsToResolvedType` |
 | `deps` (default = forward) | source file → target file | all kinds; metadata rows require class-like + metadata-eligible targets (`has_metadata_target_kind`) and a unique resolution (`target_ambiguity`) | `DbReader.GetFileDependencies` |
 | `deps --reverse` | target file → source file | same as forward `deps` (same SQL) | `DbReader.GetFileDependencies` |
