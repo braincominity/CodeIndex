@@ -46,6 +46,7 @@ public class FileIndexer
         IReadOnlyList<string> ListedDirectories,
         IReadOnlyList<string> FullyScannedDirectories,
         IReadOnlySet<string> CheckpointedDirectories,
+        IReadOnlyList<string> AncestorIgnoreDirectories,
         IReadOnlyList<string> AttributePrunedDirectories)
     {
         public bool HadErrors => Errors.Any(error => error.IsFatal);
@@ -1631,6 +1632,7 @@ public class FileIndexer
             listedDirectories.ToList(),
             fullyScannedDirectories.ToList(),
             activeCheckpointedDirectories.Concat(fullyScannedDirectories).ToHashSet(StringComparer.Ordinal),
+            _ancestorIgnoreDirectories.ToList(),
             attributePrunedDirectories.ToList());
     }
 
@@ -2136,6 +2138,13 @@ public class FileIndexer
         var activeIgnoreRules = IgnoreRuleSet.Empty;
         foreach (var dir in _ancestorIgnoreDirectories)
         {
+            if (!CanReadDirectory(dir, out var reason))
+            {
+                errors.Add(new ScanError(ToRelativePath(dir), $"Could not read ancestor ignore directory: {reason}."));
+                fullyScanned = false;
+                return new IgnoreRuleLoadResult(activeIgnoreRules, IgnoreRulesAvailable: false);
+            }
+
             var loadResult = LoadIgnoreRulesForDirectory(dir, activeIgnoreRules, errors, ref fullyScanned);
             activeIgnoreRules = loadResult.Rules;
             if (!loadResult.IgnoreRulesAvailable)
@@ -2161,23 +2170,49 @@ public class FileIndexer
         if (PathsEqual(ignoreRuleRoot, projectRoot))
             return [];
 
-        var relativePath = NormalizeIgnorePath(Path.GetRelativePath(ignoreRuleRoot, projectRoot));
-        if (relativePath.Length == 0 || relativePath == "." || relativePath.StartsWith("../", StringComparison.Ordinal))
+        if (!IsPathEqualOrParent(ignoreRuleRoot, projectRoot))
             return [];
 
-        var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Length == 0)
-            return [];
-
-        var directories = new List<string> { ignoreRuleRoot };
-        var currentDirectory = ignoreRuleRoot;
-        for (var i = 0; i < segments.Length - 1; i++)
+        var directories = new Stack<string>();
+        var root = Path.GetFullPath(ignoreRuleRoot);
+        var current = Directory.GetParent(Path.GetFullPath(projectRoot));
+        while (current != null)
         {
-            currentDirectory = Path.Combine(currentDirectory, segments[i]);
-            directories.Add(currentDirectory);
+            directories.Push(current.FullName);
+            if (PathsEqual(current.FullName, root))
+                return directories.ToList();
+
+            current = current.Parent;
         }
 
-        return directories;
+        return [];
+    }
+
+    private static bool CanReadDirectory(string dir, out string reason)
+    {
+        if (!Directory.Exists(LongPath.EnsureWindowsPrefix(dir)))
+        {
+            reason = "directory does not exist";
+            return false;
+        }
+
+        try
+        {
+            using var enumerator = Directory.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(dir)).GetEnumerator();
+            _ = enumerator.MoveNext();
+            reason = string.Empty;
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            reason = "access denied";
+            return false;
+        }
+        catch (IOException ex)
+        {
+            reason = ex.Message;
+            return false;
+        }
     }
 
     // Parse <ignoreRuleRoot>/.gitmodules and return submodule working-tree paths (and

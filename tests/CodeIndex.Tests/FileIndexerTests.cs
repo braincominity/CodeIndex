@@ -1512,6 +1512,76 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFilesDetailed_LoadsFullAncestorIgnoreChainAndReportsIt()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            var workspace = Path.Combine(tempDir, "workspace");
+            var projects = Path.Combine(workspace, "projects");
+            var projectRoot = Path.Combine(projects, "subA");
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(workspace, ".cdidxignore"), "*.cs\n");
+            File.WriteAllText(Path.Combine(projects, ".gitignore"), "!subA/App.cs\n");
+            File.WriteAllText(Path.Combine(projectRoot, "App.cs"), "class App { }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "Other.cs"), "class Other { }\n");
+
+            var indexer = new FileIndexer(projectRoot, ignoreCase: false, ignoreRuleRoot: workspace);
+            var result = indexer.ScanFilesDetailed();
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(projectRoot, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["App.cs"], files);
+            Assert.Equal([workspace, projects], result.AncestorIgnoreDirectories);
+            Assert.DoesNotContain(result.Errors, error => error.IsFatal);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_FailsClosedWhenAncestorIgnoreDirectoryIsUnreadable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        var projects = Path.Combine(tempDir, "workspace", "projects");
+        UnixFileMode? originalMode = null;
+        try
+        {
+            var workspace = Path.Combine(tempDir, "workspace");
+            var projectRoot = Path.Combine(projects, "subA");
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(workspace, ".cdidxignore"), "*.cs\n");
+            File.WriteAllText(Path.Combine(projectRoot, "App.cs"), "class App { }\n");
+            originalMode = File.GetUnixFileMode(projects);
+            SetUnixPermissions(projects, UnixFileMode.None);
+
+            var indexer = new FileIndexer(projectRoot, ignoreCase: false, ignoreRuleRoot: workspace);
+            var result = indexer.ScanFilesDetailed();
+
+            Assert.Empty(result.Files);
+            Assert.Contains(result.Errors, error =>
+                error.Path == ".."
+                && error.Message.StartsWith("Could not read ancestor ignore directory:", StringComparison.Ordinal));
+            Assert.True(result.HadErrors);
+        }
+        finally
+        {
+            if (originalMode.HasValue)
+                SetUnixPermissions(projects, originalMode.Value);
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFilesDetailed_DoesNotMarkParentsFullyScannedWhenNestedDirectoryFails()
     {
         if (OperatingSystem.IsWindows())
