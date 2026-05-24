@@ -14329,6 +14329,9 @@ public class SymbolExtractorTests
                 type Output = ();
                 type Error: std::error::Error = String;
                 type Pending;
+                fn build(&self) {
+                    type Local = String;
+                }
             }
             """;
 
@@ -14347,6 +14350,7 @@ public class SymbolExtractorTests
             && s.ContainerName == "Builder"
             && s.ReturnType == "String");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Pending");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Local");
     }
 
     [Fact]

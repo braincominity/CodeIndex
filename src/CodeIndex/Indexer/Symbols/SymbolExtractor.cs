@@ -10039,33 +10039,56 @@ public static partial class SymbolExtractor
         {
             var startLineIndex = Math.Max(trait.BodyStartLine!.Value - 1, 0);
             var endLineIndex = Math.Min(trait.BodyEndLine!.Value - 1, lines.Length - 1);
-            for (var lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
+            var depth = 1;
+            for (var lineIndex = startLineIndex + 1; lineIndex < endLineIndex; lineIndex++)
             {
-                var match = RustAssociatedTypeDefaultRegex.Match(lines[lineIndex]);
-                if (!match.Success)
-                    continue;
-
-                var nameGroup = match.Groups["name"];
-                var name = RustSymbolNameNormalizer.Normalize(nameGroup.Value);
-                var lineNumber = lineIndex + 1;
-                symbols.Add(new SymbolRecord
+                if (depth == 1)
                 {
-                    FileId = fileId,
-                    Kind = "property",
-                    Name = name,
-                    Line = lineNumber,
-                    StartLine = lineNumber,
-                    StartColumn = nameGroup.Index,
-                    EndLine = lineNumber,
-                    Signature = lines[lineIndex].Trim(),
-                    ContainerKind = trait.Kind,
-                    ContainerName = trait.Name,
-                    ContainerQualifiedName = trait.ContainerQualifiedName,
-                    Visibility = match.Groups["visibility"].Success ? match.Groups["visibility"].Value : null,
-                    ReturnType = match.Groups["returnType"].Value.Trim(),
-                });
+                    var match = RustAssociatedTypeDefaultRegex.Match(lines[lineIndex]);
+                    if (match.Success)
+                    {
+                        var nameGroup = match.Groups["name"];
+                        var name = RustSymbolNameNormalizer.Normalize(nameGroup.Value);
+                        var lineNumber = lineIndex + 1;
+                        symbols.Add(new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = "property",
+                            Name = name,
+                            Line = lineNumber,
+                            StartLine = lineNumber,
+                            StartColumn = nameGroup.Index,
+                            EndLine = lineNumber,
+                            Signature = lines[lineIndex].Trim(),
+                            ContainerKind = trait.Kind,
+                            ContainerName = trait.Name,
+                            ContainerQualifiedName = trait.ContainerQualifiedName,
+                            Visibility = match.Groups["visibility"].Success ? match.Groups["visibility"].Value : null,
+                            ReturnType = match.Groups["returnType"].Value.Trim(),
+                        });
+                    }
+                }
+
+                depth = Math.Max(1, depth + CountBraceDelta(lines[lineIndex]));
             }
         }
+    }
+
+    private static int CountBraceDelta(string line)
+    {
+        var delta = 0;
+        for (var index = 0; index < line.Length; index++)
+        {
+            if (index + 1 < line.Length && line[index] == '/' && line[index + 1] == '/')
+                break;
+
+            if (line[index] == '{')
+                delta++;
+            else if (line[index] == '}')
+                delta--;
+        }
+
+        return delta;
     }
 
     private static string StripVisualBasicIdentifierEscapes(string segment) =>
