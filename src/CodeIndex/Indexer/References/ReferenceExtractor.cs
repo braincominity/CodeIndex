@@ -190,7 +190,7 @@ public static partial class ReferenceExtractor
         // Python contextual keywords / Python の文脈キーワード
         ["python"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "raise", "yield", "from",
+            "raise", "yield", "from", "super",
         },
         // Ruby contextual keywords / Ruby の文脈キーワード
         ["ruby"] = new HashSet<string>(StringComparer.Ordinal)
@@ -3149,7 +3149,6 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     name => IsIgnoredCallName(language, name));
-
                 if (pythonHeaderMap.HasValue)
                     RemapPythonLogicalHeaderReferences(references, pythonReferenceStart, pythonHeaderMap.Value, lines);
             }
