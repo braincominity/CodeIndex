@@ -16,7 +16,7 @@ namespace CodeIndex.Mcp;
 /// </summary>
 public partial class McpServer
 {
-    private const int DefaultBatchQueryResponseByteLimit = MaxLineLength;
+    private const int DefaultBatchQueryResponseByteLimit = MaxLineByteLength;
     private const string BatchQueryResponseByteLimitEnvVar = "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES";
 
     // --- Tool implementations / ツール実装 ---
@@ -1257,6 +1257,16 @@ public partial class McpServer
             structured["sqlGraphContractReady"] = status.SqlGraphContractReady;
             if (status.SqlGraphContractDegradedReason != null)
                 structured["sqlGraphContractDegradedReason"] = status.SqlGraphContractDegradedReason;
+            structured["mcp"] = new JsonObject
+            {
+                ["limits"] = new JsonObject
+                {
+                    ["max_request_characters"] = MaxLineCharacterCount,
+                    ["max_request_bytes"] = MaxLineByteLength,
+                    ["max_json_depth"] = MaxJsonDepth,
+                    ["max_batch_requests"] = MaxBatchRequestCount,
+                }
+            };
             return CreateToolResult(id, "Database stats returned.", structured);
         });
     }

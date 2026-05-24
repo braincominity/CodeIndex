@@ -135,9 +135,12 @@ public partial class McpServer : IDisposable
     // `startLine - before` が underflow、`endLine + after` が overflow し、`Math.Max/Min` で clamp
     // する前に slice 経路が破綻していたため、CLI の `--before` / `--after` 上限と揃える（#1528）。
     private const int MaxContextLines = 1000;
-    private const int MaxLineLength = 1_000_000; // 1 MB per JSON-RPC message / 1メッセージあたり最大1MB
+    internal const int MaxLineCharacterCount = 1_000_000;
+    internal const int MaxLineByteLength = 1_048_576;
+    internal const int MaxJsonDepth = 32;
+    internal const int MaxBatchRequestCount = 100;
     // Stdio buffer for the JSON-RPC loop. Sized to fit typical large MCP payloads (e.g. batch_query)
-    // in a single read so the StreamReader does not grow from its 1 KB default toward MaxLineLength.
+    // in a single read so the StreamReader does not grow from its 1 KB default toward MaxLineCharacterCount.
     // JSON-RPCループのstdioバッファ。大きめのMCPペイロードを1回の読み取りで吸収し、
     // StreamReaderのデフォルト1KBから繰り返し拡張されるのを避けるサイズ。
     private const int StdioBufferSize = 64 * 1024;
@@ -664,12 +667,13 @@ public partial class McpServer : IDisposable
 
         // Reject oversized messages to prevent memory exhaustion
         // メモリ枯渇を防ぐため巨大メッセージを拒否
-        if (line.Length > MaxLineLength)
+        var byteLength = Encoding.UTF8.GetByteCount(line);
+        if (line.Length > MaxLineCharacterCount || byteLength > MaxLineByteLength)
         {
-            DeferFrameLog(BuildOversizedMessageLog(line.Length));
-            var errorResponse = CreateErrorResponse(null, -32700, "Message too large",
+            DeferFrameLog(BuildOversizedMessageLog(line.Length, byteLength));
+            var errorResponse = CreateErrorResponse(hasId: true, id: null, code: -32700, message: "Message too large",
                 category: McpErrorEnvelope.CategoryMessageTooLarge,
-                suggestion: $"JSON-RPC frame exceeds the {MaxLineLength} byte cap. Split the request into smaller calls or use `batch_query` with smaller slots.",
+                suggestion: $"JSON-RPC frame exceeds the {MaxLineCharacterCount} character or {MaxLineByteLength} byte cap. Split the request into smaller calls or use `batch_query` with smaller slots.",
                 retrySafe: false);
             return errorResponse.ToJsonString(_jsonOptions);
         }
@@ -679,7 +683,7 @@ public partial class McpServer : IDisposable
         JsonNode? responseId = null;
         try
         {
-            request = JsonNode.Parse(line);
+            request = JsonNode.Parse(line, documentOptions: new JsonDocumentOptions { MaxDepth = MaxJsonDepth });
             if (request == null)
                 return null;
 
@@ -691,9 +695,9 @@ public partial class McpServer : IDisposable
         {
             // Parse error / パースエラー
             DeferFrameLog(BuildJsonParseErrorLog(ex.Message));
-            var errorResponse = CreateErrorResponse(null, -32700, "Parse error",
+            var errorResponse = CreateErrorResponse(hasId: true, id: null, code: -32700, message: "Parse error",
                 category: McpErrorEnvelope.CategoryParseError,
-                suggestion: "Send valid JSON-RPC 2.0 framed as a single line of UTF-8 JSON.",
+                suggestion: $"Send valid JSON-RPC 2.0 framed as a single line of UTF-8 JSON with nesting depth <= {MaxJsonDepth}.",
                 retrySafe: false);
             return errorResponse.ToJsonString(_jsonOptions);
         }
@@ -797,6 +801,9 @@ public partial class McpServer : IDisposable
     /// </summary>
     internal JsonNode? HandleMessage(JsonNode request)
     {
+        if (request is JsonArray batch)
+            return HandleBatchMessage(batch);
+
         if (request is not JsonObject obj)
             return CreateErrorResponse(hasId: false, id: null, code: -32600, message: "Invalid request: expected JSON object",
                 category: McpErrorEnvelope.CategoryInvalidRequest,
@@ -908,6 +915,50 @@ public partial class McpServer : IDisposable
         });
     }
 
+    private JsonNode? HandleBatchMessage(JsonArray batch)
+    {
+        if (batch.Count == 0)
+            return CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: empty batch",
+                category: McpErrorEnvelope.CategoryInvalidRequest,
+                suggestion: "JSON-RPC 2.0 batch requests must contain at least one request object.",
+                retrySafe: false);
+
+        if (batch.Count > MaxBatchRequestCount)
+            return CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: batch too large",
+                category: McpErrorEnvelope.CategoryInvalidRequest,
+                suggestion: $"JSON-RPC batch requests are limited to {MaxBatchRequestCount} items.",
+                retrySafe: false);
+
+        var responses = new JsonArray();
+        foreach (var item in batch)
+        {
+            JsonNode? response;
+            if (item is null)
+            {
+                response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: expected JSON object",
+                    category: McpErrorEnvelope.CategoryInvalidRequest,
+                    suggestion: "Each JSON-RPC batch item must be a request object.",
+                    retrySafe: false);
+            }
+            else if (item is JsonArray)
+            {
+                response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: nested batches are not supported",
+                    category: McpErrorEnvelope.CategoryInvalidRequest,
+                    suggestion: "JSON-RPC batch items must be request objects, not nested arrays.",
+                    retrySafe: false);
+            }
+            else
+            {
+                response = HandleMessage(item);
+            }
+
+            if (response != null)
+                responses.Add(response);
+        }
+
+        return responses.Count == 0 ? null : responses;
+    }
+
     private JsonNode DispatchWithRequestCancellation(JsonNode? id, Func<JsonNode> action)
     {
         var requestKey = SerializeRequestId(id);
@@ -959,7 +1010,7 @@ public partial class McpServer : IDisposable
     {
         try
         {
-            var node = JsonNode.Parse(frame);
+            var node = JsonNode.Parse(frame, documentOptions: new JsonDocumentOptions { MaxDepth = MaxJsonDepth });
             if (node is not JsonObject obj)
                 return false;
             var method = obj["method"]?.GetValue<string>();
@@ -1885,8 +1936,8 @@ public partial class McpServer : IDisposable
         return null;
     }
 
-    internal static string BuildOversizedMessageLog(int lineLength) =>
-        $"[cdidx-mcp] Message too large ({lineLength} bytes), rejecting. Split the request into smaller JSON-RPC messages or shorter arguments, then retry.";
+    internal static string BuildOversizedMessageLog(int characterCount, int byteCount) =>
+        $"[cdidx-mcp] Message too large ({characterCount} chars / {byteCount} bytes), rejecting. Split the request into smaller JSON-RPC messages or shorter arguments, then retry.";
 
     internal static string BuildJsonParseErrorLog(string detail) =>
         $"[cdidx-mcp] JSON parse error: {detail}. Send one UTF-8 JSON-RPC object per line and retry.";
