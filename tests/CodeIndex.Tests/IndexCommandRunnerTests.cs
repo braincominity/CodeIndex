@@ -9,6 +9,15 @@ using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
+public sealed class SkipOnMacOsArm64FactAttribute : FactAttribute
+{
+    public SkipOnMacOsArm64FactAttribute()
+    {
+        if (OperatingSystem.IsMacOS() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
+            Skip = "macOS arm64 SDK/ILLink currently crashes before this test can exercise cdidx (#2570).";
+    }
+}
+
 /// <summary>
 /// Tests for indexing command argument handling.
 /// インデックスコマンドの引数処理テスト。
@@ -2059,7 +2068,7 @@ public class IndexCommandRunnerTests
         }
     }
 
-    [Fact]
+    [SkipOnMacOsArm64Fact]
     public void RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson()
     {
         var publishDir = Path.Combine(Path.GetTempPath(), $"cdidx_trimmed_publish_{Guid.NewGuid():N}");
@@ -7618,6 +7627,84 @@ public class IndexCommandRunnerTests
             // know to rerun `--rebuild`. Issue #1508.
             // 不一致は具体的な reason を優先表示する。HEAD 差分は head_changed フラグで通知する。
             Assert.Equal("unindexed_workspace_files", check.GetProperty("reason").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatusCheck_AfterCommitScopedRefreshAtHead_DoesNotReportHeadChanged()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "add run");
+            var currentHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+            var shortCurrentHead = currentHead[..12];
+
+            var (refreshExitCode, _) = RunAndCaptureJson([projectRoot, "--commits", shortCurrentHead, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+
+            var check = statusJson.GetProperty("workspace_check");
+            Assert.False(check.GetProperty("head_changed").GetBoolean());
+            Assert.True(check.GetProperty("matches_workspace").GetBoolean());
+            Assert.Equal("matched", check.GetProperty("reason").GetString());
+            Assert.Equal(currentHead, statusJson.GetProperty("indexed_head_sha").GetString());
+            Assert.Equal(0, statusJson.GetProperty("commits_ahead_of_indexed_head").GetInt32());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatusCheck_AfterFilesRefreshAtHead_StillReportsHeadChanged()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "init");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "add run");
+
+            var (refreshExitCode, _) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
+            Assert.Equal(CommandExitCodes.UsageError, statusExitCode);
+
+            var check = statusJson.GetProperty("workspace_check");
+            Assert.True(check.GetProperty("head_changed").GetBoolean());
+            Assert.False(check.GetProperty("matches_workspace").GetBoolean());
+            Assert.Equal("head_changed", check.GetProperty("reason").GetString());
         }
         finally
         {
