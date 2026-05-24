@@ -25089,6 +25089,35 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void SqlNameResolver_QuotedQualifiedNames_PreserveDialectSpecificMatching()
+    {
+        const string mysqlContext = "SELECT * FROM `mydb`.`mytbl`;";
+        const int mysqlColumn = 28;
+        Assert.Equal("mydb.mytbl", SqlNameResolver.ResolveReferenceNameAtColumn("mytbl", mysqlContext, null, mysqlColumn));
+        Assert.True(SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(mysqlContext, "`MYDB`.`MYTBL`", mysqlColumn));
+
+        const string tsqlContext = "SELECT * FROM [sales data].[order table];";
+        const int tsqlColumn = 35;
+        Assert.Equal("sales data.order table", SqlNameResolver.ResolveReferenceNameAtColumn("order table", tsqlContext, null, tsqlColumn));
+        Assert.True(SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(tsqlContext, "[SALES DATA].[ORDER TABLE]", tsqlColumn));
+
+        const string postgresContext = "SELECT * FROM \"Sales\".\"Orders\";";
+        const int postgresColumn = 24;
+        Assert.Equal("Sales.Orders", SqlNameResolver.ResolveReferenceNameAtColumn("Orders", postgresContext, null, postgresColumn));
+        Assert.True(SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(postgresContext, "\"Sales\".\"Orders\"", postgresColumn));
+        Assert.False(SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(postgresContext, "\"sales\".\"orders\"", postgresColumn));
+        Assert.True(SqlNameResolver.ReferenceMatchesTargetAtColumn("Orders", postgresContext, null, postgresColumn, "Sales.Orders"));
+        Assert.False(SqlNameResolver.ReferenceMatchesTargetAtColumn("Orders", postgresContext, null, postgresColumn, "sales.orders"));
+
+        const string mixedPostgresContext = "SELECT * FROM \"Sales\".orders;";
+        const int mixedPostgresColumn = 24;
+        Assert.True(SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(mixedPostgresContext, "\"Sales\".ORDERS", mixedPostgresColumn));
+        Assert.False(SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(mixedPostgresContext, "\"sales\".orders", mixedPostgresColumn));
+        Assert.True(SqlNameResolver.ReferenceMatchesTargetAtColumn("orders", mixedPostgresContext, null, mixedPostgresColumn, "\"Sales\".ORDERS"));
+        Assert.False(SqlNameResolver.ReferenceMatchesTargetAtColumn("orders", mixedPostgresContext, null, mixedPostgresColumn, "\"sales\".orders"));
+    }
+
+    [Fact]
     public void Extract_SqlHashCommentedCall_DoesNotEmitReference()
     {
         // MySQL / MariaDB accept `#` as a line comment in addition to ANSI `--`. The SQL-aware

@@ -2570,7 +2570,7 @@ public partial class DbReader
                       WHERE sr.symbol_name = s.name
                          OR (f.lang = 'sql' AND rf.lang = 'sql' AND (
                                 (sql_resolve_reference_segment_count_at(sr.symbol_name, " + ReferenceContextSql("sr") + @", sr.container_name, sr.column_number) = sql_segment_count(s.name)
-                                 AND sql_resolve_reference_name_at(sr.symbol_name, " + ReferenceContextSql("sr") + @", sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE)
+                                 AND sql_reference_matches_target_at(sr.symbol_name, " + ReferenceContextSql("sr") + @", sr.container_name, sr.column_number, s.name) = 1)
                          OR (sql_segment_count(sr.symbol_name) = 1
                             AND sql_allow_leaf_fallback_at(sr.symbol_name, " + ReferenceContextSql("sr") + @", sr.container_name, sr.column_number) = 1
                             AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE
@@ -2580,7 +2580,7 @@ public partial class DbReader
                                     JOIN files f_exact ON f_exact.id = s_exact.file_id
                                     WHERE f_exact.lang = 'sql'
                                       AND sql_segment_count(s_exact.name) = sql_resolve_reference_segment_count_at(sr.symbol_name, " + ReferenceContextSql("sr") + @", sr.container_name, sr.column_number)
-                                     AND sql_normalize_name(s_exact.name) = sql_resolve_reference_name_at(sr.symbol_name, " + ReferenceContextSql("sr") + @", sr.container_name, sr.column_number) COLLATE NOCASE
+                                     AND sql_reference_matches_target_at(sr.symbol_name, " + ReferenceContextSql("sr") + @", sr.container_name, sr.column_number, s_exact.name) = 1
                                 ))
                          ))
                   )";
@@ -2726,7 +2726,7 @@ public partial class DbReader
                   WHERE sr.symbol_name = s.name
                      OR (f.lang = 'sql' AND rf.lang = 'sql' AND (
                             (sql_resolve_reference_segment_count_at(sr.symbol_name, " + contextSql + @", sr.container_name, sr.column_number) = sql_segment_count(s.name)
-                             AND sql_resolve_reference_name_at(sr.symbol_name, " + contextSql + @", sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE)
+                             AND sql_reference_matches_target_at(sr.symbol_name, " + contextSql + @", sr.container_name, sr.column_number, s.name) = 1)
                          OR (sql_segment_count(sr.symbol_name) = 1
                             AND sql_allow_leaf_fallback_at(sr.symbol_name, " + contextSql + @", sr.container_name, sr.column_number) = 1
                             AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE
@@ -2736,7 +2736,7 @@ public partial class DbReader
                                     JOIN files f_exact ON f_exact.id = s_exact.file_id
                                     WHERE f_exact.lang = 'sql'
                                       AND sql_segment_count(s_exact.name) = sql_resolve_reference_segment_count_at(sr.symbol_name, " + contextSql + @", sr.container_name, sr.column_number)
-                                      AND sql_normalize_name(s_exact.name) = sql_resolve_reference_name_at(sr.symbol_name, " + contextSql + @", sr.container_name, sr.column_number) COLLATE NOCASE
+                                      AND sql_reference_matches_target_at(sr.symbol_name, " + contextSql + @", sr.container_name, sr.column_number, s_exact.name) = 1
                                 ))
                      ))
               )";
