@@ -262,7 +262,7 @@ internal static class ProgramRunner
 
     internal static void EnsureRedirectedStdoutUsesUtf8()
     {
-        if (!Console.IsOutputRedirected || Console.Out is StringWriter)
+        if (!Console.IsOutputRedirected || Console.Out is StringWriter || Console.Out.GetType().Assembly != typeof(Console).Assembly)
             return;
 
         var utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
@@ -288,7 +288,9 @@ internal static class ProgramRunner
                 passthrough = true;
                 continue;
             }
-            if (arg == "--json" || arg.StartsWith("--json=", StringComparison.Ordinal))
+            if (arg == "--json"
+                || arg.StartsWith("--json=", StringComparison.Ordinal)
+                || arg == JsonEnvelopeWrapper.EnvelopeFlag)
                 return true;
         }
 
