@@ -3071,6 +3071,10 @@ public partial class McpServer
 
                 pendingSymbols.AddRange(SymbolExtractor.Extract(0, record.Lang, content, record.Path, cancellationToken: cancellationToken));
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             catch
             {
             }
