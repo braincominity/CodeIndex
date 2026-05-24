@@ -676,11 +676,19 @@ public partial class DbReader
     private bool HasIncompleteFoldRows()
     {
         using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
-            SELECT
-                EXISTS(SELECT 1 FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL)
-              OR EXISTS(SELECT 1 FROM symbol_references WHERE symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
-              OR EXISTS(SELECT 1 FROM symbol_references WHERE container_name IS NOT NULL AND container_name_folded IS NULL)";
+        var predicates = new List<string>
+        {
+            "EXISTS(SELECT 1 FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL)",
+        };
+        if (_hasReferencesTable
+            && _referenceColumns.Contains("symbol_name_folded")
+            && _referenceColumns.Contains("container_name_folded"))
+        {
+            predicates.Add("EXISTS(SELECT 1 FROM symbol_references WHERE symbol_name IS NOT NULL AND symbol_name_folded IS NULL)");
+            predicates.Add("EXISTS(SELECT 1 FROM symbol_references WHERE container_name IS NOT NULL AND container_name_folded IS NULL)");
+        }
+
+        cmd.CommandText = $"SELECT {string.Join(" OR ", predicates)}";
         var raw = cmd.ExecuteScalar();
         return raw is long l ? l != 0 : raw is int i && i != 0;
     }
