@@ -22297,6 +22297,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Html_CapturesDataAndAriaAttributeNamesAsProperties()
+    {
+        var content = """
+            <button DATA-TestId="save-button" data-user-id=42 aria-label="Save" aria-expanded></button>
+            <section
+              data-panel-state="open"
+              aria-labelledby='panel-title'></section>
+            <div title="data-fake=&quot;nope&quot; aria-hidden=&quot;true&quot;" id="real"></div>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "data-testid" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "data-user-id" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "aria-label" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "aria-expanded" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "data-panel-state" && s.Line == 3);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "aria-labelledby" && s.Line == 4);
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "data-fake");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "aria-hidden");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
     public void Extract_Html_CapturesExternalScriptAndLinkAsImports()
     {
         var content = """
