@@ -1184,6 +1184,54 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlGeneratedColumns_DetectsColumnSymbols()
+    {
+        var content = """
+            CREATE TABLE dbo.Orders (
+                subtotal int,
+                tax int,
+                total int GENERATED ALWAYS AS (subtotal + tax) STORED,
+                invoice_no int DEFAULT NEXT VALUE FOR billing.invoice_seq,
+                created_at timestamp DEFAULT CURRENT_TIMESTAMP
+            );
+            ALTER TABLE dbo.Orders ADD COLUMN net_total int GENERATED ALWAYS AS (total - tax) STORED;
+            ALTER TABLE dbo.Orders ADD computed_total AS (subtotal + tax) PERSISTED;
+            ALTER TABLE dbo.Orders ADD CONSTRAINT df_orders_created DEFAULT 0 FOR created_at;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.SubKind == "generated_column"
+            && s.Name == "total"
+            && s.ContainerName == "Orders");
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.SubKind == "generated_column"
+            && s.Name == "invoice_no"
+            && s.ContainerName == "Orders");
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.SubKind == "generated_column"
+            && s.Name == "net_total"
+            && s.ContainerName == "Orders");
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.SubKind == "generated_column"
+            && s.Name == "computed_total"
+            && s.ContainerName == "Orders");
+        Assert.DoesNotContain(symbols, s =>
+            s.Kind == "property"
+            && s.SubKind == "generated_column"
+            && s.Name == "created_at");
+        Assert.DoesNotContain(symbols, s =>
+            s.Kind == "property"
+            && s.SubKind == "generated_column"
+            && s.Name == "CONSTRAINT");
+    }
+
+    [Fact]
     public void Extract_CobolProgramId_DetectsProgramSymbol()
     {
         const string content = """
@@ -14409,13 +14457,13 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s =>
             s.Kind == "property"
             && s.Name == "Output"
-            && s.ContainerKind == "interface"
+            && s.ContainerKind == "protocol"
             && s.ContainerName == "Builder"
             && s.ReturnType == "()");
         Assert.Contains(symbols, s =>
             s.Kind == "property"
             && s.Name == "Error"
-            && s.ContainerKind == "interface"
+            && s.ContainerKind == "protocol"
             && s.ContainerName == "Builder"
             && s.ReturnType == "String");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Pending");
@@ -21533,6 +21581,37 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "modifier");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "child");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == ".nested-child");
+    }
+
+    [Fact]
+    public void Extract_CSS_CapturesMediaFeatureNamesButNotValuesOrOperators()
+    {
+        var content = """
+            @media (min-width: 768px) and (prefers-color-scheme: dark), not screen and (orientation: landscape) {
+              .responsive {
+                color: red;
+              }
+            }
+
+            @supports (display: grid) {
+              @media (width >= 40rem) and (--narrow) {
+                .nested-media {
+                  display: grid;
+                }
+              }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "min-width");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "prefers-color-scheme");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "orientation");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "width");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "--narrow");
+        Assert.DoesNotContain(symbols, s =>
+            s.Kind == "property"
+            && s.Name is "768px" or "dark" or "landscape" or "and" or "not" or "or");
     }
 
     [Fact]

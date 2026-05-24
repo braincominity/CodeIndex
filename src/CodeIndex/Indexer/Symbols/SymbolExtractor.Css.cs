@@ -276,6 +276,7 @@ public static partial class SymbolExtractor
 
     private static readonly Regex CssFontFaceDeclarationRegex = new(@"(?:^|[;{])\s*font-family\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CssInlineCustomPropertyRegex = new(@"(?<name>--[\w-]+)\s*:", RegexOptions.Compiled);
+    private static readonly Regex CssMediaFeatureNameRegex = new(@"^\s*(?:not\s+)?(?<name>--[\w-]+|[A-Za-z_][\w-]*)(?=\s*(?::|[<>]=?|=|$))|[<>]=?\s*(?<name>--[\w-]+|[A-Za-z_][\w-]*)(?=\s*(?:[<>]=?|$))", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static string ResolveCssSymbolName(string matchLine, string name, string[] lines, int startIndex, int endLine)
     {
@@ -285,6 +286,79 @@ public static partial class SymbolExtractor
         return TryGetCssFontFaceFamilyName(lines, startIndex, endLine, out var fontFamily)
             ? fontFamily
             : string.Empty;
+    }
+
+    private static void TryAddCssMediaFeatureSymbols(
+        long fileId,
+        string rawLine,
+        string maskedLine,
+        int lineIndex,
+        List<SymbolRecord> symbols,
+        HashSet<string>? cssSeenSymbols)
+    {
+        var trimmedMaskedLine = maskedLine.TrimStart();
+        if (!trimmedMaskedLine.StartsWith("@media", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var blockStart = maskedLine.IndexOf('{');
+        if (blockStart < 0)
+            blockStart = maskedLine.Length;
+
+        var query = maskedLine[..blockStart];
+        for (var index = 0; index < query.Length; index++)
+        {
+            if (query[index] != '(')
+                continue;
+
+            var featureStart = index + 1;
+            var depth = 1;
+            index++;
+            while (index < query.Length && depth > 0)
+            {
+                if (query[index] == '(')
+                    depth++;
+                else if (query[index] == ')')
+                    depth--;
+
+                index++;
+            }
+
+            if (depth != 0)
+                break;
+
+            var featureText = query[featureStart..(index - 1)];
+            if (string.IsNullOrWhiteSpace(featureText))
+                continue;
+
+            var match = CssMediaFeatureNameRegex.Match(featureText);
+            if (match.Success)
+            {
+                var name = match.Groups["name"].Value;
+                if (string.Equals(name, "and", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(name, "or", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(name, "not", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var featureColumn = featureStart + match.Groups["name"].Index;
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols,
+                    lineIndex + 1,
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "property",
+                        Name = name,
+                        Line = lineIndex + 1,
+                        StartLine = lineIndex + 1,
+                        StartColumn = featureColumn,
+                        EndLine = lineIndex + 1,
+                        Signature = rawLine.Trim(),
+                    });
+            }
+        }
     }
 
     private static bool TryGetCssFontFaceFamilyName(string[] lines, int startIndex, int endLine, out string fontFamily)
