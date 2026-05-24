@@ -100,7 +100,19 @@ internal static class PythonReferenceExtractor
         @"\b(?:typing|typing_extensions)\.get_type_hints\s*\(\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)",
         RegexOptions.Compiled);
     private static readonly Regex DataclassesFieldsTargetRegex = new(
-        @"\bdataclasses\.fields\s*\(\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)",
+        @"(?<!\.)\bfields\s*\(\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)|\bdataclasses\.fields\s*\(\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)",
+        RegexOptions.Compiled);
+    private static readonly Regex DataclassFieldCallRegex = new(
+        @"^\s*[_\p{L}]\w*\s*(?::\s*[^=]+)?=\s*(?:(?:dataclasses\.)?field)\s*\(",
+        RegexOptions.Compiled);
+    private static readonly Regex DataclassFieldDefaultFactoryRegex = new(
+        @"\bdefault_factory\s*=\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{L}]\w*)",
+        RegexOptions.Compiled);
+    private static readonly Regex DataclassFieldMetadataKeyRegex = new(
+        @"\bmetadata\s*=\s*\{(?<body>[^}\n]*)\}",
+        RegexOptions.Compiled);
+    private static readonly Regex PythonStringDictionaryKeyRegex = new(
+        @"(?<quote>['""])(?<name>[^'""]+)\k<quote>\s*:",
         RegexOptions.Compiled);
     private static readonly Regex AttrsFieldsTargetRegex = new(
         @"\b(?:attr|attrs)\.fields\s*\(\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)",
@@ -906,6 +918,63 @@ internal static class PythonReferenceExtractor
                 lineNumber,
                 container,
                 "python");
+        }
+    }
+
+    public static void EmitDataclassFieldReferences(
+        string preparedLine,
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        Func<string, bool> isIgnoredName)
+    {
+        if (!DataclassFieldCallRegex.IsMatch(preparedLine))
+            return;
+
+        foreach (Match match in DataclassFieldDefaultFactoryRegex.Matches(preparedLine))
+        {
+            var name = match.Groups["name"].Value;
+            if (isIgnoredName(name))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                name,
+                match.Groups["name"].Index,
+                "call",
+                context,
+                lineNumber,
+                container,
+                "python");
+        }
+
+        foreach (Match metadataMatch in DataclassFieldMetadataKeyRegex.Matches(originalLine))
+        {
+            var body = metadataMatch.Groups["body"];
+            foreach (Match keyMatch in PythonStringDictionaryKeyRegex.Matches(body.Value))
+            {
+                var name = keyMatch.Groups["name"].Value;
+                if (isIgnoredName(name))
+                    continue;
+
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    name,
+                    body.Index + keyMatch.Groups["name"].Index,
+                    "annotation",
+                    context,
+                    lineNumber,
+                    container,
+                    "python");
+            }
         }
     }
 

@@ -58,6 +58,45 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonDataclassField_EmitsMetadataAndDefaultFactoryReferences()
+    {
+        const string content = """
+            from dataclasses import dataclass, field, fields
+
+            @dataclass
+            class Job:
+                callback: Callable[[Payload], Result] = field(default_factory=list, metadata={"wire_name": "callback"})
+
+            def inspect_job():
+                return fields(Job)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Payload"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Job");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Job");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "list"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Job");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "wire_name"
+            && reference.ReferenceKind == "annotation"
+            && reference.ContainerName == "Job");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Job"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "inspect_job");
+    }
+
+    [Fact]
     public void BuildReferenceDedupeKey_IncludesFileIdAndLanguage()
     {
         var javaKey = ReferenceExtractor.BuildReferenceDedupeKey(1, "java", 3, 5, "type_reference", "Runner");
