@@ -2515,6 +2515,12 @@ public partial class McpServer
                     errors++;
                 }
             }
+            catch (OperationCanceledException) when (requestToken.IsCancellationRequested)
+            {
+                if (fileBatchMarked)
+                    writer.ClearBatchInProgress();
+                throw;
+            }
             catch
             {
                 if (fileBatchMarked)
