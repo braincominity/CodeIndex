@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
+
+### [1.24.5] - 2026-05-25
+
+#### Fixed
+
 - **NuGet package README links now resolve outside GitHub** — the NuGet package now ships a NuGet-specific README with absolute GitHub documentation links so NuGet.org readers can open the user guide, changelog, and policy documents.
 - **Homebrew tap publishing now seeds missing formula files** — the release workflow now writes `Formula/codeindex.rb` directly from the published release checksums and pushes it to `Widthdom/homebrew-tap`, so the first release to an empty tap no longer fails before a formula exists.
 
@@ -2771,6 +2776,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
+
+### [1.24.5] - 2026-05-25
+
+#### 修正
+
 - **NuGet package README のリンクが GitHub 外でも解決できるようになりました** — NuGet package は NuGet 専用 README を同梱し、User Guide、Changelog、policy document への絶対 GitHub URL を載せるようになりました。
 - **Homebrew tap publishing が未作成の formula file を作成するようになりました** — release workflow が公開済み release checksum から `Formula/codeindex.rb` を直接生成して `Widthdom/homebrew-tap` へ push するようになり、空の tap への初回リリースで formula が存在せず失敗する問題を避けます。
 
@@ -5522,7 +5532,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.24.4...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.24.5...HEAD
+[1.24.5]: https://github.com/Widthdom/CodeIndex/compare/v1.24.4...v1.24.5
 [1.24.4]: https://github.com/Widthdom/CodeIndex/compare/v1.24.3...v1.24.4
 [1.24.3]: https://github.com/Widthdom/CodeIndex/compare/v1.24.2...v1.24.3
 [1.24.2]: https://github.com/Widthdom/CodeIndex/compare/v1.24.1...v1.24.2
