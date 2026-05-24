@@ -16,6 +16,7 @@ Run this before each commit.
 10. Confirm issue auto-close references will be placed in the PR body as `Fixes #...`.
 11. Confirm the commit message is English and includes relevant issue numbers.
 12. Check `git diff --stat` and `git diff` for accidental changes.
+13. If workflow file names or `.codex/workflows/*.md` references changed, run `bash .codex/scripts/check-workflow-links.sh`.
 
 ## Validation Commands
 
