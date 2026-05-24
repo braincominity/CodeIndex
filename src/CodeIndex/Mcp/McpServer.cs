@@ -60,7 +60,7 @@ public partial class McpServer : IDisposable
     // を渡せるようにするため (#1567)。
     private readonly AsyncLocal<CancellationToken> _currentRequestToken = new();
     private readonly AsyncLocal<Action<string>?> _currentOutOfBandFrameWriter = new();
-    private readonly AsyncLocal<List<string>?> _deferredFrameLogs = new();
+    private readonly AsyncLocal<List<Action>?> _deferredFrameLogs = new();
     private bool _running = true;
     // Per-session DbContext reused across MCP tool calls. Holding the connection open
     // avoids reopening SQLite, reapplying pragmas, and re-registering every SQL function
@@ -731,15 +731,18 @@ public partial class McpServer : IDisposable
     }
 
     private void DeferFrameLog(string message)
+        => DeferFrameLog(() => Console.Error.WriteLine(message));
+
+    private void DeferFrameLog(Action writeLog)
     {
         var logs = _deferredFrameLogs.Value;
         if (logs is null)
         {
-            Console.Error.WriteLine(message);
+            writeLog();
             return;
         }
 
-        logs.Add(message);
+        logs.Add(writeLog);
     }
 
     private void BeginDeferredFrameLogs()
@@ -753,7 +756,7 @@ public partial class McpServer : IDisposable
 
         _deferredFrameLogs.Value = null;
         foreach (var log in logs)
-            Console.Error.WriteLine(log);
+            log();
     }
 
     private static void ExtractResponseId(JsonNode request, out bool hasId, out JsonNode? id)
@@ -873,7 +876,7 @@ public partial class McpServer : IDisposable
         var authResult = _authenticator.Authenticate(request);
         if (!authResult.IsAuthenticated)
         {
-            Console.Error.WriteLine(BuildAuthFailureLog(method, authResult.FailureReason));
+            DeferFrameLog(BuildAuthFailureLog(method, authResult.FailureReason));
             return CreateErrorResponse(hasId: true, id: id, code: McpErrorEnvelope.CodeUnauthorized, message: "Unauthorized",
                 category: McpErrorEnvelope.CategoryPermissionDenied,
                 suggestion: "Set CDIDX_MCP_AUTH_TOKEN on the server and include a matching params.auth.token (or an `Authorization: Bearer <token>` header for HTTP) on each request.",
@@ -1056,7 +1059,7 @@ public partial class McpServer : IDisposable
         }
         else if (resolved != _caller && resolved != "unknown")
         {
-            Console.Error.WriteLine(BuildCallerSwapRejectionLog(_caller, resolved));
+            DeferFrameLog(BuildCallerSwapRejectionLog(_caller, resolved));
         }
         var negotiated = NegotiateProtocolVersion(_params, out var requestedVersion);
         if (negotiated == null)
@@ -1068,7 +1071,7 @@ public partial class McpServer : IDisposable
             // クライアント要求バージョンとサーバー対応集合に重なりがない場合。Issue #1554:
             // クライアントが分岐判定できるよう、`error.data` に要求バージョンと対応バージョン
             // を入れた -32602 (invalid params) を返す。
-            Console.Error.WriteLine(BuildUnsupportedProtocolLog(requestedVersion));
+            DeferFrameLog(BuildUnsupportedProtocolLog(requestedVersion));
             return CreateUnsupportedProtocolError(id, requestedVersion);
         }
 
@@ -1579,7 +1582,7 @@ public partial class McpServer : IDisposable
             if (!decision.Allowed)
             {
                 metricsError = "rate_limited";
-                Console.Error.WriteLine(BuildRateLimitedLog(toolName, _caller, decision.RetryAfterMs));
+                DeferFrameLog(BuildRateLimitedLog(toolName, _caller, decision.RetryAfterMs));
                 response = CreateRateLimitedErrorResponse(id, toolName, _caller, decision.RetryAfterMs);
             }
             else
@@ -1636,8 +1639,11 @@ public partial class McpServer : IDisposable
             // JSON-RPC のツール結果は tool 名 + 例外型のみに絞る。SQLite 例外などは
             // バインド値や該当リテラルを含むため、生のメッセージをクライアントに渡すと
             // パスや索引内容が漏れる（#1530）。
-            Console.Error.WriteLine(BuildToolErrorLog(toolName, ex.Message));
-            Database.DbDebug.DumpToStderr(ex);
+            DeferFrameLog(() =>
+            {
+                Console.Error.WriteLine(BuildToolErrorLog(toolName, ex.Message));
+                Database.DbDebug.DumpToStderr(ex);
+            });
             metricsError = ex.GetType().Name;
             var classification = McpErrorEnvelope.ClassifyException(ex);
             response = CreateToolErrorResponse(true, id, BuildSanitizedToolErrorMessage(toolName, ex),

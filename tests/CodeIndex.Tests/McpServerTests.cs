@@ -1073,6 +1073,53 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessLineAsync_UnsupportedProtocol_WritesResponseBeforeErrorLog()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+        var previousError = Console.Error;
+        Console.SetError(error);
+        try
+        {
+            await server.ProcessLineAsync(
+                """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2099-01-01"}}""",
+                new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString())));
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+
+        Assert.Contains("Unsupported MCP protocolVersion", writer.ToString());
+        Assert.Contains("Rejecting initialize", error.ToString());
+    }
+
+    [Fact]
+    public async Task ProcessLineAsync_AuthFailure_WritesResponseBeforeErrorLog()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("secret"));
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+        var previousError = Console.Error;
+        Console.SetError(error);
+        try
+        {
+            await server.ProcessLineAsync(
+                """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""",
+                new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString())));
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+
+        Assert.Contains("Unauthorized", writer.ToString());
+        Assert.Contains("Auth failed", error.ToString());
+    }
+
+    [Fact]
     public async Task RunAsync_ParseErrorWriteFailure_LogsWriteFailureAndParseError()
     {
         var transport = new ShutdownProbeTransport("stdio", _ => throw new IOException("pipe closed"), "not json");
