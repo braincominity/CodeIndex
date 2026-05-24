@@ -875,6 +875,9 @@ download_and_install() {
         error "Failed to create staging directory under ${INSTALL_DIR}."
     fi
     STAGE_DIR_CLEANUP="$stage_dir"
+    if ! chmod 0700 "$stage_dir"; then
+        error "Failed to restrict staging directory permissions under ${INSTALL_DIR}."
+    fi
 
     for asset in $required_files; do
         cp "${extract_dir}/${asset}" "${stage_dir}/${asset}"
@@ -896,6 +899,9 @@ download_and_install() {
         error "Failed to create backup directory under ${INSTALL_DIR}."
     fi
     BACKUP_DIR_CLEANUP="$backup_dir"
+    if ! chmod 0700 "$backup_dir"; then
+        error "Failed to restrict backup directory permissions under ${INSTALL_DIR}."
+    fi
 
     if ! promote_staged_install "$stage_dir" "$backup_dir" "$INSTALL_DIR" "$required_files" "$staged_assets"; then
         return 1
