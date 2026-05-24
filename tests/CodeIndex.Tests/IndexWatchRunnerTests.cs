@@ -193,8 +193,7 @@ public class IndexWatchRunnerTests
                 Console.SetOut(stdout);
                 try
                 {
-                    var loopTask = Task.Run(() =>
-                        IndexWatchRunner.RunCore(options, _jsonOptions, projectRoot, dbPath, cts.Token));
+                    var loopTask = StartWatchLoop(options, projectRoot, dbPath, cts.Token);
                     // Give the watcher a moment to emit the "watching" event.
                     Thread.Sleep(500);
                     cts.Cancel();
@@ -269,8 +268,7 @@ public class IndexWatchRunnerTests
                 Console.SetOut(stdout);
                 try
                 {
-                    var loopTask = Task.Run(() =>
-                        IndexWatchRunner.RunCore(options, _jsonOptions, projectRoot, dbPath, cts.Token));
+                    var loopTask = StartWatchLoop(options, projectRoot, dbPath, cts.Token);
                     Thread.Sleep(500);
                     cts.Cancel();
 #pragma warning disable xUnit1031
@@ -313,6 +311,21 @@ public class IndexWatchRunnerTests
         {
         }
         return null;
+    }
+
+    private Task<int> StartWatchLoop(
+        IndexCommandOptions options,
+        string projectRoot,
+        string dbPath,
+        CancellationToken cancellationToken)
+    {
+        // Run the watcher on a dedicated thread so this cancellation test does not depend on
+        // ThreadPool availability during the full test suite.
+        return Task.Factory.StartNew(
+            () => IndexWatchRunner.RunCore(options, _jsonOptions, projectRoot, dbPath, cancellationToken),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
     }
 
     private string RunIndexAndCapture(string[] args, out int exitCode)
