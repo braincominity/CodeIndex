@@ -551,6 +551,19 @@ calculate_sha256() {
     fi
 }
 
+validate_archive_members() {
+    local archive="$1"
+    local member
+
+    tar tzf "$archive" | while IFS= read -r member || [ -n "$member" ]; do
+        case "$member" in
+            ""|/*|..|../*|*/../*|*/.. )
+                error "Release archive contains unsafe member path before extraction: ${member:-<empty>}"
+                ;;
+        esac
+    done
+}
+
 verify_payload_manifest() {
     local extract_dir="$1"
     local manifest="${extract_dir}/MANIFEST.sha256"
@@ -905,6 +918,8 @@ download_and_install() {
     # 展開用サブディレクトリを使い、アーカイブや checksum ファイルと混在させない。
     local extract_dir="${tmpdir}/extract"
     mkdir -p "$extract_dir"
+    info "Checking archive member paths..."
+    validate_archive_members "${tmpdir}/${archive_name}"
     info "Extracting..."
     tar xzf "${tmpdir}/${archive_name}" -C "$extract_dir"
     info "Verifying extracted payload..."

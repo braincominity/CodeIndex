@@ -1138,6 +1138,44 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void ValidateArchiveMembers_RejectsTraversalBeforeExtraction()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var workDir = Path.Combine(_tempRoot, "unsafe_archive");
+        var baseDir = Path.Combine(workDir, "base");
+        var extractDir = Path.Combine(workDir, "extract");
+        var archivePath = Path.Combine(workDir, "unsafe.tar.gz");
+        var outsidePath = Path.Combine(workDir, "escape_marker");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            mkdir -p "{{baseDir}}" "{{extractDir}}"
+            printf 'escape' > "{{outsidePath}}"
+            tar czf "{{archivePath}}" -C "{{baseDir}}" ../escape_marker
+            rm "{{outsidePath}}"
+
+            status=0
+            if validate_archive_members "{{archivePath}}"; then
+                tar xzf "{{archivePath}}" -C "{{extractDir}}"
+            else
+                status=$?
+            fi
+
+            echo "STATUS:$status"
+            [ -e "{{outsidePath}}" ] && echo "OUTSIDE_CREATED" || echo "OUTSIDE_MISSING"
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("STATUS:1", stdout);
+        Assert.Contains("OUTSIDE_MISSING", stdout);
+        Assert.Contains("Release archive contains unsafe member path before extraction: ../escape_marker", stderr);
+        Assert.False(File.Exists(outsidePath));
+    }
+
+    [Fact]
     public void DownloadAndInstall_ArchiveWithUnmanifestedFileFails()
     {
         if (OperatingSystem.IsWindows())
