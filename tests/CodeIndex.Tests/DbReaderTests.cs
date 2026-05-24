@@ -149,6 +149,32 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetCallers_CSharpGenericInvocationTypeArgument_ParticipatesInGraph()
+    {
+        InsertIndexedFile(
+            "src/generic_type_argument_fixture.cs",
+            "csharp",
+            """
+            interface IFoo {}
+            class Runner
+            {
+                void Process<T>(T item) {}
+                void Run(IFoo value) { Process<IFoo>(value); }
+            }
+            """);
+
+        var caller = Assert.Single(_reader.GetCallers(
+            "IFoo",
+            lang: "csharp",
+            referenceKind: "generic_type_argument",
+            exact: true,
+            pathPatterns: ["generic_type_argument_fixture"]));
+
+        Assert.Equal("Run", caller.CallerName);
+        Assert.Equal("generic_type_argument", caller.ReferenceKind);
+    }
+
+    [Fact]
     public void CreateSearchReferencesCommand_RanksWithoutLoweringReferenceNames()
     {
         using var cmd = CreateSearchReferencesCommandForSql("FetchData");

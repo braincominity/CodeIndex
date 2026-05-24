@@ -84,6 +84,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharpGenericInvocation_EmitsGraphTypeArgumentReference()
+    {
+        const string content = """
+            interface IFoo {}
+            class Runner
+            {
+                void Process<T>(T item) {}
+                void Run(IFoo value) { Process<IFoo>(value); }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "IFoo"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "IFoo"
+            && reference.ReferenceKind == "generic_type_argument"
+            && reference.ContainerName == "Run");
+    }
+
+    [Fact]
     public void Extract_CustomReferencePlugin_HandlesUnsupportedLanguage()
     {
         lock (TestConsoleLock.Gate)

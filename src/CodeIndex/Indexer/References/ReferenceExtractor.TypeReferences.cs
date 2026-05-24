@@ -567,13 +567,14 @@ public static partial class ReferenceExtractor
         SymbolRecord? container,
         string language,
         bool isEscapedCSharpIdentifier = false,
-        IReadOnlySet<string>? ignoredSegments = null)
+        IReadOnlySet<string>? ignoredSegments = null,
+        string referenceKind = "type_reference")
     {
         if (segment.Length == 0 || IsIgnoredTypeReferenceSegment(language, segment, isEscapedCSharpIdentifier, ignoredSegments))
             return;
 
         int column = startInLine + 1; // 1-based / 1始まり
-        var dedupeKey = BuildReferenceDedupeKey(fileId, language, lineNumber, column, "type_reference", segment);
+        var dedupeKey = BuildReferenceDedupeKey(fileId, language, lineNumber, column, referenceKind, segment);
         if (!seen.Add(dedupeKey))
             return;
 
@@ -581,7 +582,7 @@ public static partial class ReferenceExtractor
         {
             FileId = fileId,
             SymbolName = segment,
-            ReferenceKind = "type_reference",
+            ReferenceKind = referenceKind,
             Line = lineNumber,
             Column = column,
             Context = context,
@@ -3357,6 +3358,69 @@ public static partial class ReferenceExtractor
             container,
             language,
             ignoredSegments);
+        AddGenericInvocationTypeArgumentSegments(
+            references,
+            seen,
+            fileId,
+            preparedLine.Substring(argumentsStart, argumentsLength),
+            argumentsStart,
+            context,
+            lineNumber,
+            container,
+            language,
+            ignoredSegments);
+    }
+
+    private static void AddGenericInvocationTypeArgumentSegments(
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string expression,
+        int expressionStartInLine,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        string language,
+        IReadOnlySet<string>? ignoredSegments)
+    {
+        if (language != "csharp")
+            return;
+
+        for (var i = 0; i < expression.Length; i++)
+        {
+            if (!IsTypeExpressionIdentifierStart(language, expression[i]))
+                continue;
+
+            var segmentStart = i;
+            if (expression[i] == '@')
+                i++;
+            while (i < expression.Length && IsTypeExpressionIdentifierPart(language, expression[i]))
+                i++;
+
+            var rawSegment = expression.Substring(segmentStart, i - segmentStart);
+            var isEscapedCSharpIdentifier = rawSegment.Length > 0 && rawSegment[0] == '@';
+            var segment = NormalizeCSharpIdentifier(rawSegment);
+            if (i + 1 < expression.Length && expression[i] == ':' && expression[i + 1] == ':')
+            {
+                i++;
+                continue;
+            }
+
+            AddTypeReferenceSegment(
+                references,
+                seen,
+                fileId,
+                segment,
+                expressionStartInLine + segmentStart,
+                context,
+                lineNumber,
+                container,
+                language,
+                isEscapedCSharpIdentifier,
+                ignoredSegments,
+                "generic_type_argument");
+            i--;
+        }
     }
 
     private static bool TryGetPostNameGenericInvocationTypeArgumentSpan(
