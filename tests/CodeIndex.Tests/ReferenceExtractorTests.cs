@@ -882,9 +882,28 @@ public class ReferenceExtractorTests
                     return f
                 return wrap
 
+            def target_func():
+                pass
+
+            def memoize(fn):
+                return fn
+
+            def cache_with(timeout):
+                def wrap(f):
+                    return f
+                return wrap
+
             @bare_decorator
             @parametrized("value")
             def wrapped():
+                pass
+
+            @functools.wraps(target_func)
+            def wrapped_target():
+                pass
+
+            @cache_with(timeout=30)(memoize(target_func))
+            def composed_target():
                 pass
 
             @staticmethod
@@ -903,7 +922,7 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "python", content);
         var references = ReferenceExtractor.Extract(1, "python", content, symbols);
 
-        Assert.Equal(5, references.Count(reference => reference.ReferenceKind == "decorator"));
+        Assert.Equal(7, references.Count(reference => reference.ReferenceKind == "decorator"));
         Assert.Contains(references, reference =>
             reference.SymbolName == "bare_decorator"
             && reference.ReferenceKind == "decorator");
@@ -922,6 +941,18 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference =>
             reference.SymbolName == "parametrized"
             && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "target_func"
+            && reference.ReferenceKind == "call"
+            && reference.Context == "@functools.wraps(target_func)");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "memoize"
+            && reference.ReferenceKind == "call"
+            && reference.Context == "@cache_with(timeout=30)(memoize(target_func))");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "target_func"
+            && reference.ReferenceKind == "call"
+            && reference.Context == "@cache_with(timeout=30)(memoize(target_func))");
     }
 
     [Fact]

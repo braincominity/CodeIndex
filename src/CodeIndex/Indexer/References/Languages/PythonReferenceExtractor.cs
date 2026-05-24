@@ -15,6 +15,9 @@ internal static class PythonReferenceExtractor
     private static readonly Regex DecoratorCallRegex = new(
         @"^\s*@(?<name>[_\p{L}]\w*(?:\.[_\p{L}]\w*)*)\s*\(",
         RegexOptions.Compiled);
+    private static readonly Regex PythonIdentifierRegex = new(
+        @"(?<![\w.])(?<name>[_\p{L}]\w*(?:\.[_\p{L}]\w*)*)",
+        RegexOptions.Compiled);
     private static readonly Regex BareRaiseTypeRegex = new(
         @"^\s*raise\s+(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)(?:\s+from\s+[_\p{L}]\w*)?\s*(?:#.*)?$",
         RegexOptions.Compiled);
@@ -262,6 +265,16 @@ internal static class PythonReferenceExtractor
                 continue;
 
             ReferenceExtractor.AddReference(references, seen, fileId, match, "decorator", context, lineNumber, container);
+            EmitDecoratorArgumentReferences(
+                preparedLine,
+                match,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                container,
+                isIgnoredName);
         }
 
         foreach (Match match in DecoratorRegex.Matches(preparedLine))
@@ -274,6 +287,58 @@ internal static class PythonReferenceExtractor
 
             ReferenceExtractor.AddReference(references, seen, fileId, match, "decorator", context, lineNumber, container);
         }
+    }
+
+    private static void EmitDecoratorArgumentReferences(
+        string preparedLine,
+        Match decoratorMatch,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        Func<string, bool> isIgnoredName)
+    {
+        var decoratorName = decoratorMatch.Groups["name"].Value;
+        var argumentStart = preparedLine.IndexOf('(', decoratorMatch.Index + decoratorMatch.Length - 1);
+        if (argumentStart < 0)
+            return;
+
+        foreach (Match identifierMatch in PythonIdentifierRegex.Matches(preparedLine, argumentStart + 1))
+        {
+            var nameGroup = identifierMatch.Groups["name"];
+            var name = nameGroup.Value;
+            if (name == decoratorName || isIgnoredName(name) || IsPythonLiteralName(name))
+                continue;
+            if (IsKeywordArgumentName(preparedLine, nameGroup.Index + nameGroup.Length))
+                continue;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                name,
+                nameGroup.Index,
+                "call",
+                context,
+                lineNumber,
+                container,
+                "python");
+        }
+    }
+
+    private static bool IsKeywordArgumentName(string value, int afterNameIndex)
+    {
+        while (afterNameIndex < value.Length && char.IsWhiteSpace(value[afterNameIndex]))
+            afterNameIndex++;
+
+        return afterNameIndex < value.Length && value[afterNameIndex] == '=';
+    }
+
+    private static bool IsPythonLiteralName(string name)
+    {
+        return name is "True" or "False" or "None" or "Ellipsis";
     }
 
     public static void EmitRaiseReferences(
