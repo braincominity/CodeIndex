@@ -13,7 +13,19 @@ while IFS= read -r doc; do
       printf '%s references missing or empty workflow file: %s\n' "$doc" "$target" >&2
       status=1
     fi
-  done < <(perl -ne 'while (/`(\.codex\/workflows\/[^`\s)]*\.md)`/g) { print "$1\n" unless $1 =~ /[*?]/ }' "$doc" | sort -u)
+  done < <(
+    awk '
+      {
+        while (match($0, /`\.codex\/workflows\/[^`[:space:])]*\.md`/)) {
+          target = substr($0, RSTART + 1, RLENGTH - 2)
+          if (target !~ /[*?]/) {
+            print target
+          }
+          $0 = substr($0, RSTART + RLENGTH)
+        }
+      }
+    ' "$doc" | sort -u
+  )
 done < <(
   {
     git ls-files '*.md'
