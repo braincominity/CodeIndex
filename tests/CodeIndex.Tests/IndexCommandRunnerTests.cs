@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Runtime.Versioning;
 using System.Runtime.InteropServices;
 using CodeIndex.Cli;
@@ -46,6 +47,46 @@ public class IndexCommandRunnerTests
 
         Assert.True(options.ShowHelp);
         Assert.Null(options.ProjectPath);
+    }
+
+    [Fact]
+    public void FormatIndexFileException_RegexTimeout_UsesBoundedExtractionMessage()
+    {
+        var ex = new RegexMatchTimeoutException("raw-sensitive-content", "raw-sensitive-pattern", TimeSpan.FromSeconds(2));
+
+        var message = IndexCommandRunner.FormatIndexFileException(ex);
+
+        Assert.Contains("Regex extraction timed out after 2s", message);
+        Assert.Contains("file was skipped", message);
+        Assert.DoesNotContain("raw-sensitive", message);
+    }
+
+    [Fact]
+    public void FormatIndexPhasePath_AppendsPhaseSuffixForJsonLiveness()
+    {
+        var message = IndexCommandRunner.FormatIndexPhasePath("src/App.cs", "references");
+
+        Assert.Equal("src/App.cs (references)", message);
+    }
+
+    [Fact]
+    public void GetJsonIndexHeartbeatPath_UsesWorkerPhaseWhenMainThreadIsIdle()
+    {
+        var message = IndexCommandRunner.GetJsonIndexHeartbeatPath(
+            currentFile: null,
+            activeExtractionPhases: ["src/App.cs (references)"]);
+
+        Assert.Equal("src/App.cs (references)", message);
+    }
+
+    [Fact]
+    public void GetJsonIndexHeartbeatPath_PrefersMainThreadPhaseWhenCommittingResults()
+    {
+        var message = IndexCommandRunner.GetJsonIndexHeartbeatPath(
+            "src/App.cs (committing)",
+            ["src/Other.cs (references)"]);
+
+        Assert.Equal("src/App.cs (committing)", message);
     }
 
     [Fact]
@@ -7149,7 +7190,7 @@ public class IndexCommandRunnerTests
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (hotspotsExitCode, hotspotsJson) = RunHotspotsJsonWithPaths(dbPath, "csharp", "function", ["projA/", "projB/"]);
 
-            Assert.Equal(CommandExitCodes.NotFound, hotspotsExitCode);
+            Assert.Equal(CommandExitCodes.Success, hotspotsExitCode);
             Assert.True(hotspotsJson.GetProperty("hotspot_family_ready").GetBoolean());
             Assert.Equal(0, hotspotsJson.GetProperty("count").GetInt32());
             Assert.Empty(hotspotsJson.GetProperty("hotspots").EnumerateArray());
