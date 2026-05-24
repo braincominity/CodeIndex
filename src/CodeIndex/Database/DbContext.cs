@@ -1140,10 +1140,14 @@ public class DbContext : IDisposable
 
     public void InitializeSchema()
     {
-        using var transaction = _connection.BeginTransaction(deferred: false);
-        _activeMigrationTransaction = transaction;
+        var legacyAlterTable = ExecuteScalar("PRAGMA legacy_alter_table");
+        Execute("PRAGMA legacy_alter_table=ON");
         try
         {
+            using var transaction = _connection.BeginTransaction(deferred: false);
+            _activeMigrationTransaction = transaction;
+            try
+            {
             // Files table / ファイルテーブル
             Execute(@"
             CREATE TABLE IF NOT EXISTS files (
@@ -1351,13 +1355,17 @@ public class DbContext : IDisposable
                 INSERT INTO fts_chunks(rowid, content) VALUES (new.id, new.content);
             END");
             transaction.Commit();
+            }
+            finally
+            {
+                _activeMigrationTransaction = null;
+            }
         }
         finally
         {
-            _activeMigrationTransaction = null;
+            Execute($"PRAGMA legacy_alter_table={legacyAlterTable}");
+            _schemaCache?.Refresh();
         }
-
-        _schemaCache?.Refresh();
     }
 
     private void EnforceRequiredFileIdConstraints()
@@ -1420,27 +1428,7 @@ public class DbContext : IDisposable
                 )
                 """,
                 "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_metadata_target, name_folded");
-            RebuildTableWithRequiredFileId(
-                "symbol_references",
-                """
-                CREATE TABLE symbol_references (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                    symbol_name     TEXT,
-                    reference_kind  TEXT,
-                    line            INTEGER,
-                    column_number   INTEGER,
-                    context         TEXT,
-                    reference_line_id INTEGER REFERENCES reference_lines(id),
-                    container_kind  TEXT,
-                    container_name  TEXT,
-                    symbol_name_folded TEXT,
-                    container_name_folded TEXT,
-                    is_self_reference INTEGER NOT NULL DEFAULT 0,
-                    is_mutual_recursion INTEGER NOT NULL DEFAULT 0
-                )
-                """,
-                "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion");
+            RebuildSymbolReferencesWithRequiredFileId();
             RebuildTableWithRequiredFileId(
                 "file_issues",
                 """
@@ -1480,7 +1468,34 @@ public class DbContext : IDisposable
         Execute($"ALTER TABLE {tableName} RENAME TO {oldTableName}");
         Execute(createSql);
         Execute($"INSERT INTO {tableName} ({columns}) SELECT {columns} FROM {oldTableName}");
+        if (string.Equals(tableName, "reference_lines", StringComparison.Ordinal))
+            RebuildSymbolReferencesWithRequiredFileId();
         Execute($"DROP TABLE {oldTableName}");
+    }
+
+    private void RebuildSymbolReferencesWithRequiredFileId()
+    {
+        RebuildTableWithRequiredFileId(
+            "symbol_references",
+            """
+            CREATE TABLE symbol_references (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                symbol_name     TEXT,
+                reference_kind  TEXT,
+                line            INTEGER,
+                column_number   INTEGER,
+                context         TEXT,
+                reference_line_id INTEGER REFERENCES reference_lines(id),
+                container_kind  TEXT,
+                container_name  TEXT,
+                symbol_name_folded TEXT,
+                container_name_folded TEXT,
+                is_self_reference INTEGER NOT NULL DEFAULT 0,
+                is_mutual_recursion INTEGER NOT NULL DEFAULT 0
+            )
+            """,
+            "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion");
     }
 
     private bool ColumnIsNotNull(string tableName, string columnName)
