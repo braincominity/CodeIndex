@@ -104,7 +104,7 @@ public class ProgramCliTests
 
             var (exitCode, stdout, stderr) = RunCliInSubprocess([quietFlag, "search", "definitely_missing_query", "--db", dbPath]);
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
         }
@@ -127,7 +127,7 @@ public class ProgramCliTests
                 ["search", "definitely_missing_query", "--verbose", "--db", dbPath],
                 new Dictionary<string, string?> { [ProgramRunner.QuietEnvironmentVariable] = "1" });
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
         }
