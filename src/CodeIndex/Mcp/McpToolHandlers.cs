@@ -2490,6 +2490,27 @@ public partial class McpServer
                     errors++;
                 }
             }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                if (fileBatchMarked)
+                    writer.ClearBatchInProgress();
+
+                try
+                {
+                    var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, filePath));
+                    if (writer.HasFileAtPath(relativePath))
+                    {
+                        using var txn = writer.BeginTransaction();
+                        writer.DeleteFileByPath(relativePath);
+                        WriteProjectRootOnce();
+                        txn.Commit();
+                    }
+                }
+                catch
+                {
+                    errors++;
+                }
+            }
             catch
             {
                 if (fileBatchMarked)
