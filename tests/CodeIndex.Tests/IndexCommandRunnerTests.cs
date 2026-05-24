@@ -5750,6 +5750,84 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_RewritesStaleCSharpExtractorContractForRazorDirectives()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var pagesDir = Path.Combine(projectRoot, "Pages");
+            Directory.CreateDirectory(pagesDir);
+            var sourcePath = Path.Combine(pagesDir, "Product.razor");
+            File.WriteAllText(
+                sourcePath,
+                """
+                @page "/products/{id:int}"
+                @implements IDisposable
+                @attribute [Authorize]
+                @layout MainLayout
+
+                @code {
+                    public void Dispose() { }
+                }
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = $"""
+                    DELETE FROM symbols WHERE kind IN ('route', 'implements', 'attribute', 'layout');
+                    UPDATE codeindex_meta
+                    SET value = '0'
+                    WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("csharp")}';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+            using var symbolsCmd = verify.CreateCommand();
+            symbolsCmd.CommandText = """
+                SELECT kind, name
+                FROM symbols
+                WHERE kind IN ('route', 'implements', 'attribute', 'layout')
+                ORDER BY kind, name
+                """;
+            var symbols = new List<(string Kind, string Name)>();
+            using (var reader = symbolsCmd.ExecuteReader())
+            {
+                while (reader.Read())
+                    symbols.Add((reader.GetString(0), reader.GetString(1)));
+            }
+
+            Assert.Contains(("attribute", "Authorize"), symbols);
+            Assert.Contains(("implements", "IDisposable"), symbols);
+            Assert.Contains(("layout", "MainLayout"), symbols);
+            Assert.Contains(("route", "/products/{id:int}"), symbols);
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = $"SELECT value FROM codeindex_meta WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("csharp")}'";
+            Assert.Equal(
+                SymbolExtractor.CSharpContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                versionCmd.ExecuteScalar() as string);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_DegradedWarningSummarizesRemainingFoldGap()
     {
         var projectRoot = CreateTempProject();

@@ -14,12 +14,14 @@ namespace CodeIndex.Indexer;
 public static partial class SymbolExtractor
 {
     public const int DefaultContractVersion = 1;
+    public const int CSharpContractVersion = 2;
 
     public static int GetContractVersion(string? lang)
     {
         return lang switch
         {
             null or "" => DefaultContractVersion,
+            "csharp" => CSharpContractVersion,
             _ => DefaultContractVersion,
         };
     }
