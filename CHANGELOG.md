@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.24.2] - 2026-05-25
+
+#### Fixed
+
+- **C# / Razor trimmed-publish alias tests no longer share compiler intermediates** — the published CLI smoke test for `cshtml` and `razor` search aliases now gives each publish invocation its own intermediate output path and disables shared compilation, avoiding Windows `cdidx.dll` file-lock collisions during parallel `net8.0` / `net9.0` test runs.
+
 ### [1.24.1] - 2026-05-25
 
 #### Fixed
@@ -2749,6 +2755,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.24.2] - 2026-05-25
+
+#### 修正
+
+- **C# / Razor の trimmed-publish alias テストが compiler intermediate を共有しなくなりました** — `cshtml` と `razor` の search alias を確認する published CLI smoke test は publish 実行ごとに専用の intermediate output path を使い、shared compilation を無効化することで、Windows の並列 `net8.0` / `net9.0` テスト実行中の `cdidx.dll` file-lock 衝突を避けるようにしました。
+
 ### [1.24.1] - 2026-05-25
 
 #### 修正
@@ -5476,7 +5488,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.24.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.24.2...HEAD
+[1.24.2]: https://github.com/Widthdom/CodeIndex/compare/v1.24.1...v1.24.2
 [1.24.1]: https://github.com/Widthdom/CodeIndex/compare/v1.24.0...v1.24.1
 [1.24.0]: https://github.com/Widthdom/CodeIndex/compare/v1.23.1...v1.24.0
 [1.23.1]: https://github.com/Widthdom/CodeIndex/compare/v1.23.0...v1.23.1

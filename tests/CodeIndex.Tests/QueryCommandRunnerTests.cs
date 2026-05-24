@@ -31604,6 +31604,7 @@ jobs:
     private static string PublishTrimmedCli(string outputDir)
     {
         Directory.CreateDirectory(outputDir);
+        var intermediateDir = Path.Combine(outputDir, "obj", "publish") + Path.DirectorySeparatorChar;
 
         var psi = new System.Diagnostics.ProcessStartInfo("dotnet")
         {
@@ -31624,6 +31625,8 @@ jobs:
         psi.ArgumentList.Add("-p:PublishTrimmed=true");
         psi.ArgumentList.Add("-p:SelfContained=true");
         psi.ArgumentList.Add("-p:PublishSingleFile=false");
+        psi.ArgumentList.Add($"-p:IntermediateOutputPath={intermediateDir}");
+        psi.ArgumentList.Add("-p:UseSharedCompilation=false");
 
         using var process = System.Diagnostics.Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start dotnet publish / dotnet publish の起動に失敗");
