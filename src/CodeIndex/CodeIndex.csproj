@@ -39,6 +39,8 @@
     <PackageReleaseNotes>See https://github.com/Widthdom/CodeIndex/blob/main/CHANGELOG.md for release notes.</PackageReleaseNotes>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
     <PackageIcon>cdidx-icon.png</PackageIcon>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
 
   <ItemGroup>
