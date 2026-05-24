@@ -11,12 +11,20 @@ namespace CodeIndex.Database;
 /// </summary>
 public class DbWriter
 {
+    public const string FtsIncrementalWritesSinceOptimizeMetaKey = "fts_incremental_writes_since_optimize";
+    public const string FtsLastOptimizedAtMetaKey = "fts_last_optimized_at";
+    public const int DefaultFtsOptimizeIncrementalWriteThreshold = 25;
+
     private readonly SqliteConnection _conn;
     private readonly PreparedCommandCache? _commandCache;
     private readonly Action? _markWriteWork;
     internal static Action? FoldBackfillRowUpdatedForTesting { get; set; }
+    internal static Action<string>? BatchRowSkipWarningForTesting { get; set; }
     private const int BatchSize = 500;
     private const int MaxSqlVariables = 999;
+    private const int SqliteConstraintErrorCode = 19;
+    private int _rowSkipSavepointCounter;
+    private long _batchRowsSkipped;
     private int _transactionDepth;
     // Outermost SqliteTransaction currently held open by this writer (null when no
     // transaction is active OR after the outermost transaction has been committed /
@@ -33,6 +41,7 @@ public class DbWriter
     // cached command の Transaction を null に再同期できるようにする。Issue #1566.
     private SqliteTransaction? _activeTransaction;
     internal SqliteConnection Connection => _conn;
+    public long BatchRowsSkipped => Volatile.Read(ref _batchRowsSkipped);
 
     public DbWriter(SqliteConnection connection)
         : this(connection, commandCache: null, markWriteWork: null)
@@ -700,30 +709,18 @@ public class DbWriter
         for (int i = 0; i < chunks.Count; i += rowsPerStatement)
         {
             int end = Math.Min(i + rowsPerStatement, chunks.Count);
-            // Only create a batch transaction when not already inside an outer transaction
-            // 外部トランザクション内でない場合のみバッチトランザクションを作成
-            using var transaction = !IsInTransaction() ? BeginTransaction() : null;
-
-            using var cmd = _conn.CreateCommand();
-            var sql = new StringBuilder();
-            sql.Append("INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content) VALUES ");
-            for (int j = i; j < end; j++)
+            try
             {
-                var chunk = chunks[j];
-                if (j > i)
-                    sql.Append(", ");
-                var suffix = j - i;
-                sql.Append($"(@fid{suffix}, @idx{suffix}, @start{suffix}, @end{suffix}, @content{suffix})");
-                cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = chunk.FileId;
-                cmd.Parameters.Add($"@idx{suffix}", SqliteType.Integer).Value = chunk.ChunkIndex;
-                cmd.Parameters.Add($"@start{suffix}", SqliteType.Integer).Value = chunk.StartLine;
-                cmd.Parameters.Add($"@end{suffix}", SqliteType.Integer).Value = chunk.EndLine;
-                cmd.Parameters.Add($"@content{suffix}", SqliteType.Text).Value = chunk.Content;
+                // Only create a batch transaction when not already inside an outer transaction
+                // 外部トランザクション内でない場合のみバッチトランザクションを作成
+                using var transaction = !IsInTransaction() ? BeginTransaction() : null;
+                InsertChunkBatch(chunks, i, end);
+                transaction?.Commit();
             }
-
-            cmd.CommandText = sql.ToString();
-            cmd.ExecuteNonQuery();
-            transaction?.Commit();
+            catch (SqliteException batchException) when (IsRowSkippableSqliteException(batchException))
+            {
+                InsertChunksWithRowSkip(chunks, i, end, batchException);
+            }
         }
     }
 
@@ -742,13 +739,112 @@ public class DbWriter
         {
             int end = Math.Min(i + rowsPerStatement, symbols.Count);
             var foldedNameCache = new Dictionary<string, string?>(StringComparer.Ordinal);
-            // Only create a batch transaction when not already inside an outer transaction
-            // 外部トランザクション内でない場合のみバッチトランザクションを作成
-            using var transaction = !IsInTransaction() ? BeginTransaction() : null;
+            try
+            {
+                // Only create a batch transaction when not already inside an outer transaction
+                // 外部トランザクション内でない場合のみバッチトランザクションを作成
+                using var transaction = !IsInTransaction() ? BeginTransaction() : null;
+                InsertSymbolBatch(symbols, i, end, foldedNameCache);
+                transaction?.Commit();
+            }
+            catch (SqliteException batchException) when (IsRowSkippableSqliteException(batchException))
+            {
+                InsertSymbolsWithRowSkip(symbols, i, end, batchException);
+            }
+        }
+    }
 
-            using var cmd = _conn.CreateCommand();
-            var sql = new StringBuilder();
-            sql.Append(@"
+    private void InsertChunksWithRowSkip(IReadOnlyList<ChunkRecord> chunks, int start, int end, SqliteException batchException)
+    {
+        using var transaction = !IsInTransaction() ? BeginTransaction() : null;
+        for (int i = start; i < end; i++)
+        {
+            var chunk = chunks[i];
+            ExecuteWithRowSavepoint(
+                () => InsertChunkBatch(chunks, i, i + 1),
+                ex => WarnSkippedBatchRow($"chunk file_id={chunk.FileId} chunk_index={chunk.ChunkIndex}", batchException, ex));
+        }
+
+        transaction?.Commit();
+    }
+
+    private void InsertSymbolsWithRowSkip(IReadOnlyList<SymbolRecord> symbols, int start, int end, SqliteException batchException)
+    {
+        using var transaction = !IsInTransaction() ? BeginTransaction() : null;
+        var foldedNameCache = new Dictionary<string, string?>(StringComparer.Ordinal);
+        for (int i = start; i < end; i++)
+        {
+            var symbol = symbols[i];
+            ExecuteWithRowSavepoint(
+                () => InsertSymbolBatch(symbols, i, i + 1, foldedNameCache),
+                ex => WarnSkippedBatchRow($"symbol file_id={symbol.FileId} name={symbol.Name} line={symbol.Line}", batchException, ex));
+        }
+
+        transaction?.Commit();
+    }
+
+    private void ExecuteWithRowSavepoint(Action insertRow, Action<Exception> onSkip)
+    {
+        var savepointName = $"row_skip_{Interlocked.Increment(ref _rowSkipSavepointCounter)}";
+        Execute($"SAVEPOINT {savepointName}");
+        try
+        {
+            insertRow();
+            Execute($"RELEASE SAVEPOINT {savepointName}");
+        }
+        catch (Exception ex) when (ex is SqliteException)
+        {
+            Execute($"ROLLBACK TO SAVEPOINT {savepointName}");
+            Execute($"RELEASE SAVEPOINT {savepointName}");
+            if (IsRowSkippableSqliteException((SqliteException)ex))
+                onSkip(ex);
+            else
+                throw;
+        }
+    }
+
+    private static bool IsRowSkippableSqliteException(SqliteException ex)
+        => ex.SqliteErrorCode == SqliteConstraintErrorCode;
+
+    private void WarnSkippedBatchRow(string rowIdentifier, Exception batchException, Exception rowException)
+    {
+        Interlocked.Increment(ref _batchRowsSkipped);
+        var message = $"Warning: skipped failed batch row ({rowIdentifier}); batch_error={batchException.Message}; row_error={rowException.Message}";
+        var testSink = BatchRowSkipWarningForTesting;
+        if (testSink != null)
+            testSink(message);
+        else
+            Console.Error.WriteLine(message);
+    }
+
+    private void InsertChunkBatch(IReadOnlyList<ChunkRecord> chunks, int start, int end)
+    {
+        using var cmd = _conn.CreateCommand();
+        var sql = new StringBuilder();
+        sql.Append("INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content) VALUES ");
+        for (int j = start; j < end; j++)
+        {
+            var chunk = chunks[j];
+            if (j > start)
+                sql.Append(", ");
+            var suffix = j - start;
+            sql.Append($"(@fid{suffix}, @idx{suffix}, @start{suffix}, @end{suffix}, @content{suffix})");
+            cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = chunk.FileId;
+            cmd.Parameters.Add($"@idx{suffix}", SqliteType.Integer).Value = chunk.ChunkIndex;
+            cmd.Parameters.Add($"@start{suffix}", SqliteType.Integer).Value = chunk.StartLine;
+            cmd.Parameters.Add($"@end{suffix}", SqliteType.Integer).Value = chunk.EndLine;
+            cmd.Parameters.Add($"@content{suffix}", SqliteType.Text).Value = chunk.Content;
+        }
+
+        cmd.CommandText = sql.ToString();
+        cmd.ExecuteNonQuery();
+    }
+
+    private void InsertSymbolBatch(IReadOnlyList<SymbolRecord> symbols, int start, int end, Dictionary<string, string?> foldedNameCache)
+    {
+        using var cmd = _conn.CreateCommand();
+        var sql = new StringBuilder();
+        sql.Append(@"
                 INSERT INTO symbols (
                     file_id, kind, sub_kind, name, line, start_line, start_column, end_line,
                     body_start_line, body_end_line, signature,
@@ -759,15 +855,15 @@ public class DbWriter
                 )
                 VALUES ");
 
-            for (int j = i; j < end; j++)
-            {
-                var symbol = symbols[j];
-                var startLine = symbol.StartLine > 0 ? symbol.StartLine : symbol.Line;
-                var endLine = symbol.EndLine > 0 ? symbol.EndLine : startLine;
-                if (j > i)
-                    sql.Append(", ");
-                var suffix = j - i;
-                sql.Append($@"(
+        for (int j = start; j < end; j++)
+        {
+            var symbol = symbols[j];
+            var startLine = symbol.StartLine > 0 ? symbol.StartLine : symbol.Line;
+            var endLine = symbol.EndLine > 0 ? symbol.EndLine : startLine;
+            if (j > start)
+                sql.Append(", ");
+            var suffix = j - start;
+            sql.Append($@"(
                     @fid{suffix}, @kind{suffix}, @subKind{suffix}, @name{suffix}, @line{suffix}, @startLine{suffix}, @startColumn{suffix}, @endLine{suffix},
                     @bodyStartLine{suffix}, @bodyEndLine{suffix}, @signature{suffix},
                     @containerKind{suffix}, @containerName{suffix}, @containerQualifiedName{suffix}, @familyKey{suffix},
@@ -775,33 +871,31 @@ public class DbWriter
                     @isMetadataTarget{suffix},
                     @nameFolded{suffix}
                 )");
-                cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = symbol.FileId;
-                cmd.Parameters.Add($"@kind{suffix}", SqliteType.Text).Value = symbol.Kind;
-                cmd.Parameters.Add($"@subKind{suffix}", SqliteType.Text).Value = (object?)symbol.SubKind ?? DBNull.Value;
-                cmd.Parameters.Add($"@name{suffix}", SqliteType.Text).Value = symbol.Name;
-                cmd.Parameters.Add($"@line{suffix}", SqliteType.Integer).Value = symbol.Line;
-                cmd.Parameters.Add($"@startLine{suffix}", SqliteType.Integer).Value = startLine;
-                cmd.Parameters.Add($"@startColumn{suffix}", SqliteType.Integer).Value = (object?)symbol.StartColumn ?? DBNull.Value;
-                cmd.Parameters.Add($"@endLine{suffix}", SqliteType.Integer).Value = endLine;
-                cmd.Parameters.Add($"@bodyStartLine{suffix}", SqliteType.Integer).Value = (object?)symbol.BodyStartLine ?? DBNull.Value;
-                cmd.Parameters.Add($"@bodyEndLine{suffix}", SqliteType.Integer).Value = (object?)symbol.BodyEndLine ?? DBNull.Value;
-                cmd.Parameters.Add($"@signature{suffix}", SqliteType.Text).Value = (object?)symbol.Signature ?? DBNull.Value;
-                cmd.Parameters.Add($"@containerKind{suffix}", SqliteType.Text).Value = (object?)symbol.ContainerKind ?? DBNull.Value;
-                cmd.Parameters.Add($"@containerName{suffix}", SqliteType.Text).Value = (object?)symbol.ContainerName ?? DBNull.Value;
-                cmd.Parameters.Add($"@containerQualifiedName{suffix}", SqliteType.Text).Value = (object?)symbol.ContainerQualifiedName ?? DBNull.Value;
-                cmd.Parameters.Add($"@familyKey{suffix}", SqliteType.Text).Value = (object?)symbol.FamilyKey ?? DBNull.Value;
-                cmd.Parameters.Add($"@visibility{suffix}", SqliteType.Text).Value = (object?)symbol.Visibility ?? DBNull.Value;
-                cmd.Parameters.Add($"@returnType{suffix}", SqliteType.Text).Value = (object?)symbol.ReturnType ?? DBNull.Value;
-                cmd.Parameters.Add($"@isMetadataTarget{suffix}", SqliteType.Integer).Value = symbol.IsMetadataTarget.HasValue
-                    ? (symbol.IsMetadataTarget.Value ? 1 : 0)
-                    : (object)DBNull.Value;
-                cmd.Parameters.Add($"@nameFolded{suffix}", SqliteType.Text).Value = FoldedNameDbValue(symbol.Name, foldedNameCache);
-            }
-
-            cmd.CommandText = sql.ToString();
-            cmd.ExecuteNonQuery();
-            transaction?.Commit();
+            cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = symbol.FileId;
+            cmd.Parameters.Add($"@kind{suffix}", SqliteType.Text).Value = symbol.Kind;
+            cmd.Parameters.Add($"@subKind{suffix}", SqliteType.Text).Value = (object?)symbol.SubKind ?? DBNull.Value;
+            cmd.Parameters.Add($"@name{suffix}", SqliteType.Text).Value = symbol.Name;
+            cmd.Parameters.Add($"@line{suffix}", SqliteType.Integer).Value = symbol.Line;
+            cmd.Parameters.Add($"@startLine{suffix}", SqliteType.Integer).Value = startLine;
+            cmd.Parameters.Add($"@startColumn{suffix}", SqliteType.Integer).Value = (object?)symbol.StartColumn ?? DBNull.Value;
+            cmd.Parameters.Add($"@endLine{suffix}", SqliteType.Integer).Value = endLine;
+            cmd.Parameters.Add($"@bodyStartLine{suffix}", SqliteType.Integer).Value = (object?)symbol.BodyStartLine ?? DBNull.Value;
+            cmd.Parameters.Add($"@bodyEndLine{suffix}", SqliteType.Integer).Value = (object?)symbol.BodyEndLine ?? DBNull.Value;
+            cmd.Parameters.Add($"@signature{suffix}", SqliteType.Text).Value = (object?)symbol.Signature ?? DBNull.Value;
+            cmd.Parameters.Add($"@containerKind{suffix}", SqliteType.Text).Value = (object?)symbol.ContainerKind ?? DBNull.Value;
+            cmd.Parameters.Add($"@containerName{suffix}", SqliteType.Text).Value = (object?)symbol.ContainerName ?? DBNull.Value;
+            cmd.Parameters.Add($"@containerQualifiedName{suffix}", SqliteType.Text).Value = (object?)symbol.ContainerQualifiedName ?? DBNull.Value;
+            cmd.Parameters.Add($"@familyKey{suffix}", SqliteType.Text).Value = (object?)symbol.FamilyKey ?? DBNull.Value;
+            cmd.Parameters.Add($"@visibility{suffix}", SqliteType.Text).Value = (object?)symbol.Visibility ?? DBNull.Value;
+            cmd.Parameters.Add($"@returnType{suffix}", SqliteType.Text).Value = (object?)symbol.ReturnType ?? DBNull.Value;
+            cmd.Parameters.Add($"@isMetadataTarget{suffix}", SqliteType.Integer).Value = symbol.IsMetadataTarget.HasValue
+                ? (symbol.IsMetadataTarget.Value ? 1 : 0)
+                : (object)DBNull.Value;
+            cmd.Parameters.Add($"@nameFolded{suffix}", SqliteType.Text).Value = FoldedNameDbValue(symbol.Name, foldedNameCache);
         }
+
+        cmd.CommandText = sql.ToString();
+        cmd.ExecuteNonQuery();
     }
 
     public List<SymbolRecord> LoadCSharpStaticInterfaceContractSymbols(IReadOnlySet<string>? excludedPaths = null)
@@ -1461,6 +1555,35 @@ public class DbWriter
     public void OptimizeFts()
     {
         Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')");
+        SetMeta(FtsIncrementalWritesSinceOptimizeMetaKey, "0");
+        SetMeta(FtsLastOptimizedAtMetaKey, DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    public int GetFtsIncrementalWritesSinceOptimize()
+    {
+        var raw = GetMetaString(FtsIncrementalWritesSinceOptimizeMetaKey);
+        return int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var value) && value > 0
+            ? value
+            : 0;
+    }
+
+    public int RecordFtsIncrementalWrite()
+    {
+        var value = GetFtsIncrementalWritesSinceOptimize() + 1;
+        SetMeta(FtsIncrementalWritesSinceOptimizeMetaKey, value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return value;
+    }
+
+    public bool OptimizeFtsIfIncrementalWriteThresholdReached(int threshold = DefaultFtsOptimizeIncrementalWriteThreshold)
+    {
+        if (threshold <= 0)
+            throw new ArgumentOutOfRangeException(nameof(threshold));
+
+        if (GetFtsIncrementalWritesSinceOptimize() < threshold)
+            return false;
+
+        OptimizeFts();
+        return true;
     }
 
     // End-of-successful-index trust markers. The ready bits live in PRAGMA user_version so

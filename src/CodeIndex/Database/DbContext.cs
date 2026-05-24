@@ -33,8 +33,10 @@ public class DbContext : IDisposable
     private PreparedCommandCache? _preparedCommands;
     private bool _suppressWriteWorkTracking = true;
     private bool _hasWriteWork;
+    private bool _rebuildFtsAfterSchemaMigration;
 
     internal static Action<string>? OptimizePragmaExecutedForTesting { get; set; }
+    internal static Action<string, string>? PlannerStatisticsCommandExecutedForTesting { get; set; }
 
     public SqliteConnection Connection => _connection;
     public bool IsReadOnly => _isReadOnly;
@@ -1138,8 +1140,12 @@ public class DbContext : IDisposable
 
     public void InitializeSchema()
     {
-        // Files table / ファイルテーブル
-        Execute(@"
+        using var transaction = _connection.BeginTransaction(deferred: false);
+        _activeMigrationTransaction = transaction;
+        try
+        {
+            // Files table / ファイルテーブル
+            Execute(@"
             CREATE TABLE IF NOT EXISTS files (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 path        TEXT    NOT NULL UNIQUE,
@@ -1263,6 +1269,7 @@ public class DbContext : IDisposable
         EnsureColumn("symbol_references", "container_name_folded", "TEXT");
         EnsureColumn("symbol_references", "is_self_reference", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn("symbol_references", "is_mutual_recursion", "INTEGER NOT NULL DEFAULT 0");
+        EnforceRequiredFileIdConstraints();
 
         // Indexes / インデックス
         Execute("CREATE INDEX IF NOT EXISTS idx_files_lang     ON files(lang)");
@@ -1313,13 +1320,18 @@ public class DbContext : IDisposable
         Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded_file ON symbol_references(symbol_name_folded, file_id)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_name_folded_kind ON symbol_references(container_name_folded, reference_kind)");
 
-        // Full-text search / 全文検索
-        Execute(@"
+            // Full-text search / 全文検索
+            Execute(@"
             CREATE VIRTUAL TABLE IF NOT EXISTS fts_chunks USING fts5(
                 content,
                 content='chunks',
                 content_rowid='id'
             )");
+        if (_rebuildFtsAfterSchemaMigration)
+        {
+            Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('rebuild')");
+            _rebuildFtsAfterSchemaMigration = false;
+        }
 
         // FTS5 content-synced triggers — keep fts_chunks in sync with chunks table.
         // Without these, CASCADE DELETEs on chunks leave orphan entries in fts_chunks.
@@ -1338,7 +1350,150 @@ public class DbContext : IDisposable
                 INSERT INTO fts_chunks(fts_chunks, rowid, content) VALUES('delete', old.id, old.content);
                 INSERT INTO fts_chunks(rowid, content) VALUES (new.id, new.content);
             END");
+            transaction.Commit();
+        }
+        finally
+        {
+            _activeMigrationTransaction = null;
+        }
+
         _schemaCache?.Refresh();
+    }
+
+    private void EnforceRequiredFileIdConstraints()
+    {
+        Execute("PRAGMA foreign_keys=OFF");
+        try
+        {
+            RebuildTableWithRequiredFileId(
+                "chunks",
+                """
+                CREATE TABLE chunks (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    chunk_index INTEGER NOT NULL,
+                    start_line  INTEGER,
+                    end_line    INTEGER,
+                    content     TEXT,
+                    UNIQUE(file_id, chunk_index)
+                )
+                """,
+                "id, file_id, chunk_index, start_line, end_line, content");
+            RebuildTableWithRequiredFileId(
+                "reference_lines",
+                """
+                CREATE TABLE reference_lines (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    line        INTEGER NOT NULL,
+                    context     TEXT NOT NULL,
+                    UNIQUE(file_id, line)
+                )
+                """,
+                "id, file_id, line, context");
+            RebuildTableWithRequiredFileId(
+                "symbols",
+                """
+                CREATE TABLE symbols (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    kind            TEXT,
+                    sub_kind        TEXT,
+                    name            TEXT,
+                    line            INTEGER,
+                    start_line      INTEGER,
+                    start_column    INTEGER,
+                    end_line        INTEGER,
+                    body_start_line INTEGER,
+                    body_end_line   INTEGER,
+                    signature       TEXT,
+                    container_kind  TEXT,
+                    container_name  TEXT,
+                    container_qualified_name TEXT,
+                    family_key      TEXT,
+                    visibility      TEXT,
+                    return_type     TEXT,
+                    is_metadata_target INTEGER,
+                    name_folded     TEXT
+                )
+                """,
+                "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_metadata_target, name_folded");
+            RebuildTableWithRequiredFileId(
+                "symbol_references",
+                """
+                CREATE TABLE symbol_references (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    symbol_name     TEXT,
+                    reference_kind  TEXT,
+                    line            INTEGER,
+                    column_number   INTEGER,
+                    context         TEXT,
+                    reference_line_id INTEGER REFERENCES reference_lines(id),
+                    container_kind  TEXT,
+                    container_name  TEXT,
+                    symbol_name_folded TEXT,
+                    container_name_folded TEXT,
+                    is_self_reference INTEGER NOT NULL DEFAULT 0,
+                    is_mutual_recursion INTEGER NOT NULL DEFAULT 0
+                )
+                """,
+                "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion");
+            RebuildTableWithRequiredFileId(
+                "file_issues",
+                """
+                CREATE TABLE file_issues (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    kind            TEXT NOT NULL,
+                    line            INTEGER NOT NULL DEFAULT 0,
+                    message         TEXT NOT NULL
+                )
+                """,
+                "id, file_id, kind, line, message");
+        }
+        finally
+        {
+            Execute("PRAGMA foreign_keys=ON");
+        }
+    }
+
+    private void RebuildTableWithRequiredFileId(string tableName, string createSql, string columns)
+    {
+        if (ColumnIsNotNull(tableName, "file_id"))
+            return;
+
+        var oldTableName = $"_{tableName}_nullable_file_id";
+        Execute($"DROP TABLE IF EXISTS {oldTableName}");
+        Execute($"DROP TRIGGER IF EXISTS fts_chunks_ai");
+        Execute($"DROP TRIGGER IF EXISTS fts_chunks_ad");
+        Execute($"DROP TRIGGER IF EXISTS fts_chunks_au");
+        if (string.Equals(tableName, "chunks", StringComparison.Ordinal))
+        {
+            Execute("DROP TABLE IF EXISTS fts_chunks");
+            _rebuildFtsAfterSchemaMigration = true;
+        }
+        Execute($"DELETE FROM {tableName} WHERE file_id IS NULL");
+        Execute($"ALTER TABLE {tableName} RENAME TO {oldTableName}");
+        Execute(createSql);
+        Execute($"INSERT INTO {tableName} ({columns}) SELECT {columns} FROM {oldTableName}");
+        Execute($"DROP TABLE {oldTableName}");
+    }
+
+    private bool ColumnIsNotNull(string tableName, string columnName)
+    {
+        using var cmd = _connection.CreateCommand();
+        if (_activeMigrationTransaction != null)
+            cmd.Transaction = _activeMigrationTransaction;
+        cmd.CommandText = $"PRAGMA table_info({tableName})";
+
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+                return reader.GetInt32(3) != 0;
+        }
+        return false;
     }
 
     /// <summary>
@@ -1410,7 +1565,19 @@ public class DbContext : IDisposable
         try
         {
             EnsureForeignKeysEnabled();
-            using var transaction = _connection.BeginTransaction(deferred: true);
+            SqliteTransaction transaction;
+            try
+            {
+                transaction = _connection.BeginTransaction(deferred: false);
+            }
+            catch (SqliteException ex) when (IsReadOnlyOpenError(ex))
+            {
+                RecordMigrationFailure("BEGIN IMMEDIATE schema migration", ex);
+                return;
+            }
+
+            using (transaction)
+            {
             _activeMigrationTransaction = transaction;
 
             try
@@ -1423,13 +1590,7 @@ public class DbContext : IDisposable
                     }
                     catch (SqliteException ex)
                     {
-                        var failure = new DbMigrationFailure(
-                            description,
-                            ex.SqliteErrorCode,
-                            ex.Message,
-                            BuildMigrationSuggestedAction(ex.SqliteErrorCode));
-                        LastMigrationFailure = failure;
-                        EmitMigrationFailureWarning(failure);
+                        RecordMigrationFailure(description, ex);
 
                         // Read-only DB / filesystem / sandbox — stop further steps and degrade.
                         // Catches SQLITE_READONLY (8), SQLITE_IOERR (10), and SQLITE_CANTOPEN (14):
@@ -1453,6 +1614,7 @@ public class DbContext : IDisposable
             {
                 _activeMigrationTransaction = null;
             }
+            }
 
             EnsureForeignKeysEnabled();
         }
@@ -1463,6 +1625,17 @@ public class DbContext : IDisposable
             // マイグレーションで列・index が追加された可能性があるためキャッシュを破棄する。
             _schemaCache?.Refresh();
         }
+    }
+
+    private void RecordMigrationFailure(string description, SqliteException exception)
+    {
+        var failure = new DbMigrationFailure(
+            description,
+            exception.SqliteErrorCode,
+            exception.Message,
+            BuildMigrationSuggestedAction(exception.SqliteErrorCode));
+        LastMigrationFailure = failure;
+        EmitMigrationFailureWarning(failure);
     }
 
     private IEnumerable<(string Description, Action Action)> BuildReadMigrationSteps()
@@ -1662,23 +1835,35 @@ public class DbContext : IDisposable
             _hasWriteWork = true;
     }
 
+    internal void RunPlannerStatisticsMaintenance(bool forceAnalyze)
+    {
+        if (_isReadOnly)
+            return;
+
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = forceAnalyze ? "ANALYZE" : "PRAGMA optimize";
+        try
+        {
+            cmd.ExecuteNonQuery();
+            PlannerStatisticsCommandExecutedForTesting?.Invoke(_connection.DataSource, cmd.CommandText);
+            if (!forceAnalyze)
+                OptimizePragmaExecutedForTesting?.Invoke(_connection.DataSource);
+            _hasWriteWork = false;
+        }
+        catch (SqliteException)
+        {
+            // Planner statistics are an index-performance aid. If SQLite rejects ANALYZE /
+            // optimize during cleanup (read-only handoff, transient filesystem state), keep
+            // the completed index usable instead of converting success into failure.
+        }
+    }
+
     private void RunOptimizeOnCloseIfNeeded()
     {
         if (!_hasWriteWork || _isReadOnly)
             return;
 
-        using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "PRAGMA optimize";
-        try
-        {
-            cmd.ExecuteNonQuery();
-            OptimizePragmaExecutedForTesting?.Invoke(_connection.DataSource);
-        }
-        catch (SqliteException ex) when (IsReadOnlyOpenError(ex))
-        {
-            // Best effort on close: a writable DB may become read-only before Dispose
-            // (e.g. tests or sandbox handoff). Do not turn cleanup into command failure.
-        }
+        RunPlannerStatisticsMaintenance(forceAnalyze: false);
     }
 
     public void Dispose()
@@ -1718,14 +1903,30 @@ internal static class DbColumnEnsurer
         {
             alterColumn();
         }
-        catch (SqliteException) when (columnExists())
+        catch (SqliteException ex) when (IsDuplicateColumnRace(ex, columnExists))
         {
             // Another process or an earlier partial migration may have added the
             // column between PRAGMA inspection and ALTER. Re-check PRAGMA-derived
-            // state instead of matching SQLite's English error text so localized
-            // builds or future wording changes still recover (#1532).
+            // state and gate on SQLite's generic DDL error code so localized builds
+            // or future wording changes still recover (#1532, #1690).
             // 列存在を PRAGMA 相当の状態で再確認し、SQLite の英語メッセージに依存せず
             // 「移行済み」を判定する (#1532)。
         }
+    }
+
+    private static bool IsDuplicateColumnRace(SqliteException exception, Func<bool> columnExists)
+    {
+        if (!IsDuplicateColumnAddError(exception))
+            return false;
+
+        return columnExists();
+    }
+
+    private static bool IsDuplicateColumnAddError(SqliteException exception)
+    {
+        // SQLite reports duplicate-column ADD COLUMN as SQLITE_ERROR (1). Keep the
+        // message fallback for older providers that may not surface the numeric code.
+        return exception.SqliteErrorCode == 1 ||
+               exception.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase);
     }
 }

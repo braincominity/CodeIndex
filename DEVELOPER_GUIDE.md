@@ -68,6 +68,8 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
 
 Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. Within each directory, `FileIndexer` loads `.gitignore` before `.cdidxignore`, appends both rule sets in that order, and honors later `!` patterns as re-includes. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
 
+Incremental refreshes that mutate `fts_chunks` increment `codeindex_meta.fts_incremental_writes_since_optimize`. When the counter reaches `DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold`, the update path runs `INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')`, resets the counter, and stamps `fts_last_optimized_at`. Users can run the same maintenance directly with `cdidx optimize --db <path>` or `cdidx index <projectPath> --optimize`; this may briefly hold the writer lock on large indexes.
+
 ### Extending the indexer
 
 Out-of-tree post-extraction hooks can implement `CodeIndex.Indexer.Hooks.IPostExtractionHook` in a `.dll` placed under `~/.config/cdidx/hooks/` (or the directory named by `CDIDX_HOOKS_DIR`). Hook assemblies are discovered in path order. Each concrete hook type is instantiated with a public parameterless constructor, then called after built-in symbol extraction and again after built-in reference extraction, before rows are persisted. Hooks receive a `FileContext` plus mutable `IList<SymbolRecord>` / `IList<ReferenceRecord>` values, so they can annotate extracted records, add synthetic symbols, or add domain-specific references.
@@ -143,6 +145,17 @@ Read-only fallback uses an immutable SQLite URI when the normal writable open ca
 
 Writable opens also reject databases whose `PRAGMA user_version` contains readiness bits outside the current binary's `CurrentSchemaVersion` mask. Read-only status/query paths may still surface `index_newer_than_reader=true` as a degraded audit signal, but write-capable paths must fail with `E003_SCHEMA_TOO_NEW` so an older cdidx cannot silently rewrite a DB stamped by a newer one.
 
+### Data directory resolution
+
+When `--db <path>` is omitted, cdidx resolves the SQLite location from a data directory and appends `codeindex.db`. The precedence chain is:
+
+1. `--data-dir <dir>`
+2. `CDIDX_DATA_DIR`
+3. `XDG_DATA_HOME/cdidx/<workspace-hash>` when `XDG_DATA_HOME` is set
+4. `<workspace>/.cdidx`
+
+`--db <path>` remains the most explicit override and bypasses data-directory resolution. `status --json` reports the effective directory as `data_dir` and the selected source as `data_dir_source` (`flag`, `env`, `xdg`, or `workspace`) so automation can audit where the index lives.
+
 ### SQLite performance tuning
 
 Every `DbContext` connection sets `PRAGMA cache_size=-65536` (64 MiB), `PRAGMA temp_store=MEMORY`, and on 64-bit processes `PRAGMA mmap_size=268435456` (256 MiB). These are connection-scoped query-performance knobs; they do not alter the on-disk schema and are skipped only where SQLite cannot apply them.
@@ -153,6 +166,8 @@ Operators can override the defaults with environment variables:
 |---|---:|---|
 | `CDIDX_SQLITE_CACHE_KB` | `65536` | Positive cache size in KiB; cdidx applies it as a negative SQLite `cache_size` value so SQLite interprets it as KiB. |
 | `CDIDX_SQLITE_MMAP_BYTES` | `268435456` | Non-negative memory-map window in bytes on 64-bit processes. Use `0` to disable mmap. |
+
+After a successful `cdidx index` run, the writer refreshes SQLite planner statistics so large repositories do not rely on default selectivity estimates for `search`, `references`, `callers`, and related joins. A brand-new index database runs full `ANALYZE` once after the initial population; later successful index runs use SQLite's lighter `PRAGMA optimize`. This maintenance is best-effort and never changes the schema contract.
 
 ## Database schema
 
@@ -793,6 +808,7 @@ Process exit codes are coarse (`0` success, `1` usage, `2` not-found, `3` db, `4
 
 - **No ORM** — Raw `Microsoft.Data.Sqlite` with parameterized queries. Keeps dependencies minimal and control explicit.
 - **Batch commits** — 500 records per transaction for write performance. Reduces fsync overhead.
+- **Partial batch failures** — `DbWriter` keeps the fast multi-row `INSERT` path for normal chunk and symbol batches. If SQLite rejects a batch, the writer rolls that batch back, retries rows under per-row `SAVEPOINT`s, commits the valid rows, skips only the failing rows, increments `BatchRowsSkipped`, and emits a warning containing the row identifier and SQLite error. This keeps one corrupt extracted row from discarding the rest of a large indexing batch (#1754).
 - **WAL mode + busy_timeout** — Write-Ahead Logging for concurrent read/write access and crash safety. 5-second busy timeout avoids immediate SQLITE_BUSY errors.
 - **Content-external FTS5 with triggers** — Avoids doubling storage by pointing to `chunks` table instead of storing a copy. Database triggers keep the FTS index in sync automatically.
 - **Reader snapshot isolation for bundled multi-statement reads** — Any read entry point that runs more than one SQL statement per call (`DbReader.GetStatus`, `DbReader.AnalyzeSymbol` for CLI `inspect` / MCP `analyze_symbol`, and `RepoMapBuilder.Build` for CLI `map` / MCP `repo_map`) wraps its body in a single `BEGIN DEFERRED` transaction so every sub-query resolves against the same WAL snapshot. Without this, a writer committing between two `COUNT(*)` statements can let a concurrent reader observe impossible mixed states (issue #180 exposed this as `files=836, refs=0` against a steady-state 44k-ref index). `DEFERRED` acquires only a `SHARED` lock on the first SELECT, so it does not block other writers, and the transaction is committed explicitly at the end to release that lock promptly. Sub-queries that open their own `SqliteDataReader` must scope the reader in an inner block so the handle closes before the outer `Commit()` — `SqliteTransaction.Commit()` fails if a reader on the same connection is still open. New multi-statement reader entry points should follow the same pattern; single-statement queries do not need it (SQLite auto-commit already gives statement-level snapshot isolation).
@@ -2163,6 +2179,8 @@ cdidx ./myproject --files src/app.cs        # 特定ファイルのみ
 
 `--commits` は `git diff-tree --no-commit-id -r --name-only` で変更ファイルパスを解決します。
 `--changed-between` は `git diff --name-status -M <old-ref> <new-ref>` を使い、rename の旧パスと新パスを両方含めるため、古い indexed path も purge できます。
+
+FTS5 を変更する差分更新は `codeindex_meta.fts_incremental_writes_since_optimize` を増やします。カウンタが `DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold` に達すると、更新経路は `INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')` を実行し、カウンタをリセットして `fts_last_optimized_at` を記録します。ユーザーは `cdidx optimize --db <path>` または `cdidx index <projectPath> --optimize` で同じ maintenance を手動実行できます。大きな index では短時間 writer lock を保持する可能性があります。
 
 VB.NET のコンテナ系パターンは `RegexOptions.IgnoreCase` と `VisualBasicEnd` ベースの範囲追跡を使うため、`Partial` の大小文字差や複数ファイルにまたがる型ファミリーでも、安定した定義範囲と `hotspots` 集計用メタデータを維持できる。
 

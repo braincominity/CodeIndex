@@ -62,6 +62,66 @@ public class IndexCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void Run_NewIndexDatabase_RunsAnalyzeAfterSuccessfulIndex()
+    {
+        var projectRoot = CreateTempProject();
+        var commands = new List<string>();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+            DbContext.PlannerStatisticsCommandExecutedForTesting = (dataSource, commandText) =>
+            {
+                if (dataSource.Contains(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), StringComparison.Ordinal))
+                    commands.Add(commandText);
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Contains("ANALYZE", commands);
+        }
+        finally
+        {
+            DbContext.PlannerStatisticsCommandExecutedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_ExistingIndexDatabase_RunsPragmaOptimizeAfterSuccessfulIndex()
+    {
+        var projectRoot = CreateTempProject();
+        var commands = new List<string>();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            DbContext.PlannerStatisticsCommandExecutedForTesting = (dataSource, commandText) =>
+            {
+                if (dataSource.Contains(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), StringComparison.Ordinal))
+                    commands.Add(commandText);
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Contains("PRAGMA optimize", commands);
+            Assert.DoesNotContain("ANALYZE", commands);
+        }
+        finally
+        {
+            DbContext.PlannerStatisticsCommandExecutedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
     // `cdidx index . --rebild` should not just say "unknown option"; surface the closest accepted
     // flag (`--rebuild`) so MCP callers can self-correct without re-reading docs (#1582).
     // `cdidx index . --rebild` のような単純なミスタイプから `--rebuild` を提案できることを確認する (#1582)。
@@ -2252,6 +2312,193 @@ public class IndexCommandRunnerTests
             DeleteDirectory(projectRoot);
             if (Directory.Exists(dbParent))
                 DeleteDirectory(dbParent);
+        }
+    }
+
+    [Fact]
+    public void RunOptimizeFts_ExistingDb_ResetsCounterAndEmitsJson()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_optimize_fts_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db);
+                writer.RecordFtsIncrementalWrite();
+                writer.RecordFtsIncrementalWrite();
+            }
+
+            int exitCode;
+            JsonElement json;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                try
+                {
+                    using var stdout = new StringWriter();
+                    Console.SetOut(stdout);
+                    exitCode = IndexCommandRunner.RunOptimizeFts(["--db", dbPath, "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(stdout.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(2, json.GetProperty("writes_since_optimize_before").GetInt32());
+            Assert.Equal(0, json.GetProperty("writes_since_optimize_after").GetInt32());
+
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Equal("0", verifyDb.GetMetaString(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
+            Assert.False(string.IsNullOrWhiteSpace(verifyDb.GetMetaString(DbWriter.FtsLastOptimizedAtMetaKey)));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void RunOptimizeFts_LockHeld_ReportsDbLocked()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_optimize_locked_{Guid.NewGuid():N}.db");
+        var lockPath = dbPath + ".lock";
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+
+            Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+            using (var holder = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            {
+                int exitCode;
+                JsonElement json;
+                lock (TestConsoleLock.Gate)
+                {
+                    var originalOut = Console.Out;
+                    try
+                    {
+                        using var stdout = new StringWriter();
+                        Console.SetOut(stdout);
+                        exitCode = IndexCommandRunner.RunOptimizeFts(["--db", dbPath, "--json"], _jsonOptions);
+                        using var document = JsonDocument.Parse(stdout.ToString());
+                        json = document.RootElement.Clone();
+                    }
+                    finally
+                    {
+                        Console.SetOut(originalOut);
+                    }
+                }
+
+                Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+                Assert.Equal("error", json.GetProperty("status").GetString());
+                Assert.Equal(CommandErrorCodes.DbLocked, json.GetProperty("error_code").GetString());
+                Assert.Contains("another cdidx index is already running", json.GetProperty("message").GetString());
+                Assert.Contains("retry `cdidx optimize`", json.GetProperty("hint").GetString());
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+            if (File.Exists(lockPath + ".info"))
+                File.Delete(lockPath + ".info");
+            if (File.Exists(lockPath))
+                File.Delete(lockPath);
+        }
+    }
+
+    [Fact]
+    public void RunOptimizeFts_ReadOnlyUri_ReturnsDbNotWritable()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_optimize_readonly_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db);
+                writer.RecordFtsIncrementalWrite();
+            }
+
+            var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            int exitCode;
+            JsonElement json;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                try
+                {
+                    using var stdout = new StringWriter();
+                    Console.SetOut(stdout);
+                    exitCode = IndexCommandRunner.RunOptimizeFts(["--db", dbUri, "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(stdout.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.DbNotWritable, json.GetProperty("error_code").GetString());
+            Assert.Contains("database must be writable for optimize", json.GetProperty("message").GetString());
+
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Equal("1", verifyDb.GetMetaString(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_IndexOptimizeWithDryRun_ReturnsUsageErrorWithoutWriting()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db);
+                writer.RecordFtsIncrementalWrite();
+                writer.SetMeta(DbWriter.FtsLastOptimizedAtMetaKey, "sentinel");
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--optimize", "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.UsageError, json.GetProperty("error_code").GetString());
+            Assert.Contains("--optimize cannot be combined", json.GetProperty("message").GetString());
+
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Equal("1", verifyDb.GetMetaString(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
+            Assert.Equal("sentinel", verifyDb.GetMetaString(DbWriter.FtsLastOptimizedAtMetaKey));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
         }
     }
 
@@ -6483,6 +6730,45 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_Update_RollsBackHotspotFamilyRestampWhenCommitIsInterrupted()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
+            var callerPath = Path.Combine(projectRoot, "src", "Caller.cs");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part1.cs"), "public partial class Api { public void Run() { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part2.cs"), "public partial class Api { public void Run(int value) { } }");
+            File.WriteAllText(callerPath, "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+
+            var (initialExitCode, initialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(initialJson.GetProperty("hotspot_family_ready").GetBoolean());
+
+            File.WriteAllText(callerPath, "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); api.Run(); } }");
+            File.SetLastWriteTimeUtc(callerPath, DateTime.UtcNow.AddSeconds(2));
+
+            IndexCommandRunner.HotspotFamilyUpdateRestampReadyForCommitForTesting = () =>
+                throw new InvalidOperationException("simulate crash after hotspot restamp");
+
+            Assert.Throws<InvalidOperationException>(() =>
+                RunAndCaptureJson([projectRoot, "--files", "src/Caller.cs", "--json"]));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp")));
+        }
+        finally
+        {
+            IndexCommandRunner.HotspotFamilyUpdateRestampReadyForCommitForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_Rebuild_IgnoresUnreadableDirectoriesWhenCollectingMarkerFingerprints()
     {
         if (OperatingSystem.IsWindows())
@@ -7541,6 +7827,7 @@ public class IndexCommandRunnerTests
     private static string GetBuiltCliDllPath()
     {
         var tfm = new DirectoryInfo(AppContext.BaseDirectory).Name;
+        var fallbackTfms = new[] { tfm, "net8.0" }.Distinct(StringComparer.Ordinal);
         var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name;
         var fallbackConfigurations = new[] { configuration, "Debug", "Release" }
             .Where(c => !string.IsNullOrWhiteSpace(c))
@@ -7550,9 +7837,12 @@ public class IndexCommandRunnerTests
         {
             foreach (var candidateConfiguration in fallbackConfigurations)
             {
-                var candidate = Path.Combine(dir.FullName, "src", "CodeIndex", "bin", candidateConfiguration!, tfm, "cdidx.dll");
-                if (File.Exists(candidate))
-                    return candidate;
+                foreach (var candidateTfm in fallbackTfms)
+                {
+                    var candidate = Path.Combine(dir.FullName, "src", "CodeIndex", "bin", candidateConfiguration!, candidateTfm, "cdidx.dll");
+                    if (File.Exists(candidate))
+                        return candidate;
+                }
             }
             dir = dir.Parent;
         }

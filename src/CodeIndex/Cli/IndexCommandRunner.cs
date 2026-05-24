@@ -28,6 +28,7 @@ public static class IndexCommandRunner
         IReadOnlyList<string> Directories);
 
     internal static Action? FullScanWritePhaseStartedForTesting { get; set; }
+    internal static Action? HotspotFamilyUpdateRestampReadyForCommitForTesting { get; set; }
     internal static Func<bool> IsInputRedirectedForTesting { get; set; } = () => Console.IsInputRedirected;
     internal static Func<string?> ReadLineForTesting { get; set; } = Console.ReadLine;
 
@@ -78,7 +79,8 @@ public static class IndexCommandRunner
         // operator. Failure to read cwd (e.g. it was deleted out from under us) is best-effort
         // -- we just skip the drift warning rather than block the run. Issue #1577.
         var initialCwd = TryCaptureCurrentDirectory();
-        var dbPath = DbPathResolver.ResolveForIndex(options.ProjectPath, options.DbPath);
+        var dbResolution = DbPathResolver.ResolveForIndex(options.ProjectPath, options.DbPath, options.DataDir);
+        var dbPath = dbResolution.DbPath;
         var stopwatch = Stopwatch.StartNew();
         var isUpdateMode = options.Commits.Count > 0 || options.ChangedBetweenSpecified || options.UpdateFiles.Count > 0;
         var mode = options.Rebuild ? "rebuild" : isUpdateMode ? "update" : "incremental";
@@ -115,6 +117,17 @@ public static class IndexCommandRunner
                     "Use " + watchConflictSynopsis + ".",
                     CommandErrorCodes.UsageError);
             }
+        }
+
+        if (options.OptimizeOnly && (options.DryRun || options.Watch || options.Rebuild || isUpdateMode))
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "--optimize cannot be combined with --dry-run, --watch, --rebuild, --commits, --changed-between, or --files",
+                CommandExitCodes.UsageError,
+                "Use `cdidx optimize --db <path>` or `cdidx index <projectPath> --optimize` by itself.",
+                CommandErrorCodes.UsageError);
         }
 
         if (options.Rebuild && isUpdateMode)
@@ -222,6 +235,7 @@ public static class IndexCommandRunner
 
         dbPath = DbPathResolver.NormalizeDbPath(dbPath);
         var resolvedDbPath = Path.GetFullPath(dbPath);
+        var databaseExistedBeforeIndex = File.Exists(LongPath.EnsureWindowsPrefix(resolvedDbPath));
 
         if (!options.Json && !options.Quiet)
         {
@@ -229,9 +243,12 @@ public static class IndexCommandRunner
             Console.WriteLine();
             Console.WriteLine($"  Project : {Path.GetFullPath(options.ProjectPath!)}");
             Console.WriteLine($"  Output  : {resolvedDbPath}");
-            Console.WriteLine($"  Mode    : {mode}");
+            Console.WriteLine($"  Mode    : {(options.OptimizeOnly ? "optimize" : mode)}");
             Console.WriteLine();
         }
+
+        if (options.OptimizeOnly)
+            return RunOptimizeFtsForDb(resolvedDbPath, options.Json, jsonOptions, options.ProjectPath);
 
         var ignoreCase = GitHelper.ResolveIgnoreCase(options.ProjectPath);
         var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(options.ProjectPath) ?? Path.GetFullPath(options.ProjectPath!);
@@ -492,6 +509,8 @@ public static class IndexCommandRunner
         initialExitCode = isUpdateMode
             ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexCancellation.Token)
             : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexCancellation.Token);
+        if (initialExitCode == CommandExitCodes.Success)
+            db.RunPlannerStatisticsMaintenance(forceAnalyze: !databaseExistedBeforeIndex);
             }
         }
         catch (IndexInterruptedException ex)
@@ -524,6 +543,109 @@ public static class IndexCommandRunner
 
     public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions) =>
         RunBackfillFold(cmdArgs, jsonOptions, cancellationForTesting: null);
+
+    public static int RunOptimizeFts(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var options = ParseOptimizeFtsArgs(cmdArgs);
+        if (options.ShowHelp)
+        {
+            ConsoleUi.PrintUsage();
+            return CommandExitCodes.Success;
+        }
+
+        if (options.ParseError != null)
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                options.ParseError,
+                CommandExitCodes.UsageError,
+                "Run `cdidx optimize --help` to see the supported command shape.",
+                CommandErrorCodes.UsageError);
+
+        if (DbPathResolver.UriRequestsReadOnly(options.DbPath))
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                $"database must be writable for optimize: {options.DbPath}",
+                CommandExitCodes.DatabaseError,
+                "Point `--db` at a writable filesystem path, or omit read-only URI parameters such as `immutable=1` / `mode=ro`.",
+                CommandErrorCodes.DbNotWritable);
+
+        return RunOptimizeFtsForDb(Path.GetFullPath(DbPathResolver.NormalizeDbPath(options.DbPath)), options.Json, jsonOptions, projectPath: null);
+    }
+
+    private static int RunOptimizeFtsForDb(string dbPath, bool json, JsonSerializerOptions jsonOptions, string? projectPath)
+    {
+        if (!DbContext.TryValidateExistingCodeIndexDb(dbPath, out var validationMessage, out var isNotFound))
+            return WriteCommandError(
+                json,
+                jsonOptions,
+                validationMessage,
+                isNotFound ? CommandExitCodes.NotFound : CommandExitCodes.DatabaseError,
+                isNotFound
+                    ? "Point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one."
+                    : "Point `--db` at an existing CodeIndex database created by `cdidx index`, then retry `cdidx optimize`.",
+                isNotFound ? CommandErrorCodes.DbNotFound : CommandErrorCodes.DbError);
+
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var lockPath = IndexLock.GetLockPath(dbPath);
+            using var indexLock = IndexLock.Acquire(lockPath, projectPath ?? Path.GetDirectoryName(dbPath) ?? Environment.CurrentDirectory);
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db);
+            var before = writer.GetFtsIncrementalWritesSinceOptimize();
+            writer.OptimizeFts();
+            stopwatch.Stop();
+            var after = writer.GetFtsIncrementalWritesSinceOptimize();
+
+            if (json)
+            {
+                var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
+                Console.WriteLine(JsonSerializer.Serialize(
+                    new OptimizeFtsJsonResult("success", dbPath, before, after, stopwatch.ElapsedMilliseconds),
+                    jsonContext.OptimizeFtsJsonResult));
+            }
+            else
+            {
+                Console.WriteLine("Optimized FTS5 index.");
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("DB", dbPath, indent: "  "));
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Writes before", before.ToString("N0", System.Globalization.CultureInfo.InvariantCulture), indent: "  "));
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Writes after", after.ToString("N0", System.Globalization.CultureInfo.InvariantCulture), indent: "  "));
+                Console.WriteLine(ConsoleUi.FormatSummaryLine("Elapsed", ConsoleUi.FormatDuration(stopwatch.Elapsed), indent: "  "));
+            }
+
+            return CommandExitCodes.Success;
+        }
+        catch (IndexLockConflictException ex)
+        {
+            var holderDescription = DescribeLockHolder(ex.Holder);
+            var message = string.IsNullOrEmpty(holderDescription)
+                ? "another cdidx index is already running on this database"
+                : $"another cdidx index is already running on this database ({holderDescription})";
+            return WriteCommandError(
+                json,
+                jsonOptions,
+                message,
+                CommandExitCodes.DatabaseError,
+                "Wait for the running index to finish, then retry `cdidx optimize`.",
+                CommandErrorCodes.DbLocked);
+        }
+        catch (Exception ex)
+        {
+            if (JsonOutputFailure.TryHandle(ex, out var exitCode))
+                return exitCode;
+
+            return WriteCommandError(
+                json,
+                jsonOptions,
+                $"failed to optimize FTS5 index: {ex.Message}",
+                CommandExitCodes.DatabaseError,
+                "Ensure no other writer is holding the database lock, then retry `cdidx optimize`.",
+                CommandErrorCodes.DbError);
+        }
+    }
 
     internal static int RunBackfillFold(
         string[] cmdArgs,
@@ -667,13 +789,48 @@ public static class IndexCommandRunner
         "--yes", "--watch", "--debounce", "--duration-format", "--max-file-bytes",
         "--parallelism",
         "--commits", "--changed-between", "--files", "--solution", "--project",
-        "--include-symbol-kind", "--exclude-symbol-kind", "--help",
+        "--include-symbol-kind", "--exclude-symbol-kind", "--optimize", "--help",
     ];
 
     private static readonly string[] AcceptedBackfillFoldFlags =
     [
         "--db", "--json", "--help",
     ];
+
+    private static OptimizeFtsCommandOptions ParseOptimizeFtsArgs(string[] args)
+    {
+        var dbPath = Path.Combine(".cdidx", "codeindex.db");
+        bool json = false;
+        string? parseError = null;
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--db" when i + 1 < args.Length:
+                    dbPath = args[++i];
+                    break;
+                case "--json":
+                    json = true;
+                    break;
+                case "--help" or "-h":
+                    return new OptimizeFtsCommandOptions { ShowHelp = true };
+                default:
+                    if (args[i].StartsWith("-", StringComparison.Ordinal))
+                        parseError ??= $"unknown option '{args[i]}'";
+                    else
+                        dbPath = args[i];
+                    break;
+            }
+        }
+
+        return new OptimizeFtsCommandOptions
+        {
+            DbPath = dbPath,
+            Json = json,
+            ParseError = parseError,
+        };
+    }
 
     private static void WriteUnknownIndexOptionSuggestion(string token)
     {
@@ -731,6 +888,7 @@ public static class IndexCommandRunner
     {
         string? projectPath = null;
         string? dbPath = null;
+        string? dataDir = null;
         bool rebuild = false;
         bool verbose = false;
         bool json = false;
@@ -739,6 +897,7 @@ public static class IndexCommandRunner
         bool force = false;
         bool yes = false;
         bool watch = false;
+        bool optimizeOnly = false;
         int? watchDebounceMs = null;
         var durationFormat = DurationOutputFormat.Auto;
         long? maxFileSizeBytes = ReadMaxFileSizeBytesFromEnvironment();
@@ -778,6 +937,12 @@ public static class IndexCommandRunner
                 case "--db" when i + 1 < args.Length:
                     dbPath = args[++i];
                     break;
+                case "--data-dir" when i + 1 < args.Length:
+                    dataDir = args[++i];
+                    break;
+                case var option when option.StartsWith("--data-dir=", StringComparison.Ordinal):
+                    dataDir = option["--data-dir=".Length..];
+                    break;
                 case "--rebuild":
                     rebuild = true;
                     break;
@@ -801,6 +966,9 @@ public static class IndexCommandRunner
                     break;
                 case "--watch":
                     watch = true;
+                    break;
+                case "--optimize":
+                    optimizeOnly = true;
                     break;
                 case "--debounce" when i + 1 < args.Length:
                     if (int.TryParse(args[i + 1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedDebounce) && parsedDebounce >= 0)
@@ -954,6 +1122,7 @@ public static class IndexCommandRunner
             // オプション解析の境界で絶対化し、以降の cwd 変化で相対パス計算が崩れないようにする。
             ProjectPath = AbsolutizePathOption(projectPath),
             DbPath = AbsolutizeDbPathOption(dbPath),
+            DataDir = AbsolutizePathOption(dataDir),
             Rebuild = rebuild,
             Verbose = verbose,
             Json = json,
@@ -971,6 +1140,7 @@ public static class IndexCommandRunner
             Force = force,
             Yes = yes,
             Watch = watch,
+            OptimizeOnly = optimizeOnly,
             WatchDebounceMs = watchDebounceMs,
             DurationFormat = durationFormat,
             MaxFileSizeBytes = maxFileSizeBytes,
@@ -1962,8 +2132,12 @@ public static class IndexCommandRunner
         if (purgedRefs > 0 && !options.Json && !options.Quiet)
             Console.WriteLine($"  Purged {purgedRefs:N0} stale references (unsupported language)");
 
+        var ftsOptimizeRan = false;
         if (ftsMutated)
-            writer.OptimizeFts();
+        {
+            writer.RecordFtsIncrementalWrite();
+            ftsOptimizeRan = writer.OptimizeFtsIfIncrementalWriteThresholdReached();
+        }
         ThrowIfUpdateCancelled();
         // Only stamp readiness on a fully successful run (errors == 0). A partial / error
         // run leaves the DB unstamped so readers correctly treat graph / issues data as
@@ -2043,12 +2217,21 @@ public static class IndexCommandRunner
             {
                 csharpMetadataTargetReadyAfter = true;
             }
-            writer.RebuildTypeScriptAugmentationReferences(projectRoot);
-            RestampHotspotFamilyTrustForUpdate(
-                writer,
-                priorHotspotFamilyVersions,
-                priorHotspotFamilyMarkerFingerprints,
-                currentHotspotFamilyMarkerFingerprints);
+            // Keep hotspot-family maintenance rewrites and readiness restamps in one rollback
+            // boundary. If the process dies after SetMeta but before commit, SQLite rolls back
+            // the version stamp along with any maintenance rows, so readers never see a partial
+            // family_key/container_qualified_name state as authoritative (#1488).
+            using (var hotspotFamilyTxn = writer.BeginTransaction())
+            {
+                writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+                RestampHotspotFamilyTrustForUpdate(
+                    writer,
+                    priorHotspotFamilyVersions,
+                    priorHotspotFamilyMarkerFingerprints,
+                    currentHotspotFamilyMarkerFingerprints);
+                HotspotFamilyUpdateRestampReadyForCommitForTesting?.Invoke();
+                hotspotFamilyTxn.Commit();
+            }
             // FoldReady restamp requires both the prior stored version and fingerprint to
             // match the current binary/runtime. Otherwise untouched rows still carry keys
             // from an older fold implementation or runtime table set, and advertising
@@ -2124,6 +2307,7 @@ public static class IndexCommandRunner
                     Warnings = warnings,
                     Errors = errors,
                     SymbolsDroppedByKindFilter = symbolsDroppedByKindFilter,
+                    FtsOptimizeRan = ftsOptimizeRan,
                 },
                 SymbolKindFilter = options.SymbolKindFilter.ToJsonResult(),
                 GraphTableAvailable = graphTableAvailableAfter,
@@ -2167,6 +2351,7 @@ public static class IndexCommandRunner
             if (warnings > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Warnings", $"{warnings:N0}", indent: "  "));
             if (errors > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Errors", $"{errors:N0}", indent: "  "));
             if (symbolsDroppedByKindFilter > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Filtered symbols", $"{symbolsDroppedByKindFilter:N0}", indent: "  "));
+            if (ftsOptimizeRan) Console.WriteLine(ConsoleUi.FormatSummaryLine("FTS optimize", "completed", indent: "  "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("Graph", graphTableAvailableAfter ? "ready" : "degraded", indent: "  "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("Issues", issuesTableAvailableAfter ? "ready" : "degraded", indent: "  "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("SQL graph", sqlGraphContractReadyAfter ? "ready" : "degraded", indent: "  "));
@@ -4361,6 +4546,7 @@ public sealed class IndexCommandOptions
     public bool ShowHelp { get; init; }
     public string? ProjectPath { get; init; }
     public string? DbPath { get; init; }
+    public string? DataDir { get; init; }
     public bool Rebuild { get; init; }
     public bool Verbose { get; init; }
     public bool Json { get; init; }
@@ -4378,6 +4564,7 @@ public sealed class IndexCommandOptions
     public bool Force { get; init; }
     public bool Yes { get; init; }
     public bool Watch { get; init; }
+    public bool OptimizeOnly { get; init; }
     public int? WatchDebounceMs { get; init; }
     public DurationOutputFormat DurationFormat { get; init; } = DurationOutputFormat.Auto;
     public long? MaxFileSizeBytes { get; init; }
@@ -4457,6 +4644,14 @@ public sealed class SymbolKindFilter
 }
 
 public sealed class BackfillFoldCommandOptions
+{
+    public bool ShowHelp { get; init; }
+    public string DbPath { get; init; } = Path.Combine(".cdidx", "codeindex.db");
+    public bool Json { get; init; }
+    public string? ParseError { get; init; }
+}
+
+public sealed class OptimizeFtsCommandOptions
 {
     public bool ShowHelp { get; init; }
     public string DbPath { get; init; } = Path.Combine(".cdidx", "codeindex.db");

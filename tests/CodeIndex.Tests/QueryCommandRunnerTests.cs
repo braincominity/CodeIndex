@@ -31288,6 +31288,7 @@ jobs:
     private static string GetBuiltCliDllPath()
     {
         var tfm = new DirectoryInfo(AppContext.BaseDirectory).Name;
+        var fallbackTfms = new[] { tfm, "net8.0" }.Distinct(StringComparer.Ordinal);
         var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name;
         var fallbackConfigurations = new[] { configuration, "Debug", "Release" }
             .Where(c => !string.IsNullOrWhiteSpace(c))
@@ -31297,9 +31298,12 @@ jobs:
         {
             foreach (var candidateConfiguration in fallbackConfigurations)
             {
-                var candidate = Path.Combine(dir.FullName, "src", "CodeIndex", "bin", candidateConfiguration!, tfm, "cdidx.dll");
-                if (File.Exists(candidate))
-                    return candidate;
+                foreach (var candidateTfm in fallbackTfms)
+                {
+                    var candidate = Path.Combine(dir.FullName, "src", "CodeIndex", "bin", candidateConfiguration!, candidateTfm, "cdidx.dll");
+                    if (File.Exists(candidate))
+                        return candidate;
+                }
             }
 
             dir = dir.Parent;

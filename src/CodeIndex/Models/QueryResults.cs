@@ -378,6 +378,12 @@ public class StatusResult
     public DateTime? IndexedAt { get; set; }
     public DateTime? LatestModified { get; set; }
     public string? ProjectRoot { get; set; }
+    [JsonPropertyName("data_dir")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DataDir { get; set; }
+    [JsonPropertyName("data_dir_source")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DataDirSource { get; set; }
     /// <summary>
     /// POSIX permission bits for the directory containing the active CodeIndex database,
     /// formatted as an octal string such as "0700". Null on Windows, URI databases, missing

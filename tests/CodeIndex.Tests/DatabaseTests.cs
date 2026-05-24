@@ -44,6 +44,33 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void OptimizeFts_ResetsIncrementalWriteCounterAndStampsTime()
+    {
+        Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
+
+        Assert.Equal(1, _writer.RecordFtsIncrementalWrite());
+        Assert.Equal(2, _writer.RecordFtsIncrementalWrite());
+        Assert.Equal(2, _writer.GetFtsIncrementalWritesSinceOptimize());
+
+        _writer.OptimizeFts();
+
+        Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
+        Assert.False(string.IsNullOrWhiteSpace(_db.GetMetaString(DbWriter.FtsLastOptimizedAtMetaKey)));
+    }
+
+    [Fact]
+    public void OptimizeFtsIfIncrementalWriteThresholdReached_RunsOnlyAtThreshold()
+    {
+        Assert.Equal(1, _writer.RecordFtsIncrementalWrite());
+        Assert.False(_writer.OptimizeFtsIfIncrementalWriteThresholdReached(threshold: 2));
+        Assert.Equal(1, _writer.GetFtsIncrementalWritesSinceOptimize());
+
+        Assert.Equal(2, _writer.RecordFtsIncrementalWrite());
+        Assert.True(_writer.OptimizeFtsIfIncrementalWriteThresholdReached(threshold: 2));
+        Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
+    }
+
+    [Fact]
     public void Dispose_AfterWriteWork_RunsOptimizePragma()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_optimize_write_test_{Guid.NewGuid():N}.db");
@@ -681,6 +708,45 @@ public class DatabaseTests : IDisposable
 
         var (_, _, symbolCount, _) = _writer.GetCounts();
         Assert.Equal(120, symbolCount);
+    }
+
+    [Fact]
+    public void InsertSymbols_BatchFailureSkipsOnlyBadRow()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/symbols_with_bad_row.py", Lang = "python", Size = 1000, Lines = 1000,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var warnings = new List<string>();
+        DbWriter.BatchRowSkipWarningForTesting = warnings.Add;
+        try
+        {
+            var symbols = Enumerable.Range(0, 100)
+                .Select(i => new SymbolRecord
+                {
+                    FileId = i == 50 ? -1 : fileId,
+                    Kind = "function",
+                    Name = $"fn_with_bad_row_{i}",
+                    Line = i + 1,
+                    StartLine = i + 1,
+                    EndLine = i + 1,
+                })
+                .ToList();
+
+            _writer.InsertSymbols(symbols);
+        }
+        finally
+        {
+            DbWriter.BatchRowSkipWarningForTesting = null;
+        }
+
+        var (_, _, symbolCount, _) = _writer.GetCounts();
+        Assert.Equal(99, symbolCount);
+        Assert.Equal(1, _writer.BatchRowsSkipped);
+        var warning = Assert.Single(warnings);
+        Assert.Contains("file_id=-1", warning, StringComparison.Ordinal);
+        Assert.Contains("fn_with_bad_row_50", warning, StringComparison.Ordinal);
     }
 
     [Fact]
