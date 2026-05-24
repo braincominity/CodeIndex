@@ -313,6 +313,8 @@ internal static class PythonReferenceExtractor
                 continue;
             if (IsKeywordArgumentName(preparedLine, nameGroup.Index + nameGroup.Length))
                 continue;
+            if (IsKeywordArgumentValue(preparedLine, nameGroup.Index))
+                continue;
 
             ReferenceExtractor.AddReference(
                 references,
@@ -320,7 +322,7 @@ internal static class PythonReferenceExtractor
                 fileId,
                 name,
                 nameGroup.Index,
-                "call",
+                IsCallTarget(preparedLine, nameGroup.Index + nameGroup.Length) ? "call" : "reference",
                 context,
                 lineNumber,
                 container,
@@ -334,6 +336,23 @@ internal static class PythonReferenceExtractor
             afterNameIndex++;
 
         return afterNameIndex < value.Length && value[afterNameIndex] == '=';
+    }
+
+    private static bool IsKeywordArgumentValue(string value, int nameIndex)
+    {
+        var beforeNameIndex = nameIndex - 1;
+        while (beforeNameIndex >= 0 && char.IsWhiteSpace(value[beforeNameIndex]))
+            beforeNameIndex--;
+
+        return beforeNameIndex >= 0 && value[beforeNameIndex] == '=';
+    }
+
+    private static bool IsCallTarget(string value, int afterNameIndex)
+    {
+        while (afterNameIndex < value.Length && char.IsWhiteSpace(value[afterNameIndex]))
+            afterNameIndex++;
+
+        return afterNameIndex < value.Length && value[afterNameIndex] == '(';
     }
 
     private static bool IsPythonLiteralName(string name)
