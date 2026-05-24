@@ -33,6 +33,7 @@ public class DbContext : IDisposable
     private PreparedCommandCache? _preparedCommands;
     private bool _suppressWriteWorkTracking = true;
     private bool _hasWriteWork;
+    private bool _rebuildFtsAfterSchemaMigration;
 
     internal static Action<string>? OptimizePragmaExecutedForTesting { get; set; }
 
@@ -1263,6 +1264,7 @@ public class DbContext : IDisposable
         EnsureColumn("symbol_references", "container_name_folded", "TEXT");
         EnsureColumn("symbol_references", "is_self_reference", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn("symbol_references", "is_mutual_recursion", "INTEGER NOT NULL DEFAULT 0");
+        EnforceRequiredFileIdConstraints();
 
         // Indexes / インデックス
         Execute("CREATE INDEX IF NOT EXISTS idx_files_lang     ON files(lang)");
@@ -1320,6 +1322,11 @@ public class DbContext : IDisposable
                 content='chunks',
                 content_rowid='id'
             )");
+        if (_rebuildFtsAfterSchemaMigration)
+        {
+            Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('rebuild')");
+            _rebuildFtsAfterSchemaMigration = false;
+        }
 
         // FTS5 content-synced triggers — keep fts_chunks in sync with chunks table.
         // Without these, CASCADE DELETEs on chunks leave orphan entries in fts_chunks.
@@ -1339,6 +1346,142 @@ public class DbContext : IDisposable
                 INSERT INTO fts_chunks(rowid, content) VALUES (new.id, new.content);
             END");
         _schemaCache?.Refresh();
+    }
+
+    private void EnforceRequiredFileIdConstraints()
+    {
+        Execute("PRAGMA foreign_keys=OFF");
+        try
+        {
+            RebuildTableWithRequiredFileId(
+                "chunks",
+                """
+                CREATE TABLE chunks (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    chunk_index INTEGER NOT NULL,
+                    start_line  INTEGER,
+                    end_line    INTEGER,
+                    content     TEXT,
+                    UNIQUE(file_id, chunk_index)
+                )
+                """,
+                "id, file_id, chunk_index, start_line, end_line, content");
+            RebuildTableWithRequiredFileId(
+                "reference_lines",
+                """
+                CREATE TABLE reference_lines (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    line        INTEGER NOT NULL,
+                    context     TEXT NOT NULL,
+                    UNIQUE(file_id, line)
+                )
+                """,
+                "id, file_id, line, context");
+            RebuildTableWithRequiredFileId(
+                "symbols",
+                """
+                CREATE TABLE symbols (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    kind            TEXT,
+                    sub_kind        TEXT,
+                    name            TEXT,
+                    line            INTEGER,
+                    start_line      INTEGER,
+                    start_column    INTEGER,
+                    end_line        INTEGER,
+                    body_start_line INTEGER,
+                    body_end_line   INTEGER,
+                    signature       TEXT,
+                    container_kind  TEXT,
+                    container_name  TEXT,
+                    container_qualified_name TEXT,
+                    family_key      TEXT,
+                    visibility      TEXT,
+                    return_type     TEXT,
+                    is_metadata_target INTEGER,
+                    name_folded     TEXT
+                )
+                """,
+                "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_metadata_target, name_folded");
+            RebuildTableWithRequiredFileId(
+                "symbol_references",
+                """
+                CREATE TABLE symbol_references (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    symbol_name     TEXT,
+                    reference_kind  TEXT,
+                    line            INTEGER,
+                    column_number   INTEGER,
+                    context         TEXT,
+                    reference_line_id INTEGER REFERENCES reference_lines(id),
+                    container_kind  TEXT,
+                    container_name  TEXT,
+                    symbol_name_folded TEXT,
+                    container_name_folded TEXT,
+                    is_self_reference INTEGER NOT NULL DEFAULT 0,
+                    is_mutual_recursion INTEGER NOT NULL DEFAULT 0
+                )
+                """,
+                "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion");
+            RebuildTableWithRequiredFileId(
+                "file_issues",
+                """
+                CREATE TABLE file_issues (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    kind            TEXT NOT NULL,
+                    line            INTEGER NOT NULL DEFAULT 0,
+                    message         TEXT NOT NULL
+                )
+                """,
+                "id, file_id, kind, line, message");
+        }
+        finally
+        {
+            Execute("PRAGMA foreign_keys=ON");
+        }
+    }
+
+    private void RebuildTableWithRequiredFileId(string tableName, string createSql, string columns)
+    {
+        if (ColumnIsNotNull(tableName, "file_id"))
+            return;
+
+        var oldTableName = $"_{tableName}_nullable_file_id";
+        Execute($"DROP TABLE IF EXISTS {oldTableName}");
+        Execute($"DROP TRIGGER IF EXISTS fts_chunks_ai");
+        Execute($"DROP TRIGGER IF EXISTS fts_chunks_ad");
+        Execute($"DROP TRIGGER IF EXISTS fts_chunks_au");
+        if (string.Equals(tableName, "chunks", StringComparison.Ordinal))
+        {
+            Execute("DROP TABLE IF EXISTS fts_chunks");
+            _rebuildFtsAfterSchemaMigration = true;
+        }
+        Execute($"DELETE FROM {tableName} WHERE file_id IS NULL");
+        Execute($"ALTER TABLE {tableName} RENAME TO {oldTableName}");
+        Execute(createSql);
+        Execute($"INSERT INTO {tableName} ({columns}) SELECT {columns} FROM {oldTableName}");
+        Execute($"DROP TABLE {oldTableName}");
+    }
+
+    private bool ColumnIsNotNull(string tableName, string columnName)
+    {
+        using var cmd = _connection.CreateCommand();
+        if (_activeMigrationTransaction != null)
+            cmd.Transaction = _activeMigrationTransaction;
+        cmd.CommandText = $"PRAGMA table_info({tableName})";
+
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+                return reader.GetInt32(3) != 0;
+        }
+        return false;
     }
 
     /// <summary>
