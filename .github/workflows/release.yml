@@ -278,8 +278,13 @@ jobs:
           mkdir -p artifacts
           cd publish
           find . -exec touch -t 200001010000 {} +
+          if command -v sha256sum >/dev/null 2>&1; then
+            hash_file() { sha256sum "$1"; }
+          else
+            hash_file() { shasum -a 256 "$1"; }
+          fi
           find . -type f ! -name MANIFEST.sha256 ! -name .MANIFEST.sha256.tmp | sed 's#^\./##' | LC_ALL=C sort | while IFS= read -r file; do
-            sha256sum "$file"
+            hash_file "$file"
           done > .MANIFEST.sha256.tmp
           mv .MANIFEST.sha256.tmp MANIFEST.sha256
           touch -t 200001010000 MANIFEST.sha256
