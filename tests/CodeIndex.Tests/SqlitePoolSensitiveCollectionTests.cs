@@ -1,5 +1,6 @@
 namespace CodeIndex.Tests;
 
+[Collection("SQLite pool sensitive")]
 public sealed class SqlitePoolSensitiveCollectionTests
 {
     [Fact]
