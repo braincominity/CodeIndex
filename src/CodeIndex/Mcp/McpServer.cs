@@ -678,6 +678,7 @@ public partial class McpServer : IDisposable
         JsonNode? request = null;
         var responseHasId = true;
         JsonNode? responseId = null;
+        IDisposable? frameCorrelationScope = null;
         try
         {
             request = JsonNode.Parse(line);
@@ -685,6 +686,8 @@ public partial class McpServer : IDisposable
                 return null;
 
             ExtractResponseId(request, out responseHasId, out responseId);
+            if (responseHasId && CurrentCorrelationContext.Value is null)
+                frameCorrelationScope = BeginRequestCorrelation(responseId);
             var response = HandleMessage(request);
             return response != null ? SerializeResponseOrFallback(response, responseHasId, responseId) : null;
         }
@@ -715,6 +718,10 @@ public partial class McpServer : IDisposable
                 suggestion: classification.Suggestion,
                 retrySafe: classification.RetrySafe);
             return SerializeResponseOrFallback(errorResponse, responseHasId, responseId);
+        }
+        finally
+        {
+            frameCorrelationScope?.Dispose();
         }
     }
 
@@ -861,7 +868,7 @@ public partial class McpServer : IDisposable
                 suggestion: "JSON-RPC 2.0 `id` must be a string, integer, or null. Booleans/objects/arrays are not allowed.",
                 retrySafe: false);
 
-        using var correlationScope = hasId ? BeginRequestCorrelation(id) : null;
+        using var correlationScope = hasId && CurrentCorrelationContext.Value is null ? BeginRequestCorrelation(id) : null;
 
         if (method == "$/cancelRequest" || method == "notifications/cancelled")
         {

@@ -186,6 +186,38 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessLineAsync_FallbackErrorIncludesCorrelationData()
+    {
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+
+        Monitor.Enter(TestConsoleLock.Gate);
+        try
+        {
+            var previousError = Console.Error;
+            try
+            {
+                Console.SetError(error);
+                await _server.ProcessLineAsync("""{"jsonrpc":"2.0","id":321,"method":"tools/call","params":{"name":42,"arguments":{}}}""", writer);
+            }
+            finally
+            {
+                Console.SetError(previousError);
+            }
+        }
+        finally
+        {
+            Monitor.Exit(TestConsoleLock.Gate);
+        }
+
+        var response = JsonNode.Parse(writer.ToString())!;
+        var data = response["error"]!["data"]!;
+        Assert.Equal("321", data["request_id"]!.GetValue<string>());
+        Assert.False(string.IsNullOrWhiteSpace(data["correlation_id"]!.GetValue<string>()));
+        Assert.Contains("[cdidx-mcp] [rid=321 cid=", error.ToString());
+    }
+
+    [Fact]
     public void Initialize_ReturnsProtocolVersion()
     {
         // Issue #1554: negotiation echoes back the client's requested protocolVersion when
