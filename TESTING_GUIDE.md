@@ -43,7 +43,7 @@ The test project mirrors the production areas closely.
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   is a coarse runaway guard for the real `InstallScriptTests.cs` C# extraction fixture. Its wall-clock budget is intentionally broader than a benchmark so slower or noisy CI hosts do not fail the suite for ordinary variance.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
-  publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
+  publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). It is reported as skipped on macOS arm64 while the current SDK/ILLink path can crash before exercising `cdidx`. Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `McpServerTests.cs`
   MCP JSON-RPC behavior and tool outputs.
 - `HttpMcpTransportTests.cs`
