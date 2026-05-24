@@ -158,6 +158,17 @@ public partial class DbReader
         return inheritedContainingTypes;
     }
 
+    private HashSet<string> GetPolymorphicCSharpContainingTypes(CSharpContainingTypeScope containingTypeScope)
+    {
+        var inheritedContainingTypes = new HashSet<string>(StringComparer.Ordinal);
+        var visited = new HashSet<string>(StringComparer.Ordinal)
+        {
+            containingTypeScope.QualifiedName,
+        };
+        CollectPolymorphicCSharpContainingTypes(containingTypeScope, inheritedContainingTypes, visited);
+        return inheritedContainingTypes;
+    }
+
     private List<string> GetCSharpPolymorphicDispatchSymbolNames(string symbolName)
     {
         var memberName = SqlNameResolver.GetLeafName(symbolName);
@@ -204,7 +215,7 @@ public partial class DbReader
             if (containingTypeScope == null)
                 continue;
 
-            foreach (var inheritedContainingType in GetInheritedCSharpContainingTypes(containingTypeScope))
+            foreach (var inheritedContainingType in GetPolymorphicCSharpContainingTypes(containingTypeScope))
             {
                 var inheritedMemberName = CombineDbQualifiedName(inheritedContainingType, memberName);
                 if (!string.IsNullOrWhiteSpace(inheritedMemberName))
@@ -276,13 +287,23 @@ public partial class DbReader
 
     private void CollectInheritedCSharpContainingTypes(CSharpContainingTypeScope containingTypeScope, HashSet<string> inheritedContainingTypes, HashSet<string> visited)
     {
+        var directBaseScope = ResolveDirectCSharpBaseContainingTypeScope(containingTypeScope);
+        if (directBaseScope == null || !visited.Add(directBaseScope.QualifiedName))
+            return;
+
+        inheritedContainingTypes.Add(directBaseScope.QualifiedName);
+        CollectInheritedCSharpContainingTypes(directBaseScope, inheritedContainingTypes, visited);
+    }
+
+    private void CollectPolymorphicCSharpContainingTypes(CSharpContainingTypeScope containingTypeScope, HashSet<string> inheritedContainingTypes, HashSet<string> visited)
+    {
         foreach (var inheritedScope in ResolveDirectCSharpInheritedContainingTypeScopes(containingTypeScope))
         {
             if (!visited.Add(inheritedScope.QualifiedName))
                 continue;
 
             inheritedContainingTypes.Add(inheritedScope.QualifiedName);
-            CollectInheritedCSharpContainingTypes(inheritedScope, inheritedContainingTypes, visited);
+            CollectPolymorphicCSharpContainingTypes(inheritedScope, inheritedContainingTypes, visited);
         }
     }
 
