@@ -12306,6 +12306,28 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Go_DetectsBuildDirectivesAndCgoImport()
+    {
+        var content = """
+            package demo
+
+            //go:build darwin && cgo
+            //go:test integration
+            import "C"
+
+            func CallCCode() {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        Assert.Contains(symbols, s => s.Kind == "annotation" && s.Name == "go:build darwin && cgo");
+        Assert.Contains(symbols, s => s.Kind == "annotation" && s.Name == "go:test integration");
+        Assert.Contains(symbols, s => s.Kind == "cgo" && s.Name == @"""C""");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == @"""C""");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CallCCode");
+    }
+
+    [Fact]
     public void Extract_Go_InterfaceMethodSignatureIncludesTypeParameters()
     {
         var content = """

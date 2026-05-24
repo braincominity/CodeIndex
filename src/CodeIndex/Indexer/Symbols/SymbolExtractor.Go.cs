@@ -16,6 +16,9 @@ public static partial class SymbolExtractor
     {
         var trimmed = line.TrimStart();
 
+        if (TryAddGoDirectiveSymbol(fileId, line, lineIndex, symbols, trimmed))
+            return true;
+
         if (inImportBlock)
         {
             if (trimmed.Length == 0
@@ -352,6 +355,7 @@ public static partial class SymbolExtractor
             return true;
 
         var name = match.Groups["name"].Value.Trim();
+        var kind = string.Equals(name, @"""C""", StringComparison.Ordinal) ? "cgo" : "import";
         var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
         if (startColumn < 0)
             startColumn = rawLine.IndexOf(importText, StringComparison.Ordinal);
@@ -365,13 +369,53 @@ public static partial class SymbolExtractor
             new SymbolRecord
             {
                 FileId = fileId,
-                Kind = "import",
+                Kind = kind,
                 Name = name,
                 Line = lineIndex + 1,
                 StartLine = lineIndex + 1,
                 StartColumn = startColumn,
                 EndLine = lineIndex + 1,
                 Signature = name,
+            },
+            rawLine);
+        return true;
+    }
+
+    private static bool TryAddGoDirectiveSymbol(
+        long fileId,
+        string rawLine,
+        int lineIndex,
+        List<SymbolRecord> symbols,
+        string trimmed)
+    {
+        if (!trimmed.StartsWith("//go:build", StringComparison.Ordinal)
+            && !trimmed.StartsWith("//go:test", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var name = trimmed[2..].Trim();
+        if (HasGoSymbol(symbols, fileId, lineIndex + 1, "annotation", name))
+            return true;
+
+        var startColumn = rawLine.IndexOf("//go:", StringComparison.Ordinal);
+        if (startColumn < 0)
+            startColumn = rawLine.Length - rawLine.TrimStart().Length;
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineIndex + 1,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "annotation",
+                Name = name,
+                Line = lineIndex + 1,
+                StartLine = lineIndex + 1,
+                StartColumn = startColumn,
+                EndLine = lineIndex + 1,
+                Signature = trimmed,
             },
             rawLine);
         return true;
@@ -852,6 +896,7 @@ public static partial class SymbolExtractor
                 || trimmed.StartsWith("//", StringComparison.Ordinal)
                 || trimmed.StartsWith("/*", StringComparison.Ordinal))
             {
+                TryAddGoDirectiveSymbol(fileId, line, i, symbols, trimmed);
                 continue;
             }
 
