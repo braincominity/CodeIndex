@@ -400,7 +400,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // 構造化された失敗情報を呼び出し側へ提供する。
         Assert.NotNull(db.LastMigrationFailure);
         Assert.False(string.IsNullOrWhiteSpace(db.LastMigrationFailure!.Step));
-        Assert.Equal("CREATE TABLE reference_lines", db.LastMigrationFailure.Step);
+        Assert.Equal("BEGIN IMMEDIATE schema migration", db.LastMigrationFailure.Step);
         Assert.Equal(8, db.LastMigrationFailure.SqliteErrorCode);
         Assert.Contains("writable storage", db.LastMigrationFailure.SuggestedAction, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("chmod", db.LastMigrationFailure.SuggestedAction, StringComparison.OrdinalIgnoreCase);
@@ -409,7 +409,7 @@ public class LegacySchemaMigrationTests : IDisposable
         // 1 行の stderr 警告。
         var stderr = capturedError.ToString();
         Assert.Contains("schema migration step", stderr, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("CREATE TABLE reference_lines", stderr, StringComparison.Ordinal);
+        Assert.Contains("BEGIN IMMEDIATE schema migration", stderr, StringComparison.Ordinal);
         Assert.Contains("SQLite error 8", stderr, StringComparison.Ordinal);
         Assert.Contains("no such column", stderr, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("writable storage", stderr, StringComparison.OrdinalIgnoreCase);
@@ -1471,6 +1471,42 @@ public class LegacySchemaMigrationTests : IDisposable
 
             Assert.Contains("synthetic non-duplicate failure", thrown.Message, StringComparison.Ordinal);
             Assert.False(ColumnExists(dbPath, "symbols", "start_line"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task TryMigrateForRead_ConcurrentLegacyMigrations_SerializeAndComplete()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_concurrent_migration_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var dbPath = Path.Combine(dir, "codeindex.db");
+        try
+        {
+            SeedLegacyDb(dbPath);
+
+            using var gate = new ManualResetEventSlim(initialState: false);
+            var tasks = Enumerable.Range(0, 2)
+                .Select(_ => Task.Run(() =>
+                {
+                    gate.Wait();
+                    using var db = new DbContext(dbPath);
+                    db.TryMigrateForRead();
+                    Assert.Null(db.LastMigrationFailure);
+                }))
+                .ToArray();
+
+            gate.Set();
+            await Task.WhenAll(tasks);
+
+            Assert.True(ColumnExists(dbPath, "symbols", "start_line"));
+            Assert.True(ColumnExists(dbPath, "symbols", "end_line"));
+            Assert.True(ColumnExists(dbPath, "symbols", "signature"));
+            Assert.True(ColumnExists(dbPath, "symbol_references", "is_self_reference"));
         }
         finally
         {
