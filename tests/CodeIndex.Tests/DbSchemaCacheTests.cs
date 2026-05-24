@@ -4,8 +4,8 @@ using Microsoft.Data.Sqlite;
 namespace CodeIndex.Tests;
 
 /// <summary>
-/// Tests for the connection-scoped schema cache that backs DbReader's
-/// PRAGMA table_info / PRAGMA index_list / sqlite_master lookups (issue #1565).
+/// Tests for the DB-path-scoped schema cache that backs DbReader's
+/// PRAGMA table_info / PRAGMA index_list / sqlite_master lookups (issues #1565 / #1701).
 /// </summary>
 [Collection("SQLite pool sensitive")]
 public sealed class DbSchemaCacheTests : IDisposable
@@ -127,6 +127,23 @@ public sealed class DbSchemaCacheTests : IDisposable
         var fromCacheAfter = _db.SchemaCache.GetColumns("files");
 
         Assert.Same(fromCacheBefore, fromCacheAfter);
+    }
+
+    [Fact]
+    public void DbReader_SeparateDbContextsForSamePath_ReuseSharedSchemaCacheInstances()
+    {
+        // A writable open may run SQLite maintenance that changes
+        // schema_version. Once two separately-opened contexts observe the
+        // same generation, they should reuse the process-level snapshot.
+        using var secondDb = new DbContext(_dbPath);
+        _ = new DbReader(secondDb);
+        var secondContextColumns = secondDb.SchemaCache.GetColumns("files");
+
+        using var thirdDb = new DbContext(_dbPath);
+        _ = new DbReader(thirdDb);
+        var thirdContextColumns = thirdDb.SchemaCache.GetColumns("files");
+
+        Assert.Same(secondContextColumns, thirdContextColumns);
     }
 
     [Fact]

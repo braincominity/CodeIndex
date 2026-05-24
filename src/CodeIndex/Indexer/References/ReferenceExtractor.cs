@@ -1976,8 +1976,9 @@ public static partial class ReferenceExtractor
                 var rustEnumContainer = rustEnumCandidates != null
                     ? FindInnermostContainer(rustEnumCandidates, lineNumber)
                     : null;
+                var rustTypePositionLine = RustReferenceExtractor.MaskAttributeBodies(preparedLine);
                 RustReferenceExtractor.EmitTypePositionReferences(
-                    preparedLine,
+                    rustTypePositionLine,
                     references,
                     seen,
                     fileId,
@@ -3119,6 +3120,15 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitDataclassFieldReferences(
+                    preparedLines,
+                    lines,
+                    i,
+                    references,
+                    seen,
+                    fileId,
+                    container,
+                    name => IsIgnoredCallName(language, name));
                 PythonReferenceExtractor.EmitAttrsFieldsReferences(
                     preparedLine,
                     references,
@@ -3155,6 +3165,15 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     container,
                     name => IsIgnoredCallName(language, name));
+                PythonReferenceExtractor.EmitDynamicImportReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
                 if (pythonHeaderMap.HasValue)
                     RemapPythonLogicalHeaderReferences(references, pythonReferenceStart, pythonHeaderMap.Value, lines);
             }
