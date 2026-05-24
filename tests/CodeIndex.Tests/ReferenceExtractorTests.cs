@@ -30522,6 +30522,23 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustAssociatedTypeDefaults_CaptureBoundAndDefaultTypeReferences()
+    {
+        const string content = """
+            trait Builder {
+                type Output = ();
+                type Error: std::error::Error = String;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "String" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_RustConstGenericDeclarations_CaptureConstGenericReferences()
     {
         const string content = """
