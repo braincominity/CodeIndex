@@ -14,7 +14,7 @@ public sealed class SkipOnMacOsArm64FactAttribute : FactAttribute
     public SkipOnMacOsArm64FactAttribute()
     {
         if (OperatingSystem.IsMacOS() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-            Skip = "macOS arm64 SDK/ILLink currently crashes before this test can exercise cdidx (#2570).";
+            Skip = "macOS arm64 SDK/ILLink can crash before this test can exercise cdidx (#2586).";
     }
 }
 
