@@ -4,6 +4,7 @@ This directory contains shared task workflows for CodeIndex coding agents.
 Despite the `.codex` directory name, these workflows are used by both Codex and Claude Code.
 
 Use these workflows instead of pasting long repeated instructions into every prompt.
+Start from the thin entry point for your tool (`AGENTS.md` for Codex or `CLAUDE.md` for Claude Code), then follow `AGENT_GUIDE.md` to the relevant workflow here.
 
 ## Workflows
 

@@ -18,6 +18,7 @@ For implementation tasks:
 ## Workflow Index
 
 Task-specific procedures live in `.codex/workflows/`. The directory is a shared workflow library for all coding agents, not only Codex.
+See `.codex/workflows/README.md` for the workflow directory map and rule-placement guidance.
 
 - issue fixing: `.codex/workflows/issue-fix.md`
 - changelog fragments: `.codex/workflows/changelog-fragment.md`
