@@ -221,6 +221,11 @@ public static partial class SymbolExtractor
                     emitKind = "property";
                     emittedNames = [attrValue.Trim()];
                 }
+                else if (attrNameLower is "class" or "classname")
+                {
+                    emitKind = "reference";
+                    emittedNames = EnumerateHtmlClassNames(attrValue).ToList();
+                }
 
                 if (emitKind == null || emittedNames == null || emittedNames.Count == 0)
                     continue;
@@ -254,6 +259,12 @@ public static partial class SymbolExtractor
         AssignContainers(symbols, lines, null);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
+    }
+
+    private static IEnumerable<string> EnumerateHtmlClassNames(string value)
+    {
+        foreach (var token in value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            yield return token;
     }
 
     private static List<SymbolRecord> ExtractMarkdownSymbols(long fileId, string[] lines)
