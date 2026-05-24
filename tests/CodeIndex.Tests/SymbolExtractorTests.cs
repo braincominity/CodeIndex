@@ -53,6 +53,39 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "StructuralLineMasker");
     }
 
+    [Fact]
+    public void Extract_PythonDataclassField_IndexesFieldAndMetadataKeys()
+    {
+        const string content = """
+            from dataclasses import dataclass, field
+
+            @dataclass
+            class Job:
+                callback: Callable[[Payload], Result] = field(
+                    default_factory=list,
+                    metadata={"wire_name": "callback", "role": "handler"},
+                )
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "property"
+            && symbol.SubKind == "dataclass_field"
+            && symbol.Name == "callback"
+            && symbol.Line == 5);
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "reference"
+            && symbol.SubKind == "dataclass_field_metadata"
+            && symbol.Name == "wire_name"
+            && symbol.Line == 7);
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "reference"
+            && symbol.SubKind == "dataclass_field_metadata"
+            && symbol.Name == "role"
+            && symbol.Line == 7);
+    }
+
     [Theory]
     [InlineData("csharp", "Pages/Product.razor")]
     [InlineData("csharp", "Views/Product.cshtml")]
@@ -79,6 +112,33 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, symbol => symbol.Kind == "attribute" && symbol.Name == "Authorize" && symbol.Line == 3);
         Assert.Contains(symbols, symbol => symbol.Kind == "layout" && symbol.Name == "MainLayout" && symbol.Line == 4);
         Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "Load");
+    }
+
+    [Fact]
+    public void Extract_HtmlClassAttributes_IndexesIndividualClassReferences()
+    {
+        const string content = """
+            <div class="btn  btn-primary mx-2 md:flex hover:bg-red-500 [&>*]:mt-2"></div>
+            <span className='inline-flex  items-center'></span>
+            <section class="   "></section>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+        var classReferences = symbols
+            .Where(symbol => symbol.Kind == "reference")
+            .Select(symbol => (symbol.Name, symbol.Line))
+            .ToArray();
+
+        Assert.Contains(("btn", 1), classReferences);
+        Assert.Contains(("btn-primary", 1), classReferences);
+        Assert.Contains(("mx-2", 1), classReferences);
+        Assert.Contains(("md:flex", 1), classReferences);
+        Assert.Contains(("hover:bg-red-500", 1), classReferences);
+        Assert.Contains(("[&>*]:mt-2", 1), classReferences);
+        Assert.Contains(("inline-flex", 2), classReferences);
+        Assert.Contains(("items-center", 2), classReferences);
+        Assert.DoesNotContain(classReferences, symbol => string.IsNullOrWhiteSpace(symbol.Name));
+        Assert.DoesNotContain(("btn  btn-primary mx-2 md:flex hover:bg-red-500 [&>*]:mt-2", 1), classReferences);
     }
 
     [Theory]
@@ -1154,6 +1214,54 @@ public class SymbolExtractorTests
             s.Kind == "function"
             && s.Name.Contains("proc", StringComparison.OrdinalIgnoreCase)
             && s.Name.Contains("name", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Extract_SqlGeneratedColumns_DetectsColumnSymbols()
+    {
+        var content = """
+            CREATE TABLE dbo.Orders (
+                subtotal int,
+                tax int,
+                total int GENERATED ALWAYS AS (subtotal + tax) STORED,
+                invoice_no int DEFAULT NEXT VALUE FOR billing.invoice_seq,
+                created_at timestamp DEFAULT CURRENT_TIMESTAMP
+            );
+            ALTER TABLE dbo.Orders ADD COLUMN net_total int GENERATED ALWAYS AS (total - tax) STORED;
+            ALTER TABLE dbo.Orders ADD computed_total AS (subtotal + tax) PERSISTED;
+            ALTER TABLE dbo.Orders ADD CONSTRAINT df_orders_created DEFAULT 0 FOR created_at;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.SubKind == "generated_column"
+            && s.Name == "total"
+            && s.ContainerName == "Orders");
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.SubKind == "generated_column"
+            && s.Name == "invoice_no"
+            && s.ContainerName == "Orders");
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.SubKind == "generated_column"
+            && s.Name == "net_total"
+            && s.ContainerName == "Orders");
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.SubKind == "generated_column"
+            && s.Name == "computed_total"
+            && s.ContainerName == "Orders");
+        Assert.DoesNotContain(symbols, s =>
+            s.Kind == "property"
+            && s.SubKind == "generated_column"
+            && s.Name == "created_at");
+        Assert.DoesNotContain(symbols, s =>
+            s.Kind == "property"
+            && s.SubKind == "generated_column"
+            && s.Name == "CONSTRAINT");
     }
 
     [Fact]
@@ -14382,13 +14490,13 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s =>
             s.Kind == "property"
             && s.Name == "Output"
-            && s.ContainerKind == "interface"
+            && s.ContainerKind == "protocol"
             && s.ContainerName == "Builder"
             && s.ReturnType == "()");
         Assert.Contains(symbols, s =>
             s.Kind == "property"
             && s.Name == "Error"
-            && s.ContainerKind == "interface"
+            && s.ContainerKind == "protocol"
             && s.ContainerName == "Builder"
             && s.ReturnType == "String");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Pending");
@@ -21506,6 +21614,37 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "modifier");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "child");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == ".nested-child");
+    }
+
+    [Fact]
+    public void Extract_CSS_CapturesMediaFeatureNamesButNotValuesOrOperators()
+    {
+        var content = """
+            @media (min-width: 768px) and (prefers-color-scheme: dark), not screen and (orientation: landscape) {
+              .responsive {
+                color: red;
+              }
+            }
+
+            @supports (display: grid) {
+              @media (width >= 40rem) and (--narrow) {
+                .nested-media {
+                  display: grid;
+                }
+              }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "min-width");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "prefers-color-scheme");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "orientation");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "width");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "--narrow");
+        Assert.DoesNotContain(symbols, s =>
+            s.Kind == "property"
+            && s.Name is "768px" or "dark" or "landscape" or "and" or "not" or "or");
     }
 
     [Fact]

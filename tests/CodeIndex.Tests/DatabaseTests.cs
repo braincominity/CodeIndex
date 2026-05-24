@@ -45,6 +45,60 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InitializeSchema_CreatesFoldedMutualReferenceIndex()
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_symbol_refs_mutual_folded'";
+
+        Assert.Equal("idx_symbol_refs_mutual_folded", (string?)cmd.ExecuteScalar());
+    }
+
+    [Fact]
+    public void InsertReferences_UsesFoldedNamesForMutualRecursion()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/app.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 4,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = "abc",
+        });
+
+        _writer.InsertReferences(
+        [
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Run",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 1,
+                Context = "Start();",
+                ContainerKind = "function",
+                ContainerName = "Start",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Start",
+                ReferenceKind = "call",
+                Line = 2,
+                Column = 1,
+                Context = "Run();",
+                ContainerKind = "function",
+                ContainerName = "Run",
+            },
+        ]);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE is_mutual_recursion = 1";
+
+        Assert.Equal(2L, (long)cmd.ExecuteScalar()!);
+    }
+
+    [Fact]
     public void OptimizeFts_ResetsIncrementalWriteCounterAndStampsTime()
     {
         Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
@@ -69,6 +123,70 @@ public class DatabaseTests : IDisposable
         Assert.Equal(2, _writer.RecordFtsIncrementalWrite());
         Assert.True(_writer.OptimizeFtsIfIncrementalWriteThresholdReached(threshold: 2));
         Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
+    }
+
+    [Fact]
+    public void DbContext_OpenWithBatchInProgress_Warns()
+    {
+        _writer.MarkBatchInProgress();
+
+        var stderr = ConsoleCapture.CaptureError(() =>
+        {
+            using var reopened = new DbContext(_dbPath);
+        });
+
+        Assert.Contains("Last batch did not complete", stderr);
+        Assert.Contains("cdidx index --rebuild", stderr);
+    }
+
+    [Fact]
+    public void DbContext_OpenWithBatchInProgress_DemotesReadiness()
+    {
+        _writer.MarkGraphReady();
+        _writer.MarkIssuesReady();
+        _writer.MarkBatchInProgress();
+
+        using (var reopened = new DbContext(_dbPath))
+        {
+            Assert.Equal(0, reopened.GetUserVersion());
+        }
+    }
+
+    [Fact]
+    public void BatchInProgress_ClearInsideCommittedTransaction_PersistsCleanState()
+    {
+        _writer.MarkBatchInProgress();
+
+        using (var txn = _writer.BeginTransaction())
+        {
+            _writer.ClearBatchInProgress();
+            txn.Commit();
+        }
+
+        var stderr = ConsoleCapture.CaptureError(() =>
+        {
+            using var reopened = new DbContext(_dbPath);
+        });
+
+        Assert.DoesNotContain("Last batch did not complete", stderr);
+    }
+
+    [Fact]
+    public void BatchInProgress_ClearInsideRolledBackTransaction_LeavesRecoveryWarning()
+    {
+        _writer.MarkBatchInProgress();
+
+        using (var txn = _writer.BeginTransaction())
+        {
+            _writer.ClearBatchInProgress();
+        }
+
+        var stderr = ConsoleCapture.CaptureError(() =>
+        {
+            using var reopened = new DbContext(_dbPath);
+        });
+
+        Assert.Contains("Last batch did not complete", stderr);
     }
 
     [Fact]
@@ -344,6 +462,78 @@ public class DatabaseTests : IDisposable
             verifyJournalMode.CommandText = "PRAGMA journal_mode";
             var journalMode = Assert.IsType<string>(verifyJournalMode.ExecuteScalar());
             Assert.False(string.Equals("wal", journalMode, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+            {
+                try
+                {
+                    File.Delete(dbPath);
+                }
+                catch (IOException) when (OperatingSystem.IsWindows())
+                {
+                    SqliteConnection.ClearAllPools();
+                    File.Delete(dbPath);
+                }
+                catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
+                {
+                    SqliteConnection.ClearAllPools();
+                    File.Delete(dbPath);
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void TryMigrateForRead_InsideExistingTransaction_DoesNotStartNestedTransaction()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_nested_migration_test_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TABLE files (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        path TEXT NOT NULL UNIQUE
+                    );
+                    CREATE TABLE symbols (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                        kind TEXT,
+                        name TEXT,
+                        line INTEGER
+                    );
+                    CREATE TABLE symbol_references (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                        symbol_name TEXT,
+                        reference_kind TEXT,
+                        line INTEGER,
+                        column_number INTEGER,
+                        context TEXT,
+                        container_kind TEXT,
+                        container_name TEXT
+                    );
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            using var db = new DbContext(dbPath);
+            using var transaction = db.Connection.BeginTransaction(deferred: true);
+
+            db.TryMigrateForRead();
+
+            using var check = db.Connection.CreateCommand();
+            check.Transaction = transaction;
+            check.CommandText = "SELECT COUNT(*) FROM pragma_table_info('symbols') WHERE name = 'signature'";
+            Assert.Equal(1L, (long)check.ExecuteScalar()!);
+
+            transaction.Rollback();
         }
         finally
         {

@@ -87,15 +87,31 @@ internal static class ProgramRunner
 
         if (args[0] is "--license" or "license")
         {
+            if (args[0] == "license" && args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
+            {
+                ConsoleUi.PrintCommandUsage("license");
+                GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} subcommand_help=true");
+                EmitCommandMetric("license", args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
+                return CommandExitCodes.Success;
+            }
+
             ConsoleUi.PrintLicenseSummary();
             GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} license_only=true");
             EmitCommandMetric("license", args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
             return CommandExitCodes.Success;
         }
 
-        if (args[0] == "--completions")
+        if (args[0] is "--completions" or "completions")
         {
-            var exitCode = RunCompletions(args[1..]);
+            if (args[0] == "completions" && args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
+            {
+                ConsoleUi.PrintCommandUsage("completions");
+                GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} subcommand_help=true");
+                EmitCommandMetric("completions", args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
+                return CommandExitCodes.Success;
+            }
+
+            var exitCode = RunCompletions(args[1..], args[0] == "completions" ? "completions" : "--completions");
             GlobalToolLog.Info($"command_complete exit_code={exitCode} command=completions");
             EmitCommandMetric("completions", args, commandStartTimestamp, commandStopwatch, exitCode);
             return exitCode;
@@ -103,7 +119,8 @@ internal static class ProgramRunner
 
         if (args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
         {
-            ConsoleUi.PrintUsage(showBanner: true);
+            if (!ConsoleUi.PrintCommandUsage(args[0]))
+                ConsoleUi.PrintUsage(showBanner: true);
             GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} subcommand_help=true");
             EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
             return CommandExitCodes.Success;
@@ -1078,28 +1095,29 @@ internal static class ProgramRunner
         return $"cdidx v{metadata.Version} (commit {commit}, built {buildDate}, {dirty}){suffix}";
     }
 
-    private static int RunCompletions(string[] cmdArgs)
+    private static int RunCompletions(string[] cmdArgs, string commandName = "--completions")
     {
+        var usage = $"cdidx {commandName} <shell>";
         if (cmdArgs.Length == 0)
             return CommandErrorWriter.Write(
-                "--completions requires a shell value.",
+                $"{commandName} requires a shell value.",
                 CommandExitCodes.UsageError,
                 "rerun with one of `bash`, `zsh`, `fish`, or `powershell`.",
-                "cdidx --completions <shell>");
+                usage);
 
         if (cmdArgs[0].StartsWith("-", StringComparison.Ordinal))
             return CommandErrorWriter.Write(
-                $"--completions requires a shell value, got option-like token '{cmdArgs[0]}'.",
+                $"{commandName} requires a shell value, got option-like token '{cmdArgs[0]}'.",
                 CommandExitCodes.UsageError,
                 "rerun with one of `bash`, `zsh`, `fish`, or `powershell`.",
-                "cdidx --completions <shell>");
+                usage);
 
         if (cmdArgs.Length > 1)
             return CommandErrorWriter.Write(
-                $"--completions accepts exactly one shell value, got extra {ConsoleUi.Counted(cmdArgs.Length - 1, "argument")}: {string.Join(", ", cmdArgs.Skip(1).Select(arg => $"`{arg}`"))}.",
+                $"{commandName} accepts exactly one shell value, got extra {ConsoleUi.Counted(cmdArgs.Length - 1, "argument")}: {string.Join(", ", cmdArgs.Skip(1).Select(arg => $"`{arg}`"))}.",
                 CommandExitCodes.UsageError,
                 "rerun with exactly one shell name: `bash`, `zsh`, `fish`, or `powershell`.",
-                "cdidx --completions <shell>");
+                usage);
 
         if (ConsoleUi.PrintCompletions(cmdArgs[0]))
             return CommandExitCodes.Success;
@@ -1108,7 +1126,7 @@ internal static class ProgramRunner
             $"unsupported completion shell `{cmdArgs[0]}`.",
             CommandExitCodes.UsageError,
             "rerun with one of `bash`, `zsh`, `fish`, or `powershell`.",
-            "cdidx --completions <shell>");
+            usage);
     }
 
     private static string StripErrorPrefix(string message)

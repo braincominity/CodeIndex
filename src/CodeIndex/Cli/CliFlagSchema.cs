@@ -54,7 +54,7 @@ internal static class CliFlagSchema
     [
         "index", "backfill-fold", "optimize", "search", "definition", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "db", "vacuum", "report", "license",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license",
     ];
 
     // Commands that accept the `--` end-of-options marker so a user can pass a literal

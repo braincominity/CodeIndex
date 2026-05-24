@@ -58,6 +58,50 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonDataclassField_EmitsMetadataAndDefaultFactoryReferences()
+    {
+        const string content = """
+            from dataclasses import dataclass, field, fields
+
+            @dataclass
+            class Job:
+                callback: Callable[[Payload], Result] = field(
+                    default_factory=list,
+                    metadata={
+                        "wire_name": "callback",
+                    },
+                )
+
+            def inspect_job():
+                return fields(Job)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Payload"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Job");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Job");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "list"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Job");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "wire_name"
+            && reference.ReferenceKind == "annotation"
+            && reference.ContainerName == "Job");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Job"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "inspect_job");
+    }
+
+    [Fact]
     public void BuildReferenceDedupeKey_IncludesFileIdAndLanguage()
     {
         var javaKey = ReferenceExtractor.BuildReferenceDedupeKey(1, "java", 3, 5, "type_reference", "Runner");
@@ -81,6 +125,31 @@ public class ReferenceExtractorTests
         Assert.Equal(2, references.Count);
         Assert.Contains(references, reference => reference.FileId == 1 && reference.SymbolName == "Runner");
         Assert.Contains(references, reference => reference.FileId == 2 && reference.SymbolName == "Runner");
+    }
+
+    [Fact]
+    public void Extract_CSharpGenericInvocation_EmitsGraphTypeArgumentReference()
+    {
+        const string content = """
+            interface IFoo {}
+            class Runner
+            {
+                void Process<T>(T item) {}
+                void Run(IFoo value) { Process<IFoo>(value); }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "IFoo"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "IFoo"
+            && reference.ReferenceKind == "generic_type_argument"
+            && reference.ContainerName == "Run");
     }
 
     [Fact]
@@ -1088,6 +1157,61 @@ public class ReferenceExtractorTests
             reference.SymbolName == "register_plugin"
             && reference.ReferenceKind == "call"
             && reference.ContainerName == "__init_subclass__");
+    }
+
+    [Fact]
+    public void Extract_PythonMixedBasesAndMetaclass_EmitsBaseAndMetaclassReferences()
+    {
+        const string content = """
+            class Derived(Base, Mixin, metaclass=Meta):
+                pass
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Base"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Mixin"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Meta"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "metaclass"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PythonSuperInitSubclass_EmitsHookCallReference()
+    {
+        const string content = """
+            class Base:
+                def __init_subclass__(cls) -> None:
+                    pass
+
+            class Child(Base):
+                def __init_subclass__(cls) -> None:
+                    super().__init_subclass__()
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        var hookCall = Assert.Single(references, reference =>
+            reference.SymbolName == "__init_subclass__"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "__init_subclass__"
+            && reference.Line == 7);
+        Assert.Equal(17, hookCall.Column);
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "super"
+            && reference.ReferenceKind == "call");
     }
 
     [Fact]
@@ -14719,6 +14843,52 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_AlterTableAddConstraintForeignKeyCapturesReferencedTable()
+    {
+        const string content = """
+            CREATE TABLE orders (id int PRIMARY KEY);
+            CREATE TABLE order_items (order_id int REFERENCES orders(id));
+            ALTER TABLE order_items ADD CONSTRAINT fk_order
+                FOREIGN KEY (order_id) REFERENCES orders(id);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "order_items" && r.ReferenceKind == "reference" && r.Line == 3);
+        Assert.Equal(2, references.Count(r => r.SymbolName == "orders" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "orders" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "orders" && r.ReferenceKind == "reference" && r.Line == 4);
+        Assert.DoesNotContain(references, r => r.SymbolName == "fk_order" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_GeneratedColumnsCaptureExpressionDependencies()
+    {
+        const string content = """
+            CREATE TABLE dbo.Orders (
+                subtotal int,
+                tax int,
+                total int GENERATED ALWAYS AS (round(subtotal + tax, 2)) STORED,
+                invoice_no int DEFAULT NEXT VALUE FOR billing.invoice_seq,
+                created_at timestamp DEFAULT CURRENT_TIMESTAMP
+            );
+            ALTER TABLE dbo.Orders ADD computed_total AS (subtotal + tax) PERSISTED;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "round" && r.ReferenceKind == "generated_column_dependency");
+        Assert.Contains(references, r => r.SymbolName == "subtotal" && r.ReferenceKind == "generated_column_dependency");
+        Assert.Contains(references, r => r.SymbolName == "tax" && r.ReferenceKind == "generated_column_dependency");
+        Assert.Contains(references, r => r.SymbolName.EndsWith("invoice_seq", StringComparison.Ordinal) && r.ReferenceKind == "generated_column_dependency");
+        Assert.DoesNotContain(references, r => r.SymbolName == "GENERATED" && r.ReferenceKind == "generated_column_dependency");
+        Assert.DoesNotContain(references, r => r.SymbolName == "DEFAULT" && r.ReferenceKind == "generated_column_dependency");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CURRENT_TIMESTAMP" && r.ReferenceKind == "generated_column_dependency");
+    }
+
+    [Fact]
     public void Extract_SQL_DropTableCapturesAllTargetReferences()
     {
         // T-SQL teardown migrations should still be searchable by the table names they touch,
@@ -14923,6 +15093,47 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Customers" && r.ReferenceKind == "reference" && r.Line == 1);
         Assert.Contains(references, r => r.SymbolName == "Customers" && r.ReferenceKind == "reference" && r.Line == 2);
         Assert.DoesNotContain(references, r => r.SymbolName == "Customers" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SQL_WindowOverClausesEmitColumnReferences()
+    {
+        const string content = """
+            SELECT
+                ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY created_at DESC) AS rn,
+                SUM(amount) OVER (PARTITION BY [region] ORDER BY COALESCE(sale_date, fallback_date) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total
+            FROM sales.orders;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "customer_id" && r.ReferenceKind == "column_reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "created_at" && r.ReferenceKind == "column_reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "region" && r.ReferenceKind == "column_reference" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "sale_date" && r.ReferenceKind == "column_reference" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "fallback_date" && r.ReferenceKind == "column_reference" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "COALESCE" && r.ReferenceKind == "column_reference");
+        Assert.DoesNotContain(references, r => (r.SymbolName is "ROW_NUMBER" or "SUM") && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName is "ROWS" or "UNBOUNDED" or "PRECEDING" or "CURRENT" or "ROW");
+    }
+
+    [Fact]
+    public void Extract_SQL_MultilineWindowOverClausesSuppressFunctionCalls()
+    {
+        const string content = """
+            SELECT
+                SUM(amount)
+                    OVER (PARTITION BY customer_id ORDER BY created_at DESC) AS running_total
+            FROM sales.orders;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "customer_id" && r.ReferenceKind == "column_reference" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "created_at" && r.ReferenceKind == "column_reference" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "SUM" && r.ReferenceKind == "call");
     }
 
     [Fact]
@@ -16634,6 +16845,39 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_MergeActionsEmitColumnReferences()
+    {
+        // issue #2100: MERGE action bodies carry target/source column lineage in UPDATE SET,
+        // INSERT column lists, VALUES expressions, and the ON join condition.
+        // issue #2100: MERGE action body の UPDATE SET、INSERT column list、VALUES 式、
+        // ON join condition から target/source column lineage を落としてはいけない。
+        const string content = """
+            MERGE INTO audit_log AS t
+            USING staging_log AS s
+            ON t.id = s.id AND t.account_id = s.account_id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action, updated_at = COALESCE(s.updated_at, t.updated_at)
+            WHEN NOT MATCHED THEN
+                INSERT (id, action, updated_at)
+                VALUES (s.id, s.action, COALESCE(s.updated_at, CURRENT_TIMESTAMP));
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "id" && r.ReferenceKind == "join_condition_reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "account_id" && r.ReferenceKind == "join_condition_reference"));
+        Assert.Contains(references, r => r.SymbolName == "action" && r.ReferenceKind == "column_reference");
+        Assert.Contains(references, r => r.SymbolName == "updated_at" && r.ReferenceKind == "column_reference");
+        Assert.True(references.Count(r => r.SymbolName == "id" && r.ReferenceKind == "column_reference") >= 2);
+        Assert.True(references.Count(r => r.SymbolName == "action" && r.ReferenceKind == "column_reference") >= 3);
+        Assert.True(references.Count(r => r.SymbolName == "updated_at" && r.ReferenceKind == "column_reference") >= 4);
+        Assert.DoesNotContain(references, r => r.SymbolName == "CURRENT_TIMESTAMP" && r.ReferenceKind == "column_reference");
+    }
+
+    [Fact]
     public void Extract_SQL_HashCommentsDoNotLeakAsTempObjects()
     {
         // issue #653 / #656: after restoring temp-table support, MySQL-style `# comment` tails must
@@ -17871,6 +18115,28 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "fake_basic");
         Assert.DoesNotContain(references, r => r.SymbolName == "fake_nested");
         Assert.Contains(references, r => r.SymbolName == "real_call" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_RustAttributeRawString_DoesNotLeakPhantomUseReferences()
+    {
+        const string content = """
+            #[doc = r"use baz::qux;"]
+            pub fn f() {
+                real_call();
+            }
+
+            use crate::actual::Thing;
+
+            fn real_call() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "qux");
+        Assert.Contains(references, r => r.SymbolName == "Thing" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "real_call" && r.ContainerName == "f");
     }
 
     [Fact]
@@ -24967,6 +25233,35 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void SqlNameResolver_QuotedQualifiedNames_PreserveDialectSpecificMatching()
+    {
+        const string mysqlContext = "SELECT * FROM `mydb`.`mytbl`;";
+        const int mysqlColumn = 28;
+        Assert.Equal("mydb.mytbl", SqlNameResolver.ResolveReferenceNameAtColumn("mytbl", mysqlContext, null, mysqlColumn));
+        Assert.True(SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(mysqlContext, "`MYDB`.`MYTBL`", mysqlColumn));
+
+        const string tsqlContext = "SELECT * FROM [sales data].[order table];";
+        const int tsqlColumn = 35;
+        Assert.Equal("sales data.order table", SqlNameResolver.ResolveReferenceNameAtColumn("order table", tsqlContext, null, tsqlColumn));
+        Assert.True(SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(tsqlContext, "[SALES DATA].[ORDER TABLE]", tsqlColumn));
+
+        const string postgresContext = "SELECT * FROM \"Sales\".\"Orders\";";
+        const int postgresColumn = 24;
+        Assert.Equal("Sales.Orders", SqlNameResolver.ResolveReferenceNameAtColumn("Orders", postgresContext, null, postgresColumn));
+        Assert.True(SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(postgresContext, "\"Sales\".\"Orders\"", postgresColumn));
+        Assert.False(SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(postgresContext, "\"sales\".\"orders\"", postgresColumn));
+        Assert.True(SqlNameResolver.ReferenceMatchesTargetAtColumn("Orders", postgresContext, null, postgresColumn, "Sales.Orders"));
+        Assert.False(SqlNameResolver.ReferenceMatchesTargetAtColumn("Orders", postgresContext, null, postgresColumn, "sales.orders"));
+
+        const string mixedPostgresContext = "SELECT * FROM \"Sales\".orders;";
+        const int mixedPostgresColumn = 24;
+        Assert.True(SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(mixedPostgresContext, "\"Sales\".ORDERS", mixedPostgresColumn));
+        Assert.False(SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(mixedPostgresContext, "\"sales\".orders", mixedPostgresColumn));
+        Assert.True(SqlNameResolver.ReferenceMatchesTargetAtColumn("orders", mixedPostgresContext, null, mixedPostgresColumn, "\"Sales\".ORDERS"));
+        Assert.False(SqlNameResolver.ReferenceMatchesTargetAtColumn("orders", mixedPostgresContext, null, mixedPostgresColumn, "\"sales\".orders"));
+    }
+
+    [Fact]
     public void Extract_SqlHashCommentedCall_DoesNotEmitReference()
     {
         // MySQL / MariaDB accept `#` as a line comment in addition to ANSI `--`. The SQL-aware
@@ -25122,6 +25417,35 @@ public class ReferenceExtractorTests
         var outsideCall = Assert.Single(innerCalls.Where(r => r.Line == 7));
         Assert.Null(outsideCall.ContainerKind);
         Assert.Null(outsideCall.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_SqlPostgresDollarQuotedBody_IgnoresNestedDifferentDollarTag()
+    {
+        // issue #1442: `$inner$ ... $inner$` text inside a `$body$ ... $body$` function body must
+        // not close the outer body range, or calls after the inner literal lose their container.
+        // issue #1442: `$body$ ... $body$` 関数本体内の `$inner$ ... $inner$` テキストで外側の
+        // 本体範囲を閉じると、後続の呼び出しがコンテナから外れるため、同一タグだけを閉じタグにする。
+        const string content = """
+            CREATE OR REPLACE FUNCTION public.fn_outer() RETURNS text LANGUAGE plpgsql AS $body$
+            DECLARE
+                s text := $inner$hello $inner$;
+            BEGIN
+                PERFORM public.fn_inner();
+                RETURN s;
+            END
+            $body$;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var bodyCall = Assert.Single(references.Where(r =>
+            r.SymbolName == "fn_inner" &&
+            r.ReferenceKind == "call" &&
+            r.Line == 5));
+        Assert.Equal("function", bodyCall.ContainerKind);
+        Assert.Equal("public.fn_outer", bodyCall.ContainerName);
     }
 
     [Fact]

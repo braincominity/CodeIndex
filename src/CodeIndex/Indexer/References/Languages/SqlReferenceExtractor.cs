@@ -74,6 +74,18 @@ internal static class SqlReferenceExtractor
     private static readonly Regex MergeUsingSourceRegex = new(
         $@"(?<![\w$])MERGE\b(?:\s+{TopTargetModifierPattern})?(?:\s+INTO)?\s+{QualifiedIdentifierNoCapturePattern}(?:\s+{MergeTargetHintPattern})?(?:\s+(?:AS\s+)?(?!USING\b|WITH\b)(?:{QuotedIdentifierPattern}|{BareIdentifierPattern}))?\s+USING\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{QualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex MergeUpdateSetActionRegex = new(
+        @"(?<![\w$])WHEN\b[\s\S]*?\bTHEN\s+UPDATE\s+SET\s+(?<body>[\s\S]*?)(?=(?<![\w$])WHEN\b|;|$)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex MergeInsertActionRegex = new(
+        @"(?<![\w$])WHEN\b[\s\S]*?\bTHEN\s+INSERT\s*(?<columns>\((?:[^()]|\([^()]*\))*\))?(?:\s+VALUES\s*(?<values>\((?:[^()]|\([^()]*\))*\)))?",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex MergeOnClauseRegex = new(
+        @"(?<![\w$])MERGE\b[\s\S]*?\bON\s+(?<body>[\s\S]*?)(?=(?<![\w$])WHEN\b|;|$)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex QualifiedColumnReferenceRegex = new(
+        $@"(?<![\w$])(?:{QuotedIdentifierPattern}|{BareIdentifierPattern})\s*\.\s*(?<name>{QuotedIdentifierPattern}|{BareIdentifierPattern})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex MergeUsingPrefixRegex = new(
         $@"(?<![\w$])MERGE\b(?:\s+{TopTargetModifierPattern})?(?:\s+INTO)?\s+{QualifiedIdentifierNoCapturePattern}(?:\s+{MergeTargetHintPattern})?(?:\s+(?:AS\s+)?(?!USING\b|WITH\b)(?:{QuotedIdentifierPattern}|{BareIdentifierPattern}))?\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -285,11 +297,29 @@ internal static class SqlReferenceExtractor
     private static readonly Regex CreateTempRoutineRegex = new(
         $@"(?<![\w$])CREATE(?:\s+OR\s+(?:REPLACE|ALTER))?(?:\s+(?:TEMP|TEMPORARY))?\s+(?:PROC(?:EDURE)?|FUNCTION)\b(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{TempIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex GeneratedColumnMarkerRegex = new(
+        @"\b(?:GENERATED\s+(?:ALWAYS\s+)?AS|NEXT\s+VALUE\s+FOR)\b|(?<![\w$])AS\s*\(",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex GeneratedColumnExpressionStartRegex = new(
+        @"\b(?:GENERATED\s+(?:ALWAYS\s+)?AS|AS)\s*\(",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex DefaultNextValueForExpressionRegex = new(
+        $@"\bDEFAULT\s+NEXT\s+VALUE\s+FOR\s+(?<name>{QualifiedIdentifierNoCapturePattern})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlExpressionIdentifierRegex = new(
+        $@"(?<name>{QualifiedIdentifierNoCapturePattern})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex TrailingTempIdentifierRegex = new(
         $@"^(?:(?:ONLY)\b\s+)?(?<item>(?:{TempIdentifierPattern}|{QualifiedIdentifierNoCapturePattern}))(?:\s+(?:AS\s+)?(?:{QuotedIdentifierPattern}|{BareIdentifierPattern}))?\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex MergeTargetHintContinuationPrefixRegex = new(
         $@"(?<![\w$])MERGE\b(?:\s+{TopTargetModifierPattern})?(?:\s+INTO)?\s+{QualifiedIdentifierNoCapturePattern}\s+WITH\s*\((?:[^()]|\([^()]*\))*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex WindowClauseColumnRegex = new(
+        $@"(?<![\w$]){QualifiedIdentifierPattern}(?:\s+(?:ASC|DESC)\b)?(?:\s+NULLS\s+(?:FIRST|LAST)\b)?",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex WindowFrameKeywordRegex = new(
+        @"(?<![\w$])(?<name>ROWS|RANGE|GROUPS|BETWEEN|UNBOUNDED|PRECEDING|FOLLOWING|CURRENT|ROW|EXCLUDE|TIES|OTHERS|NO)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     public static State CreateState() => new();
@@ -323,6 +353,43 @@ internal static class SqlReferenceExtractor
         }
 
         return spansByLine;
+    }
+
+    public static HashSet<(int LineNumber, int ColumnIndex)> BuildWindowFunctionCallSiteSuppressions(string[] lines)
+    {
+        var suppressed = new HashSet<(int LineNumber, int ColumnIndex)>();
+        if (lines.Length == 0)
+            return suppressed;
+
+        var lineStarts = new int[lines.Length];
+        var textBuilder = new StringBuilder();
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            if (lineIndex > 0)
+                textBuilder.Append('\n');
+            lineStarts[lineIndex] = textBuilder.Length;
+            textBuilder.Append(lines[lineIndex]);
+        }
+
+        var text = textBuilder.ToString();
+        var searchStart = 0;
+        while (TryFindNextWindowClause(
+            text,
+            searchStart,
+            out var overKeywordIndex,
+            out _,
+            out var closeParenIndex))
+        {
+            if (TryFindWindowFunctionNameIndex(text, overKeywordIndex, out var functionNameIndex)
+                && TryMapJoinedOffsetToLine(lineStarts, text, functionNameIndex, out var lineNumber, out var columnIndex))
+            {
+                suppressed.Add((lineNumber, columnIndex));
+            }
+
+            searchStart = closeParenIndex + 1;
+        }
+
+        return suppressed;
     }
 
     public static bool ShouldSuppressDefinitionCall(
@@ -482,6 +549,20 @@ internal static class SqlReferenceExtractor
             suppressedCallIndices.Add(nameGroup.Index + statementStart - lineOffset);
         }
 
+        EmitWindowClauseReferences(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            suppressedCallIndices,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
         EmitProcedureCalls(
             statement,
             statementStart,
@@ -508,6 +589,19 @@ internal static class SqlReferenceExtractor
             seen,
             fileId,
             resolveContainerForCall);
+
+        EmitGeneratedColumnDependencyReferences(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
 
         EmitSourceCaptureReferences(
             FromSourceListRegex.Matches(statement),
@@ -1394,6 +1488,292 @@ internal static class SqlReferenceExtractor
             shouldIgnoreName);
     }
 
+    private static void EmitWindowClauseReferences(
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        HashSet<int> suppressedCallIndices,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName)
+    {
+        int searchStart = 0;
+        while (TryFindNextWindowClause(
+            statement,
+            searchStart,
+            out var overKeywordIndex,
+            out var openParenIndex,
+            out var closeParenIndex))
+        {
+            if (TryFindWindowFunctionNameIndex(statement, overKeywordIndex, out var functionNameIndex)
+                && functionNameIndex >= statementLineOffset)
+            {
+                suppressedCallIndices.Add(functionNameIndex + statementStart - lineOffset);
+            }
+
+            var bodyStart = openParenIndex + 1;
+            if (closeParenIndex > statementLineOffset)
+            {
+                EmitWindowClauseColumnReferences(
+                    statement,
+                    bodyStart,
+                    closeParenIndex,
+                    statementStart,
+                    statementLineOffset,
+                    lineOffset,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    suppressedCallIndices,
+                    resolveContainerForCall,
+                    shouldIgnoreName);
+            }
+
+            searchStart = closeParenIndex + 1;
+        }
+    }
+
+    private static bool TryFindNextWindowClause(
+        string statement,
+        int searchStart,
+        out int overKeywordIndex,
+        out int openParenIndex,
+        out int closeParenIndex)
+    {
+        overKeywordIndex = -1;
+        openParenIndex = -1;
+        closeParenIndex = -1;
+
+        for (int i = searchStart; i < statement.Length;)
+        {
+            if (!IsKeywordAt(statement, i, "OVER"))
+            {
+                i++;
+                continue;
+            }
+
+            if (IsInsideDoubleQuotedRegion(statement, i))
+            {
+                i += "OVER".Length;
+                continue;
+            }
+
+            int probe = SkipWhitespaceAhead(statement, i + "OVER".Length);
+            if (probe >= statement.Length || statement[probe] != '(')
+            {
+                i += "OVER".Length;
+                continue;
+            }
+
+            int close = FindMatchingParen(statement, probe);
+            if (close < 0)
+            {
+                i += "OVER".Length;
+                continue;
+            }
+
+            overKeywordIndex = i;
+            openParenIndex = probe;
+            closeParenIndex = close;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryFindWindowFunctionNameIndex(string statement, int overKeywordIndex, out int functionNameIndex)
+    {
+        functionNameIndex = -1;
+        int probe = overKeywordIndex - 1;
+        while (probe >= 0 && char.IsWhiteSpace(statement[probe]))
+            probe--;
+        if (probe < 0 || statement[probe] != ')')
+            return false;
+
+        int openParen = FindMatchingOpenParen(statement, probe);
+        if (openParen <= 0)
+            return false;
+
+        probe = openParen - 1;
+        while (probe >= 0 && char.IsWhiteSpace(statement[probe]))
+            probe--;
+        int nameEnd = probe;
+        while (probe >= 0 && IsSqlIdentifierPart(statement[probe]))
+            probe--;
+        int nameStart = probe + 1;
+        if (nameStart > nameEnd)
+            return false;
+
+        functionNameIndex = nameStart;
+        return true;
+    }
+
+    private static bool TryMapJoinedOffsetToLine(int[] lineStarts, string text, int offset, out int lineNumber, out int columnIndex)
+    {
+        lineNumber = 0;
+        columnIndex = 0;
+        if (offset < 0 || offset >= text.Length)
+            return false;
+
+        var lineIndex = Array.BinarySearch(lineStarts, offset);
+        if (lineIndex < 0)
+            lineIndex = ~lineIndex - 1;
+        if (lineIndex < 0 || lineIndex >= lineStarts.Length)
+            return false;
+
+        lineNumber = lineIndex + 1;
+        columnIndex = offset - lineStarts[lineIndex];
+        return true;
+    }
+
+    private static void EmitWindowClauseColumnReferences(
+        string statement,
+        int bodyStart,
+        int bodyEnd,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        HashSet<int> suppressedCallIndices,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName)
+    {
+        foreach (Match keywordMatch in WindowFrameKeywordRegex.Matches(statement))
+        {
+            if (keywordMatch.Index >= bodyStart && keywordMatch.Index < bodyEnd && keywordMatch.Index >= statementLineOffset)
+                suppressedCallIndices.Add(keywordMatch.Index + statementStart - lineOffset);
+        }
+
+        foreach (var (start, end) in EnumerateWindowColumnListSpans(statement, bodyStart, bodyEnd))
+        {
+            foreach (Match match in WindowClauseColumnRegex.Matches(statement))
+            {
+                var nameGroup = match.Groups["name"];
+                if (!nameGroup.Success || nameGroup.Index < start || nameGroup.Index >= end || nameGroup.Index < statementLineOffset)
+                    continue;
+                if (IsSqlWindowKeyword(nameGroup.Value))
+                    continue;
+                if (IsImmediatelyFollowedByOpenParen(statement, nameGroup.Index + nameGroup.Length))
+                    continue;
+
+                NormalizeIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                if (!wasQuoted && shouldIgnoreName(resolvedName))
+                    continue;
+
+                int nameColumn = nameIndex + statementStart - lineOffset;
+                var container = resolveContainerForCall(nameGroup.Index);
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    resolvedName,
+                    nameColumn,
+                    "column_reference",
+                    context,
+                    lineNumber,
+                    container);
+            }
+        }
+    }
+
+    private static IEnumerable<(int Start, int End)> EnumerateWindowColumnListSpans(string statement, int bodyStart, int bodyEnd)
+    {
+        int position = bodyStart;
+        while (position < bodyEnd)
+        {
+            if (IsKeywordAt(statement, position, "PARTITION"))
+            {
+                int byIndex = SkipWhitespaceAhead(statement, position + "PARTITION".Length);
+                if (IsKeywordAt(statement, byIndex, "BY"))
+                {
+                    int start = SkipWhitespaceAhead(statement, byIndex + "BY".Length);
+                    int end = FindWindowListEnd(statement, start, bodyEnd);
+                    yield return (start, end);
+                    position = end;
+                    continue;
+                }
+            }
+
+            if (IsKeywordAt(statement, position, "ORDER"))
+            {
+                int byIndex = SkipWhitespaceAhead(statement, position + "ORDER".Length);
+                if (IsKeywordAt(statement, byIndex, "BY"))
+                {
+                    int start = SkipWhitespaceAhead(statement, byIndex + "BY".Length);
+                    int end = FindWindowListEnd(statement, start, bodyEnd);
+                    yield return (start, end);
+                    position = end;
+                    continue;
+                }
+            }
+
+            position++;
+        }
+    }
+
+    private static int FindWindowListEnd(string statement, int start, int bodyEnd)
+    {
+        for (int i = start; i < bodyEnd; i++)
+        {
+            if (IsKeywordAt(statement, i, "PARTITION")
+                || IsKeywordAt(statement, i, "ORDER")
+                || IsKeywordAt(statement, i, "ROWS")
+                || IsKeywordAt(statement, i, "RANGE")
+                || IsKeywordAt(statement, i, "GROUPS"))
+            {
+                return i;
+            }
+        }
+
+        return bodyEnd;
+    }
+
+    private static bool IsKeywordAt(string text, int index, string keyword)
+    {
+        if (index < 0 || index + keyword.Length > text.Length)
+            return false;
+        if (string.Compare(text, index, keyword, 0, keyword.Length, StringComparison.OrdinalIgnoreCase) != 0)
+            return false;
+        if (index > 0 && IsSqlIdentifierPart(text[index - 1]))
+            return false;
+        var after = index + keyword.Length;
+        return after >= text.Length || !IsSqlIdentifierPart(text[after]);
+    }
+
+    private static bool IsSqlIdentifierPart(char value)
+    {
+        return char.IsLetterOrDigit(value) || value == '_' || value == '$' || value == '#';
+    }
+
+    private static bool IsSqlWindowKeyword(string value)
+    {
+        return string.Equals(value, "PARTITION", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "ORDER", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "BY", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "ASC", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "DESC", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "NULLS", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "FIRST", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "LAST", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsImmediatelyFollowedByOpenParen(string text, int index)
+    {
+        int probe = SkipWhitespaceAhead(text, index);
+        return probe < text.Length && text[probe] == '(';
+    }
+
     private static void EmitProcedureCalls(
         string statement,
         int statementStart,
@@ -1545,6 +1925,538 @@ internal static class SqlReferenceExtractor
                 resolveContainerForCall,
                 shouldIgnoreName);
         }
+
+        EmitMergeActionColumnReferences(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+    }
+
+    private static void EmitMergeActionColumnReferences(
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName)
+    {
+        foreach (Match match in MergeOnClauseRegex.Matches(statement))
+        {
+            if (IsInsideDoubleQuotedRegion(statement, match.Index))
+                continue;
+
+            var bodyGroup = match.Groups["body"];
+            EmitQualifiedColumnReferences(
+                bodyGroup.Value,
+                bodyGroup.Index,
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName,
+                "join_condition_reference");
+        }
+
+        foreach (Match match in MergeUpdateSetActionRegex.Matches(statement))
+        {
+            if (IsInsideDoubleQuotedRegion(statement, match.Index))
+                continue;
+
+            var bodyGroup = match.Groups["body"];
+            foreach (var segment in SplitTopLevelCommaSegments(bodyGroup.Value, bodyGroup.Index))
+            {
+                var equalsIndex = IndexOfTopLevelChar(segment.Text, '=');
+                if (equalsIndex <= 0)
+                    continue;
+
+                EmitMergeColumnReference(
+                    segment.Text[..equalsIndex],
+                    segment.StartIndex,
+                    statement,
+                    statementStart,
+                    statementLineOffset,
+                    lineOffset,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    resolveContainerForCall,
+                    shouldIgnoreName,
+                    "column_reference");
+            }
+
+            EmitQualifiedColumnReferences(
+                bodyGroup.Value,
+                bodyGroup.Index,
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName,
+                "column_reference");
+        }
+
+        foreach (Match match in MergeInsertActionRegex.Matches(statement))
+        {
+            if (IsInsideDoubleQuotedRegion(statement, match.Index))
+                continue;
+
+            var columnsGroup = match.Groups["columns"];
+            if (columnsGroup.Success)
+            {
+                var innerStart = columnsGroup.Index + 1;
+                var inner = columnsGroup.Value.Length >= 2
+                    ? columnsGroup.Value[1..^1]
+                    : string.Empty;
+                foreach (var segment in SplitTopLevelCommaSegments(inner, innerStart))
+                {
+                    EmitMergeColumnReference(
+                        segment.Text,
+                        segment.StartIndex,
+                        statement,
+                        statementStart,
+                        statementLineOffset,
+                        lineOffset,
+                        context,
+                        lineNumber,
+                        references,
+                        seen,
+                        fileId,
+                        resolveContainerForCall,
+                        shouldIgnoreName,
+                        "column_reference");
+                }
+            }
+
+            var valuesGroup = match.Groups["values"];
+            if (valuesGroup.Success)
+            {
+                EmitQualifiedColumnReferences(
+                    valuesGroup.Value,
+                    valuesGroup.Index,
+                    statement,
+                    statementStart,
+                    statementLineOffset,
+                    lineOffset,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    resolveContainerForCall,
+                    shouldIgnoreName,
+                    "column_reference");
+            }
+        }
+    }
+
+    private readonly record struct TextSegment(string Text, int StartIndex);
+
+    private static void EmitQualifiedColumnReferences(
+        string text,
+        int textStart,
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName,
+        string referenceKind)
+    {
+        foreach (Match match in QualifiedColumnReferenceRegex.Matches(text))
+        {
+            if (IsInsideDoubleQuotedRegion(text, match.Index))
+                continue;
+
+            var nameGroup = match.Groups["name"];
+            EmitMergeColumnReference(
+                nameGroup.Value,
+                textStart + nameGroup.Index,
+                statement,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName,
+                referenceKind);
+        }
+    }
+
+    private static void EmitMergeColumnReference(
+        string rawName,
+        int rawIndex,
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName,
+        string referenceKind)
+    {
+        var trimmedStart = 0;
+        while (trimmedStart < rawName.Length && char.IsWhiteSpace(rawName[trimmedStart]))
+            trimmedStart++;
+        var trimmedEnd = rawName.Length;
+        while (trimmedEnd > trimmedStart && char.IsWhiteSpace(rawName[trimmedEnd - 1]))
+            trimmedEnd--;
+        if (trimmedStart >= trimmedEnd)
+            return;
+
+        rawName = rawName[trimmedStart..trimmedEnd];
+        rawIndex += trimmedStart;
+        var leafIndex = FindQualifiedIdentifierLeafIndex(rawName);
+        rawIndex += leafIndex;
+        rawName = rawName[leafIndex..].TrimStart();
+
+        var match = Regex.Match(
+            rawName,
+            $"^(?<name>{QuotedIdentifierPattern}|{BareIdentifierPattern})",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success)
+            return;
+
+        var nameGroup = match.Groups["name"];
+        var absoluteNameIndex = rawIndex + nameGroup.Index;
+        if (absoluteNameIndex < statementLineOffset)
+            return;
+
+        NormalizeIdentifier(nameGroup.Value, absoluteNameIndex, out var resolvedName, out var nameIndex, out var wasQuoted);
+        if (!wasQuoted && shouldIgnoreName(resolvedName))
+            return;
+
+        var nameColumn = nameIndex + statementStart - lineOffset;
+        var container = resolveContainerForCall(absoluteNameIndex);
+        ReferenceExtractor.AddReference(references, seen, fileId, resolvedName, nameColumn, referenceKind, context, lineNumber, container);
+    }
+
+    private static int FindQualifiedIdentifierLeafIndex(string rawName)
+    {
+        var leafStart = 0;
+        var quote = '\0';
+        for (var i = 0; i < rawName.Length; i++)
+        {
+            var ch = rawName[i];
+            if (quote != '\0')
+            {
+                if (quote == '[')
+                {
+                    if (ch == ']')
+                    {
+                        if (i + 1 < rawName.Length && rawName[i + 1] == ']')
+                            i++;
+                        else
+                            quote = '\0';
+                    }
+                    continue;
+                }
+
+                if (ch == quote)
+                {
+                    if (i + 1 < rawName.Length && rawName[i + 1] == quote)
+                        i++;
+                    else
+                        quote = '\0';
+                }
+                continue;
+            }
+
+            if (ch is '[' or '"' or '`')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch != '.')
+                continue;
+
+            leafStart = i + 1;
+            while (leafStart < rawName.Length && char.IsWhiteSpace(rawName[leafStart]))
+                leafStart++;
+        }
+
+        return leafStart;
+    }
+
+    private static List<TextSegment> SplitTopLevelCommaSegments(string text, int textStart)
+    {
+        var segments = new List<TextSegment>();
+        var segmentStart = 0;
+        var depth = 0;
+        var quote = '\0';
+        for (var i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (quote != '\0')
+            {
+                if (quote == '[')
+                {
+                    if (ch == ']')
+                    {
+                        if (i + 1 < text.Length && text[i + 1] == ']')
+                            i++;
+                        else
+                            quote = '\0';
+                    }
+                    continue;
+                }
+
+                if (ch == quote)
+                {
+                    if (i + 1 < text.Length && text[i + 1] == quote)
+                        i++;
+                    else
+                        quote = '\0';
+                }
+                continue;
+            }
+
+            if (ch is '[' or '"' or '`' or '\'')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '(')
+            {
+                depth++;
+                continue;
+            }
+            if (ch == ')' && depth > 0)
+            {
+                depth--;
+                continue;
+            }
+            if (ch != ',' || depth != 0)
+                continue;
+
+            segments.Add(new TextSegment(text[segmentStart..i], textStart + segmentStart));
+            segmentStart = i + 1;
+        }
+
+        segments.Add(new TextSegment(text[segmentStart..], textStart + segmentStart));
+        return segments;
+    }
+
+    private static int IndexOfTopLevelChar(string text, char value)
+    {
+        var depth = 0;
+        var quote = '\0';
+        for (var i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (quote != '\0')
+            {
+                if (quote == '[')
+                {
+                    if (ch == ']')
+                    {
+                        if (i + 1 < text.Length && text[i + 1] == ']')
+                            i++;
+                        else
+                            quote = '\0';
+                    }
+                    continue;
+                }
+
+                if (ch == quote)
+                {
+                    if (i + 1 < text.Length && text[i + 1] == quote)
+                        i++;
+                    else
+                        quote = '\0';
+                }
+                continue;
+            }
+
+            if (ch is '[' or '"' or '`' or '\'')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '(')
+            {
+                depth++;
+                continue;
+            }
+            if (ch == ')' && depth > 0)
+            {
+                depth--;
+                continue;
+            }
+            if (ch == value && depth == 0)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static void EmitGeneratedColumnDependencyReferences(
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName)
+    {
+        if (!GeneratedColumnMarkerRegex.IsMatch(statement))
+            return;
+
+        foreach (Match match in GeneratedColumnExpressionStartRegex.Matches(statement))
+        {
+            if (match.Index < statementLineOffset || IsInsideDoubleQuotedRegion(statement, match.Index))
+                continue;
+            if (match.Value.TrimStart().StartsWith("AS", StringComparison.OrdinalIgnoreCase)
+                && !IsLikelyComputedColumnAsExpression(statement, match.Index))
+            {
+                continue;
+            }
+
+            var openParenIndex = statement.IndexOf('(', match.Index + match.Length - 1);
+            if (openParenIndex < 0)
+                continue;
+
+            var closeParenIndex = FindMatchingParen(statement, openParenIndex);
+            if (closeParenIndex <= openParenIndex)
+                continue;
+
+            EmitSqlExpressionIdentifierDependencies(
+                statement,
+                openParenIndex + 1,
+                closeParenIndex,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
+
+        foreach (Match match in DefaultNextValueForExpressionRegex.Matches(statement))
+        {
+            if (match.Index < statementLineOffset || IsInsideDoubleQuotedRegion(statement, match.Index))
+                continue;
+
+            var sequence = match.Groups["name"];
+            EmitSqlExpressionIdentifierDependencies(
+                statement,
+                sequence.Index,
+                sequence.Index + sequence.Length,
+                statementStart,
+                statementLineOffset,
+                lineOffset,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                resolveContainerForCall,
+                shouldIgnoreName);
+        }
+    }
+
+    private static void EmitSqlExpressionIdentifierDependencies(
+        string statement,
+        int startIndex,
+        int endIndexExclusive,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName)
+    {
+        var expression = statement[startIndex..endIndexExclusive];
+        foreach (Match match in SqlExpressionIdentifierRegex.Matches(expression))
+        {
+            var rawIndex = startIndex + match.Index;
+            if (rawIndex < statementLineOffset || IsInsideDoubleQuotedRegion(statement, rawIndex))
+                continue;
+
+            var rawName = match.Value;
+            NormalizeIdentifier(rawName, rawIndex, out var resolvedName, out var nameIndex, out var wasQuoted);
+            if (!wasQuoted && (shouldIgnoreName(resolvedName) || IsGeneratedColumnDependencyKeyword(resolvedName)))
+                continue;
+
+            var nameColumn = nameIndex + statementStart - lineOffset;
+            var container = resolveContainerForCall(rawIndex);
+            ReferenceExtractor.AddReference(references, seen, fileId, resolvedName, nameColumn, "generated_column_dependency", context, lineNumber, container);
+        }
+    }
+
+    private static bool IsGeneratedColumnDependencyKeyword(string name)
+        => name.Equals("GENERATED", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("ALWAYS", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("AS", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("DEFAULT", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("NEXT", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("VALUE", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("FOR", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("STORED", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("VIRTUAL", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("PERSISTED", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("NULL", StringComparison.OrdinalIgnoreCase)
+           || name.Equals("NOT", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsLikelyComputedColumnAsExpression(string statement, int asIndex)
+    {
+        var prefix = statement[..asIndex];
+        return Regex.IsMatch(prefix, @"(?<![\w$])ALTER\s+TABLE\b[\s\S]*\bADD\b", RegexOptions.IgnoreCase)
+            || Regex.IsMatch(prefix, @"(?<![\w$])CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP|TEMPORARY)\s+|UNLOGGED\s+)?TABLE\b", RegexOptions.IgnoreCase);
     }
 
     private static void EmitSourceReference(
@@ -1634,6 +2546,28 @@ internal static class SqlReferenceExtractor
             }
 
             if (text[i] != ')')
+                continue;
+
+            depth--;
+            if (depth == 0)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static int FindMatchingOpenParen(string text, int closeParenIndex)
+    {
+        var depth = 0;
+        for (var i = closeParenIndex; i >= 0; i--)
+        {
+            if (text[i] == ')')
+            {
+                depth++;
+                continue;
+            }
+
+            if (text[i] != '(')
                 continue;
 
             depth--;

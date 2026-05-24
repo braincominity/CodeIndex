@@ -3514,6 +3514,44 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_ImpactAnalysis_ReturnsSameCallerPerReferenceKind()
+    {
+        InsertIndexedFile("src/EventHub.cs", "csharp",
+            """
+            public class EventHub
+            {
+                public event System.Action? Changed;
+                public void Changed() { }
+            }
+            """);
+        InsertIndexedFile("src/App.cs", "csharp",
+            """
+            public class App
+            {
+                public void Boot(EventHub hub)
+                {
+                    hub.Changed += OnChanged;
+                    hub.Changed();
+                }
+
+                private void OnChanged() { }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"Changed","limit":10}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var callers = structured["callers"]!.AsArray()
+            .Where(caller => caller!["path"]!.GetValue<string>() == "src/App.cs"
+                && caller!["callerName"]!.GetValue<string>() == "Boot")
+            .ToList();
+
+        Assert.Equal(2, callers.Count);
+        Assert.Equal(new[] { "call", "subscribe" }, callers.Select(caller => caller!["referenceKind"]!.GetValue<string>()).Order().ToArray());
+        Assert.All(callers, caller => Assert.Equal(1, caller!["referenceCount"]!.GetValue<int>()));
+    }
+
+    [Fact]
     public void ToolsList_ImpactAnalysisMaxHopsSchemaDocumentsCap()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;

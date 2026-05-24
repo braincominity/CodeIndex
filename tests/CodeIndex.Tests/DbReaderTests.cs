@@ -149,6 +149,41 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetCallers_CSharpGenericInvocationTypeArgument_ParticipatesInGraph()
+    {
+        InsertIndexedFile(
+            "src/generic_type_argument_fixture.cs",
+            "csharp",
+            """
+            interface IFoo {}
+            class Runner
+            {
+                void Process<T>(T item) {}
+                void Run(IFoo value) { Process<IFoo>(value); }
+            }
+            """);
+
+        var defaultCaller = Assert.Single(_reader.GetCallers(
+            "IFoo",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["generic_type_argument_fixture"]));
+
+        Assert.Equal("Run", defaultCaller.CallerName);
+        Assert.Equal("generic_type_argument", defaultCaller.ReferenceKind);
+
+        var caller = Assert.Single(_reader.GetCallers(
+            "IFoo",
+            lang: "csharp",
+            referenceKind: "generic_type_argument",
+            exact: true,
+            pathPatterns: ["generic_type_argument_fixture"]));
+
+        Assert.Equal("Run", caller.CallerName);
+        Assert.Equal("generic_type_argument", caller.ReferenceKind);
+    }
+
+    [Fact]
     public void CreateSearchReferencesCommand_RanksWithoutLoweringReferenceNames()
     {
         using var cmd = CreateSearchReferencesCommandForSql("FetchData");
@@ -402,6 +437,18 @@ public class DbReaderTests : IDisposable
                 ContainerName = containerName,
             })
             .ToList();
+        _writer.InsertReferences(references);
+    }
+
+    private void InsertManualReferences(string path, IReadOnlyList<ReferenceRecord> references)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT id FROM files WHERE path = @path";
+        cmd.Parameters.AddWithValue("@path", path);
+        var fileId = (long)cmd.ExecuteScalar()!;
+        foreach (var reference in references)
+            reference.FileId = fileId;
+
         _writer.InsertReferences(references);
     }
 
@@ -2876,6 +2923,203 @@ public class DbReaderTests : IDisposable
         Assert.Equal("Run", caller.CalleeName);
         Assert.Equal("call", caller.ReferenceKind);
         Assert.Equal(1, caller.ReferenceCount);
+    }
+
+    [Fact]
+    public void GetTransitiveCallers_CSharpExact_MapsInterfaceDispatchToConcreteImplementation()
+    {
+        InsertIndexedFile("src/PolymorphicDispatch.cs", "csharp",
+            """
+            namespace Demo;
+
+            public interface IWorker
+            {
+                void Execute();
+            }
+
+            public sealed class Worker : IWorker
+            {
+                public void Execute() { }
+            }
+
+            public sealed class Coordinator
+            {
+                public void Run(IWorker worker)
+                {
+                    worker.Execute();
+                }
+            }
+            """);
+        InsertManualReferences("src/PolymorphicDispatch.cs",
+        [
+            new ReferenceRecord
+            {
+                SymbolName = "Demo.IWorker.Execute",
+                ReferenceKind = "call",
+                Line = 16,
+                Column = 16,
+                Context = "worker.Execute();",
+                ContainerKind = "function",
+                ContainerName = "Run",
+            },
+        ]);
+
+        var impact = _reader.GetTransitiveCallers("Demo.Worker.Execute", maxDepth: 2, lang: "csharp", pathPatterns: ["PolymorphicDispatch.cs"]);
+
+        var caller = Assert.Single(impact.Results);
+        Assert.Equal("Run", caller.CallerName);
+        Assert.Equal(1, caller.Depth);
+    }
+
+    [Fact]
+    public void GetTransitiveCallers_CSharpExact_FollowsAbstractBaseDispatchToConcreteOverride()
+    {
+        InsertIndexedFile("src/AbstractDispatch.cs", "csharp",
+            """
+            namespace Demo;
+
+            public abstract class BaseJob
+            {
+                public abstract void Execute();
+            }
+
+            public sealed class Job : BaseJob
+            {
+                public override void Execute() { }
+            }
+
+            public sealed class Scheduler
+            {
+                public void Schedule(BaseJob job)
+                {
+                    job.Execute();
+                }
+            }
+            """);
+        InsertManualReferences("src/AbstractDispatch.cs",
+        [
+            new ReferenceRecord
+            {
+                SymbolName = "Demo.BaseJob.Execute",
+                ReferenceKind = "call",
+                Line = 16,
+                Column = 13,
+                Context = "job.Execute();",
+                ContainerKind = "function",
+                ContainerName = "Schedule",
+            },
+        ]);
+
+        var impact = _reader.GetTransitiveCallers("Demo.Job.Execute", maxDepth: 2, lang: "csharp", pathPatterns: ["AbstractDispatch.cs"]);
+
+        var caller = Assert.Single(impact.Results);
+        Assert.Equal("Schedule", caller.CallerName);
+        Assert.Equal(1, caller.Depth);
+    }
+
+    [Fact]
+    public void GetTransitiveCallers_CSharpExact_DoesNotMixUnrelatedSameNameHierarchies()
+    {
+        InsertIndexedFile("src/UnrelatedDispatch.cs", "csharp",
+            """
+            namespace Demo;
+
+            public interface IWorker
+            {
+                void Execute();
+            }
+
+            public sealed class Worker : IWorker
+            {
+                public void Execute() { }
+            }
+
+            public interface IOtherWorker
+            {
+                void Execute();
+            }
+
+            public sealed class OtherWorker : IOtherWorker
+            {
+                public void Execute() { }
+            }
+
+            public sealed class Coordinator
+            {
+                public void RunOther(IOtherWorker worker)
+                {
+                    worker.Execute();
+                }
+            }
+            """);
+        InsertManualReferences("src/UnrelatedDispatch.cs",
+        [
+            new ReferenceRecord
+            {
+                SymbolName = "Demo.IOtherWorker.Execute",
+                ReferenceKind = "call",
+                Line = 24,
+                Column = 16,
+                Context = "worker.Execute();",
+                ContainerKind = "function",
+                ContainerName = "RunOther",
+            },
+        ]);
+
+        var impact = _reader.GetTransitiveCallers("Demo.Worker.Execute", maxDepth: 2, lang: "csharp", pathPatterns: ["UnrelatedDispatch.cs"]);
+
+        Assert.Empty(impact.Results);
+    }
+
+    [Fact]
+    public void GetTransitiveCallers_CSharpExact_DoesNotUseBaseListFromDuplicateShortTypeName()
+    {
+        InsertIndexedFile("src/DuplicateShortTypeDispatch.cs", "csharp",
+            """
+            namespace Other;
+
+            public interface IWorker
+            {
+                void Execute();
+            }
+
+            public sealed class Worker : IWorker
+            {
+                public void Execute() { }
+            }
+
+            public sealed class Coordinator
+            {
+                public void Run(IWorker worker)
+                {
+                    worker.Execute();
+                }
+            }
+
+            namespace Demo;
+
+            public sealed class Worker
+            {
+                public void Execute() { }
+            }
+            """);
+        InsertManualReferences("src/DuplicateShortTypeDispatch.cs",
+        [
+            new ReferenceRecord
+            {
+                SymbolName = "Other.IWorker.Execute",
+                ReferenceKind = "call",
+                Line = 16,
+                Column = 16,
+                Context = "worker.Execute();",
+                ContainerKind = "function",
+                ContainerName = "Run",
+            },
+        ]);
+
+        var impact = _reader.GetTransitiveCallers("Demo.Worker.Execute", maxDepth: 2, lang: "csharp", pathPatterns: ["DuplicateShortTypeDispatch.cs"]);
+
+        Assert.Empty(impact.Results);
     }
 
     [Fact]

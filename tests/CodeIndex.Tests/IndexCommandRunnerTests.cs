@@ -14,7 +14,7 @@ public sealed class SkipOnMacOsArm64FactAttribute : FactAttribute
     public SkipOnMacOsArm64FactAttribute()
     {
         if (OperatingSystem.IsMacOS() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-            Skip = "macOS arm64 SDK/ILLink currently crashes before this test can exercise cdidx (#2570).";
+            Skip = "macOS arm64 SDK/ILLink can crash before this test can exercise cdidx (#2586).";
     }
 }
 
@@ -3435,8 +3435,12 @@ public class IndexCommandRunnerTests
 
             Assert.True(hookInvoked);
             Assert.Equal(CommandExitCodes.Interrupted, interruptedExitCode);
-            using (var db = new DbContext(dbPath))
-                Assert.Equal(initialReadiness, db.GetUserVersion());
+            var recoveryWarning = ConsoleCapture.CaptureError(() =>
+            {
+                using var db = new DbContext(dbPath);
+                Assert.Equal(0, db.GetUserVersion());
+            });
+            Assert.Contains("Last batch did not complete", recoveryWarning);
             Assert.DoesNotContain("later.cs", ReadIndexedPaths(dbPath));
         }
         finally

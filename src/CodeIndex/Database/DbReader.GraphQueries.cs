@@ -694,6 +694,7 @@ public partial class DbReader
     private static string ReferenceWeightedScoreSql(string columnSql) => $@"
         SUM(CASE {columnSql}
             WHEN 'instantiate' THEN 3.0
+            WHEN 'generic_type_argument' THEN 0.5
             WHEN 'call' THEN 1.0
             WHEN 'subscribe' THEN 0.1
             ELSE 0.0
@@ -702,7 +703,7 @@ public partial class DbReader
     private static string BuildReferenceRankOrderSql(ReferenceRankMode rankMode) => rankMode switch
     {
         ReferenceRankMode.Count => "reference_count DESC",
-        ReferenceRankMode.Kind => "CASE reference_kind WHEN 'instantiate' THEN 0 WHEN 'invoke' THEN 0 WHEN 'call' THEN 1 WHEN 'subscribe' THEN 2 WHEN 'event' THEN 2 ELSE 3 END, reference_count DESC",
+        ReferenceRankMode.Kind => "CASE reference_kind WHEN 'instantiate' THEN 0 WHEN 'invoke' THEN 0 WHEN 'call' THEN 1 WHEN 'generic_type_argument' THEN 2 WHEN 'subscribe' THEN 3 WHEN 'event' THEN 3 ELSE 4 END, reference_count DESC",
         _ => "weighted_score DESC, reference_count DESC",
     };
 
@@ -798,17 +799,25 @@ public partial class DbReader
         // caller 側も leaf `--exact` と同じく FoldReady なら folded equality、legacy DB では
         // `COLLATE NOCASE` fallback。definition と caller 行の casing 差もここで吸収する。
         var allowSqlLeafFallback = !SqlNameResolver.HasQualifier(symbolName);
+        var polymorphicCSharpSymbolNames = lang is null or "csharp"
+            ? GetCSharpPolymorphicDispatchSymbolNames(symbolName)
+            : [];
+        var polymorphicNameCondition = polymorphicCSharpSymbolNames.Count == 0
+            ? string.Empty
+            : _foldReady
+                ? " OR (f.lang = 'csharp' AND r.symbol_name_folded IN (" + string.Join(", ", polymorphicCSharpSymbolNames.Select((_, i) => $"@polymorphicSymbolNameFolded{i}")) + "))"
+                : " OR (f.lang = 'csharp' AND r.symbol_name COLLATE NOCASE IN (" + string.Join(", ", polymorphicCSharpSymbolNames.Select((_, i) => $"@polymorphicSymbolName{i}")) + "))";
         var nameCondition = _foldReady
             ? allowSqlLeafFallback
                 ? @"
-              AND (r.symbol_name_folded = @symbolNameFolded OR (f.lang = 'sql' AND r.symbol_name_folded = @symbolNameLeafFolded))"
+              AND (r.symbol_name_folded = @symbolNameFolded OR (f.lang = 'sql' AND r.symbol_name_folded = @symbolNameLeafFolded)" + polymorphicNameCondition + ")"
                 : @"
-              AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @symbolNameFolded))"
+              AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @symbolNameFolded)" + polymorphicNameCondition + ")"
             : allowSqlLeafFallback
                 ? @"
-              AND (r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE))"
+              AND (r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE)" + polymorphicNameCondition + ")"
                 : @"
-              AND (((f.lang = 'sql') AND sql_context_has_name_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE))";
+              AND (((f.lang = 'sql') AND sql_context_has_name_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE)" + polymorphicNameCondition + ")";
 
         // impact BFS must share the call-graph contract with `callers`/`callees`/`hotspots`,
         // so event subscriptions (`Click += OnClick`) also participate in the transitive
@@ -819,7 +828,7 @@ public partial class DbReader
         var callerContainerPredicate = BuildCallerContainerPredicate("f", "r");
         var sql = $@"
             WITH logical_references AS (
-                SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.line,
+                SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind, r.line,
                        MAX({selfReferenceSql}) AS is_self_reference,
                        MAX({mutualRecursionSql}) AS is_mutual_recursion
                 FROM symbol_references r
@@ -833,21 +842,28 @@ public partial class DbReader
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += @"
-                GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number
+                GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind, r.file_id, r.line, r.column_number
             )
             SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
-                   MIN(line) AS first_line, COUNT(*) AS reference_count,
+                   reference_kind, MIN(line) AS first_line, COUNT(*) AS reference_count,
                    MAX(is_self_reference) AS is_self_reference,
                    MAX(is_mutual_recursion) AS is_mutual_recursion
             FROM logical_references r
-            GROUP BY path, lang, container_kind, container_name, symbol_name";
-        sql += $" ORDER BY {GetPathBucketOrderSql("r.path")}, reference_count DESC, r.path, COALESCE(r.container_name, ''), COALESCE(r.container_kind, ''), r.symbol_name, first_line LIMIT @limit OFFSET @offset";
+            GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
+        sql += $" ORDER BY {GetPathBucketOrderSql("r.path")}, reference_count DESC, r.path, COALESCE(r.container_name, ''), COALESCE(r.container_kind, ''), r.symbol_name, reference_kind, first_line LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@symbolName", symbolName);
         cmd.Parameters.AddWithValue("@symbolNameLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(symbolName)) ?? SqlNameResolver.GetLeafName(symbolName));
         if (_foldReady)
             cmd.Parameters.AddWithValue("@symbolNameFolded", NameFold.Fold(symbolName) ?? symbolName);
+        for (var i = 0; i < polymorphicCSharpSymbolNames.Count; i++)
+        {
+            if (_foldReady)
+                cmd.Parameters.AddWithValue($"@polymorphicSymbolNameFolded{i}", NameFold.Fold(polymorphicCSharpSymbolNames[i]) ?? polymorphicCSharpSymbolNames[i]);
+            else
+                cmd.Parameters.AddWithValue($"@polymorphicSymbolName{i}", polymorphicCSharpSymbolNames[i]);
+        }
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
@@ -865,14 +881,23 @@ public partial class DbReader
                 CallerKind = GetNullableString(reader, 2),
                 CallerName = GetNullableString(reader, 3),
                 CalleeName = reader.GetString(4),
-                FirstLine = reader.GetInt32(5),
-                ReferenceCount = reader.GetInt32(6),
-                HasSelfReference = reader.GetInt32(7) != 0,
-                HasMutualRecursion = reader.GetInt32(8) != 0,
+                ReferenceKind = reader.GetString(5),
+                ReferenceKinds = [reader.GetString(5)],
+                ReferenceKindCounts = new Dictionary<string, int>(StringComparer.Ordinal)
+                {
+                    [reader.GetString(5)] = reader.GetInt32(7),
+                },
+                FirstLine = reader.GetInt32(6),
+                ReferenceCount = reader.GetInt32(7),
+                HasSelfReference = reader.GetInt32(8) != 0,
+                HasMutualRecursion = reader.GetInt32(9) != 0,
             });
         }
         return results;
     }
+
+    private static string BuildImpactVisitedKey(CallerResult caller, string callerName)
+        => $"{caller.Path}:{callerName}:{caller.ReferenceKind}";
 
     // Per-result cap on the number of distinct shortest paths surfaced by impact --with-paths.
     // Each call chain row may carry multiple converging paths from the resolved root through
@@ -983,7 +1008,7 @@ public partial class DbReader
                     if (string.Equals(callerName, resolvedName, StringComparison.OrdinalIgnoreCase)
                         && (rootDefinitionPaths.Count == 0 || rootDefinitionPaths.Contains(caller.Path)))
                         continue;
-                    var key = $"{caller.Path}:{callerName}";
+                    var key = BuildImpactVisitedKey(caller, callerName);
                     if (!cycleParentsByName.TryGetValue(callerName, out var cycleParentSet))
                     {
                         cycleParentSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1017,6 +1042,9 @@ public partial class DbReader
                         Depth = depth + 1,
                         FirstLine = caller.FirstLine,
                         ReferenceCount = caller.ReferenceCount,
+                        ReferenceKind = caller.ReferenceKind,
+                        ReferenceKinds = caller.ReferenceKinds,
+                        ReferenceKindCounts = caller.ReferenceKindCounts,
                     });
 
                     if (withPaths)
@@ -1158,7 +1186,7 @@ public partial class DbReader
                 }
                 cycleParentSet.Add(symbolName);
 
-                var key = $"{caller.Path}:{callerName}";
+                var key = BuildImpactVisitedKey(caller, callerName);
                 if (!visited.Contains(key))
                     return true;
             }
