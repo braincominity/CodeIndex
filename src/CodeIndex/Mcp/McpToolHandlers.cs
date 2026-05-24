@@ -1493,6 +1493,7 @@ public partial class McpServer
             var entry = new JsonObject
             {
                 ["tool"] = toolName,
+                ["correlation_id"] = CurrentCorrelationContext.Value?.CorrelationId,
                 ["args_summary"] = BuildArgsSummary(toolArgs),
                 ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                 ["error"] = errorMessage,
@@ -1537,6 +1538,7 @@ public partial class McpServer
             var entry = new JsonObject
             {
                 ["tool"] = toolName,
+                ["correlation_id"] = CurrentCorrelationContext.Value?.CorrelationId,
                 ["args_summary"] = BuildArgsSummary(toolArgs),
                 ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                 ["error"] = $"Rate limit exceeded for tool '{toolName}' (retry after {retryAfterMs} ms).",
@@ -1550,8 +1552,11 @@ public partial class McpServer
                 failureCount++;
         }
 
+        var slotIndex = 0;
         foreach (var q in queries)
         {
+            slotIndex++;
+            using var slotCorrelation = BeginChildCorrelation(slotIndex);
             var toolName = q?["tool"]?.GetValue<string>();
             var toolArgs = q?["arguments"];
             var slotStopwatch = Stopwatch.StartNew();
@@ -1709,6 +1714,7 @@ public partial class McpServer
                 var entry = new JsonObject
                 {
                     ["tool"] = toolName,
+                    ["correlation_id"] = CurrentCorrelationContext.Value?.CorrelationId,
                     ["args_summary"] = BuildArgsSummary(toolArgs),
                     ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                     ["result"] = structured?.DeepClone(),

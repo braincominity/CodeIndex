@@ -384,6 +384,33 @@ public class McpServerTests : IDisposable
         Assert.False(string.IsNullOrWhiteSpace(structured["correlation_id"]!.GetValue<string>()));
     }
 
+    [Fact]
+    public void ToolCall_ResponseIncludesCorrelationMeta()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":"abc","method":"tools/call","params":{"name":"ping","arguments":{}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var meta = response["result"]!["_meta"]!;
+        Assert.Equal("\"abc\"", meta["request_id"]!.GetValue<string>());
+        Assert.False(string.IsNullOrWhiteSpace(meta["correlation_id"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public void BatchQuery_SlotsIncludeChildCorrelationIds()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"ping","arguments":{}},{"tool":"languages","arguments":{}}]}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
+        var first = results[0]!["correlation_id"]!.GetValue<string>();
+        var second = results[1]!["correlation_id"]!.GetValue<string>();
+        Assert.EndsWith(".1", first, StringComparison.Ordinal);
+        Assert.EndsWith(".2", second, StringComparison.Ordinal);
+        Assert.NotEqual(first, second);
+    }
+
     [Theory]
     [InlineData("search")]
     [InlineData("definition")]

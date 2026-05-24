@@ -982,6 +982,17 @@ public partial class McpServer : IDisposable
         return new CorrelationScope(previous);
     }
 
+    private static IDisposable BeginChildCorrelation(int childIndex)
+    {
+        var previous = CurrentCorrelationContext.Value;
+        var requestId = previous?.RequestId;
+        var correlationId = previous == null
+            ? Guid.NewGuid().ToString("D")
+            : $"{previous.CorrelationId}.{childIndex.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+        CurrentCorrelationContext.Value = new RequestCorrelationContext(requestId, correlationId);
+        return new CorrelationScope(previous);
+    }
+
     private sealed record RequestCorrelationContext(string? RequestId, string CorrelationId);
 
     private sealed class CorrelationScope : IDisposable
@@ -2147,6 +2158,7 @@ public partial class McpServer : IDisposable
 
     private static JsonObject CreateSuccessResponse(bool hasId, JsonNode? id, JsonNode result)
     {
+        AddResponseMeta(result);
         var response = new JsonObject
         {
             ["jsonrpc"] = "2.0",
@@ -2155,6 +2167,19 @@ public partial class McpServer : IDisposable
         if (hasId)
             response["id"] = id is null ? JsonNode.Parse("null") : JsonNode.Parse(id.ToJsonString());
         return response;
+    }
+
+    private static void AddResponseMeta(JsonNode result)
+    {
+        var context = CurrentCorrelationContext.Value;
+        if (context is null || result is not JsonObject obj)
+            return;
+
+        var meta = obj["_meta"] as JsonObject ?? new JsonObject();
+        meta["correlation_id"] = context.CorrelationId;
+        if (context.RequestId != null)
+            meta["request_id"] = context.RequestId;
+        obj["_meta"] = meta;
     }
 
     private static JsonObject? AddCorrelationData(JsonObject? extraData)

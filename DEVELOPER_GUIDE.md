@@ -178,11 +178,11 @@ After a successful `cdidx index` run, the writer refreshes SQLite planner statis
 
 ### MCP request correlation
 
-Each JSON-RPC MCP request gets a server-generated `correlation_id` in addition to the client-controlled JSON-RPC `id`. Error responses include it in `error.data.correlation_id` or tool-error `result.structuredContent.correlation_id`. The serialized JSON-RPC id is echoed as `request_id` in the same metadata when one exists. MCP stderr diagnostics are prefixed with `[rid=<json-rpc-id> cid=<correlation-id>]` when a request context exists.
+Each JSON-RPC MCP request gets a server-generated `correlation_id` in addition to the client-controlled JSON-RPC `id`. Successful MCP responses include it under `result._meta.correlation_id`, and error responses include it in `error.data.correlation_id` or tool-error `result.structuredContent.correlation_id`. The serialized JSON-RPC id is echoed as `request_id` in the same metadata when one exists. `batch_query` assigns child correlation IDs to each slot by suffixing the parent value with `.1`, `.2`, and so on. MCP stderr diagnostics are prefixed with `[rid=<json-rpc-id> cid=<correlation-id>]` when a request context exists.
 
 ### MCP リクエスト相関
 
-各 JSON-RPC MCP リクエストには、クライアント制御の JSON-RPC `id` とは別に、サーバー生成の `correlation_id` が割り当てられます。エラーレスポンスでは `error.data.correlation_id` またはツールエラーの `result.structuredContent.correlation_id` に含まれます。JSON-RPC id がある場合は、同じメタデータにシリアライズ済みの値を `request_id` として入れます。MCP stderr 診断は、リクエストコンテキストがある場合に `[rid=<json-rpc-id> cid=<correlation-id>]` で prefix されます。
+各 JSON-RPC MCP リクエストには、クライアント制御の JSON-RPC `id` とは別に、サーバー生成の `correlation_id` が割り当てられます。成功レスポンスでは `result._meta.correlation_id`、エラーレスポンスでは `error.data.correlation_id` またはツールエラーの `result.structuredContent.correlation_id` に含まれます。JSON-RPC id がある場合は、同じメタデータにシリアライズ済みの値を `request_id` として入れます。`batch_query` は親の値に `.1`、`.2` のような suffix を付けた子 correlation ID を各スロットに割り当てます。MCP stderr 診断は、リクエストコンテキストがある場合に `[rid=<json-rpc-id> cid=<correlation-id>]` で prefix されます。
 
 ## Database schema
 
