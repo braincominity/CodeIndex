@@ -372,6 +372,18 @@ public class McpServerTests : IDisposable
         Assert.Null(_server.HandleMessage(missing));
     }
 
+    [Fact]
+    public void ToolCall_ErrorIncludesCorrelationData()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"search","arguments":{}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("42", structured["request_id"]!.GetValue<string>());
+        Assert.False(string.IsNullOrWhiteSpace(structured["correlation_id"]!.GetValue<string>()));
+    }
+
     [Theory]
     [InlineData("search")]
     [InlineData("definition")]
@@ -823,6 +835,10 @@ public class McpServerTests : IDisposable
         var shortResp = server.HandleMessage(shortReq)!;
         var sameLenResp = server.HandleMessage(sameLenReq)!;
 
+        ((JsonObject)shortResp["error"]!["data"]!).Remove("correlation_id");
+        ((JsonObject)sameLenResp["error"]!["data"]!).Remove("correlation_id");
+        ((JsonObject)shortResp["error"]!["data"]!).Remove("request_id");
+        ((JsonObject)sameLenResp["error"]!["data"]!).Remove("request_id");
         Assert.Equal(shortResp.ToJsonString(), sameLenResp.ToJsonString());
         Assert.Equal(-32001, shortResp["error"]!["code"]!.GetValue<int>());
     }

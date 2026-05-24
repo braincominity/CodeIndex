@@ -61,6 +61,7 @@ public partial class McpServer : IDisposable
     private readonly AsyncLocal<CancellationToken> _currentRequestToken = new();
     private readonly AsyncLocal<Action<string>?> _currentOutOfBandFrameWriter = new();
     private readonly AsyncLocal<List<Action>?> _deferredFrameLogs = new();
+    private static readonly AsyncLocal<RequestCorrelationContext?> CurrentCorrelationContext = new();
     private bool _running = true;
     // Per-session DbContext reused across MCP tool calls. Holding the connection open
     // avoids reopening SQLite, reapplying pragmas, and re-registering every SQL function
@@ -608,7 +609,7 @@ public partial class McpServer : IDisposable
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
             {
-                Console.Error.WriteLine(BuildResponseWriteErrorLog(ex.Message));
+                WriteMcpLogLine(BuildResponseWriteErrorLog(ex.Message));
                 FlushDeferredFrameLogs();
             }
         }
@@ -629,11 +630,11 @@ public partial class McpServer : IDisposable
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            Console.Error.WriteLine(BuildResponseWriteErrorLog("write operation was canceled"));
+            WriteMcpLogLine(BuildResponseWriteErrorLog("write operation was canceled"));
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException)
         {
-            Console.Error.WriteLine(BuildResponseWriteErrorLog(ex.Message));
+            WriteMcpLogLine(BuildResponseWriteErrorLog(ex.Message));
         }
     }
 
@@ -731,7 +732,7 @@ public partial class McpServer : IDisposable
     }
 
     private void DeferFrameLog(string message)
-        => DeferFrameLog(() => Console.Error.WriteLine(message));
+        => DeferFrameLog(() => WriteMcpLogLine(message));
 
     private void DeferFrameLog(Action writeLog)
     {
@@ -757,6 +758,34 @@ public partial class McpServer : IDisposable
         _deferredFrameLogs.Value = null;
         foreach (var log in logs)
             log();
+    }
+
+    private static void WriteMcpLogLine(string message)
+    {
+        var line = AddCorrelationPrefix(message);
+        try
+        {
+            Console.Error.WriteLine(line);
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            // Best-effort diagnostics: a closed redirected stderr must not break the MCP request.
+        }
+        GlobalToolLog.Info(line);
+    }
+
+    private static string AddCorrelationPrefix(string message)
+    {
+        var context = CurrentCorrelationContext.Value;
+        if (context is null)
+            return message;
+
+        var prefix = context.RequestId == null
+            ? $"[cid={context.CorrelationId}] "
+            : $"[rid={context.RequestId} cid={context.CorrelationId}] ";
+        return message.StartsWith("[cdidx-mcp] ", StringComparison.Ordinal)
+            ? "[cdidx-mcp] " + prefix + message["[cdidx-mcp] ".Length..]
+            : prefix + message;
     }
 
     private static void ExtractResponseId(JsonNode request, out bool hasId, out JsonNode? id)
@@ -817,13 +846,15 @@ public partial class McpServer : IDisposable
                 suggestion: "JSON-RPC 2.0 `id` must be a string, integer, or null. Booleans/objects/arrays are not allowed.",
                 retrySafe: false);
 
+        using var correlationScope = hasId ? BeginRequestCorrelation(id) : null;
+
         if (method == "$/cancelRequest" || method == "notifications/cancelled")
         {
             var cancelAuth = _authenticator.Authenticate(request);
             if (cancelAuth.IsAuthenticated)
                 TryCancelRequest(request["params"]);
             else
-                Console.Error.WriteLine(BuildAuthFailureLog(method, cancelAuth.FailureReason));
+                WriteMcpLogLine(BuildAuthFailureLog(method, cancelAuth.FailureReason));
             return null;
         }
 
@@ -843,7 +874,7 @@ public partial class McpServer : IDisposable
         if (string.Equals(method, "notifications/shutdown", StringComparison.Ordinal)
             || string.Equals(method, "notifications/exit", StringComparison.Ordinal))
         {
-            Console.Error.WriteLine($"[cdidx-mcp] Received {method}; draining in-flight work and shutting down.");
+            WriteMcpLogLine($"[cdidx-mcp] Received {method}; draining in-flight work and shutting down.");
             _running = false;
             try
             {
@@ -861,7 +892,7 @@ public partial class McpServer : IDisposable
         if (!hasId)
         {
             if (method != null && method.StartsWith("notifications/", StringComparison.OrdinalIgnoreCase))
-                Console.Error.WriteLine(BuildUnknownNotificationLog(method));
+                WriteMcpLogLine(BuildUnknownNotificationLog(method));
             return null;
         }
 
@@ -939,6 +970,36 @@ public partial class McpServer : IDisposable
         {
             _currentRequestToken.Value = previousToken;
             _activeRequests.TryRemove(requestKey, out _);
+        }
+    }
+
+    private static IDisposable BeginRequestCorrelation(JsonNode? id)
+    {
+        var previous = CurrentCorrelationContext.Value;
+        CurrentCorrelationContext.Value = new RequestCorrelationContext(
+            SerializeRequestId(id),
+            Guid.NewGuid().ToString("D"));
+        return new CorrelationScope(previous);
+    }
+
+    private sealed record RequestCorrelationContext(string? RequestId, string CorrelationId);
+
+    private sealed class CorrelationScope : IDisposable
+    {
+        private readonly RequestCorrelationContext? _previous;
+        private bool _disposed;
+
+        public CorrelationScope(RequestCorrelationContext? previous)
+        {
+            _previous = previous;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+            CurrentCorrelationContext.Value = _previous;
+            _disposed = true;
         }
     }
 
@@ -1436,7 +1497,7 @@ public partial class McpServer : IDisposable
             McpErrorEnvelope.CategoryInvalidArgument,
             "Reissue `initialize` with one of `data.supportedVersions` in `params.protocolVersion`, or omit the field to fall back to the server's newest supported version.",
             retrySafe: false,
-            extra);
+            AddCorrelationData(extra));
 
         var error = new JsonObject
         {
@@ -1493,7 +1554,7 @@ public partial class McpServer : IDisposable
             category: McpErrorEnvelope.CategoryRateLimited,
             suggestion: $"Back off for at least {retryAfterMs} ms before retrying this tool, or raise {RateLimiterOptions.RpsEnvVar} / {RateLimiterOptions.BurstEnvVar} on the server.",
             retrySafe: true,
-            extraData: extraData);
+            extraData: AddCorrelationData(extraData));
         var error = new JsonObject
         {
             ["code"] = -32000,
@@ -1641,7 +1702,7 @@ public partial class McpServer : IDisposable
             // パスや索引内容が漏れる（#1530）。
             DeferFrameLog(() =>
             {
-                Console.Error.WriteLine(BuildToolErrorLog(toolName, ex.Message));
+                WriteMcpLogLine(BuildToolErrorLog(toolName, ex.Message));
                 Database.DbDebug.DumpToStderr(ex);
             });
             metricsError = ex.GetType().Name;
@@ -2096,6 +2157,19 @@ public partial class McpServer : IDisposable
         return response;
     }
 
+    private static JsonObject? AddCorrelationData(JsonObject? extraData)
+    {
+        var context = CurrentCorrelationContext.Value;
+        if (context is null)
+            return extraData;
+
+        var data = extraData is null ? new JsonObject() : (JsonObject)extraData.DeepClone();
+        data["correlation_id"] = context.CorrelationId;
+        if (context.RequestId != null)
+            data["request_id"] = context.RequestId;
+        return data;
+    }
+
     private static JsonObject CreateErrorResponse(JsonNode? id, int code, string message,
         string category, string suggestion, bool retrySafe, JsonObject? extraData = null)
         => CreateErrorResponse(id is not null, id, code, message, category, suggestion, retrySafe, extraData);
@@ -2117,7 +2191,7 @@ public partial class McpServer : IDisposable
             {
                 ["code"] = code,
                 ["message"] = message,
-                ["data"] = McpErrorEnvelope.BuildData(category, suggestion, retrySafe, extraData),
+                ["data"] = McpErrorEnvelope.BuildData(category, suggestion, retrySafe, AddCorrelationData(extraData)),
             }
         };
         if (hasId)
@@ -2210,7 +2284,7 @@ public partial class McpServer : IDisposable
                 }
             },
             ["isError"] = true,
-            ["structuredContent"] = McpErrorEnvelope.BuildData(category, suggestion, retrySafe, extraData),
+            ["structuredContent"] = McpErrorEnvelope.BuildData(category, suggestion, retrySafe, AddCorrelationData(extraData)),
         };
         if (similarValues != null && similarValues.Count > 0)
         {
