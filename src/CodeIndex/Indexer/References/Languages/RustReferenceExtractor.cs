@@ -584,6 +584,9 @@ internal static class RustReferenceExtractor
     {
         foreach (Match match in MutableReferenceTypeRegex.Matches(preparedLine))
         {
+            if (!IsMutableReferenceTypeContext(preparedLine, match.Index))
+                continue;
+
             var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, match.Index + match.Length);
             var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, typeStart);
             if (typeEnd <= typeStart)
@@ -600,6 +603,22 @@ internal static class RustReferenceExtractor
                 lineNumber,
                 resolveContainerForColumn(typeStart));
         }
+    }
+
+    private static bool IsMutableReferenceTypeContext(string preparedLine, int ampersandIndex)
+    {
+        var cursor = ampersandIndex - 1;
+        while (cursor >= 0 && char.IsWhiteSpace(preparedLine[cursor]))
+            cursor--;
+
+        if (cursor < 0)
+            return false;
+        if (preparedLine[cursor] == ':')
+            return true;
+
+        return preparedLine[cursor] == '>'
+            && cursor > 0
+            && preparedLine[cursor - 1] == '-';
     }
 
     private static void EmitLifetimeReferences(

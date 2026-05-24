@@ -31378,6 +31378,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustMutableBorrowExpression_DoesNotEmitTypeReference()
+    {
+        const string content = """
+            fn demo(buffer: &mut Buffer) {
+                take(&mut buffer);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Buffer" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "buffer" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_RustLifetimeParameters_CaptureExplicitLifetimeReferences()
     {
         const string content = """
