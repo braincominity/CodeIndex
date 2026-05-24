@@ -2712,6 +2712,49 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFilesDetailed_FileDeletedAfterEnumeration_RecordsWarning()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-delete-race-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var scriptPath = Path.Combine(tempDir, "script");
+            File.WriteAllText(scriptPath, "#!/usr/bin/env python\nprint('hello')\n");
+
+            var indexer = new FileIndexer(
+                tempDir,
+                ignoreCase: false,
+                ignoreRuleRoot: null,
+                maxFileSizeBytes: null,
+                directoryIgnoreCaseProbe: _ => false,
+                enumerateFiles: dir => Path.GetFullPath(dir) == Path.GetFullPath(tempDir)
+                    ? DeleteBeforeProbe(scriptPath)
+                    : Directory.EnumerateFiles(dir));
+
+            var result = indexer.ScanFilesDetailed();
+
+            Assert.Empty(result.Files);
+            Assert.Contains("script", result.NonIndexablePaths);
+            var warning = Assert.Single(result.Errors);
+            Assert.Equal("script", warning.Path);
+            Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
+            Assert.Contains("deleted during scanning", warning.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+
+        static IEnumerable<string> DeleteBeforeProbe(string path)
+        {
+            File.Delete(path);
+            yield return path;
+        }
+    }
+
+    [Fact]
     public void ScanFiles_DescendsIntoSubmoduleHostedUnderSkipDir()
     {
         // .gitmodules declared submodule under a SkipDirs-named directory (e.g. vendor/foo)
