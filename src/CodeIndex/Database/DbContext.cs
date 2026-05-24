@@ -1719,10 +1719,22 @@ public class DbContext : IDisposable
         try
         {
             EnsureForeignKeysEnabled();
-            SqliteTransaction transaction;
+            SqliteTransaction? transaction;
             try
             {
                 transaction = _connection.BeginTransaction(deferred: false);
+            }
+            catch (SqliteException ex) when (IsNestedTransactionError(ex))
+            {
+                if (RunReadMigrationSteps())
+                    EnsureForeignKeysEnabled();
+                return;
+            }
+            catch (InvalidOperationException ex) when (IsNestedTransactionError(ex))
+            {
+                if (RunReadMigrationSteps())
+                    EnsureForeignKeysEnabled();
+                return;
             }
             catch (SqliteException ex) when (IsReadOnlyOpenError(ex))
             {
@@ -1732,43 +1744,13 @@ public class DbContext : IDisposable
 
             using (transaction)
             {
-            _activeMigrationTransaction = transaction;
-
-            try
-            {
-                foreach (var (description, action) in BuildReadMigrationSteps())
-                {
-                    try
-                    {
-                        action();
-                    }
-                    catch (SqliteException ex)
-                    {
-                        RecordMigrationFailure(description, ex);
-
-                        // Read-only DB / filesystem / sandbox — stop further steps and degrade.
-                        // Catches SQLITE_READONLY (8), SQLITE_IOERR (10), and SQLITE_CANTOPEN (14):
-                        // some restricted environments report CANTOPEN when SQLite tries to create
-                        // -journal side files for the DDL. DbReader.LoadColumns() / table-detection
-                        // will drive the degraded read path; later read queries that hit a still-
-                        // missing column will now have a single clear preceding diagnostic to refer to.
-                        // 読み取り専用 DB・FS・サンドボックスでの DDL 失敗は縮退扱いで打ち切る。
-                        if (IsReadOnlyOpenError(ex)) return;
-
-                        // Other SQLite errors (e.g. corruption, full disk) are not opportunistic-
-                        // migration concerns — preserve the existing surface-the-exception behavior.
-                        // それ以外の SQLite エラーは従来通り上位に伝播させる。
-                        throw;
-                    }
-                }
-
+                _activeMigrationTransaction = transaction;
+                if (!RunReadMigrationSteps())
+                    return;
                 transaction.Commit();
             }
-            finally
-            {
-                _activeMigrationTransaction = null;
-            }
-            }
+
+            _activeMigrationTransaction = null;
 
             EnsureForeignKeysEnabled();
         }
@@ -1780,6 +1762,51 @@ public class DbContext : IDisposable
             _schemaCache?.Refresh();
         }
     }
+
+    private bool RunReadMigrationSteps()
+    {
+        try
+        {
+            foreach (var (description, action) in BuildReadMigrationSteps())
+            {
+                try
+                {
+                    action();
+                }
+                catch (SqliteException ex)
+                {
+                    RecordMigrationFailure(description, ex);
+
+                    // Read-only DB / filesystem / sandbox — stop further steps and degrade.
+                    // Catches SQLITE_READONLY (8), SQLITE_IOERR (10), and SQLITE_CANTOPEN (14):
+                    // some restricted environments report CANTOPEN when SQLite tries to create
+                    // -journal side files for the DDL. DbReader.LoadColumns() / table-detection
+                    // will drive the degraded read path; later read queries that hit a still-
+                    // missing column will now have a single clear preceding diagnostic to refer to.
+                    // 読み取り専用 DB・FS・サンドボックスでの DDL 失敗は縮退扱いで打ち切る。
+                    if (IsReadOnlyOpenError(ex)) return false;
+
+                    // Other SQLite errors (e.g. corruption, full disk) are not opportunistic-
+                    // migration concerns — preserve the existing surface-the-exception behavior.
+                    // それ以外の SQLite エラーは従来通り上位に伝播させる。
+                    throw;
+                }
+            }
+
+            return true;
+        }
+        finally
+        {
+            _activeMigrationTransaction = null;
+        }
+    }
+
+    private static bool IsNestedTransactionError(SqliteException exception) =>
+        exception.SqliteErrorCode == 1 &&
+        exception.Message.Contains("cannot start a transaction within a transaction", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsNestedTransactionError(InvalidOperationException exception) =>
+        exception.Message.Contains("does not support nested transactions", StringComparison.OrdinalIgnoreCase);
 
     private void RecordMigrationFailure(string description, SqliteException exception)
     {

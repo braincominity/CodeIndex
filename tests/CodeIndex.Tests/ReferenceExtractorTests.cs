@@ -1215,6 +1215,47 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonDynamicImports_EmitImportAndImportlibReferences()
+    {
+        const string content = """
+            import importlib
+
+            def load(module_name):
+                importlib.import_module("plugins.alpha")
+                __import__('legacy.loader')
+                importlib.util.find_spec("optional.backend")
+                importlib.import_module(module_name)
+                note = "importlib.import_module('not.real')"
+                # importlib.import_module("commented.out")
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Equal(3, references.Count(reference =>
+            reference.SymbolName == "importlib"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "load"));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "plugins.alpha"
+            && reference.ReferenceKind == "import"
+            && reference.ContainerName == "load");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "legacy.loader"
+            && reference.ReferenceKind == "import"
+            && reference.ContainerName == "load");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "optional.backend"
+            && reference.ReferenceKind == "import"
+            && reference.ContainerName == "load");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "module_name"
+            && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "not.real");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "commented.out");
+    }
+
+    [Fact]
     public void Extract_PythonStringifiedAnnotations_CapturesNestedForwardReferences()
     {
         const string content = """
