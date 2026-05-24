@@ -1976,8 +1976,9 @@ public static partial class ReferenceExtractor
                 var rustEnumContainer = rustEnumCandidates != null
                     ? FindInnermostContainer(rustEnumCandidates, lineNumber)
                     : null;
+                var rustTypePositionLine = RustReferenceExtractor.MaskAttributeBodies(preparedLine);
                 RustReferenceExtractor.EmitTypePositionReferences(
-                    preparedLine,
+                    rustTypePositionLine,
                     references,
                     seen,
                     fileId,

@@ -18118,6 +18118,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustAttributeRawString_DoesNotLeakPhantomUseReferences()
+    {
+        const string content = """
+            #[doc = r"use baz::qux;"]
+            pub fn f() {
+                real_call();
+            }
+
+            use crate::actual::Thing;
+
+            fn real_call() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "qux");
+        Assert.Contains(references, r => r.SymbolName == "Thing" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "real_call" && r.ContainerName == "f");
+    }
+
+    [Fact]
     public void Extract_JsTemplateLiteral_DoesNotLeakPhantomCallsButKeepsInterpolationCalls()
     {
         // Regression for issue #291: multi-line JS/TS template literal bodies must
