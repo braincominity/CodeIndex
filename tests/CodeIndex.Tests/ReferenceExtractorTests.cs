@@ -1558,6 +1558,147 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonTypeVarConstraints_MultilineCapturesConstraintTypeReferences()
+    {
+        const string content = """
+            TAccount = TypeVar(
+                "TAccount",
+                models.User,
+                models.Admin,
+            )
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Line == 3);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Admin"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_PythonTypeVarConstraints_MultilineDoesNotCaptureCommentTypeNames()
+    {
+        const string content = """
+            TAccount = TypeVar(
+                "TAccount",
+                models.Admin,  # models.User should stay a comment
+            )
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Admin"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Line == 3);
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PythonParamSpecBound_CapturesNestedCallableTypeReferences()
+    {
+        const string content = """
+            P = ParamSpec("P", bound=Callable[models.User, results.Result])
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PythonCallableParamSpecAnnotation_CapturesReturnTypeAfterComma()
+    {
+        const string content = """
+            def bind(callback: Callable[P.args, results.Result]):
+                return callback
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "P"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "bind");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "bind");
+    }
+
+    [Fact]
+    public void Extract_PythonCallableParameterAnnotation_DoesNotCaptureNextParameterName()
+    {
+        const string content = """
+            def bind(callback: Callable[P.args, results.Result], Request=None):
+                return callback
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "bind");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Request"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PythonTypeVarTupleUnpack_CapturesTupleTypeReference()
+    {
+        const string content = """
+            type Packed = tuple[*Ts, results.Result]
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Ts"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PythonLiteralUnion_CapturesNestedUnionTypeReferences()
+    {
+        const string content = """
+            type Choice = Literal["a", "b"] | models.User | results.Result
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "User"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_PythonGetTypeHints_CapturesTargetTypeReference()
     {
         const string content = """
