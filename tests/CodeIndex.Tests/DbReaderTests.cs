@@ -2372,6 +2372,18 @@ public class DbReaderTests : IDisposable
                 cmd.ExecuteNonQuery();
             }
             Assert.False(writer.AllFoldedColumnsBackfilled());
+
+            // Issue #1758: the readiness predicate must also reject rows that are non-NULL
+            // but were folded with an older or otherwise incorrect fold key, and it must do
+            // that in the same read snapshot as the NULL check.
+            using (var cmd = db.Connection.CreateCommand())
+            {
+                cmd.CommandText = "UPDATE symbols SET name_folded = 'stale-fold-key' WHERE name = 'authenticate'";
+                cmd.ExecuteNonQuery();
+            }
+            Assert.True(writer.AllFoldedColumnsBackfilled());
+            Assert.False(writer.AllFoldedColumnsBackfilled(requireCurrentFoldKeys: true));
+            Assert.False(writer.MarkFoldReady());
         }
         finally
         {
