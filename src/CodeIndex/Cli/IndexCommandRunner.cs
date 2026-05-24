@@ -28,6 +28,7 @@ public static class IndexCommandRunner
         IReadOnlyList<string> Directories);
 
     internal static Action? FullScanWritePhaseStartedForTesting { get; set; }
+    internal static Action? HotspotFamilyUpdateRestampReadyForCommitForTesting { get; set; }
     internal static Func<bool> IsInputRedirectedForTesting { get; set; } = () => Console.IsInputRedirected;
     internal static Func<string?> ReadLineForTesting { get; set; } = Console.ReadLine;
 
@@ -2204,12 +2205,21 @@ public static class IndexCommandRunner
             {
                 csharpMetadataTargetReadyAfter = true;
             }
-            writer.RebuildTypeScriptAugmentationReferences(projectRoot);
-            RestampHotspotFamilyTrustForUpdate(
-                writer,
-                priorHotspotFamilyVersions,
-                priorHotspotFamilyMarkerFingerprints,
-                currentHotspotFamilyMarkerFingerprints);
+            // Keep hotspot-family maintenance rewrites and readiness restamps in one rollback
+            // boundary. If the process dies after SetMeta but before commit, SQLite rolls back
+            // the version stamp along with any maintenance rows, so readers never see a partial
+            // family_key/container_qualified_name state as authoritative (#1488).
+            using (var hotspotFamilyTxn = writer.BeginTransaction())
+            {
+                writer.RebuildTypeScriptAugmentationReferences(projectRoot);
+                RestampHotspotFamilyTrustForUpdate(
+                    writer,
+                    priorHotspotFamilyVersions,
+                    priorHotspotFamilyMarkerFingerprints,
+                    currentHotspotFamilyMarkerFingerprints);
+                HotspotFamilyUpdateRestampReadyForCommitForTesting?.Invoke();
+                hotspotFamilyTxn.Commit();
+            }
             // FoldReady restamp requires both the prior stored version and fingerprint to
             // match the current binary/runtime. Otherwise untouched rows still carry keys
             // from an older fold implementation or runtime table set, and advertising
