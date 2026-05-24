@@ -28,6 +28,7 @@ public static class IndexCommandRunner
         IReadOnlyList<string> Directories);
 
     internal static Action? FullScanWritePhaseStartedForTesting { get; set; }
+    internal static Action<bool, string?>? FullScanExtractionSchedulingForTesting { get; set; }
     internal static Action? HotspotFamilyUpdateRestampReadyForCommitForTesting { get; set; }
     internal static Func<bool> IsInputRedirectedForTesting { get; set; } = () => Console.IsInputRedirected;
     internal static Func<string?> ReadLineForTesting { get; set; } = Console.ReadLine;
@@ -1515,7 +1516,7 @@ public static class IndexCommandRunner
         var ftsMutated = false;
         var purgedRefs = 0;
         var supportedGraphLanguages = ReferenceExtractor.GetSupportedLanguages();
-        var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
+        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
         var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var currentFoldFingerprint = NameFold.Fingerprint();
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -3249,10 +3250,15 @@ public static class IndexCommandRunner
         string? currentJsonIndexFile = null;
         CancellationTokenSource? jsonHeartbeatCts = null;
         Task? jsonHeartbeatTask = null;
-        var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
+        using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
         var extractionParallelism = Math.Max(1, options.Parallelism);
-        var parallelizeExtraction = (options.Rebuild || writer.GetCounts().files == 0)
-            && !options.SymbolKindFilter.IsActive;
+        var hasPostExtractionHooks = postExtractionHooks.Hooks.Count > 0;
+        var parallelizeExtraction = (options.Rebuild || writer.GetCounts().files == 0 || headChangeDetected)
+            && !options.SymbolKindFilter.IsActive
+            && !hasPostExtractionHooks;
+        FullScanExtractionSchedulingForTesting?.Invoke(
+            parallelizeExtraction,
+            headChangeDetected ? "head_changed" : null);
 
         void StartIndexSpinnerIfNeeded()
         {
