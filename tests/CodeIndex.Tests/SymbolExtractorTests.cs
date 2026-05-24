@@ -12306,6 +12306,87 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Go_DetectsEmbeddedGenericStructTypes()
+    {
+        var content = """
+            package demo
+
+            type Inline[T any] struct { Reader[T]; *pkg.Writer[U] }
+
+            type Container[T any, U any] struct {
+                Reader[T]
+                *pkg.Writer[U]
+                Named Field[T]
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Reader" && s.Signature == "Reader[T]");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "pkg.Writer" && s.Signature == "*pkg.Writer[U]");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "Named");
+    }
+
+    [Fact]
+    public void Extract_Go_DetectsBuildDirectivesAndCgoImport()
+    {
+        var content = """
+            package demo
+
+            //go:build darwin && cgo
+            //go:test integration
+            import "C"
+
+            func CallCCode() {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        Assert.Contains(symbols, s => s.Kind == "annotation" && s.Name == "go:build darwin && cgo");
+        Assert.Contains(symbols, s => s.Kind == "annotation" && s.Name == "go:test integration");
+        Assert.Contains(symbols, s => s.Kind == "cgo" && s.Name == @"""C""");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == @"""C""");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CallCCode");
+    }
+
+    [Fact]
+    public void Extract_Go_InterfaceMethodSignatureIncludesTypeParameters()
+    {
+        var content = """
+            package demo
+
+            type Ordered interface {
+                Method[T constraints.Ordered](x T) T
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        var method = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "Method");
+        Assert.Equal("Method[T constraints.Ordered](x T) T", method.Signature);
+    }
+
+    [Fact]
+    public void Extract_Go_DoesNotIndexBlankIdentifierDeclarations()
+    {
+        var content = """
+            package demo
+
+            const _, exported = 1, 2
+
+            var (
+                _ int
+                _unused string
+                _, err = open()
+            )
+            """;
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "_");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "exported");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_unused");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "err");
+    }
+
+    [Fact]
     public void Extract_Go_DetectsLabels()
     {
         var content = """

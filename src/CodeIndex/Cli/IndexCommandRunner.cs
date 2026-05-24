@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -38,6 +39,7 @@ public static class IndexCommandRunner
 
     internal static int Run(string[] indexArgs, JsonSerializerOptions jsonOptions, CancellationTokenSource? cancellationForTesting)
     {
+        RuntimeSafety.Configure();
         var options = ParseArgs(indexArgs);
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         using var ownedCancellation = cancellationForTesting == null ? new CancellationTokenSource() : null;
@@ -2073,8 +2075,10 @@ public static class IndexCommandRunner
                     writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path);
                 WriteProjectRootOnce();
                 var fileId = writer.UpsertFile(record);
+                currentUpdatePath = FormatIndexPhasePath(relPath, "chunking");
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
+                currentUpdatePath = FormatIndexPhasePath(relPath, "symbols");
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, absPath, Path.GetFullPath(options.ProjectPath!));
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
                 var fileContext = new FileContext(projectRoot, record.Path, absPath, record.Lang);
@@ -2082,6 +2086,7 @@ public static class IndexCommandRunner
                 symbolsDroppedByKindFilter += options.SymbolKindFilter.Apply(symbols);
                 FileIndexer.ValidateSymbolLineRanges(record, symbols);
                 writer.InsertSymbols(symbols);
+                currentUpdatePath = FormatIndexPhasePath(relPath, "references");
                 var references = ReferenceExtractor.Extract(
                     fileId,
                     record.Lang,
@@ -2092,8 +2097,10 @@ public static class IndexCommandRunner
                 postExtractionHooks.OnReferencesExtracted(fileContext, references);
                 writer.InsertReferences(references);
                 // Validate content for encoding issues / エンコーディング問題を検証
+                currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
                 writer.InsertIssues(fileId, issues);
+                currentUpdatePath = FormatIndexPhasePath(relPath, "committing");
                 writer.ClearBatchInProgress();
                 txn.Commit();
 
@@ -2209,11 +2216,12 @@ public static class IndexCommandRunner
                 GlobalToolLog.Error($"index_update_file_failed path={CollapseLineBreaks(relPath)}\n{GlobalToolLog.FormatExceptionChain(ex)}");
 
                 errors++;
-                errorList.Add(new CliJsonMessage(relPath, ex.Message));
+                var errorMessage = FormatIndexFileException(ex);
+                errorList.Add(new CliJsonMessage(relPath, errorMessage));
                 if (!options.Json)
                 {
                     PauseUpdateSpinnerForConsoleWrite();
-                    Console.Error.WriteLine(FormatPerFileErrorLine("ERR ", relPath, ex));
+                    Console.Error.WriteLine(FormatPerFileErrorLine("ERR ", relPath, ex, errorMessage));
                     ResumeUpdateSpinnerAfterConsoleWrite();
                 }
             }
@@ -2793,7 +2801,26 @@ public static class IndexCommandRunner
     // 複数行メッセージが疑似スタック行を注入できないようにする。詳細診断は
     // `cdidx report` / `CDIDX_DEBUG` で取得する (#1578)。
     internal static string FormatPerFileErrorLine(string label, string path, Exception ex) =>
-        $"  [{label}] {CollapseLineBreaks(path)}: {CollapseLineBreaks(ex.Message)}";
+        FormatPerFileErrorLine(label, path, ex, FormatIndexFileException(ex));
+
+    internal static string FormatPerFileErrorLine(string label, string path, Exception ex, string message) =>
+        $"  [{label}] {CollapseLineBreaks(path)}: {CollapseLineBreaks(message)}";
+
+    internal static string FormatIndexFileException(Exception ex) =>
+        ex is RegexMatchTimeoutException timeoutException
+            ? RuntimeSafety.FormatRegexTimeout(timeoutException)
+            : ex.Message;
+
+    internal static string FormatIndexPhasePath(string path, string phase) =>
+        $"{path} ({phase})";
+
+    internal static string? GetJsonIndexHeartbeatPath(string? currentFile, IEnumerable<string> activeExtractionPhases)
+    {
+        if (!string.IsNullOrEmpty(currentFile))
+            return currentFile;
+
+        return activeExtractionPhases.FirstOrDefault(static phase => !string.IsNullOrEmpty(phase));
+    }
 
     private static string CollapseLineBreaks(string value)
     {
@@ -3268,13 +3295,14 @@ public static class IndexCommandRunner
         int processed = 0, skipped = 0, warnings = warningList.Count, errors = errorList.Count;
         var symbolsDroppedByKindFilter = 0;
 
-          var interactiveIndexSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
+        var interactiveIndexSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
         var redirectedIndexingMessagePrinted = false;
         var indexProgressVisible = false;
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
         var skippedSymbolExtractorLanguages = new HashSet<string>(StringComparer.Ordinal);
         var lastJsonProgressAt = Stopwatch.GetTimestamp();
         string? currentJsonIndexFile = null;
+        var activeJsonExtractionPhases = new ConcurrentDictionary<int, string>();
         CancellationTokenSource? jsonHeartbeatCts = null;
         Task? jsonHeartbeatTask = null;
         using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
@@ -3389,7 +3417,9 @@ public static class IndexCommandRunner
                     if (token.IsCancellationRequested)
                         break;
 
-                    var file = currentJsonIndexFile;
+                    var file = GetJsonIndexHeartbeatPath(
+                        currentJsonIndexFile,
+                        activeJsonExtractionPhases.OrderBy(static kvp => kvp.Key).Select(static kvp => kvp.Value));
                     var fileSuffix = string.IsNullOrEmpty(file) ? string.Empty : $": {file}";
                     Console.Error.WriteLine($"cdidx: still indexing {processed:N0}/{files.Count:N0} file(s){fileSuffix}...");
                 }
@@ -3456,7 +3486,7 @@ public static class IndexCommandRunner
             using var extractionResults = new BlockingCollection<FullScanFileWorkItem>(Math.Max(1, extractionParallelism * 4));
             var nextFileIndex = -1;
             var workers = Enumerable.Range(0, extractionParallelism)
-                .Select(_ => Task.Factory.StartNew(() =>
+                .Select(workerIndex => Task.Factory.StartNew(() =>
                 {
                     while (true)
                     {
@@ -3468,6 +3498,8 @@ public static class IndexCommandRunner
                         var filePath = files[fileIndex];
                         try
                         {
+                            var relativeFilePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, filePath));
+                            activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(relativeFilePath, "reading");
                             var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(filePath);
                             IReadOnlyList<ChunkRecord>? chunks = null;
                             IReadOnlyList<SymbolRecord>? symbols = null;
@@ -3475,9 +3507,12 @@ public static class IndexCommandRunner
                             IReadOnlyList<FileIssue>? issues = null;
                             if (parallelizeExtraction)
                             {
+                                activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "chunking");
                                 chunks = ChunkSplitter.Split(0, content);
+                                activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "symbols");
                                 symbols = SymbolExtractor.Extract(0, record.Lang, content, filePath, Path.GetFullPath(options.ProjectPath!));
                                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
+                                activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "references");
                                 references = ReferenceExtractor.Extract(
                                     0,
                                     record.Lang,
@@ -3485,6 +3520,7 @@ public static class IndexCommandRunner
                                     symbols,
                                     record.Path,
                                     record.Lang == "csharp" ? csharpWorkspace.Symbols : null);
+                                activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
                                 issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
                             }
                             extractionResults.Add(
@@ -3523,6 +3559,10 @@ public static class IndexCommandRunner
                         catch (Exception ex)
                         {
                             extractionResults.Add(FullScanFileWorkItem.Failure(filePath, ex), cancellationToken);
+                        }
+                        finally
+                        {
+                            activeJsonExtractionPhases.TryRemove(workerIndex, out _);
                         }
                     }
                 }, cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default))
@@ -3643,10 +3683,12 @@ public static class IndexCommandRunner
                     using var txn = writer.BeginTransaction();
                     writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
                     var fileId = writer.UpsertFile(record);
+                    currentJsonIndexFile = FormatIndexPhasePath(record.Path, "chunking");
                     var chunks = item.Chunks == null
                         ? ChunkSplitter.Split(fileId, item.Content!)
                         : ReassignChunkFileIds(item.Chunks, fileId);
                     writer.InsertChunks(chunks);
+                    currentJsonIndexFile = FormatIndexPhasePath(record.Path, "symbols");
                     var symbols = item.Symbols == null
                         ? SymbolExtractor.Extract(fileId, record.Lang, item.Content!, item.FilePath, Path.GetFullPath(options.ProjectPath!))
                         : ReassignSymbolFileIds(item.Symbols, fileId);
@@ -3659,6 +3701,7 @@ public static class IndexCommandRunner
                     symbols = (IReadOnlyList<SymbolRecord>)mutableSymbols;
                     FileIndexer.ValidateSymbolLineRanges(record, symbols);
                     writer.InsertSymbols(symbols);
+                    currentJsonIndexFile = FormatIndexPhasePath(record.Path, "references");
                     var references = item.References == null
                         ? ReferenceExtractor.Extract(
                             fileId,
@@ -3670,8 +3713,10 @@ public static class IndexCommandRunner
                         : ReassignReferenceFileIds(item.References, fileId);
                     postExtractionHooks.OnReferencesExtracted(fileContext, AsMutableList(references));
                     writer.InsertReferences(references);
+                    currentJsonIndexFile = FormatIndexPhasePath(record.Path, "validating");
                     var issues = item.Issues ?? FileIndexer.ValidateContent(record.Path, item.RawBytes!, item.Content!);
                     writer.InsertIssues(fileId, issues);
+                    currentJsonIndexFile = FormatIndexPhasePath(record.Path, "committing");
                     WriteProjectRootOnce();
                     txn.Commit();
 
@@ -3681,12 +3726,13 @@ public static class IndexCommandRunner
                 {
                     GlobalToolLog.Error($"index_file_failed path={CollapseLineBreaks(item.FilePath)}\n{GlobalToolLog.FormatExceptionChain(ex)}");
                     errors++;
-                    errorList.Add(new CliJsonMessage(item.FilePath, ex.Message));
+                    var errorMessage = FormatIndexFileException(ex);
+                    errorList.Add(new CliJsonMessage(item.FilePath, errorMessage));
                     if (!options.Json)
                     {
                         PauseIndexSpinnerForConsoleWrite();
                         ConsoleUi.ClearProgressLine();
-                        Console.Error.WriteLine(FormatPerFileErrorLine("ERR ", item.FilePath, ex));
+                        Console.Error.WriteLine(FormatPerFileErrorLine("ERR ", item.FilePath, ex, errorMessage));
                         ResumeIndexSpinnerAfterConsoleWrite();
                     }
                 }
