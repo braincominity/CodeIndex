@@ -28,6 +28,7 @@ public static class IndexCommandRunner
         IReadOnlyList<string> Directories);
 
     internal static Action? FullScanWritePhaseStartedForTesting { get; set; }
+    internal static Action<bool, string?>? FullScanExtractionSchedulingForTesting { get; set; }
     internal static Action? HotspotFamilyUpdateRestampReadyForCommitForTesting { get; set; }
     internal static Func<bool> IsInputRedirectedForTesting { get; set; } = () => Console.IsInputRedirected;
     internal static Func<string?> ReadLineForTesting { get; set; } = Console.ReadLine;
@@ -3175,8 +3176,11 @@ public static class IndexCommandRunner
         Task? jsonHeartbeatTask = null;
         var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
         var extractionParallelism = Math.Max(1, options.Parallelism);
-        var parallelizeExtraction = (options.Rebuild || writer.GetCounts().files == 0)
+        var parallelizeExtraction = (options.Rebuild || writer.GetCounts().files == 0 || headChangeDetected)
             && !options.SymbolKindFilter.IsActive;
+        FullScanExtractionSchedulingForTesting?.Invoke(
+            parallelizeExtraction,
+            headChangeDetected ? "head_changed" : null);
 
         void StartIndexSpinnerIfNeeded()
         {
