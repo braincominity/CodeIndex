@@ -11280,7 +11280,8 @@ public class DbReaderTests : IDisposable
 
         Assert.False(analysis.Truncated);
         Assert.Null(analysis.TruncatedReason);
-        Assert.Single(analysis.Callers);
+        var caller = Assert.Single(analysis.Callers);
+        Assert.Equal(ImpactResultKinds.Graph, caller.ResultKind);
     }
 
     [Fact]
@@ -11314,6 +11315,7 @@ public class DbReaderTests : IDisposable
         Assert.False(analysis.HasMultipleDefinitionFiles);
         Assert.Equal(1, analysis.HintCount);
         var edge = Assert.Single(analysis.FileImpacts);
+        Assert.Equal(ImpactResultKinds.FileHeuristic, edge.ResultKind);
         Assert.Equal("src/App.cs", edge.SourcePath);
         Assert.Equal("src/FolderDiffService.cs", edge.TargetPath);
         Assert.Contains("ExecuteFolderDiffAsync", edge.Symbols);
