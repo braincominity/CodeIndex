@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
+- **Homebrew tap publishing now seeds missing formula files** — the release workflow now writes `Formula/codeindex.rb` directly from the published release checksums and pushes it to `Widthdom/homebrew-tap`, so the first release to an empty tap no longer fails before a formula exists.
 
 ### [1.24.4] - 2026-05-25
 
@@ -2769,6 +2770,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
+- **Homebrew tap publishing が未作成の formula file を作成するようになりました** — release workflow が公開済み release checksum から `Formula/codeindex.rb` を直接生成して `Widthdom/homebrew-tap` へ push するようになり、空の tap への初回リリースで formula が存在せず失敗する問題を避けます。
 
 ### [1.24.4] - 2026-05-25
 
