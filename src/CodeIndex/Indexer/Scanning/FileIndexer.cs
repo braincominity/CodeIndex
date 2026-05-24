@@ -845,6 +845,9 @@ public class FileIndexer
 
         private static bool TryAppendCharacterClassRange(StringBuilder builder, char start, char end, bool ignoreCase)
         {
+            if (start > end)
+                throw new ArgumentException("reversed character class range");
+
             builder.Append(EscapeCharacterClassLiteral(start));
             builder.Append('-');
             builder.Append(EscapeCharacterClassLiteral(end));
@@ -2455,7 +2458,11 @@ public class FileIndexer
         {
             var initialLength = stream.Length;
             if (initialLength > _maxFileSizeBytes)
-                throw new InvalidOperationException(BuildFileTooLargeMessage(initialLength, grewDuringRead: false));
+                throw new FileTooLargeSkippedException(
+                    NormalizePathSeparators(relativePath),
+                    initialLength,
+                    _maxFileSizeBytes,
+                    BuildFileTooLargeMessage(initialLength, grewDuringRead: false));
 
             // Pre-size the accumulator to the observed length but cap initial capacity
             // at the configured limit so a tampered Length cannot force a huge up-front allocation.
@@ -2470,7 +2477,11 @@ public class FileIndexer
             {
                 total += read;
                 if (total > _maxFileSizeBytes)
-                    throw new InvalidOperationException(BuildFileTooLargeMessage(total, grewDuringRead: true));
+                    throw new FileTooLargeSkippedException(
+                        NormalizePathSeparators(relativePath),
+                        total,
+                        _maxFileSizeBytes,
+                        BuildFileTooLargeMessage(total, grewDuringRead: true));
                 accumulator.Write(buffer, 0, read);
             }
             bytes = accumulator.ToArray();
@@ -2575,6 +2586,27 @@ public class FileIndexer
         };
 
         return (record, content, bytes, warning);
+    }
+
+    public FileRecord BuildSkippedFileRecord(string absolutePath)
+    {
+        if (!IsFilePathSyntaxIndexable(absolutePath))
+            throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
+
+        var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
+        var normalizedRelativePath = NormalizePathSeparators(relativePath);
+        var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
+        var info = new FileInfo(ioPath);
+        return new FileRecord
+        {
+            Path = normalizedRelativePath,
+            Lang = TryDetectLanguage(absolutePath).Language,
+            Size = info.Exists ? info.Length : 0,
+            Lines = 0,
+            Checksum = null,
+            Modified = info.Exists ? info.LastWriteTimeUtc : DateTime.MinValue,
+            Generated = HasGeneratedCodeFileName(normalizedRelativePath),
+        };
     }
 
     internal static bool IsFilePathSyntaxIndexable(string path)
@@ -3077,6 +3109,17 @@ public class FileIndexer
     }
 
     internal sealed class BinaryFileSkippedException(string message) : InvalidOperationException(message);
+
+    internal sealed class FileTooLargeSkippedException(
+        string relativePath,
+        long actualBytes,
+        long limitBytes,
+        string message) : InvalidOperationException(message)
+    {
+        public string RelativePath { get; } = relativePath;
+        public long ActualBytes { get; } = actualBytes;
+        public long LimitBytes { get; } = limitBytes;
+    }
 
     public static bool HasConflictMarkers(string content) =>
         TryGetConflictMarkerLine(content, out _);
