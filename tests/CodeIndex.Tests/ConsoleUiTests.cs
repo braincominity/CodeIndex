@@ -970,6 +970,7 @@ public class ConsoleUiTests
             outputEncoding: Encoding.UTF8,
             isTextWriterCapture: false,
             hasTerminalEnvironmentHint: true,
+            isTerminalEnvironmentDisabled: false,
             isWindows: true));
     }
 
@@ -981,6 +982,7 @@ public class ConsoleUiTests
             outputEncoding: Encoding.Unicode,
             isTextWriterCapture: true,
             hasTerminalEnvironmentHint: false,
+            isTerminalEnvironmentDisabled: false,
             isWindows: false));
     }
 
@@ -992,6 +994,7 @@ public class ConsoleUiTests
             outputEncoding: Encoding.Unicode,
             isTextWriterCapture: true,
             hasTerminalEnvironmentHint: true,
+            isTerminalEnvironmentDisabled: false,
             isWindows: true));
     }
 
@@ -1003,7 +1006,32 @@ public class ConsoleUiTests
             outputEncoding: Encoding.Unicode,
             isTextWriterCapture: false,
             hasTerminalEnvironmentHint: true,
+            isTerminalEnvironmentDisabled: false,
             isWindows: true));
+    }
+
+    [Fact]
+    public void ShouldUseInteractiveConsole_DumbOrCiEnvironment_DisablesInteractiveOutput()
+    {
+        Assert.False(ConsoleUi.ShouldUseInteractiveConsole(
+            isOutputRedirected: false,
+            outputEncoding: Encoding.UTF8,
+            isTextWriterCapture: false,
+            hasTerminalEnvironmentHint: true,
+            isTerminalEnvironmentDisabled: true,
+            isWindows: false));
+    }
+
+    [Fact]
+    public void ShouldUseInteractiveConsole_UnixWithoutTerminalHint_DisablesInteractiveOutput()
+    {
+        Assert.False(ConsoleUi.ShouldUseInteractiveConsole(
+            isOutputRedirected: false,
+            outputEncoding: Encoding.UTF8,
+            isTextWriterCapture: false,
+            hasTerminalEnvironmentHint: false,
+            isTerminalEnvironmentDisabled: false,
+            isWindows: false));
     }
 
     [Fact]
@@ -1014,6 +1042,7 @@ public class ConsoleUiTests
             outputEncoding: Encoding.Unicode,
             isTextWriterCapture: true,
             hasTerminalEnvironmentHint: true,
+            isTerminalEnvironmentDisabled: false,
             isWindows: true,
             windowsVirtualTerminalProcessingEnabled: true));
     }
@@ -1026,6 +1055,7 @@ public class ConsoleUiTests
             outputEncoding: Encoding.Unicode,
             isTextWriterCapture: false,
             hasTerminalEnvironmentHint: false,
+            isTerminalEnvironmentDisabled: false,
             isWindows: true,
             windowsVirtualTerminalProcessingEnabled: true));
     }
@@ -1038,6 +1068,7 @@ public class ConsoleUiTests
             outputEncoding: Encoding.UTF8,
             isTextWriterCapture: false,
             hasTerminalEnvironmentHint: false,
+            isTerminalEnvironmentDisabled: false,
             isWindows: true,
             windowsVirtualTerminalProcessingEnabled: true));
 
@@ -1046,6 +1077,7 @@ public class ConsoleUiTests
             outputEncoding: Encoding.UTF8,
             isTextWriterCapture: false,
             hasTerminalEnvironmentHint: true,
+            isTerminalEnvironmentDisabled: false,
             isWindows: true,
             windowsVirtualTerminalProcessingEnabled: false));
 
@@ -1054,6 +1086,7 @@ public class ConsoleUiTests
             outputEncoding: Encoding.UTF8,
             isTextWriterCapture: false,
             hasTerminalEnvironmentHint: false,
+            isTerminalEnvironmentDisabled: false,
             isWindows: true,
             windowsVirtualTerminalProcessingEnabled: false));
     }
@@ -1066,6 +1099,7 @@ public class ConsoleUiTests
             outputEncoding: Encoding.UTF8,
             isTextWriterCapture: false,
             hasTerminalEnvironmentHint: true,
+            isTerminalEnvironmentDisabled: false,
             isWindows: true,
             windowsVirtualTerminalProcessingEnabled: true));
     }
@@ -1309,6 +1343,23 @@ public class ConsoleUiTests
 
         Assert.Contains("\x1b[36m", output);
         Assert.Contains("\x1b[0m", output);
+    }
+
+    [Fact]
+    public void ColorizeKind_JsonOutputScopeSuppressesAnsiEvenWhenForced()
+    {
+        using var env = new ColorEnvironmentScope();
+        ConsoleUi.SetColorMode(ColorMode.Always);
+
+        using (ConsoleUi.SuppressAnsiForJsonOutput(enabled: true))
+        {
+            var output = ConsoleUi.ColorizeKind("class");
+
+            Assert.Equal("class", output);
+            Assert.DoesNotContain('\x1b', output);
+        }
+
+        Assert.Contains("\x1b[36m", ConsoleUi.ColorizeKind("class"));
     }
 
     [Fact]

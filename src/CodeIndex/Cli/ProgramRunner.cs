@@ -41,6 +41,7 @@ internal static class ProgramRunner
         if (configResult.Loaded)
             GlobalToolLog.Info($"config_file_loaded path={configResult.Path}");
         jsonOptions ??= CreateDefaultJsonOptions();
+        EnsureRedirectedStdoutUsesUtf8();
 
         var quiet = TryConsumeQuietFlag(ref args) || IsTruthyEnvironmentVariable(QuietEnvironmentVariable);
         using var quietScope = quiet ? QuietStderrScope.Start() : null;
@@ -71,6 +72,7 @@ internal static class ProgramRunner
         using var metricsSession = MetricsSink.TryStart(metricsPath);
 
         TryConsumeDebugUnsafeFlag(ref args);
+        using var jsonAnsiScope = ConsoleUi.SuppressAnsiForJsonOutput(ContainsJsonOutputFlag(args));
 
         var commandStopwatch = Stopwatch.StartNew();
         var commandStartTimestamp = DateTimeOffset.UtcNow;
@@ -257,6 +259,41 @@ internal static class ProgramRunner
 
     internal static bool IsProjectPathArg(string arg) =>
         !arg.StartsWith('-') && (Directory.Exists(arg) || arg.Contains('/') || arg.Contains('\\') || arg == ".");
+
+    internal static void EnsureRedirectedStdoutUsesUtf8()
+    {
+        if (!Console.IsOutputRedirected || Console.Out is StringWriter)
+            return;
+
+        var utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        if (Console.Out.Encoding.CodePage == utf8NoBom.CodePage)
+            return;
+
+        var writer = new StreamWriter(Console.OpenStandardOutput(), utf8NoBom)
+        {
+            AutoFlush = true
+        };
+        Console.SetOut(TextWriter.Synchronized(writer));
+    }
+
+    internal static bool ContainsJsonOutputFlag(IEnumerable<string> args)
+    {
+        var passthrough = false;
+        foreach (var arg in args)
+        {
+            if (passthrough)
+                continue;
+            if (arg == "--")
+            {
+                passthrough = true;
+                continue;
+            }
+            if (arg == "--json" || arg.StartsWith("--json=", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
 
     internal static bool TryConsumeQuietFlag(ref string[] args)
     {

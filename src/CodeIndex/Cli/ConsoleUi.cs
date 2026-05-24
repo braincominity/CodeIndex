@@ -108,6 +108,7 @@ public static class ConsoleUi
     private static TextWriter? _synchronizedOut;
     private static TextWriter? _synchronizedError;
     private static readonly string[] ByteUnits = ["bytes", "KiB", "MiB", "GiB", "TiB", "PiB"];
+    private static readonly AsyncLocal<int> JsonOutputDepth = new();
 
     private static readonly string[] DefaultBrailleSpinnerFrames =
     [
@@ -150,6 +151,15 @@ public static class ConsoleUi
                 Console.SetError(_synchronizedError);
             }
         }
+    }
+
+    internal static IDisposable SuppressAnsiForJsonOutput(bool enabled)
+    {
+        if (!enabled)
+            return NoopDisposable.Instance;
+
+        JsonOutputDepth.Value++;
+        return new JsonOutputScope();
     }
 
     // --- Spinner / スピナー ---
@@ -1586,7 +1596,7 @@ public static class ConsoleUi
     public static string ColorizeKind(string kind, int padWidth = 0)
     {
         var padded = padWidth > 0 ? kind.PadRight(padWidth) : kind;
-        if (ShouldUseColor())
+        if (JsonOutputDepth.Value <= 0 && ShouldUseColor())
         {
             var color = GetKindColorCode(kind, ResolveColorPalette());
             if (color.Length > 0)
@@ -1653,6 +1663,7 @@ public static class ConsoleUi
             Console.Out.Encoding,
             Console.Out is StringWriter,
             HasTerminalEnvironmentHint(),
+            IsTerminalEnvironmentDisabled(),
             OperatingSystem.IsWindows());
 
     internal static bool ShouldUseInteractiveConsole(
@@ -1660,9 +1671,13 @@ public static class ConsoleUi
         Encoding outputEncoding,
         bool isTextWriterCapture,
         bool hasTerminalEnvironmentHint,
+        bool isTerminalEnvironmentDisabled,
         bool isWindows)
     {
         if (isOutputRedirected)
+            return false;
+
+        if (isTerminalEnvironmentDisabled)
             return false;
 
         // StringWriter-based test capture leaves the process console attached, so
@@ -1673,7 +1688,7 @@ public static class ConsoleUi
         if (isTextWriterCapture)
             return false;
 
-        return true;
+        return isWindows || hasTerminalEnvironmentHint;
     }
 
     internal static bool ShouldUseAnsiOutput()
@@ -1682,6 +1697,7 @@ public static class ConsoleUi
             Console.Out.Encoding,
             Console.Out is StringWriter,
             HasTerminalEnvironmentHint(),
+            IsTerminalEnvironmentDisabled(),
             OperatingSystem.IsWindows(),
             GetWindowsVirtualTerminalProcessingEnabled());
 
@@ -1690,10 +1706,11 @@ public static class ConsoleUi
         Encoding outputEncoding,
         bool isTextWriterCapture,
         bool hasTerminalEnvironmentHint,
+        bool isTerminalEnvironmentDisabled,
         bool isWindows,
         bool windowsVirtualTerminalProcessingEnabled)
     {
-        if (!ShouldUseInteractiveConsole(isOutputRedirected, outputEncoding, isTextWriterCapture, hasTerminalEnvironmentHint, isWindows))
+        if (!ShouldUseInteractiveConsole(isOutputRedirected, outputEncoding, isTextWriterCapture, hasTerminalEnvironmentHint, isTerminalEnvironmentDisabled, isWindows))
             return false;
 
         if (!isWindows)
@@ -1736,6 +1753,19 @@ public static class ConsoleUi
         var term = Environment.GetEnvironmentVariable("TERM");
         return !string.IsNullOrWhiteSpace(term)
             && !term.Equals("dumb", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsTerminalEnvironmentDisabled()
+        => IsDumbTerminal() || IsCiEnvironment();
+
+    private static bool IsCiEnvironment()
+    {
+        var ci = Environment.GetEnvironmentVariable("CI");
+        return !string.IsNullOrEmpty(ci)
+            && !ci.Equals("0", StringComparison.OrdinalIgnoreCase)
+            && !ci.Equals("false", StringComparison.OrdinalIgnoreCase)
+            && !ci.Equals("no", StringComparison.OrdinalIgnoreCase)
+            && !ci.Equals("off", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool GetWindowsVirtualTerminalProcessingEnabled()
@@ -1893,5 +1923,22 @@ public static class ConsoleUi
 
         width = 0;
         return false;
+    }
+
+    private sealed class JsonOutputScope : IDisposable
+    {
+        public void Dispose()
+        {
+            if (JsonOutputDepth.Value > 0)
+                JsonOutputDepth.Value--;
+        }
+    }
+
+    private sealed class NoopDisposable : IDisposable
+    {
+        public static readonly NoopDisposable Instance = new();
+        public void Dispose()
+        {
+        }
     }
 }
