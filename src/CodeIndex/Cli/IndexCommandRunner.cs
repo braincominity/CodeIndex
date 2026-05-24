@@ -3242,22 +3242,25 @@ public static class IndexCommandRunner
         if (scanResult.HadErrors)
         {
             SaveScanCheckpoint(scanCheckpointPath, currentHeadForCheckpoint, scanResult.CheckpointedDirectories);
-            retainedPaths.UnionWith(scanResult.ProbeFailedFilePaths);
+            retainedPaths.UnionWith(scanResult.ProbeFailedFilePaths.Select(FileIndexer.NormalizeIndexPath));
 
             foreach (var relPath in scanResult.NonIndexablePaths)
             {
-                if (!writer.HasFileAtPath(relPath))
+                var dbPath = FileIndexer.NormalizeIndexPath(relPath);
+                if (!writer.HasFileAtPath(dbPath))
                     continue;
 
-                if (writer.DeleteFileByPath(relPath))
+                if (writer.DeleteFileByPath(dbPath))
                     purged++;
             }
 
             var authoritativeDirectories = scanResult.ListedDirectories
+                .Select(FileIndexer.NormalizeIndexPath)
                 .ToHashSet(StringComparer.Ordinal);
             var attributePrunedDirectories = scanResult.AttributePrunedDirectories
+                .Select(FileIndexer.NormalizeIndexPath)
                 .ToHashSet(StringComparer.Ordinal);
-            attributePrunedDirectories.UnionWith(scanResult.NestedRepositories);
+            attributePrunedDirectories.UnionWith(scanResult.NestedRepositories.Select(FileIndexer.NormalizeIndexPath));
             purged += writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, attributePrunedDirectories);
         }
         else
@@ -3265,10 +3268,12 @@ public static class IndexCommandRunner
             if (checkpointedDirectories.Count > 0)
             {
                 var authoritativeDirectories = scanResult.ListedDirectories
+                    .Select(FileIndexer.NormalizeIndexPath)
                     .ToHashSet(StringComparer.Ordinal);
                 var attributePrunedDirectories = scanResult.AttributePrunedDirectories
+                    .Select(FileIndexer.NormalizeIndexPath)
                     .ToHashSet(StringComparer.Ordinal);
-                attributePrunedDirectories.UnionWith(scanResult.NestedRepositories);
+                attributePrunedDirectories.UnionWith(scanResult.NestedRepositories.Select(FileIndexer.NormalizeIndexPath));
                 purged = writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, attributePrunedDirectories);
             }
             else

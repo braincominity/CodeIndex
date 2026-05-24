@@ -3068,6 +3068,37 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void PurgeFilesOutsideRetainedSetWithinListedDirectories_UsesNfcPrunedDirectories()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var dbPath = TestProjectHelper.CreateProjectDb(tempDir);
+            TestProjectHelper.InsertIndexedFile(dbPath, "Caf\u00e9/src/File.cs", "csharp", "class NestedCafe { }\n");
+
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            var prunedDirectories = new[] { "Cafe\u0301" }
+                .Select(FileIndexer.NormalizeIndexPath)
+                .ToHashSet(StringComparer.Ordinal);
+
+            var purged = writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(
+                new HashSet<string>(StringComparer.Ordinal),
+                new HashSet<string>(StringComparer.Ordinal),
+                prunedDirectories);
+
+            Assert.Equal(1, purged);
+            Assert.Equal(0, CountFiles(db.Connection));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void IndexFilesUpdate_UsesOriginalUnicodePathForIoAndNfcPathForDb()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
