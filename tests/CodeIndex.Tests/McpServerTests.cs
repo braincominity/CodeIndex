@@ -7685,6 +7685,53 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Index_SymlinkEscapingCurrentDirectory_ReturnsError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var originalCurrentDirectory = Environment.CurrentDirectory;
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_symlink_root");
+        var outsideRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_symlink_outside");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_symlink_{Guid.NewGuid():N}.db");
+        var linkPath = Path.Combine(projectRoot, "outside-link");
+        try
+        {
+            File.WriteAllText(Path.Combine(outsideRoot, "secret.cs"), "public class Secret { }\n");
+            Directory.CreateSymbolicLink(linkPath, outsideRoot);
+
+            Environment.CurrentDirectory = projectRoot;
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = linkPath
+                    }
+                }
+            };
+            var response = server.HandleMessage(request)!;
+
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+            var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+            Assert.Contains("current working directory", text);
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalCurrentDirectory;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(outsideRoot);
+            DeleteFileRobust(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Search_QueryTooLong_ReturnsError()
     {
         var longQuery = new string('a', 1001);
