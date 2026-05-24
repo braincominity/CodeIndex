@@ -62,6 +62,66 @@ public class IndexCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void Run_NewIndexDatabase_RunsAnalyzeAfterSuccessfulIndex()
+    {
+        var projectRoot = CreateTempProject();
+        var commands = new List<string>();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+            DbContext.PlannerStatisticsCommandExecutedForTesting = (dataSource, commandText) =>
+            {
+                if (dataSource.Contains(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), StringComparison.Ordinal))
+                    commands.Add(commandText);
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Contains("ANALYZE", commands);
+        }
+        finally
+        {
+            DbContext.PlannerStatisticsCommandExecutedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_ExistingIndexDatabase_RunsPragmaOptimizeAfterSuccessfulIndex()
+    {
+        var projectRoot = CreateTempProject();
+        var commands = new List<string>();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            DbContext.PlannerStatisticsCommandExecutedForTesting = (dataSource, commandText) =>
+            {
+                if (dataSource.Contains(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), StringComparison.Ordinal))
+                    commands.Add(commandText);
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Contains("PRAGMA optimize", commands);
+            Assert.DoesNotContain("ANALYZE", commands);
+        }
+        finally
+        {
+            DbContext.PlannerStatisticsCommandExecutedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
     // `cdidx index . --rebild` should not just say "unknown option"; surface the closest accepted
     // flag (`--rebuild`) so MCP callers can self-correct without re-reading docs (#1582).
     // `cdidx index . --rebild` のような単純なミスタイプから `--rebuild` を提案できることを確認する (#1582)。
@@ -6664,6 +6724,45 @@ public class IndexCommandRunnerTests
         }
         finally
         {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_Update_RollsBackHotspotFamilyRestampWhenCommitIsInterrupted()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
+            var callerPath = Path.Combine(projectRoot, "src", "Caller.cs");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part1.cs"), "public partial class Api { public void Run() { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part2.cs"), "public partial class Api { public void Run(int value) { } }");
+            File.WriteAllText(callerPath, "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+
+            var (initialExitCode, initialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(initialJson.GetProperty("hotspot_family_ready").GetBoolean());
+
+            File.WriteAllText(callerPath, "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); api.Run(); } }");
+            File.SetLastWriteTimeUtc(callerPath, DateTime.UtcNow.AddSeconds(2));
+
+            IndexCommandRunner.HotspotFamilyUpdateRestampReadyForCommitForTesting = () =>
+                throw new InvalidOperationException("simulate crash after hotspot restamp");
+
+            Assert.Throws<InvalidOperationException>(() =>
+                RunAndCaptureJson([projectRoot, "--files", "src/Caller.cs", "--json"]));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp")));
+        }
+        finally
+        {
+            IndexCommandRunner.HotspotFamilyUpdateRestampReadyForCommitForTesting = null;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
