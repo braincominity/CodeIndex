@@ -1380,18 +1380,6 @@ public class DbContext : IDisposable
                 """,
                 "id, file_id, chunk_index, start_line, end_line, content");
             RebuildTableWithRequiredFileId(
-                "reference_lines",
-                """
-                CREATE TABLE reference_lines (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                    line        INTEGER NOT NULL,
-                    context     TEXT NOT NULL,
-                    UNIQUE(file_id, line)
-                )
-                """,
-                "id, file_id, line, context");
-            RebuildTableWithRequiredFileId(
                 "symbols",
                 """
                 CREATE TABLE symbols (
@@ -1418,27 +1406,7 @@ public class DbContext : IDisposable
                 )
                 """,
                 "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_metadata_target, name_folded");
-            RebuildTableWithRequiredFileId(
-                "symbol_references",
-                """
-                CREATE TABLE symbol_references (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                    symbol_name     TEXT,
-                    reference_kind  TEXT,
-                    line            INTEGER,
-                    column_number   INTEGER,
-                    context         TEXT,
-                    reference_line_id INTEGER REFERENCES reference_lines(id),
-                    container_kind  TEXT,
-                    container_name  TEXT,
-                    symbol_name_folded TEXT,
-                    container_name_folded TEXT,
-                    is_self_reference INTEGER NOT NULL DEFAULT 0,
-                    is_mutual_recursion INTEGER NOT NULL DEFAULT 0
-                )
-                """,
-                "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion");
+            RebuildReferenceLineTablesWithRequiredFileId();
             RebuildTableWithRequiredFileId(
                 "file_issues",
                 """
@@ -1456,6 +1424,62 @@ public class DbContext : IDisposable
         {
             Execute("PRAGMA foreign_keys=ON");
         }
+    }
+
+    private void RebuildReferenceLineTablesWithRequiredFileId()
+    {
+        if (ColumnIsNotNull("reference_lines", "file_id") &&
+            ColumnIsNotNull("symbol_references", "file_id"))
+        {
+            return;
+        }
+
+        const string referenceLinesCreateSql =
+            """
+            CREATE TABLE reference_lines (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                line        INTEGER NOT NULL,
+                context     TEXT NOT NULL,
+                UNIQUE(file_id, line)
+            )
+            """;
+        const string referenceLinesColumns = "id, file_id, line, context";
+        const string symbolReferencesCreateSql =
+            """
+            CREATE TABLE symbol_references (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                symbol_name     TEXT,
+                reference_kind  TEXT,
+                line            INTEGER,
+                column_number   INTEGER,
+                context         TEXT,
+                reference_line_id INTEGER REFERENCES reference_lines(id),
+                container_kind  TEXT,
+                container_name  TEXT,
+                symbol_name_folded TEXT,
+                container_name_folded TEXT,
+                is_self_reference INTEGER NOT NULL DEFAULT 0,
+                is_mutual_recursion INTEGER NOT NULL DEFAULT 0
+            )
+            """;
+        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion";
+
+        const string oldReferenceLines = "_reference_lines_nullable_file_id";
+        const string oldSymbolReferences = "_symbol_references_nullable_file_id";
+        Execute($"DROP TABLE IF EXISTS {oldSymbolReferences}");
+        Execute($"DROP TABLE IF EXISTS {oldReferenceLines}");
+        Execute("DELETE FROM symbol_references WHERE file_id IS NULL");
+        Execute("DELETE FROM reference_lines WHERE file_id IS NULL");
+        Execute($"ALTER TABLE symbol_references RENAME TO {oldSymbolReferences}");
+        Execute($"ALTER TABLE reference_lines RENAME TO {oldReferenceLines}");
+        Execute(referenceLinesCreateSql);
+        Execute($"INSERT INTO reference_lines ({referenceLinesColumns}) SELECT {referenceLinesColumns} FROM {oldReferenceLines}");
+        Execute(symbolReferencesCreateSql);
+        Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {oldSymbolReferences}");
+        Execute($"DROP TABLE {oldSymbolReferences}");
+        Execute($"DROP TABLE {oldReferenceLines}");
     }
 
     private void RebuildTableWithRequiredFileId(string tableName, string createSql, string columns)
