@@ -1340,7 +1340,7 @@ public partial class McpServer : IDisposable
         if (!IsSupportedMcpLogLevel(level))
             return CreateErrorResponse(hasId: true, id: id, code: -32602, message: "Invalid logging level",
                 category: McpErrorEnvelope.CategoryInvalidArgument,
-                suggestion: "logging/setLevel requires params.level to be one of: debug, info, notice, warning, error.",
+                suggestion: "logging/setLevel requires params.level to be one of: debug, info, notice, warning, error, critical, alert, emergency.",
                 retrySafe: false);
 
         var previous = _mcpLogLevel;
@@ -1392,9 +1392,6 @@ public partial class McpServer : IDisposable
 
     private static string? TryReadStringValue(JsonNode? node)
         => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
-
-    private static bool? TryReadBooleanValue(JsonNode? node)
-        => node is JsonValue value && value.TryGetValue<bool>(out var flag) ? flag : null;
 
     private static string GetResourceMimeType(string? lang)
         => lang?.ToLowerInvariant() switch
@@ -1753,7 +1750,7 @@ public partial class McpServer : IDisposable
 
     private void EmitProgressNotification(JsonNode? progressToken, long progress, long? total, string? message = null)
     {
-        if (progressToken is null || !ClientSupportsProgressNotifications() || _currentOutOfBandFrameWriter.Value is not { } writer)
+        if (progressToken is null || _currentOutOfBandFrameWriter.Value is not { } writer)
             return;
 
         var parameters = new JsonObject
@@ -1793,11 +1790,6 @@ public partial class McpServer : IDisposable
         };
         writer(notification.ToJsonString(_jsonOptions));
     }
-
-    private bool ClientSupportsProgressNotifications()
-        => TryReadBooleanValue(_clientCapabilities?["experimental"]?["progress"]) == true
-            || TryReadBooleanValue(_clientCapabilities?["progress"]) == true
-            || TryReadBooleanValue(_clientCapabilities?["notifications"]?["progress"]) == true;
 
     /// <summary>
     /// Emit a single audit record for the just-executed tool call. Inspects the wire
@@ -2003,7 +1995,7 @@ public partial class McpServer : IDisposable
         $"[cdidx-mcp] Ignoring unknown notification: {method}";
 
     internal static bool IsSupportedMcpLogLevel(string? level)
-        => level is "debug" or "info" or "notice" or "warning" or "error";
+        => level is "debug" or "info" or "notice" or "warning" or "error" or "critical" or "alert" or "emergency";
 
     // Wire-safe error body for the tool catch-all. Mentions the tool and the
     // exception type so the client can branch (retry vs. surface to user)

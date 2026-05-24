@@ -201,11 +201,11 @@ public class McpServerTests : IDisposable
     [Fact]
     public void LoggingSetLevel_UpdatesSessionLogLevel()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"logging/setLevel","params":{"level":"debug"}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"logging/setLevel","params":{"level":"emergency"}}""")!;
         var response = _server.HandleMessage(request)!;
 
         Assert.NotNull(response["result"]);
-        Assert.Equal("debug", _server.McpLogLevelForTests);
+        Assert.Equal("emergency", _server.McpLogLevelForTests);
     }
 
     [Fact]
@@ -1606,20 +1606,7 @@ public class McpServerTests : IDisposable
                     ["_meta"] = new JsonObject { ["progressToken"] = "issue-1684" },
                 },
             };
-            var initialize = new JsonObject
-            {
-                ["jsonrpc"] = "2.0",
-                ["id"] = 1,
-                ["method"] = "initialize",
-                ["params"] = new JsonObject
-                {
-                    ["capabilities"] = new JsonObject
-                    {
-                        ["experimental"] = new JsonObject { ["progress"] = true },
-                    },
-                },
-            };
-            var transport = new ShutdownProbeTransport("stdio", (Action<string?>?)null, initialize.ToJsonString(), request.ToJsonString());
+            var transport = new ShutdownProbeTransport("stdio", (Action<string?>?)null, request.ToJsonString());
 
             await server.RunAsync(transport, CancellationToken.None);
 
