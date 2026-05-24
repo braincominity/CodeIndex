@@ -147,6 +147,10 @@ expected publish output before upload. If that validation fails, fix the
 packaging step and re-run the failed release lane instead of uploading the
 archive manually.
 
+Each release archive also contains `MANIFEST.sha256`, generated from the
+published payload before upload. `install.sh` verifies that manifest after
+extraction, so do not remove or hand-edit it when diagnosing release artifacts.
+
 ```bash
 git show "v1.17.0:version.json" | grep -q '"version": "1.17.0"' \
   && echo "version.json OK" \

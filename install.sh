@@ -510,6 +510,48 @@ existing_install_is_reusable() {
     return 0
 }
 
+calculate_sha256() {
+    local path="$1"
+
+    if command -v sha256sum > /dev/null 2>&1; then
+        sha256sum "$path" | awk '{print $1}'
+    elif command -v shasum > /dev/null 2>&1; then
+        shasum -a 256 "$path" | awk '{print $1}'
+    elif command -v openssl > /dev/null 2>&1; then
+        openssl dgst -sha256 "$path" | awk '{print $NF}'
+    else
+        error "No checksum tool found (need sha256sum, shasum, or openssl). Cannot verify release payload integrity."
+    fi
+}
+
+verify_payload_manifest() {
+    local extract_dir="$1"
+    local manifest="${extract_dir}/MANIFEST.sha256"
+    local line expected path actual
+
+    if [ ! -f "$manifest" ]; then
+        error "Release payload is missing MANIFEST.sha256. Refusing to install without per-file integrity metadata."
+    fi
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -n "$line" ] || continue
+        expected="${line%%  *}"
+        path="${line#*  }"
+        case "$path" in
+            ""|/*|*"/../"*|../*|*"/.." )
+                error "Invalid path in release payload manifest: ${path}"
+                ;;
+        esac
+        if [ ! -f "${extract_dir}/${path}" ]; then
+            error "Release payload manifest entry missing after extraction: ${path}"
+        fi
+        actual="$(calculate_sha256 "${extract_dir}/${path}")"
+        if [ "$actual" != "$expected" ]; then
+            error "Release payload checksum mismatch for ${path}.\n  Expected: ${expected}\n  Actual:   ${actual}"
+        fi
+    done < "$manifest"
+}
+
 restore_backed_up_files() {
     local backup_dir="$1"
     local install_dir="$2"
@@ -787,15 +829,7 @@ download_and_install() {
     fi
 
     local actual_checksum
-    if command -v sha256sum > /dev/null 2>&1; then
-        actual_checksum="$(sha256sum "${tmpdir}/${archive_name}" | awk '{print $1}')"
-    elif command -v shasum > /dev/null 2>&1; then
-        actual_checksum="$(shasum -a 256 "${tmpdir}/${archive_name}" | awk '{print $1}')"
-    elif command -v openssl > /dev/null 2>&1; then
-        actual_checksum="$(openssl dgst -sha256 "${tmpdir}/${archive_name}" | awk '{print $NF}')"
-    else
-        error "No checksum tool found (need sha256sum, shasum, or openssl). Cannot verify download integrity."
-    fi
+    actual_checksum="$(calculate_sha256 "${tmpdir}/${archive_name}")"
 
     if [ "$actual_checksum" != "$expected_checksum" ]; then
         error "Checksum mismatch!\n  Expected: $expected_checksum\n  Actual:   $actual_checksum"
@@ -808,6 +842,8 @@ download_and_install() {
     mkdir -p "$extract_dir"
     info "Extracting..."
     tar xzf "${tmpdir}/${archive_name}" -C "$extract_dir"
+    info "Verifying extracted payload..."
+    verify_payload_manifest "$extract_dir"
 
     # Validate the extracted payload before copying anything into INSTALL_DIR.
     # This avoids overwriting a healthy install with a partially broken one
@@ -1059,18 +1095,15 @@ EOF
 
     (
         cd "$local_payload_dir"
-        tar czf "../${archive_name}" "${BINARY_NAME}" version.json "${runtime_asset}"
+        {
+            calculate_sha256 "${BINARY_NAME}" | awk -v file="${BINARY_NAME}" '{ print $1 "  " file }'
+            calculate_sha256 version.json | awk '{ print $1 "  version.json" }'
+            calculate_sha256 "${runtime_asset}" | awk -v file="${runtime_asset}" '{ print $1 "  " file }'
+        } > MANIFEST.sha256
+        tar czf "../${archive_name}" MANIFEST.sha256 "${BINARY_NAME}" version.json "${runtime_asset}"
     )
 
-    if command -v sha256sum > /dev/null 2>&1; then
-        checksum="$(sha256sum "${local_release_base}/${archive_name}" | awk '{print $1}')"
-    elif command -v shasum > /dev/null 2>&1; then
-        checksum="$(shasum -a 256 "${local_release_base}/${archive_name}" | awk '{print $1}')"
-    elif command -v openssl > /dev/null 2>&1; then
-        checksum="$(openssl dgst -sha256 "${local_release_base}/${archive_name}" | awk '{print $NF}')"
-    else
-        error "No checksum tool found (need sha256sum, shasum, or openssl) for local mirror self-test."
-    fi
+    checksum="$(calculate_sha256 "${local_release_base}/${archive_name}")"
     printf '%s  %s\n' "$checksum" "$archive_name" > "${local_release_base}/sha256sums.txt"
 
     if has_explicit_self_test_install_dir; then
