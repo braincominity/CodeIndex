@@ -31695,6 +31695,35 @@ public class ReferenceExtractorTests
             && r.ReferenceKind == "capture");
     }
 
+    [Fact]
+    public void Extract_CSharpLambdaCapture_DoesNotShareLocalsAcrossSameNamedMethods()
+    {
+        const string content = """
+            class First
+            {
+                void Run()
+                {
+                    var seed = 1;
+                }
+            }
+
+            class Second
+            {
+                void Run()
+                {
+                    System.Func<int> next = () => seed + 1;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "seed"
+            && r.ReferenceKind == "capture");
+    }
+
     private static SymbolRecord Container(string name, string kind, int startLine, int endLine) =>
         new()
         {

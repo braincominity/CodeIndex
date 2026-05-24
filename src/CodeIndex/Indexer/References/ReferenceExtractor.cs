@@ -3433,7 +3433,7 @@ public static partial class ReferenceExtractor
     {
         if (container?.Kind != "function"
             || localNamesByFunction == null
-            || !localNamesByFunction.TryGetValue(container.Name, out var localNames)
+            || !localNamesByFunction.TryGetValue(GetCSharpContainerLocalScopeKey(container), out var localNames)
             || localNames.Count == 0)
         {
             return;
@@ -3513,15 +3513,19 @@ public static partial class ReferenceExtractor
             if (IsIgnoredCallName("csharp", name))
                 continue;
 
-            if (!localNamesByFunction.TryGetValue(container.Name, out var localNames))
+            var scopeKey = GetCSharpContainerLocalScopeKey(container);
+            if (!localNamesByFunction.TryGetValue(scopeKey, out var localNames))
             {
                 localNames = new HashSet<string>(StringComparer.Ordinal);
-                localNamesByFunction[container.Name] = localNames;
+                localNamesByFunction[scopeKey] = localNames;
             }
 
             localNames.Add(name);
         }
     }
+
+    private static string GetCSharpContainerLocalScopeKey(SymbolRecord container)
+        => $"{container.Kind}:{container.ContainerQualifiedName}:{container.ContainerKind}:{container.ContainerName}:{container.Name}:{container.StartLine}:{container.EndLine}:{container.BodyStartLine}:{container.BodyEndLine}:{container.StartColumn}";
 
     private static void MarkMutualRecursionReferences(List<ReferenceRecord> references)
     {
