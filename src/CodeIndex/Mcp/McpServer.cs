@@ -60,6 +60,7 @@ public partial class McpServer : IDisposable
     // を渡せるようにするため (#1567)。
     private readonly AsyncLocal<CancellationToken> _currentRequestToken = new();
     private readonly AsyncLocal<Action<string>?> _currentOutOfBandFrameWriter = new();
+    private readonly AsyncLocal<List<Action>?> _deferredFrameLogs = new();
     private bool _running = true;
     // Per-session DbContext reused across MCP tool calls. Holding the connection open
     // avoids reopening SQLite, reapplying pragmas, and re-registering every SQL function
@@ -437,6 +438,7 @@ public partial class McpServer : IDisposable
                         _currentOutOfBandFrameWriter.Value = transport is IOutOfBandMcpTransport outOfBandTransport
                             ? frameToWrite => outOfBandTransport.WriteOutOfBandFrameAsync(frameToWrite, loopToken).GetAwaiter().GetResult()
                             : null;
+                        BeginDeferredFrameLogs();
                         response = ProcessFrame(frame);
                     }
                     finally
@@ -447,6 +449,7 @@ public partial class McpServer : IDisposable
                     }
 
                     await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
+                    FlushDeferredFrameLogs();
 
                     // `notifications/shutdown` flips `_running` inside `HandleMessage`; exit the loop
                     // immediately so a subsequent slow `ReadFrameAsync` does not extend the lifetime
@@ -461,7 +464,9 @@ public partial class McpServer : IDisposable
                 }
                 catch (DecoderFallbackException ex)
                 {
+                    BeginDeferredFrameLogs();
                     await WriteFrameSafelyAsync(transport, BuildInvalidUtf8ParseErrorResponse(ex), loopToken).ConfigureAwait(false);
+                    FlushDeferredFrameLogs();
                     break;
                 }
             }
@@ -498,7 +503,9 @@ public partial class McpServer : IDisposable
                 await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
                 try
                 {
+                    BeginDeferredFrameLogs();
                     await WriteFrameSafelyAsync(transport, BuildInvalidUtf8ParseErrorResponse(ex), loopToken).ConfigureAwait(false);
+                    FlushDeferredFrameLogs();
                 }
                 finally
                 {
@@ -511,11 +518,13 @@ public partial class McpServer : IDisposable
 
             if (IsCancellationFrame(frame))
             {
+                BeginDeferredFrameLogs();
                 var response = ProcessFrame(frame);
                 await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
                 try
                 {
                     await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
+                    FlushDeferredFrameLogs();
                 }
                 finally
                 {
@@ -546,6 +555,7 @@ public partial class McpServer : IDisposable
                                 writeGate.Release();
                             }
                         };
+                        BeginDeferredFrameLogs();
                         response = ProcessFrame(frame);
                     }
                     finally
@@ -559,6 +569,7 @@ public partial class McpServer : IDisposable
                     try
                     {
                         await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
+                        FlushDeferredFrameLogs();
                     }
                     finally
                     {
@@ -586,16 +597,19 @@ public partial class McpServer : IDisposable
     /// </summary>
     internal async Task ProcessLineAsync(string line, TextWriter writer)
     {
+        BeginDeferredFrameLogs();
         var response = ProcessFrame(line);
         if (response != null)
         {
             try
             {
                 await WriteJsonLineAsync(writer, response).ConfigureAwait(false);
+                FlushDeferredFrameLogs();
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
             {
                 Console.Error.WriteLine(BuildResponseWriteErrorLog(ex.Message));
+                FlushDeferredFrameLogs();
             }
         }
     }
@@ -604,6 +618,7 @@ public partial class McpServer : IDisposable
     {
         await writer.WriteAsync(response).ConfigureAwait(false);
         await writer.WriteAsync('\n').ConfigureAwait(false);
+        await writer.FlushAsync().ConfigureAwait(false);
     }
 
     private static async Task WriteFrameSafelyAsync(IMcpTransport transport, string? response, CancellationToken cancellationToken)
@@ -624,7 +639,7 @@ public partial class McpServer : IDisposable
 
     private string BuildInvalidUtf8ParseErrorResponse(DecoderFallbackException ex)
     {
-        Console.Error.WriteLine(BuildInvalidUtf8ErrorLog(ex.Message));
+        DeferFrameLog(BuildInvalidUtf8ErrorLog(ex.Message));
         var errorResponse = CreateErrorResponse(hasId: true, id: null, code: -32700, message: "Parse error: invalid UTF-8 input",
             category: McpErrorEnvelope.CategoryParseError,
             suggestion: "Send one JSON-RPC 2.0 object per line encoded as valid UTF-8. Reject or re-encode malformed bytes before retrying.",
@@ -651,7 +666,7 @@ public partial class McpServer : IDisposable
         // メモリ枯渇を防ぐため巨大メッセージを拒否
         if (line.Length > MaxLineLength)
         {
-            Console.Error.WriteLine(BuildOversizedMessageLog(line.Length));
+            DeferFrameLog(BuildOversizedMessageLog(line.Length));
             var errorResponse = CreateErrorResponse(null, -32700, "Message too large",
                 category: McpErrorEnvelope.CategoryMessageTooLarge,
                 suggestion: $"JSON-RPC frame exceeds the {MaxLineLength} byte cap. Split the request into smaller calls or use `batch_query` with smaller slots.",
@@ -675,7 +690,7 @@ public partial class McpServer : IDisposable
         catch (JsonException ex)
         {
             // Parse error / パースエラー
-            Console.Error.WriteLine(BuildJsonParseErrorLog(ex.Message));
+            DeferFrameLog(BuildJsonParseErrorLog(ex.Message));
             var errorResponse = CreateErrorResponse(null, -32700, "Parse error",
                 category: McpErrorEnvelope.CategoryParseError,
                 suggestion: "Send valid JSON-RPC 2.0 framed as a single line of UTF-8 JSON.",
@@ -691,7 +706,7 @@ public partial class McpServer : IDisposable
             // stderr には診断用に詳細を残すが、ネットワークに出るレスポンスには
             // 例外型のみを返し、SQLite の "near 'foo': syntax error" などを通じた
             // 内容漏れを防ぐ（#1530）。
-            Console.Error.WriteLine(BuildUnhandledLoopErrorLog(ex.Message));
+            DeferFrameLog(BuildUnhandledLoopErrorLog(ex.Message));
             var classification = McpErrorEnvelope.ClassifyException(ex);
             var errorResponse = CreateErrorResponse(responseHasId, responseId, classification.JsonRpcCode,
                 BuildSanitizedLoopErrorMessage(ex),
@@ -710,9 +725,38 @@ public partial class McpServer : IDisposable
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine(BuildResponseSerializationErrorLog(ex.Message));
+            DeferFrameLog(BuildResponseSerializationErrorLog(ex.Message));
             return BuildMinimalInternalErrorResponse(hasId, id, ex);
         }
+    }
+
+    private void DeferFrameLog(string message)
+        => DeferFrameLog(() => Console.Error.WriteLine(message));
+
+    private void DeferFrameLog(Action writeLog)
+    {
+        var logs = _deferredFrameLogs.Value;
+        if (logs is null)
+        {
+            writeLog();
+            return;
+        }
+
+        logs.Add(writeLog);
+    }
+
+    private void BeginDeferredFrameLogs()
+        => _deferredFrameLogs.Value = [];
+
+    private void FlushDeferredFrameLogs()
+    {
+        var logs = _deferredFrameLogs.Value;
+        if (logs is null)
+            return;
+
+        _deferredFrameLogs.Value = null;
+        foreach (var log in logs)
+            log();
     }
 
     private static void ExtractResponseId(JsonNode request, out bool hasId, out JsonNode? id)
@@ -832,7 +876,7 @@ public partial class McpServer : IDisposable
         var authResult = _authenticator.Authenticate(request);
         if (!authResult.IsAuthenticated)
         {
-            Console.Error.WriteLine(BuildAuthFailureLog(method, authResult.FailureReason));
+            DeferFrameLog(BuildAuthFailureLog(method, authResult.FailureReason));
             return CreateErrorResponse(hasId: true, id: id, code: McpErrorEnvelope.CodeUnauthorized, message: "Unauthorized",
                 category: McpErrorEnvelope.CategoryPermissionDenied,
                 suggestion: "Set CDIDX_MCP_AUTH_TOKEN on the server and include a matching params.auth.token (or an `Authorization: Bearer <token>` header for HTTP) on each request.",
@@ -1015,7 +1059,7 @@ public partial class McpServer : IDisposable
         }
         else if (resolved != _caller && resolved != "unknown")
         {
-            Console.Error.WriteLine(BuildCallerSwapRejectionLog(_caller, resolved));
+            DeferFrameLog(BuildCallerSwapRejectionLog(_caller, resolved));
         }
         var negotiated = NegotiateProtocolVersion(_params, out var requestedVersion);
         if (negotiated == null)
@@ -1027,7 +1071,7 @@ public partial class McpServer : IDisposable
             // クライアント要求バージョンとサーバー対応集合に重なりがない場合。Issue #1554:
             // クライアントが分岐判定できるよう、`error.data` に要求バージョンと対応バージョン
             // を入れた -32602 (invalid params) を返す。
-            Console.Error.WriteLine(BuildUnsupportedProtocolLog(requestedVersion));
+            DeferFrameLog(BuildUnsupportedProtocolLog(requestedVersion));
             return CreateUnsupportedProtocolError(id, requestedVersion);
         }
 
@@ -1538,7 +1582,7 @@ public partial class McpServer : IDisposable
             if (!decision.Allowed)
             {
                 metricsError = "rate_limited";
-                Console.Error.WriteLine(BuildRateLimitedLog(toolName, _caller, decision.RetryAfterMs));
+                DeferFrameLog(BuildRateLimitedLog(toolName, _caller, decision.RetryAfterMs));
                 response = CreateRateLimitedErrorResponse(id, toolName, _caller, decision.RetryAfterMs);
             }
             else
@@ -1595,8 +1639,11 @@ public partial class McpServer : IDisposable
             // JSON-RPC のツール結果は tool 名 + 例外型のみに絞る。SQLite 例外などは
             // バインド値や該当リテラルを含むため、生のメッセージをクライアントに渡すと
             // パスや索引内容が漏れる（#1530）。
-            Console.Error.WriteLine(BuildToolErrorLog(toolName, ex.Message));
-            Database.DbDebug.DumpToStderr(ex);
+            DeferFrameLog(() =>
+            {
+                Console.Error.WriteLine(BuildToolErrorLog(toolName, ex.Message));
+                Database.DbDebug.DumpToStderr(ex);
+            });
             metricsError = ex.GetType().Name;
             var classification = McpErrorEnvelope.ClassifyException(ex);
             response = CreateToolErrorResponse(true, id, BuildSanitizedToolErrorMessage(toolName, ex),

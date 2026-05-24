@@ -1858,9 +1858,9 @@ When SQLite returns permission-style errors such as `SQLITE_AUTH`, `SQLITE_PERM`
     - Recovery: fix file/directory permissions, or exclude the path via `.cdidxignore`. The index keeps running across the rest of the tree; no rebuild is required after permissions are fixed — a normal `cdidx index .` will pick up the now-readable files.
 
 12. **File rejected: too large**
-    - Symptom: `--verbose` shows `[ERR ] <path>: File too large (N MiB > M MiB limit). Override with --max-file-bytes <bytes> or CDIDX_MAX_FILE_BYTES=<bytes> when this source file is intentionally indexable.` (the file becomes part of the run's `errors` count), and the file does not appear in search.
+    - Symptom: `validate --kind file_too_large` reports `File too large (N MiB > M MiB limit). Override with --max-file-bytes <bytes> or CDIDX_MAX_FILE_BYTES=<bytes> when this source file is intentionally indexable.` The file is listed in `files`, but no chunks, symbols, or references are indexed for it, so it does not appear in search.
     - Cause: the file exceeds the configured per-file size limit. Indexing huge generated files would waste tokens and bloat the DB.
-    - Recovery: shrink or split the file, add it to `.cdidxignore`, or raise the limit with `cdidx index . --max-file-bytes 50M` / `CDIDX_MAX_FILE_BYTES=50M` when the file is legitimate source. Generated artifacts should generally be gitignored too. Note that any `[ERR ]` files in a run leave readiness flags unstamped, so resolve oversize entries before depending on `graph_table_available` / `issues_table_available` results.
+    - Recovery: shrink or split the file, add it to `.cdidxignore`, or raise the limit with `cdidx index . --max-file-bytes 50M` / `CDIDX_MAX_FILE_BYTES=50M` when the file is legitimate source. Generated artifacts should generally be gitignored too.
 
 13. **Feature unavailable on trimmed / AOT build** (`E009_FEATURE_UNAVAILABLE`)
     - Symptom: `Error [E009_FEATURE_UNAVAILABLE]: ...` when invoking flags such as `--json` on a build that lacks the required code paths.

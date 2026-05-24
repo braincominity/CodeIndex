@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Runtime.Versioning;
 using System.Runtime.InteropServices;
 using CodeIndex.Cli;
@@ -49,6 +50,46 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void FormatIndexFileException_RegexTimeout_UsesBoundedExtractionMessage()
+    {
+        var ex = new RegexMatchTimeoutException("raw-sensitive-content", "raw-sensitive-pattern", TimeSpan.FromSeconds(2));
+
+        var message = IndexCommandRunner.FormatIndexFileException(ex);
+
+        Assert.Contains("Regex extraction timed out after 2s", message);
+        Assert.Contains("file was skipped", message);
+        Assert.DoesNotContain("raw-sensitive", message);
+    }
+
+    [Fact]
+    public void FormatIndexPhasePath_AppendsPhaseSuffixForJsonLiveness()
+    {
+        var message = IndexCommandRunner.FormatIndexPhasePath("src/App.cs", "references");
+
+        Assert.Equal("src/App.cs (references)", message);
+    }
+
+    [Fact]
+    public void GetJsonIndexHeartbeatPath_UsesWorkerPhaseWhenMainThreadIsIdle()
+    {
+        var message = IndexCommandRunner.GetJsonIndexHeartbeatPath(
+            currentFile: null,
+            activeExtractionPhases: ["src/App.cs (references)"]);
+
+        Assert.Equal("src/App.cs (references)", message);
+    }
+
+    [Fact]
+    public void GetJsonIndexHeartbeatPath_PrefersMainThreadPhaseWhenCommittingResults()
+    {
+        var message = IndexCommandRunner.GetJsonIndexHeartbeatPath(
+            "src/App.cs (committing)",
+            ["src/Other.cs (references)"]);
+
+        Assert.Equal("src/App.cs (committing)", message);
+    }
+
+    [Fact]
     public void Run_NullByteFile_SkipsWithoutPersistingPartialRows()
     {
         var projectRoot = CreateTempProject();
@@ -72,6 +113,76 @@ public class IndexCommandRunnerTests
             Assert.Equal(0, CountRows(dbPath, "chunks"));
             Assert.Equal(0, CountRows(dbPath, "symbols"));
             Assert.Equal(0, CountRows(dbPath, "symbol_references"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FileAboveMaxFileBytes_PersistsFileTooLargeIssue()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var filePath = Path.Combine(projectRoot, "large.py");
+            File.WriteAllText(filePath, "print('start')\n" + new string('a', 256));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--max-file-bytes", "128", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(1, CountRows(dbPath, "files"));
+            Assert.Equal(0, CountRows(dbPath, "chunks"));
+            Assert.Equal(0, CountRows(dbPath, "symbols"));
+            Assert.Equal(0, CountRows(dbPath, "symbol_references"));
+
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
+            var issue = Assert.Single(reader.GetIssues("file_too_large"));
+            Assert.Equal("large.py", issue.Path);
+            Assert.Equal(0, issue.Line);
+            Assert.Contains("File too large", issue.Message);
+            Assert.Contains("--max-file-bytes", issue.Message);
+            Assert.Contains(FileIndexer.MaxFileSizeEnvironmentVariable, issue.Message);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFiles_FileAboveMaxFileBytes_PersistsFileTooLargeIssue()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var filePath = Path.Combine(projectRoot, "large.py");
+            File.WriteAllText(filePath, "print('start')\n" + new string('a', 256));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "large.py", "--max-file-bytes", "128", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(1, CountRows(dbPath, "files"));
+            Assert.Equal(0, CountRows(dbPath, "chunks"));
+            Assert.Equal(0, CountRows(dbPath, "symbols"));
+            Assert.Equal(0, CountRows(dbPath, "symbol_references"));
+
+            var issue = Assert.Single(ReadFileIssues(dbPath, "file_too_large"));
+            Assert.Equal("large.py", issue.Path);
+            Assert.Contains("File too large", issue.Message);
         }
         finally
         {
@@ -3442,7 +3553,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_WithIndexingErrors_PrintsRecoveryWarning()
+    public void Run_FullScan_WithOversizedFile_PrintsSkipWarningWithoutRecoveryWarning()
     {
         var projectRoot = CreateTempProject();
         try
@@ -3453,8 +3564,9 @@ public class IndexCommandRunnerTests
             var (exitCode, _, stderr) = RunCliInSubprocess([projectRoot], projectRoot);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains("Some files failed to index", stderr);
-            Assert.Contains("rerun `cdidx index", stderr);
+            Assert.Contains("[WARN] File too large", stderr);
+            Assert.DoesNotContain("Some files failed to index", stderr);
+            Assert.DoesNotContain("rerun `cdidx index", stderr);
         }
         finally
         {
@@ -3547,7 +3659,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_UpdateMode_WithIndexingErrors_PrintsRecoveryWarning()
+    public void Run_UpdateMode_WithOversizedFile_PrintsSkipWarningWithoutRecoveryWarning()
     {
         var projectRoot = CreateTempProject();
         try
@@ -3562,8 +3674,9 @@ public class IndexCommandRunnerTests
             var (exitCode, _, stderr) = RunCliInSubprocess([projectRoot, "--files", "huge.py"], projectRoot);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains("Some files failed to update", stderr);
-            Assert.Contains("rerun `cdidx index", stderr);
+            Assert.Equal(string.Empty, stderr);
+            Assert.DoesNotContain("Some files failed to update", stderr);
+            Assert.DoesNotContain("rerun `cdidx index", stderr);
         }
         finally
         {
@@ -6652,7 +6765,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_UpdateMode_ClearsHotspotFamilyTrustOnPartialFailure()
+    public void Run_UpdateMode_RestampsHotspotFamilyTrustOnOversizedFileSkip()
     {
         var projectRoot = CreateTempProject();
         try
@@ -6671,11 +6784,11 @@ public class IndexCommandRunnerTests
 
             var (exitCode2, json2) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
             Assert.Equal(CommandExitCodes.Success, exitCode2);
-            Assert.Equal("partial", json2.GetProperty("status").GetString());
-            Assert.Equal(1, json2.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal("success", json2.GetProperty("status").GetString());
+            Assert.Equal(0, json2.GetProperty("summary").GetProperty("errors").GetInt32());
 
             using var verifyDb = new DbContext(dbPath);
-            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+            Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
         }
         finally
         {
@@ -7840,6 +7953,35 @@ public class IndexCommandRunnerTests
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT COUNT(*) FROM {tableName}";
         return Convert.ToInt32(command.ExecuteScalar());
+    }
+
+    private static List<FileIssue> ReadFileIssues(string dbPath, string kind)
+    {
+        using var connection = new SqliteConnection($"Data Source={dbPath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT f.path, i.kind, i.line, i.message
+            FROM file_issues i
+            JOIN files f ON f.id = i.file_id
+            WHERE i.kind = @kind
+            ORDER BY f.path
+            """;
+        command.Parameters.AddWithValue("@kind", kind);
+        using var reader = command.ExecuteReader();
+        var issues = new List<FileIssue>();
+        while (reader.Read())
+        {
+            issues.Add(new FileIssue
+            {
+                Path = reader.GetString(0),
+                Kind = reader.GetString(1),
+                Line = reader.GetInt32(2),
+                Message = reader.GetString(3),
+            });
+        }
+
+        return issues;
     }
 
     private (int ExitCode, JsonElement Json, string Stderr) RunAndCaptureJsonWithStderr(string[] args)

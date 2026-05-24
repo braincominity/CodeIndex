@@ -3507,7 +3507,7 @@ public static class QueryCommandRunner
     // `--kind replacement_chra` のようなタイプミスを did-you-mean で救うため、
     // FileIndexer.cs 内の `Kind = "..."` 代入と同期させる (#1582)。
     private static readonly string[] AllValidValidateKinds =
-        ["bom", "cr_only_line_endings", "line_too_long", "mixed_line_endings", "mixed_line_endings_three_way", "non_utf8_likely", "null_byte", "replacement_char", "utf16_bom"];
+        ["bom", "cr_only_line_endings", "file_too_large", "line_too_long", "mixed_line_endings", "mixed_line_endings_three_way", "non_utf8_likely", "null_byte", "replacement_char", "utf16_bom"];
 
     public static int RunValidate(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
