@@ -12306,6 +12306,28 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Go_DoesNotIndexBlankIdentifierDeclarations()
+    {
+        var content = """
+            package demo
+
+            const _, exported = 1, 2
+
+            var (
+                _ int
+                _unused string
+                _, err = open()
+            )
+            """;
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "_");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "exported");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_unused");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "err");
+    }
+
+    [Fact]
     public void Extract_Go_DetectsLabels()
     {
         var content = """

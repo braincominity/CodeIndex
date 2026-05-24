@@ -140,6 +140,9 @@ public static partial class SymbolExtractor
 
         foreach (var name in match.Groups["names"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
+            if (name == "_")
+                continue;
+
             if (HasGoSymbol(symbols, fileId, lineIndex + 1, "property", name))
                 continue;
 
