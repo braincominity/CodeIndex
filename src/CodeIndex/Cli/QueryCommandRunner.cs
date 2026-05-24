@@ -150,6 +150,7 @@ public static class QueryCommandRunner
         "--fts",
         "--body",
         "--count",
+        "--strict-not-found",
         "--no-dedup",
         "--no-visibility-rank",
         "--exact",
@@ -407,7 +408,7 @@ public static class QueryCommandRunner
                     WriteLangHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader);
                 }
-                return CommandExitCodes.NotFound;
+                return ZeroResultExitCode(options);
             }
 
             if (options.Json)
@@ -562,7 +563,7 @@ public static class QueryCommandRunner
                     WriteLangHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader, "Try 'search' for full-text matches instead of symbol lookup.");
                 }
-                return CommandExitCodes.NotFound;
+                return ZeroResultExitCode(options);
             }
 
             if (options.Json)
@@ -711,7 +712,7 @@ public static class QueryCommandRunner
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult(reader, "references", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
-                return CommandExitCodes.NotFound;
+                return ZeroResultExitCode(options);
             }
 
             if (options.Json)
@@ -837,7 +838,7 @@ public static class QueryCommandRunner
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult(reader, "callers", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
-                return CommandExitCodes.NotFound;
+                return ZeroResultExitCode(options);
             }
 
             if (options.Json)
@@ -963,7 +964,7 @@ public static class QueryCommandRunner
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult(reader, "callees", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
-                return CommandExitCodes.NotFound;
+                return ZeroResultExitCode(options);
             }
 
             if (options.Json)
@@ -1136,7 +1137,7 @@ public static class QueryCommandRunner
                     WriteLangHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader);
                 }
-                return CommandExitCodes.NotFound;
+                return ZeroResultExitCode(options);
             }
 
             if (options.Json)
@@ -1211,7 +1212,7 @@ public static class QueryCommandRunner
                     WriteLangHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader);
                 }
-                return CommandExitCodes.NotFound;
+                return ZeroResultExitCode(options);
             }
 
             if (options.Json)
@@ -1327,7 +1328,7 @@ public static class QueryCommandRunner
             {
                 if (!options.Json)
                     Console.Error.WriteLine("No excerpt found.");
-                return CommandExitCodes.NotFound;
+                return ZeroResultExitCode(options);
             }
 
             if (options.Json)
@@ -1448,7 +1449,7 @@ public static class QueryCommandRunner
                         WriteZeroResultHints(options, reader, filterHint: "try broadening --path or adding another --path value; --path is required for find.");
                     }
                 }
-                return CommandExitCodes.NotFound;
+                return ZeroResultExitCode(options);
             }
 
             if (options.Json)
@@ -1638,7 +1639,7 @@ public static class QueryCommandRunner
                 {
                     Console.Error.WriteLine("No files found matching the given filters.");
                 }
-                return CommandExitCodes.NotFound;
+                return ZeroResultExitCode(options);
             }
 
             if (options.Json)
@@ -1793,7 +1794,7 @@ public static class QueryCommandRunner
                 WriteRepoMapSection("Callees", analysis.Callees.Select(item => $"{item.CallerName ?? "<top-level>"} -> {item.CalleeName}  ({item.ReferenceCount} refs)"));
             }
 
-            return CommandExitCodes.Success;
+            return IsEmptySymbolAnalysis(analysis) ? ZeroResultExitCode(options) : CommandExitCodes.Success;
         });
     }
 
@@ -2485,7 +2486,7 @@ public static class QueryCommandRunner
                     WriteGraphSupportHint(options.Lang);
                     WriteDegradedGraphZeroResult(reader, "callers", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
-                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
+                return ZeroResultExitCode(options);
             }
 
             if (options.CountOnly)
@@ -2651,7 +2652,7 @@ public static class QueryCommandRunner
                     WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
                     WriteDegradedGraphZeroResult(reader, "edges", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
-                return CommandExitCodes.NotFound;
+                return ZeroResultExitCode(options);
             }
 
             if (options.Json)
@@ -2900,7 +2901,7 @@ public static class QueryCommandRunner
                         WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
                         WriteDegradedGraphZeroResult(reader, "hotspots", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                     }
-                    return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
+                    return ZeroResultExitCode(options);
                 }
 
                 var definitionSiteTotal = groupedResults.Sum(g => g.DefinitionSites);
@@ -3046,7 +3047,7 @@ public static class QueryCommandRunner
                         WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
                         WriteDegradedGraphZeroResult(reader, "hotspots", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                     }
-                    return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
+                    return ZeroResultExitCode(options);
                 }
 
                 if (options.CountOnly)
@@ -3173,7 +3174,7 @@ public static class QueryCommandRunner
                     WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
                     WriteDegradedGraphZeroResult(reader, "hotspots", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
-                return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
+                return ZeroResultExitCode(options);
             }
 
             if (options.CountOnly)
@@ -3334,7 +3335,7 @@ public static class QueryCommandRunner
                     WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
                     WriteDegradedGraphZeroResult(reader, "symbols", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
-                return options.Json ? CommandExitCodes.Success : CommandExitCodes.NotFound;
+                return ZeroResultExitCode(options);
             }
 
             if (options.Json)
@@ -3660,6 +3661,7 @@ public static class QueryCommandRunner
         bool rawFts = false;
         bool includeBody = false;
         bool countOnly = false;
+        bool strictNotFound = false;
         int? startLine = null;
         int? endLine = null;
         int contextBefore = 0;
@@ -3920,6 +3922,9 @@ public static class QueryCommandRunner
                     break;
                 case "--count":
                     countOnly = true;
+                    break;
+                case "--strict-not-found":
+                    strictNotFound = true;
                     break;
                 case "--by-bucket":
                     break;
@@ -4301,6 +4306,7 @@ public static class QueryCommandRunner
             ExcludeTests = excludeTests,
             IncludeGenerated = includeGenerated,
             CountOnly = countOnly,
+            StrictNotFound = strictNotFound,
             Since = since,
             NoDedup = noDedup,
             NoVisibilityRank = noVisibilityRank,
@@ -4608,6 +4614,17 @@ public static class QueryCommandRunner
     // runs through ParseArgs() + TryWriteUnsupportedOptionError().
     // preview 系オプションの検証はコマンド別 allowlist に寄せたため、この shim は常に null を返す。
     private static string? ValidatePreviewOptions(string commandName, string[] args, bool allowMaxLineWidth, bool allowFocusOptions) => null;
+
+    private static int ZeroResultExitCode(QueryCommandOptions options)
+        => options.StrictNotFound ? CommandExitCodes.NotFound : CommandExitCodes.Success;
+
+    private static bool IsEmptySymbolAnalysis(SymbolAnalysisResult analysis)
+        => analysis.File == null
+           && analysis.Definitions.Count == 0
+           && analysis.NearbySymbols.Count == 0
+           && analysis.References.Count == 0
+           && analysis.Callers.Count == 0
+           && analysis.Callees.Count == 0;
 
     private static int WithDb(QueryCommandOptions options, JsonSerializerOptions jsonOptions, Func<DbReader, int> action, Action<int>? afterProfile = null)
     {
@@ -6754,6 +6771,7 @@ public sealed class QueryCommandOptions
     public bool ExcludeTests { get; init; }
     public bool IncludeGenerated { get; init; }
     public bool CountOnly { get; init; }
+    public bool StrictNotFound { get; init; }
     public DateTime? Since { get; init; }
     public bool NoDedup { get; init; }
     public bool NoVisibilityRank { get; init; }

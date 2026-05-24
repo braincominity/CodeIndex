@@ -6,4 +6,5 @@ using CodeIndex.Cli;
 // Windows のコンソールは既定で OEM コードページを使用するため、Unicode 文字が文字化けします。
 Console.OutputEncoding = Encoding.UTF8;
 ConsoleUi.EnsureConsoleWritersSynchronized();
+RuntimeSafety.Configure();
 return ProgramRunner.Run(args);
