@@ -331,6 +331,43 @@ internal static class SqlReferenceExtractor
         return spansByLine;
     }
 
+    public static HashSet<(int LineNumber, int ColumnIndex)> BuildWindowFunctionCallSiteSuppressions(string[] lines)
+    {
+        var suppressed = new HashSet<(int LineNumber, int ColumnIndex)>();
+        if (lines.Length == 0)
+            return suppressed;
+
+        var lineStarts = new int[lines.Length];
+        var textBuilder = new StringBuilder();
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            if (lineIndex > 0)
+                textBuilder.Append('\n');
+            lineStarts[lineIndex] = textBuilder.Length;
+            textBuilder.Append(lines[lineIndex]);
+        }
+
+        var text = textBuilder.ToString();
+        var searchStart = 0;
+        while (TryFindNextWindowClause(
+            text,
+            searchStart,
+            out var overKeywordIndex,
+            out _,
+            out var closeParenIndex))
+        {
+            if (TryFindWindowFunctionNameIndex(text, overKeywordIndex, out var functionNameIndex)
+                && TryMapJoinedOffsetToLine(lineStarts, text, functionNameIndex, out var lineNumber, out var columnIndex))
+            {
+                suppressed.Add((lineNumber, columnIndex));
+            }
+
+            searchStart = closeParenIndex + 1;
+        }
+
+        return suppressed;
+    }
+
     public static bool ShouldSuppressDefinitionCall(
         IReadOnlyList<DefinitionLeafSpan>? definitionLeafSpans,
         string resolvedName,
@@ -1538,6 +1575,24 @@ internal static class SqlReferenceExtractor
             return false;
 
         functionNameIndex = nameStart;
+        return true;
+    }
+
+    private static bool TryMapJoinedOffsetToLine(int[] lineStarts, string text, int offset, out int lineNumber, out int columnIndex)
+    {
+        lineNumber = 0;
+        columnIndex = 0;
+        if (offset < 0 || offset >= text.Length)
+            return false;
+
+        var lineIndex = Array.BinarySearch(lineStarts, offset);
+        if (lineIndex < 0)
+            lineIndex = ~lineIndex - 1;
+        if (lineIndex < 0 || lineIndex >= lineStarts.Length)
+            return false;
+
+        lineNumber = lineIndex + 1;
+        columnIndex = offset - lineStarts[lineIndex];
         return true;
     }
 

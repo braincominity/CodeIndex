@@ -14949,6 +14949,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_MultilineWindowOverClausesSuppressFunctionCalls()
+    {
+        const string content = """
+            SELECT
+                SUM(amount)
+                    OVER (PARTITION BY customer_id ORDER BY created_at DESC) AS running_total
+            FROM sales.orders;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "customer_id" && r.ReferenceKind == "column_reference" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "created_at" && r.ReferenceKind == "column_reference" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "SUM" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_SQL_CreateSynonymCapturesBaseObjectReference()
     {
         // T-SQL/Oracle synonym definitions should point reference search at the base object after `FOR`,
