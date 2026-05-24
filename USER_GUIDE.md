@@ -230,6 +230,20 @@ Stable since values are intentionally not repeated in this guide because the
 release changelog is the source of truth for when each command first shipped.
 Run `cdidx --help` for the full syntax line for every command.
 
+## JSON output format
+
+Most query commands emit one complete JSON value when `--json` is set. `search
+--json` is intentionally stream-oriented: it writes one `CompactSearchResult`
+per line as newline-delimited JSON (ndjson), then a final `{"done":true,...}`
+line. Stream consumers can parse each line as it arrives; array-oriented tools
+can use `jq -s '.'` or pass `--json=array` to `search` to emit the result set as
+one JSON array.
+
+```bash
+cdidx search authenticate --json          # ndjson stream, one result per line
+cdidx search authenticate --json=array    # single JSON array
+```
+
 ## Flag compatibility and migrations
 
 `--exact` remains accepted for compatibility, but new usage should prefer the
@@ -2049,6 +2063,20 @@ cdidx index . --quiet
 Stable since の値はこのガイドでは重複管理しません。各コマンドがいつ入ったかは
 release changelog を source of truth とします。完全な syntax line は `cdidx --help`
 を参照してください。
+
+## JSON 出力形式
+
+ほとんどの query command は `--json` 指定時に 1 つの完全な JSON 値を出力します。
+`search --json` は stream 向けの形式で、1 行に 1 件の `CompactSearchResult` を
+newline-delimited JSON (ndjson) として出力し、最後に `{"done":true,...}` 行を
+出力します。stream consumer は各行を到着順に parse できます。array 前提の tool
+では `jq -s '.'` を使うか、`search` に `--json=array` を渡すと result set を
+1 つの JSON array として出力できます。
+
+```bash
+cdidx search authenticate --json          # ndjson stream、1 行 1 result
+cdidx search authenticate --json=array    # 単一 JSON array
+```
 
 ## フラグ互換性と移行
 
