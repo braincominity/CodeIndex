@@ -993,7 +993,6 @@ public class DbWriter
     {
         if (references.Count == 0) return;
 
-        var referenceLineIds = new Dictionary<(long FileId, int Line), long>();
         int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 13);
         for (int i = 0; i < references.Count; i += rowsPerStatement)
         {
@@ -1003,18 +1002,7 @@ public class DbWriter
             // symbol_references share one rollback boundary; without it a mid-chunk failure
             // under an outer transaction would orphan committed reference_lines (#1518).
             using var transaction = BeginTransaction();
-
-            using var lineCmd = _conn.CreateCommand();
-            lineCmd.CommandText = @"
-                INSERT INTO reference_lines (file_id, line, context)
-                VALUES (@fid, @line, @context)
-                ON CONFLICT(file_id, line) DO UPDATE SET
-                    context = excluded.context
-                RETURNING id";
-            var pReferenceLineFid = lineCmd.Parameters.Add("@fid", SqliteType.Integer);
-            var pReferenceLineNumber = lineCmd.Parameters.Add("@line", SqliteType.Integer);
-            var pReferenceLineContext = lineCmd.Parameters.Add("@context", SqliteType.Text);
-            lineCmd.Prepare();
+            var referenceLineIds = UpsertReferenceLines(references, i, end);
 
             using var cmd = _conn.CreateCommand();
             var sql = new StringBuilder();
@@ -1030,15 +1018,7 @@ public class DbWriter
             for (int j = i; j < end; j++)
             {
                 var reference = references[j];
-                var referenceLineKey = (reference.FileId, reference.Line);
-                if (!referenceLineIds.TryGetValue(referenceLineKey, out var referenceLineId))
-                {
-                    pReferenceLineFid.Value = reference.FileId;
-                    pReferenceLineNumber.Value = reference.Line;
-                    pReferenceLineContext.Value = reference.Context;
-                    referenceLineId = (long)lineCmd.ExecuteScalar()!;
-                    referenceLineIds[referenceLineKey] = referenceLineId;
-                }
+                var referenceLineId = referenceLineIds[(reference.FileId, reference.Line)];
 
                 if (j > i)
                     sql.Append(", ");
@@ -1072,6 +1052,74 @@ public class DbWriter
         RefreshMutualRecursionFlags();
     }
 
+    private Dictionary<(long FileId, int Line), long> UpsertReferenceLines(IReadOnlyList<ReferenceRecord> references, int start, int end)
+    {
+        var contextsByLine = new Dictionary<(long FileId, int Line), string>();
+        for (int i = start; i < end; i++)
+        {
+            var reference = references[i];
+            contextsByLine[(reference.FileId, reference.Line)] = reference.Context;
+        }
+
+        var rows = contextsByLine.ToArray();
+        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 3);
+        for (int i = 0; i < rows.Length; i += rowsPerStatement)
+        {
+            int batchEnd = Math.Min(i + rowsPerStatement, rows.Length);
+            using var cmd = _conn.CreateCommand();
+            var sql = new StringBuilder();
+            sql.Append("INSERT INTO reference_lines (file_id, line, context) VALUES ");
+            for (int j = i; j < batchEnd; j++)
+            {
+                if (j > i)
+                    sql.Append(", ");
+                var suffix = j - i;
+                var ((fileId, line), context) = rows[j];
+                sql.Append($"(@fid{suffix}, @line{suffix}, @context{suffix})");
+                cmd.Parameters.Add($"@fid{suffix}", SqliteType.Integer).Value = fileId;
+                cmd.Parameters.Add($"@line{suffix}", SqliteType.Integer).Value = line;
+                cmd.Parameters.Add($"@context{suffix}", SqliteType.Text).Value = context;
+            }
+
+            sql.Append(" ON CONFLICT(file_id, line) DO UPDATE SET context = excluded.context");
+            cmd.CommandText = sql.ToString();
+            cmd.ExecuteNonQuery();
+        }
+
+        var fileIds = contextsByLine.Keys.Select(key => key.FileId).Distinct().ToArray();
+        var lineIds = new Dictionary<(long FileId, int Line), long>();
+        int fileIdsPerStatement = GetRowsPerInsertStatement(columnCount: 1);
+        for (int i = 0; i < fileIds.Length; i += fileIdsPerStatement)
+        {
+            int fileEnd = Math.Min(i + fileIdsPerStatement, fileIds.Length);
+            using var cmd = _conn.CreateCommand();
+            var parameters = new List<string>(fileEnd - i);
+            for (int j = i; j < fileEnd; j++)
+            {
+                var parameterName = $"@fid{j - i}";
+                parameters.Add(parameterName);
+                cmd.Parameters.Add(parameterName, SqliteType.Integer).Value = fileIds[j];
+            }
+
+            cmd.CommandText = $@"
+                SELECT id, file_id, line
+                FROM reference_lines
+                WHERE file_id IN ({string.Join(", ", parameters)})";
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var id = reader.GetInt64(0);
+                var fileId = reader.GetInt64(1);
+                var line = reader.GetInt32(2);
+                var key = (fileId, line);
+                if (contextsByLine.ContainsKey(key))
+                    lineIds[key] = id;
+            }
+        }
+
+        return lineIds;
+    }
+
     private void RefreshMutualRecursionFlags()
     {
         using var cmd = _conn.CreateCommand();
@@ -1084,13 +1132,32 @@ public class DbWriter
                  AND r.container_name <> ''
                  AND r.symbol_name IS NOT NULL
                  AND r.symbol_name <> ''
-                 AND EXISTS (
-                    SELECT 1
-                    FROM symbol_references AS reverse
-                    WHERE reverse.is_self_reference = 0
-                      AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
-                      AND reverse.container_name = r.symbol_name COLLATE NOCASE
-                      AND reverse.symbol_name = r.container_name COLLATE NOCASE
+                 AND (
+                    (
+                        r.container_name_folded IS NOT NULL
+                        AND r.container_name_folded <> ''
+                        AND r.symbol_name_folded IS NOT NULL
+                        AND r.symbol_name_folded <> ''
+                        AND EXISTS (
+                            SELECT 1
+                            FROM symbol_references AS reverse
+                            WHERE reverse.is_self_reference = 0
+                              AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
+                              AND reverse.container_name_folded = r.symbol_name_folded
+                              AND reverse.symbol_name_folded = r.container_name_folded
+                        )
+                    )
+                    OR (
+                        (r.container_name_folded IS NULL OR r.symbol_name_folded IS NULL)
+                        AND EXISTS (
+                            SELECT 1
+                            FROM symbol_references AS reverse
+                            WHERE reverse.is_self_reference = 0
+                              AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
+                              AND reverse.container_name = r.symbol_name COLLATE NOCASE
+                              AND reverse.symbol_name = r.container_name COLLATE NOCASE
+                        )
+                    )
                  )
                 THEN 1
                 ELSE 0
