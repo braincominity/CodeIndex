@@ -31281,6 +31281,9 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Debug" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Clone" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Serialize" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Debug" && r.Line == 4 && r.Column == 9);
+        Assert.Contains(references, r => r.SymbolName == "Clone" && r.Line == 5 && r.Column == 9);
+        Assert.Contains(references, r => r.SymbolName == "Serialize" && r.Line == 6 && r.Column == 16);
         Assert.DoesNotContain(references, r => r.SymbolName == "cfg_attr" && r.ReferenceKind == "type_reference");
     }
 
@@ -31352,8 +31355,26 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "Buffer" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "crate::io::Cursor" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Cursor" && r.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "mut" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_RustMutableDynAndImplReferences_CaptureTraitType()
+    {
+        const string content = """
+            fn demo(writer: &mut dyn Write, parser: &mut impl Parser) {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Write" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Parser" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(
+            references,
+            r => r.ReferenceKind == "type_reference" && (r.SymbolName is "dyn" or "impl" or "mut"));
     }
 
     [Fact]

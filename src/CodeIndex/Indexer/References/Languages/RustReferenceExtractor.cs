@@ -41,7 +41,7 @@ internal static class RustReferenceExtractor
         $@"(?<![\w$])(?<name>{RustIdentifierPattern}(?:::{RustIdentifierPattern})*)(?:::\s*<(?<args>[^>\n]+)>)?\s*\{{",
         RegexOptions.Compiled);
     private static readonly Regex MutableReferenceTypeRegex = new(
-        $@"&\s*mut\s+(?<type>{RustIdentifierPattern}(?:::{RustIdentifierPattern})*)",
+        @"&\s*mut\b",
         RegexOptions.Compiled);
 
     // Rust macro calls use `!` plus one of `()`, `[]`, or `{}` instead of the shared trailing `(`.
@@ -182,17 +182,16 @@ internal static class RustReferenceExtractor
         if (closeParen <= openParen)
             return;
 
-        var typesStart = openParen + 1;
-        var (lineNumber, column) = GetLineColumn(attribute, startLineIndex, startColumn, typesStart);
-        EmitDeriveTypeList(
-            attribute.Substring(typesStart, closeParen - typesStart),
-            column,
+        EmitMultilineDeriveTypeList(
+            attribute,
+            openParen + 1,
+            closeParen,
+            startLineIndex,
+            startColumn,
             references,
             seen,
             fileId,
-            attribute.Trim(),
-            lineNumber,
-            resolveContainer(lineNumber, column));
+            resolveContainer);
     }
 
     private static int FindRustAttributeDeriveIndex(string attribute)
@@ -430,6 +429,41 @@ internal static class RustReferenceExtractor
         }
     }
 
+    private static void EmitMultilineDeriveTypeList(
+        string attribute,
+        int typesStart,
+        int typesEnd,
+        int attributeStartLineIndex,
+        int attributeStartColumn,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, int, SymbolRecord?> resolveContainer)
+    {
+        var types = attribute.Substring(typesStart, typesEnd - typesStart);
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(types))
+        {
+            var fragment = types.Substring(segmentStart, segmentLength);
+            var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(fragment, 0);
+            var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(fragment, typeStart);
+            if (typeEnd <= typeStart)
+                continue;
+
+            var absoluteTypeStart = typesStart + segmentStart + typeStart;
+            var (lineNumber, column) = GetLineColumn(attribute, attributeStartLineIndex, attributeStartColumn, absoluteTypeStart);
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                fragment.Substring(typeStart, typeEnd - typeStart),
+                column,
+                "rust",
+                references,
+                seen,
+                fileId,
+                attribute.Trim(),
+                lineNumber,
+                resolveContainer(lineNumber, column));
+        }
+    }
+
     private static int FindMatchingDelimiter(string text, int openIndex, char open, char close)
     {
         var depth = 0;
@@ -550,21 +584,21 @@ internal static class RustReferenceExtractor
     {
         foreach (Match match in MutableReferenceTypeRegex.Matches(preparedLine))
         {
-            var typeGroup = match.Groups["type"];
-            var typeName = NormalizeIdentifier(typeGroup.Value);
-            if (typeName == "self" || typeName == "Self")
+            var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, match.Index + match.Length);
+            var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(preparedLine, typeStart);
+            if (typeEnd <= typeStart)
                 continue;
 
-            ReferenceExtractor.AddReference(
+            TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                preparedLine.Substring(typeStart, typeEnd - typeStart),
+                typeStart,
+                "rust",
                 references,
                 seen,
                 fileId,
-                typeName,
-                typeGroup.Index,
-                "type_reference",
                 context,
                 lineNumber,
-                resolveContainerForColumn(typeGroup.Index));
+                resolveContainerForColumn(typeStart));
         }
     }
 
