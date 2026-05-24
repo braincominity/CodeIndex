@@ -26164,6 +26164,7 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
             Assert.Equal(1, json.GetProperty("hint_count").GetInt32());
+            Assert.Equal("file_heuristic", json.GetProperty("file_impacts")[0].GetProperty("result_kind").GetString());
             Assert.Equal("src/App.cs", json.GetProperty("file_impacts")[0].GetProperty("source_path").GetString());
         }
         finally
