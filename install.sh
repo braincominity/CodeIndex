@@ -66,6 +66,7 @@ set -euo pipefail
 REPO="Widthdom/CodeIndex"
 INSTALL_DIR="${CDIDX_INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="cdidx"
+MANIFEST_REQUIRED_VERSION="1.24.6"
 GITHUB_BASE_URL="${CDIDX_GITHUB_BASE_URL:-https://github.com}"
 GITHUB_API_BASE_URL="${CDIDX_GITHUB_API_BASE_URL:-https://api.github.com}"
 # Normalize optional base URL overrides by removing a trailing slash.
@@ -196,6 +197,29 @@ acquire_install_lock() {
 
 strip_version_prefix() {
     printf '%s' "$1" | sed 's/^[^0-9]*//'
+}
+
+semver_core() {
+    printf '%s' "$1" | sed 's/^[^0-9]*//' | sed 's/[^0-9.].*$//'
+}
+
+semver_ge() {
+    local left right
+    left="$(semver_core "$1")"
+    right="$(semver_core "$2")"
+
+    awk -v left="$left" -v right="$right" '
+        BEGIN {
+            split(left, l, ".")
+            split(right, r, ".")
+            for (i = 1; i <= 3; i++) {
+                li = (l[i] == "" ? 0 : l[i]) + 0
+                ri = (r[i] == "" ? 0 : r[i]) + 0
+                if (li > ri) exit 0
+                if (li < ri) exit 1
+            }
+            exit 0
+        }'
 }
 
 extract_release_tag_name() {
@@ -533,7 +557,12 @@ verify_payload_manifest() {
     local line expected path actual
 
     if [ ! -f "$manifest" ]; then
-        error "Release payload is missing MANIFEST.sha256. Refusing to install without per-file integrity metadata."
+        if semver_ge "${VERSION#v}" "$MANIFEST_REQUIRED_VERSION"; then
+            error "Release payload is missing MANIFEST.sha256. Refusing to install without per-file integrity metadata."
+        fi
+
+        warn "Release payload is missing MANIFEST.sha256; falling back to archive-level checksum verification for legacy release ${VERSION}."
+        return 0
     fi
 
     while IFS= read -r line || [ -n "$line" ]; do

@@ -149,7 +149,9 @@ archive manually.
 
 Each release archive also contains `MANIFEST.sha256`, generated from the
 published payload before upload. `install.sh` verifies that manifest after
-extraction, so do not remove or hand-edit it when diagnosing release artifacts.
+extraction for releases that require it, so do not remove or hand-edit it when
+diagnosing release artifacts. Older explicit-version installs may not contain
+the manifest and fall back to archive-level checksum verification.
 
 ```bash
 git show "v1.17.0:version.json" | grep -q '"version": "1.17.0"' \

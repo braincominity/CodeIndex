@@ -936,6 +936,131 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void DownloadAndInstall_LegacyArchiveWithoutManifestStillInstalls()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "legacy_manifest_target");
+        var payloadDir = Path.Combine(_tempRoot, "legacy_manifest_payload");
+        var archivePath = Path.Combine(_tempRoot, "legacy_manifest.tar.gz");
+        var checksumsPath = Path.Combine(_tempRoot, "legacy_manifest.sha256sums.txt");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            mkdir -p "{{payloadDir}}"
+            cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "cdidx v1.24.5"
+            EOF
+            chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
+            printf '{"version":"1.24.5"}' > "{{Path.Combine(payloadDir, "version.json")}}"
+            printf 'legacy-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
+            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+
+            checksum="$(calculate_sha256 "{{archivePath}}")"
+            printf '%s  CodeIndex-linux-x64.tar.gz\n' "$checksum" > "{{checksumsPath}}"
+
+            VERSION="v1.24.5"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o) output_path="$2"; shift 2 ;;
+                        -w) shift 2 ;;
+                        *) url="$1"; shift ;;
+                    esac
+                done
+                case "$url" in
+                    */sha256sums.txt) cp "{{checksumsPath}}" "$output_path" ;;
+                    *) cp "{{archivePath}}" "$output_path" ;;
+                esac
+                printf '200'
+                return 0
+            }
+
+            download_and_install
+            echo "LEGACY_INSTALL_OK"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("LEGACY_INSTALL_OK", stdout);
+        Assert.Contains("falling back to archive-level checksum verification", stderr);
+        Assert.Equal("""{"version":"1.24.5","integrity_ok":true}""" + Environment.NewLine, File.ReadAllText(Path.Combine(installDir, "version.json")));
+    }
+
+    [Fact]
+    public void DownloadAndInstall_NewArchiveWithoutManifestFails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "new_manifest_required_target");
+        var payloadDir = Path.Combine(_tempRoot, "new_manifest_required_payload");
+        var archivePath = Path.Combine(_tempRoot, "new_manifest_required.tar.gz");
+        var checksumsPath = Path.Combine(_tempRoot, "new_manifest_required.sha256sums.txt");
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            $$"""
+            mkdir -p "{{payloadDir}}"
+            cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "cdidx v1.24.6"
+            EOF
+            chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
+            printf '{"version":"1.24.6"}' > "{{Path.Combine(payloadDir, "version.json")}}"
+            printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
+            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+
+            checksum="$(calculate_sha256 "{{archivePath}}")"
+            printf '%s  CodeIndex-linux-x64.tar.gz\n' "$checksum" > "{{checksumsPath}}"
+
+            VERSION="v1.24.6"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o) output_path="$2"; shift 2 ;;
+                        -w) shift 2 ;;
+                        *) url="$1"; shift ;;
+                    esac
+                done
+                case "$url" in
+                    */sha256sums.txt) cp "{{checksumsPath}}" "$output_path" ;;
+                    *) cp "{{archivePath}}" "$output_path" ;;
+                esac
+                printf '200'
+                return 0
+            }
+
+            download_and_install
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("Release payload is missing MANIFEST.sha256", stderr);
+        Assert.False(File.Exists(Path.Combine(installDir, "cdidx")));
+    }
+
+    [Fact]
     public void DownloadAndInstall_StageDirMktempFailure_AbortsBeforeInstallWritesUnderStrictMode()
     {
         if (OperatingSystem.IsWindows())
