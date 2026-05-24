@@ -285,6 +285,65 @@ public partial class McpServer
         return values.Count(value => value);
     }
 
+    private JsonArray ToJsonArray<T>(IEnumerable<T> items)
+    {
+        var array = new JsonArray();
+        foreach (var item in items)
+            array.Add(JsonSerializer.SerializeToNode(item, _jsonOptions));
+        return array;
+    }
+
+    private JsonArray ToJsonArray<TSource, TResult>(IEnumerable<TSource> items, Func<TSource, TResult> selector)
+    {
+        var array = new JsonArray();
+        foreach (var item in items)
+            array.Add(JsonSerializer.SerializeToNode(selector(item), _jsonOptions));
+        return array;
+    }
+
+    private JsonObject ToAnalyzeSymbolJsonObject(SymbolAnalysisResult analysis)
+    {
+        var payload = new JsonObject
+        {
+            ["api_version"] = analysis.ApiVersion,
+            ["query"] = analysis.Query,
+            ["file"] = JsonSerializer.SerializeToNode(analysis.File, _jsonOptions),
+            ["workspaceIndexedAt"] = JsonSerializer.SerializeToNode(analysis.WorkspaceIndexedAt, _jsonOptions),
+            ["workspaceLatestModified"] = JsonSerializer.SerializeToNode(analysis.WorkspaceLatestModified, _jsonOptions),
+            ["projectRoot"] = analysis.ProjectRoot,
+            ["gitHead"] = analysis.GitHead,
+            ["gitIsDirty"] = analysis.GitIsDirty,
+            ["graphLanguage"] = analysis.GraphLanguage,
+            ["graphSupported"] = analysis.GraphSupported,
+            ["graphSupportReason"] = analysis.GraphSupportReason,
+            ["definitions"] = ToJsonArray(analysis.Definitions),
+            ["nearbySymbols"] = ToJsonArray(analysis.NearbySymbols),
+            ["references"] = ToJsonArray(analysis.References),
+            ["callers"] = ToJsonArray(analysis.Callers),
+            ["callees"] = ToJsonArray(analysis.Callees),
+            ["graphTableAvailable"] = analysis.GraphTableAvailable,
+        };
+        if (analysis.IndexedHeadCommit != null)
+            payload["indexed_head_commit"] = analysis.IndexedHeadCommit;
+        if (analysis.WorktreeHeadChanged.HasValue)
+            payload["worktree_head_changed"] = analysis.WorktreeHeadChanged.Value;
+        if (analysis.GraphDegraded.HasValue)
+            payload["graphDegraded"] = analysis.GraphDegraded.Value;
+        if (analysis.UnsupportedSymbolKind != null)
+            payload["unsupportedSymbolKind"] = analysis.UnsupportedSymbolKind;
+        if (analysis.SqlGraphContractReady.HasValue)
+            payload["sqlGraphContractReady"] = analysis.SqlGraphContractReady.Value;
+        if (analysis.SqlGraphContractDegradedReason != null)
+            payload["sqlGraphContractDegradedReason"] = analysis.SqlGraphContractDegradedReason;
+        if (analysis.ExactZeroHint != null)
+            payload["exactZeroHint"] = JsonSerializer.SerializeToNode(analysis.ExactZeroHint, _jsonOptions);
+        if (analysis.ExactIndexAvailable.HasValue)
+            payload["exactIndexAvailable"] = analysis.ExactIndexAvailable.Value;
+        if (analysis.DegradedReason != null)
+            payload["degradedReason"] = analysis.DegradedReason;
+        return payload;
+    }
+
     /// <summary>
     /// Read a path filter argument that accepts either a scalar string or an array of strings.
     /// Returns null when the value is missing or empty so downstream SQL omits the filter.
@@ -479,7 +538,7 @@ public partial class McpServer
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["count"] = results.Count,
-                ["results"] = JsonSerializer.SerializeToNode(results.Select(result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines, exact, maxLineWidth)), _jsonOptions)
+                ["results"] = ToJsonArray(results, result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines, exact, maxLineWidth))
             };
             // Include top file paths in summary for quick AI orientation
             // AIが素早く位置把握できるよう、サマリにトップファイルパスを含める
@@ -591,7 +650,7 @@ public partial class McpServer
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["count"] = results.Count,
-                ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
+                ["results"] = ToJsonArray(results)
             };
             if (hasExactPredicate)
                 AddExactGraphSignal(structured, exactSignal);
@@ -641,7 +700,7 @@ public partial class McpServer
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["count"] = results.Count,
-                ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
+                ["results"] = ToJsonArray(results)
             };
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
@@ -704,7 +763,7 @@ public partial class McpServer
                 ["graphSupported"] = graphSupport.GraphSupported,
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
                 ["count"] = results.Count,
-                ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
+                ["results"] = ToJsonArray(results)
             };
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
@@ -770,7 +829,7 @@ public partial class McpServer
                 ["graphSupported"] = graphSupport.GraphSupported,
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
                 ["count"] = results.Count,
-                ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
+                ["results"] = ToJsonArray(results)
             };
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
@@ -836,7 +895,7 @@ public partial class McpServer
                 ["graphSupported"] = graphSupport.GraphSupported,
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
                 ["count"] = results.Count,
-                ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
+                ["results"] = ToJsonArray(results)
             };
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
@@ -965,7 +1024,7 @@ public partial class McpServer
             analysis.SqlGraphContractReady = sqlGraphSignal.Relevant ? sqlGraphSignal.Ready : null;
             analysis.SqlGraphContractDegradedReason = sqlGraphSignal.Relevant ? sqlGraphSignal.DegradedReason : null;
             WorkspaceMetadataEnricher.Enrich(analysis, _dbPath, _dbPathExplicit);
-            var structured = JsonSerializer.SerializeToNode(analysis, _jsonOptions)!.AsObject();
+            var structured = ToAnalyzeSymbolJsonObject(analysis);
             AddExactSignalAliases(structured);
             AddSqlGraphContractSignal(structured, sqlGraphSignal);
             structured.Remove("exactZeroHint");
@@ -1914,20 +1973,20 @@ public partial class McpServer
                 ["cycle_detected"] = analysis.CycleDetected,
                 ["impact_mode"] = analysis.ImpactMode,
                 ["heuristic"] = analysis.Heuristic,
-                ["callers"] = JsonSerializer.SerializeToNode(analysis.Callers, _jsonOptions),
-                ["file_impacts"] = JsonSerializer.SerializeToNode(analysis.FileImpacts, _jsonOptions),
+                ["callers"] = ToJsonArray(analysis.Callers),
+                ["file_impacts"] = ToJsonArray(analysis.FileImpacts),
                 ["definition_count"] = analysis.DefinitionCount,
                 ["definition_file_count"] = analysis.DefinitionFileCount,
                 ["has_multiple_definitions"] = analysis.HasMultipleDefinitions,
                 ["has_class_like_definitions"] = analysis.HasClassLikeDefinitions,
                 ["has_multiple_definition_files"] = analysis.HasMultipleDefinitionFiles,
-                ["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, _jsonOptions),
+                ["definitions"] = ToJsonArray(analysis.Definitions),
                 ["graph_table_available"] = analysis.GraphTableAvailable,
             };
             if (analysis.TruncatedReason != null)
                 payload["truncated_reason"] = analysis.TruncatedReason;
             if (analysis.Cycles is { Count: > 0 })
-                payload["cycles"] = JsonSerializer.SerializeToNode(analysis.Cycles, _jsonOptions);
+                payload["cycles"] = ToJsonArray(analysis.Cycles);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
             var warnings = new JsonArray();
             string? maxDepthClampWarning = null;
@@ -2061,16 +2120,6 @@ public partial class McpServer
                     baseSqlGraphSignal,
                     resultLangs,
                     lang);
-            var items = results.Select(r => new
-            {
-                name = r.Symbol.Name,
-                kind = r.Symbol.Kind,
-                path = r.Symbol.Path,
-                line = r.Symbol.Line,
-                reference_count = r.ReferenceCount,
-                visibility = r.Symbol.Visibility,
-                container = r.Symbol.ContainerName,
-            });
             JsonNode? hotspotsNode;
             if (fileResults != null)
             {
@@ -2089,7 +2138,16 @@ public partial class McpServer
             }
             else
             {
-                hotspotsNode = JsonSerializer.SerializeToNode(items, _jsonOptions);
+                hotspotsNode = ToJsonArray(results, r => new
+                {
+                    name = r.Symbol.Name,
+                    kind = r.Symbol.Kind,
+                    path = r.Symbol.Path,
+                    line = r.Symbol.Line,
+                    reference_count = r.ReferenceCount,
+                    visibility = r.Symbol.Visibility,
+                    container = r.Symbol.ContainerName,
+                });
             }
 
             var payload = new JsonObject
