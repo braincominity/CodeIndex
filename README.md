@@ -57,34 +57,23 @@ cdidx search "Handle" --project MyApp
 cdidx mcp
 ```
 
-During indexing, the terminal shows `Scanning...`, `Indexing...`, and a
-`67.0% [28/42]`-style progress line, then a unit-labelled elapsed time such as
-`2.4s` or `5m 42s`. For later edits or branch switches, refresh incrementally
-with `--files`, `--commits`, or `--changed-between <old-ref> <new-ref>` instead
-of rebuilding; see
-[Quick Start](USER_GUIDE.md#quick-start) and
-[Incremental update reliability](USER_GUIDE.md#incremental-update-reliability).
-If you do need `--rebuild`, interactive terminals ask for confirmation before
-deleting the existing DB, and scripts/CI must pass `--yes` (or `--force`).
-Incremental refreshes keep an FTS5 maintenance counter and optimize internal
-segments opportunistically; run `cdidx optimize` or
-`cdidx index <projectPath> --optimize` to perform the same maintenance manually
-when a long-lived DB needs immediate compaction.
-If a directory cannot be scanned because of permissions or an I/O error,
-`cdidx` records the scan error, keeps scanning other directories, and writes a
-temporary `.cdidx/scan-checkpoint.json` so a same-HEAD retry can skip directories
-that already completed successfully.
-On POSIX systems, persistent global tool stderr logs are forced to owner-only
-`0600` permissions on every open, including existing date-stamped log files.
-Terminals that request ASCII-only output with `--ascii`, `CDIDX_ASCII=1`,
-`NO_UNICODE`, `TERM=dumb`, accessibility env hints, or a non-UTF-8 locale render
-spinner frames as `|` / `/` / `-` / `\` and progress bars with `#` / `-` instead
-of Unicode glyphs. Very narrow Unicode-capable terminals show a percentage-only
-progress line so the display does not wrap.
-For script-friendly query pipelines, pass `--quiet`, `-q`, `--silent`, or set
-`CDIDX_QUIET=1` to suppress informational stderr output such as zero-result
-hints, summaries, warnings, notes, and verbose diagnostics while preserving
-error lines. `--quiet` takes precedence over `--verbose` for stderr text.
+After the first command, use these cues and follow-up commands:
+
+| Situation | What to expect or run |
+|---|---|
+| Index progress | The terminal shows `Scanning...`, `Indexing...`, a `67.0% [28/42]`-style progress line, and an elapsed time such as `2.4s` or `5m 42s`. |
+| Edits or branch switches | Refresh incrementally with `--files`, `--commits`, or `--changed-between <old-ref> <new-ref>` instead of rebuilding. See [Quick Start](USER_GUIDE.md#quick-start) and [Incremental update reliability](USER_GUIDE.md#incremental-update-reliability). |
+| Intentional rebuilds | Interactive terminals ask before deleting the DB. Scripts and CI must pass `--yes` or `--force`. |
+| Long-lived DB compaction | Run `cdidx optimize` or `cdidx index <projectPath> --optimize` to compact FTS5 segments immediately. Incremental refreshes also optimize opportunistically. |
+| Permission or I/O scan errors | `cdidx` records the scan error, continues other directories, and writes `.cdidx/scan-checkpoint.json` so same-HEAD retries can skip completed directories. |
+
+Output controls:
+
+| Need | Option |
+|---|---|
+| Owner-only persistent stderr logs on POSIX | Global tool stderr logs are forced to `0600` permissions on every open, including existing date-stamped log files. |
+| ASCII-only terminal output | Use `--ascii`, `CDIDX_ASCII=1`, `NO_UNICODE`, `TERM=dumb`, accessibility env hints, or a non-UTF-8 locale. Spinners use pipe, slash, dash, and backslash frames; progress bars use `#` / `-`; very narrow terminals fall back to percentage-only progress. |
+| Script-friendly query pipelines | Use `--quiet`, `-q`, `--silent`, or `CDIDX_QUIET=1` to suppress informational stderr text while preserving errors. `--quiet` takes precedence over `--verbose`. |
 
 Use `cdidx` when a repository will be searched repeatedly from terminals,
 scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
@@ -99,84 +88,49 @@ file completion.
 
 ## Highlights
 
-- CLI-first search with human-readable and machine-oriented output.
-- `cdidx --version` checks GitHub releases at most once per day and appends a
-  newer-release hint when one is available; set `CDIDX_DISABLE_UPDATE_CHECK=1`
-  to suppress the check.
-- Search ranking prefers public/exported symbol matches ahead of protected,
-  internal, and private matches; `--no-visibility-rank` keeps the legacy order.
-- `symbols`, `definition`, `unused`, and `hotspots` can include or exclude
-  `public`, `protected`, `internal`, and `private` symbols with `--visibility`
-  and `--exclude-visibility`.
-- Full-text, symbol, reference, caller/callee, dependency, map, inspect, and
-  excerpt commands.
-- `.sln` / `.csproj`-aware `--project <name|path>` filters for indexing and
-  query commands, with `--solution <path>` when a workspace has multiple
-  solution files.
-- MCP server for AI clients such as Claude Code, Cursor, and Windsurf,
-  including tools, indexed-file resources, and canned analysis prompts.
-- Local suggestion history can be listed, inspected, and exported with
-  `cdidx suggestions`; near-duplicate MCP suggestions are fuzzy-deduped before
-  GitHub submission, with `cdidx mcp --suggestion-dedup-threshold`,
-  `CDIDX_SUGGESTION_DEDUP_THRESHOLD`, or `.cdidxrc.json`
-  `suggestion_dedup_threshold` controlling the score cutoff.
-- Parallel full-scan extraction with configurable `--parallelism`, incremental refreshes
-  with `--files` and `--commits`, plus continuous `--watch` mode.
-- New index databases use SQLite incremental auto-vacuum, `cdidx vacuum` reclaims
-  free pages from existing DBs (including a one-time full `VACUUM` conversion for
-  legacy no-autovacuum DBs), and `status --json` reports page/free-list metrics
-  under `db_pragma_settings`.
-- Post-extraction hooks from `~/.config/cdidx/hooks/*.dll` (or `CDIDX_HOOKS_DIR`)
-  can enrich symbols and references before persistence.
-- Exact DB/worktree freshness checks with `status --check`, including an
-  overridable age threshold via `--stale-after` / `CDIDX_STALE_AFTER`.
-- Default SQLite storage can be moved out of the workspace with `--data-dir <dir>`,
-  `CDIDX_DATA_DIR`, or `XDG_DATA_HOME`; explicit `--db <path>` still wins.
-- Human `status` output translates readiness flags and `status --explain <field>`
-  describes one readiness field/remediation; `status --json` keeps raw fields for
-  automation, including the last full-scan unknown-extension count.
-- Read commands accept `--profile` to append SQL timing, row-count, and
-  `EXPLAIN QUERY PLAN` JSON after the normal result; `--slow-query-ms <n>` logs
-  profiled SQL statements that meet the threshold.
-- Read commands also accept `--trace=stderr|file|none` (default `none`) to emit
-  one structured JSON trace line with sanitized parameters, elapsed time,
-  result count when available, exit code, and error status. `file` writes daily
-  `query-trace-YYYYMMDD.jsonl` files next to the persistent lifecycle log.
-- `cdidx diff <db1> <db2>` compares two index databases for CI or drift
-  debugging, reporting schema, file, symbol, and reference deltas with stable
-  exit codes: `0` identical, `1` drift, `2` schema mismatch, `3` unreadable DB.
-- The documented `status --json` trust contract covers `fold_ready`,
-  `fold_ready_reason`, `graph_table_available`, `issues_table_available`,
-  `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`,
-  `hotspot_family_ready`, `hotspot_family_degraded_reason`,
-  `csharp_symbol_name_ready`, `csharp_metadata_target_ready`,
-  `csharp_metadata_target_degraded_reason`,
-  `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`,
-  `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`,
-  `index_writer_version`, `index_newer_than_reader`,
-  `index_newer_than_reader_reason`, `unknown_extension_file_count`,
-  `path_case_sensitive`, `data_dir`, `data_dir_source`, `data_dir_mode`,
-  `mac_profile`, `db_pragma_settings`, `hooks`, `stale_after_seconds`,
-  `index_age_seconds`, `degraded_reason`, `recommended_action`, and `alternative_action`; keep this
-  list synchronized with `DEVELOPER_GUIDE.md` and `AGENT_GUIDE.md`.
-  `hotspot_family_degraded_reason` distinguishes legacy DBs without hotspot-family
-  support (`hotspot_family_support_not_indexed`), stale metadata
-  (`hotspot_family_metadata_stale`), and indexes written while marker fingerprints
-  were unavailable (`hotspot_family_disabled_at_index_time`); hotspot-family
-  readiness is tracked by per-language `hotspot_family_version_<lang>` metadata
-  introduced with hotspot-family contract version 2.
-- Local-first storage in `.cdidx/codeindex.db`.
-- On POSIX systems, CodeIndex creates its `.cdidx` data directory with `0700`
-  permissions so only the owning user can traverse the stored index and local
-  suggestion data. `status --json` reports the effective POSIX mode as
-  `data_dir_mode` when available.
-- 78 detected languages, with symbol and graph support where available.
-- MCP `tools/list` descriptions include a `Language support:` clause sourced
-  from the same language registries as `cdidx languages`.
-- MCP `resources/list` exposes indexed files as `cdidx://file/<path>` resources,
-  `resources/read` returns indexed file text, and `prompts/list` advertises
-  starter prompts such as `summarize_file`, `find_unused`, and
-  `impact_of_changing`.
+| Area | What cdidx provides |
+|---|---|
+| Search surfaces | CLI-first output for humans and machines; full-text, symbol, reference, caller/callee, dependency, map, inspect, and excerpt commands. |
+| Ranking and filters | Public/exported symbol matches rank ahead of protected, internal, and private matches. Use `--no-visibility-rank` for legacy order, and `--visibility` / `--exclude-visibility` with `symbols`, `definition`, `unused`, and `hotspots`. |
+| Project scoping | `.sln` / `.csproj`-aware <code>--project &lt;name&#124;path&gt;</code> filters for indexing and queries, plus `--solution <path>` when a workspace has multiple solution files. |
+| MCP integration | MCP server support for AI clients such as Claude Code, Cursor, and Windsurf, including tools, indexed-file resources, starter prompts, and `Language support:` descriptions sourced from the same registries as `cdidx languages`. |
+| Freshness | Parallel full-scan extraction with `--parallelism`, incremental refreshes with `--files` and `--commits`, continuous `--watch`, exact `status --check`, and configurable stale thresholds via `--stale-after` / `CDIDX_STALE_AFTER`. |
+| Storage | Local-first `.cdidx/codeindex.db` storage. `--data-dir <dir>`, `CDIDX_DATA_DIR`, or `XDG_DATA_HOME` can move default SQLite storage outside the workspace; explicit `--db <path>` still wins. |
+| DB maintenance | New indexes use SQLite incremental auto-vacuum. `cdidx vacuum` reclaims free pages from existing DBs, including a one-time full `VACUUM` conversion for legacy no-autovacuum DBs, and `status --json` reports metrics under `db_pragma_settings`. |
+| Security defaults | On POSIX systems, `.cdidx` is created with `0700` permissions and `status --json` reports the effective `data_dir_mode` when available. |
+| Diagnostics | `status --explain <field>` describes readiness fields and remediation. Read commands support `--profile`, `--slow-query-ms <n>`, and <code>--trace=stderr&#124;file&#124;none</code>; file traces write daily `query-trace-YYYYMMDD.jsonl` files next to the lifecycle log. |
+| Drift checks | `cdidx diff <db1> <db2>` compares schema, file, symbol, and reference deltas with stable exit codes: `0` identical, `1` drift, `2` schema mismatch, `3` unreadable DB. |
+| Extensibility and feedback | Post-extraction hooks from `~/.config/cdidx/hooks/*.dll` or `CDIDX_HOOKS_DIR` can enrich symbols and references. `cdidx suggestions` lists, inspects, and exports local suggestion history, with fuzzy MCP suggestion deduplication controlled by CLI, env, or `.cdidxrc.json`. |
+| Language coverage | 78 detected languages, with symbol and graph support where available. |
+| Updates | `cdidx --version` checks GitHub releases at most once per day and appends a newer-release hint when one is available. Set `CDIDX_DISABLE_UPDATE_CHECK=1` to suppress the check. |
+
+The documented `status --json` trust contract covers these fields:
+
+<table>
+<tbody>
+<tr><td><code>fold_ready</code></td><td><code>fold_ready_reason</code></td><td><code>graph_table_available</code></td><td><code>issues_table_available</code></td></tr>
+<tr><td><code>sql_graph_contract_ready</code></td><td><code>sql_graph_contract_degraded_reason</code></td><td><code>hotspot_family_ready</code></td><td><code>hotspot_family_degraded_reason</code></td></tr>
+<tr><td><code>csharp_symbol_name_ready</code></td><td><code>csharp_metadata_target_ready</code></td><td><code>csharp_metadata_target_degraded_reason</code></td><td><code>indexed_head_commit</code></td></tr>
+<tr><td><code>worktree_head_changed</code></td><td><code>indexed_head_sha</code></td><td><code>indexed_head_branch</code></td><td><code>indexed_head_timestamp</code></td></tr>
+<tr><td><code>commits_ahead_of_indexed_head</code></td><td><code>index_writer_version</code></td><td><code>index_newer_than_reader</code></td><td><code>index_newer_than_reader_reason</code></td></tr>
+<tr><td><code>unknown_extension_file_count</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td><td><code>data_dir_source</code></td></tr>
+<tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_pragma_settings</code></td><td><code>hooks</code></td></tr>
+<tr><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td><td><code>degraded_reason</code></td><td><code>recommended_action</code></td></tr>
+<tr><td><code>alternative_action</code></td><td></td><td></td><td></td></tr>
+</tbody>
+</table>
+
+`hotspot_family_degraded_reason` uses these values:
+
+| Value | Meaning |
+|---|---|
+| `hotspot_family_support_not_indexed` | Legacy DB without hotspot-family support. |
+| `hotspot_family_metadata_stale` | Hotspot-family metadata is stale. |
+| `hotspot_family_disabled_at_index_time` | The index was written while marker fingerprints were unavailable. |
+
+Hotspot-family readiness is tracked by per-language
+`hotspot_family_version_<lang>` metadata introduced with hotspot-family contract
+version 2.
 
 ## Documentation
 
@@ -286,31 +240,23 @@ cdidx search "Handle" --project MyApp
 cdidx mcp
 ```
 
-インデックス中は `Scanning...`、`Indexing...`、`67.0% [28/42]` のような
-進捗行が表示され、最後に `2.4s` や `5m 42s` のような単位付き経過時間が出ます。
-編集後やブランチ切り替え後は再構築ではなく `--files`、`--commits`、または
-`--changed-between <old-ref> <new-ref>` で差分更新できます。詳細は
-[クイックスタート](USER_GUIDE.md#クイックスタート) と
-[インクリメンタル更新の信頼性](USER_GUIDE.md#インクリメンタル更新の信頼性)
-を参照してください。
-`--rebuild` が必要な場合、interactive terminal では既存 DB 削除前に確認を求め、
-script / CI では `--yes`（または `--force`）が必要です。
-差分更新では FTS5 maintenance counter を保持し、内部 segment をしきい値到達時に
-自動で optimize します。長期間使っている DB をすぐに compact したい場合は、
-`cdidx optimize` または `cdidx index <projectPath> --optimize` を実行してください。
-権限や I/O エラーでディレクトリを走査できない場合でも、`cdidx` は scan error を
-記録して他のディレクトリの走査を続け、同じ HEAD の再実行で成功済みディレクトリを
-読み飛ばせるように一時的な `.cdidx/scan-checkpoint.json` を書き込みます。
-POSIX 環境では、persistent global tool stderr log は開くたびに所有者のみ読み書き可能な
-`0600` 権限へ補正され、既存の日付付き log file も同じ扱いになります。
-`--ascii`、`CDIDX_ASCII=1`、`NO_UNICODE`、`TERM=dumb`、accessibility 系の環境変数、
-または非 UTF-8 locale により ASCII-only 出力が要求されている端末では、スピナーは
-`|` / `/` / `-` / `\`、進捗バーは `#` / `-` で描画されます。Unicode を利用できる端末でも
-幅が非常に狭い場合は、折り返しを避けるため percentage-only の進捗行を表示します。
-スクリプト向けの query pipeline では、`--quiet`、`-q`、`--silent`、または
-`CDIDX_QUIET=1` により、0件時のヒント、summary、warning、note、verbose 診断などの
-informational stderr 出力を抑制し、error 行だけを残せます。stderr text については
-`--quiet` が `--verbose` より優先されます。
+初回実行後は、次の見方と追加コマンドをよく使います。
+
+| 状況 | 見るもの / 使うもの |
+|---|---|
+| index の進捗 | `Scanning...`、`Indexing...`、`67.0% [28/42]` のような進捗行と、`2.4s` や `5m 42s` のような単位付き経過時間が表示されます。 |
+| 編集後やブランチ切り替え後 | 再構築ではなく `--files`、`--commits`、`--changed-between <old-ref> <new-ref>` で差分更新します。詳細は [クイックスタート](USER_GUIDE.md#クイックスタート) と [インクリメンタル更新の信頼性](USER_GUIDE.md#インクリメンタル更新の信頼性) を参照してください。 |
+| 意図的な再構築 | interactive terminal では既存 DB 削除前に確認を求めます。script / CI では `--yes` または `--force` が必要です。 |
+| 長期間使っている DB の compact | `cdidx optimize` または `cdidx index <projectPath> --optimize` で FTS5 segment をすぐに compact できます。差分更新中も必要に応じて自動 optimize します。 |
+| 権限や I/O の scan error | `cdidx` は scan error を記録し、他のディレクトリの走査を続けます。同じ HEAD の再実行では `.cdidx/scan-checkpoint.json` により成功済みディレクトリを読み飛ばせます。 |
+
+出力を整える option:
+
+| 目的 | option / 動作 |
+|---|---|
+| POSIX の persistent stderr log を owner-only にする | global tool stderr log は開くたびに `0600` 権限へ補正され、既存の日付付き log file も同じ扱いになります。 |
+| ASCII-only 端末で崩れない表示にする | `--ascii`、`CDIDX_ASCII=1`、`NO_UNICODE`、`TERM=dumb`、accessibility 系の環境変数、非 UTF-8 locale を使います。スピナーは pipe、slash、dash、backslash の frame、進捗バーは `#` / `-` になり、幅が非常に狭い端末では percentage-only になります。 |
+| script 向け query pipeline の stderr を静かにする | `--quiet`、`-q`、`--silent`、`CDIDX_QUIET=1` で informational stderr を抑制し、error 行だけを残します。`--quiet` は `--verbose` より優先されます。 |
 
 ターミナル、スクリプト、CI、AI ツールから同じリポジトリを繰り返し検索する
 場合は `cdidx` が向いています。1回限りのテキスト検索には `rg` が向いています。
@@ -324,78 +270,48 @@ informational stderr 出力を抑制し、error 行だけを残せます。stder
 
 ## 特長
 
-- CLI-first の検索。人間向け出力と機械処理向け出力に対応。
-- `cdidx --version` は GitHub releases を 1 日 1 回まで確認し、新しい
-  リリースがある場合にヒントを追記します。確認を抑止するには
-  `CDIDX_DISABLE_UPDATE_CHECK=1` を設定します。
-- 検索順位は public/exported なシンボル一致を protected、internal、private より優先します。
-  従来順が必要な場合は `--no-visibility-rank` を使えます。
-- `symbols`、`definition`、`unused`、`hotspots` は `--visibility` と
-  `--exclude-visibility` で `public`、`protected`、`internal`、`private`
-  シンボルを include / exclude できます。
-- 全文検索、シンボル、参照、caller/callee、依存関係、map、inspect、excerpt
-  コマンドを提供。
-- `.sln` / `.csproj` を使った `--project <name|path>` filter により、
-  index と query コマンドを特定の .NET project 配下へ絞り込めます。
-  workspace に solution が複数ある場合は `--solution <path>` を指定します。
-- Claude Code、Cursor、Windsurf などの AI クライアント向け MCP サーバー。
-  tools、インデックス済みファイル resources、定型分析 prompts を提供します。
-- `cdidx suggestions` でローカルの提案履歴を一覧表示、詳細表示、エクスポート可能。
-  MCP 提案は GitHub 送信前に近似重複排除され、しきい値は
-  `cdidx mcp --suggestion-dedup-threshold`、`CDIDX_SUGGESTION_DEDUP_THRESHOLD`、
-  または `.cdidxrc.json` の `suggestion_dedup_threshold` で調整できます。
-- 新規 index DB は SQLite incremental auto-vacuum を使い、既存 DB は
-  `cdidx vacuum` で free page を回収できます（legacy no-autovacuum DB は
-  初回だけ full `VACUUM` で変換）。`status --json` は `db_pragma_settings`
-  配下に page / freelist metrics を出力します。
-- `--files` と `--commits` による差分更新、および `--watch` による継続更新モード。
-- `~/.config/cdidx/hooks/*.dll`（または `CDIDX_HOOKS_DIR`）の post-extraction hook で、
-  永続化前のシンボルと参照を拡張できます。
-- `status --check` による DB と作業ツリーの完全一致確認。`--stale-after` /
-  `CDIDX_STALE_AFTER` で age threshold を上書き可能。
-- 既定の SQLite 保存先は `--data-dir <dir>`、`CDIDX_DATA_DIR`、`XDG_DATA_HOME`
-  で workspace 外へ移せます。明示的な `--db <path>` は引き続き最優先です。
-- 人間向け `status` は readiness flag を翻訳し、`status --explain <field>` は
-  個別 field の意味と対処を説明します。自動化向けの `status --json` は raw field
-  と直近 full scan の未知拡張子数を維持します。
-- read 系コマンドは `--profile` で通常結果の後に SQL の時間、行数、
-  `EXPLAIN QUERY PLAN` の JSON を追加できます。`--slow-query-ms <n>` は
-  閾値以上の profiled SQL をログに記録します。
-- read 系コマンドは `--trace=stderr|file|none`（既定は `none`）も受け付け、
-  sanitise 済みパラメータ、経過時間、取得可能な場合の result count、exit code、
-  error 状態を含む構造化 JSON trace を 1 行出力できます。`file` は persistent
-  lifecycle log と同じ場所に日次 `query-trace-YYYYMMDD.jsonl` を書きます。
-- `cdidx diff <db1> <db2>` は CI や drift 調査向けに 2 つの index DB を比較し、
-  schema、file、symbol、reference の差分を報告します。exit code は `0` identical、
-  `1` drift、`2` schema mismatch、`3` unreadable DB です。
-- 文書化された `status --json` trust contract は `fold_ready`、
-  `fold_ready_reason`、`graph_table_available`、`issues_table_available`、
-  `sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`、
-  `hotspot_family_ready`、`hotspot_family_degraded_reason`、
-  `csharp_symbol_name_ready`、`csharp_metadata_target_ready`、
-  `csharp_metadata_target_degraded_reason`、
-  `indexed_head_commit`、`worktree_head_changed`、`indexed_head_sha`、
-  `indexed_head_branch`、`indexed_head_timestamp`、`commits_ahead_of_indexed_head`、
-  `index_writer_version`、`index_newer_than_reader`、
-  `index_newer_than_reader_reason`、`unknown_extension_file_count`、
-  `path_case_sensitive`、`mac_profile`、`data_dir`、`data_dir_source`、
-  `db_pragma_settings`、`hooks`、`stale_after_seconds`、
-  `index_age_seconds`、`degraded_reason`、`recommended_action`、`alternative_action` を対象にします。
-  この一覧は `DEVELOPER_GUIDE.md` と `AGENT_GUIDE.md` に同期してください。
-  `hotspot_family_degraded_reason` は、hotspot-family 未対応の legacy DB
-  (`hotspot_family_support_not_indexed`)、古い metadata
-  (`hotspot_family_metadata_stale`)、marker fingerprint が利用できない状態で書かれた index
-  (`hotspot_family_disabled_at_index_time`) を区別します。hotspot-family readiness は
-  hotspot-family contract version 2 で導入された言語別
-  `hotspot_family_version_<lang>` metadata で追跡されます。
-- `.cdidx/codeindex.db` に保存するローカルファースト設計。
-- 78 言語を検出し、対応言語ではシンボルとグラフも利用可能。
-- MCP の `tools/list` 説明には、`cdidx languages` と同じ言語レジストリから
-  生成した `Language support:` 句を含めます。
-- MCP の `resources/list` はインデックス済みファイルを `cdidx://file/<path>`
-  resources として公開し、`resources/read` はファイル本文を返します。
-  `prompts/list` は `summarize_file`、`find_unused`、`impact_of_changing`
-  などの starter prompt を公開します。
+| 分野 | 内容 |
+|---|---|
+| 検索面 | CLI-first の人間向け / 機械処理向け出力。全文検索、シンボル、参照、caller/callee、依存関係、map、inspect、excerpt コマンドを提供します。 |
+| 順位と filter | public/exported なシンボル一致を protected、internal、private より優先します。従来順は `--no-visibility-rank`、可視性の include / exclude は `symbols`、`definition`、`unused`、`hotspots` の `--visibility` / `--exclude-visibility` で指定できます。 |
+| project scope | `.sln` / `.csproj` を使った <code>--project &lt;name&#124;path&gt;</code> filter で index と query を .NET project 配下へ絞り込めます。workspace に solution が複数ある場合は `--solution <path>` を指定します。 |
+| MCP 連携 | Claude Code、Cursor、Windsurf などの AI クライアント向け MCP server。tools、インデックス済みファイル resources、starter prompts、`cdidx languages` と同じ言語レジストリ由来の `Language support:` 説明を提供します。 |
+| freshness | `--parallelism` による parallel full-scan、`--files` / `--commits` による差分更新、`--watch` による継続更新、`status --check` による完全一致確認、`--stale-after` / `CDIDX_STALE_AFTER` による age threshold 上書きに対応します。 |
+| storage | `.cdidx/codeindex.db` に保存する local-first 設計。既定の SQLite 保存先は `--data-dir <dir>`、`CDIDX_DATA_DIR`、`XDG_DATA_HOME` で workspace 外へ移せます。明示的な `--db <path>` は引き続き最優先です。 |
+| DB maintenance | 新規 index DB は SQLite incremental auto-vacuum を使います。既存 DB は `cdidx vacuum` で free page を回収でき、legacy no-autovacuum DB は初回だけ full `VACUUM` で変換します。`status --json` は `db_pragma_settings` 配下に metrics を出力します。 |
+| security defaults | POSIX では `.cdidx` を `0700` 権限で作成します。`status --json` は利用可能な場合に実効 POSIX mode を `data_dir_mode` として報告します。 |
+| diagnostics | `status --explain <field>` は readiness field の意味と対処を説明します。read 系コマンドは `--profile`、`--slow-query-ms <n>`、<code>--trace=stderr&#124;file&#124;none</code> に対応し、file trace は lifecycle log と同じ場所に日次 `query-trace-YYYYMMDD.jsonl` を書きます。 |
+| drift checks | `cdidx diff <db1> <db2>` は schema、file、symbol、reference の差分を比較します。exit code は `0` identical、`1` drift、`2` schema mismatch、`3` unreadable DB です。 |
+| extensibility / feedback | `~/.config/cdidx/hooks/*.dll` または `CDIDX_HOOKS_DIR` の post-extraction hook で永続化前のシンボルと参照を拡張できます。`cdidx suggestions` はローカル提案履歴の一覧表示、詳細表示、エクスポートに対応し、MCP 提案の近似重複排除しきい値は CLI、env、`.cdidxrc.json` で調整できます。 |
+| language coverage | 78 言語を検出し、対応言語ではシンボルとグラフも利用可能です。 |
+| updates | `cdidx --version` は GitHub releases を 1 日 1 回まで確認し、新しいリリースがある場合にヒントを追記します。確認を抑止するには `CDIDX_DISABLE_UPDATE_CHECK=1` を設定します。 |
+
+文書化された `status --json` trust contract は次の field を対象にします。
+
+<table>
+<tbody>
+<tr><td><code>fold_ready</code></td><td><code>fold_ready_reason</code></td><td><code>graph_table_available</code></td><td><code>issues_table_available</code></td></tr>
+<tr><td><code>sql_graph_contract_ready</code></td><td><code>sql_graph_contract_degraded_reason</code></td><td><code>hotspot_family_ready</code></td><td><code>hotspot_family_degraded_reason</code></td></tr>
+<tr><td><code>csharp_symbol_name_ready</code></td><td><code>csharp_metadata_target_ready</code></td><td><code>csharp_metadata_target_degraded_reason</code></td><td><code>indexed_head_commit</code></td></tr>
+<tr><td><code>worktree_head_changed</code></td><td><code>indexed_head_sha</code></td><td><code>indexed_head_branch</code></td><td><code>indexed_head_timestamp</code></td></tr>
+<tr><td><code>commits_ahead_of_indexed_head</code></td><td><code>index_writer_version</code></td><td><code>index_newer_than_reader</code></td><td><code>index_newer_than_reader_reason</code></td></tr>
+<tr><td><code>unknown_extension_file_count</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td><td><code>data_dir_source</code></td></tr>
+<tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_pragma_settings</code></td><td><code>hooks</code></td></tr>
+<tr><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td><td><code>degraded_reason</code></td><td><code>recommended_action</code></td></tr>
+<tr><td><code>alternative_action</code></td><td></td><td></td><td></td></tr>
+</tbody>
+</table>
+
+`hotspot_family_degraded_reason` は次の値を使います。
+
+| 値 | 意味 |
+|---|---|
+| `hotspot_family_support_not_indexed` | hotspot-family 未対応の legacy DB。 |
+| `hotspot_family_metadata_stale` | hotspot-family metadata が古い状態。 |
+| `hotspot_family_disabled_at_index_time` | marker fingerprint が利用できない状態で書かれた index。 |
+
+hotspot-family readiness は、hotspot-family contract version 2 で導入された
+言語別 `hotspot_family_version_<lang>` metadata で追跡されます。
 
 ## ドキュメント
 
