@@ -37,9 +37,8 @@ public partial class DbReader
             WITH logical_references AS (
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
                        " + groupedReferenceKindSql + @" AS reference_kind,
-                       " + ReferenceKindCountSql("r.reference_kind", "call") + @" AS call_count,
-                       " + ReferenceKindCountSql("r.reference_kind", "instantiate") + @" AS instantiate_count,
-                       " + ReferenceKindCountSql("r.reference_kind", "subscribe") + @" AS subscribe_count,
+                       r.reference_kind AS raw_reference_kind,
+                       COUNT(*) AS reference_count,
                        " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score,
                        r.line,
                        MAX(" + selfReferenceSql + @") AS is_self_reference,
@@ -53,9 +52,7 @@ public partial class DbReader
             SELECT f.path, f.lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, r.symbol_name,
                    r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count,
                    GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds,
-                   " + ReferenceKindCountSql("r.reference_kind", "call") + @" AS call_count,
-                   " + ReferenceKindCountSql("r.reference_kind", "instantiate") + @" AS instantiate_count,
-                   " + ReferenceKindCountSql("r.reference_kind", "subscribe") + @" AS subscribe_count,
+                   r.reference_kind || ':' || COUNT(*) AS reference_kind_counts,
                    " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score,
                    MAX(" + selfReferenceSql + @") AS is_self_reference,
                    MAX(" + mutualRecursionSql + @") AS is_mutual_recursion
@@ -107,15 +104,13 @@ public partial class DbReader
         if (referenceKind == null)
         {
             sql += @"
-            GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, " + groupedReferenceKindGroupSql + @"
+            GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, " + groupedReferenceKindGroupSql + @", r.reference_kind
             )
             SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
                    " + (rawKinds ? GetGroupedCallerReferenceKindSql("r.reference_kind") : "MIN(r.reference_kind)") + @" AS reference_kind,
-                   MIN(line) AS first_line, COUNT(*) AS reference_count,
+                   MIN(line) AS first_line, SUM(r.reference_count) AS reference_count,
                    GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds,
-                   SUM(r.call_count) AS call_count,
-                   SUM(r.instantiate_count) AS instantiate_count,
-                   SUM(r.subscribe_count) AS subscribe_count,
+                   GROUP_CONCAT(r.raw_reference_kind || ':' || r.reference_count) AS reference_kind_counts,
                    SUM(r.weighted_score) AS weighted_score,
                    MAX(r.is_self_reference) AS is_self_reference,
                    MAX(r.is_mutual_recursion) AS is_mutual_recursion
@@ -162,7 +157,7 @@ public partial class DbReader
         {
             var primaryKind = reader.GetString(5);
             var kinds = ParseDistinctReferenceKinds(GetNullableString(reader, 8), primaryKind);
-            var counts = BuildReferenceKindCounts(reader.GetInt32(9), reader.GetInt32(10), reader.GetInt32(11));
+            var counts = ParseReferenceKindCounts(GetNullableString(reader, 9), primaryKind, reader.GetInt32(7));
             results.Add(new CallerResult
             {
                 Path = reader.GetString(0),
@@ -174,11 +169,11 @@ public partial class DbReader
                 ReferenceKinds = kinds,
                 HasMixedReferenceKinds = kinds.Count > 1,
                 ReferenceKindCounts = counts,
-                ReferenceWeightScore = reader.GetDouble(12),
+                ReferenceWeightScore = reader.GetDouble(10),
                 FirstLine = reader.GetInt32(6),
                 ReferenceCount = reader.GetInt32(7),
-                HasSelfReference = reader.GetInt32(13) != 0,
-                HasMutualRecursion = reader.GetInt32(14) != 0,
+                HasSelfReference = reader.GetInt32(11) != 0,
+                HasMutualRecursion = reader.GetInt32(12) != 0,
             });
         }
         return results;
@@ -380,9 +375,8 @@ public partial class DbReader
             WITH logical_references AS (
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
                        {preferredCalleeKindSql} AS reference_kind,
-                       {ReferenceKindCountSql("r.reference_kind", "call")} AS call_count,
-                       {ReferenceKindCountSql("r.reference_kind", "instantiate")} AS instantiate_count,
-                       {ReferenceKindCountSql("r.reference_kind", "subscribe")} AS subscribe_count,
+                       r.reference_kind AS raw_reference_kind,
+                       COUNT(*) AS reference_count,
                        {ReferenceWeightedScoreSql("r.reference_kind")} AS weighted_score,
                        r.line
                 FROM symbol_references r
@@ -394,9 +388,7 @@ public partial class DbReader
             SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
                    r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count,
                    GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds,
-                   " + ReferenceKindCountSql("r.reference_kind", "call") + @" AS call_count,
-                   " + ReferenceKindCountSql("r.reference_kind", "instantiate") + @" AS instantiate_count,
-                   " + ReferenceKindCountSql("r.reference_kind", "subscribe") + @" AS subscribe_count,
+                   r.reference_kind || ':' || COUNT(*) AS reference_kind_counts,
                    " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
@@ -440,14 +432,12 @@ public partial class DbReader
         if (referenceKind == null)
         {
             sql += @"
-                GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number
+                GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, r.reference_kind
             )
             SELECT path, lang, container_kind, container_name, symbol_name,
-                   reference_kind, MIN(line) AS first_line, COUNT(*) AS reference_count,
+                   reference_kind, MIN(line) AS first_line, SUM(r.reference_count) AS reference_count,
                    GROUP_CONCAT(DISTINCT reference_kind) AS reference_kinds,
-                   SUM(r.call_count) AS call_count,
-                   SUM(r.instantiate_count) AS instantiate_count,
-                   SUM(r.subscribe_count) AS subscribe_count,
+                   GROUP_CONCAT(r.raw_reference_kind || ':' || r.reference_count) AS reference_kind_counts,
                    SUM(r.weighted_score) AS weighted_score
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
@@ -495,7 +485,7 @@ public partial class DbReader
         {
             var primaryKind = reader.GetString(5);
             var kinds = ParseDistinctReferenceKinds(GetNullableString(reader, 8), primaryKind);
-            var counts = BuildReferenceKindCounts(reader.GetInt32(9), reader.GetInt32(10), reader.GetInt32(11));
+            var counts = ParseReferenceKindCounts(GetNullableString(reader, 9), primaryKind, reader.GetInt32(7));
             results.Add(new CalleeResult
             {
                 Path = reader.GetString(0),
@@ -507,7 +497,7 @@ public partial class DbReader
                 ReferenceKinds = kinds,
                 HasMixedReferenceKinds = kinds.Count > 1,
                 ReferenceKindCounts = counts,
-                ReferenceWeightScore = reader.GetDouble(12),
+                ReferenceWeightScore = reader.GetDouble(10),
                 FirstLine = reader.GetInt32(6),
                 ReferenceCount = reader.GetInt32(7),
             });
@@ -688,9 +678,6 @@ public partial class DbReader
         return ExecuteCountSummary(cmd);
     }
 
-    private static string ReferenceKindCountSql(string columnSql, string kind) =>
-        $"SUM(CASE WHEN {columnSql} = '{kind}' THEN 1 ELSE 0 END)";
-
     private static string ReferenceWeightedScoreSql(string columnSql) => $@"
         SUM(CASE {columnSql}
             WHEN 'instantiate' THEN 3.0
@@ -707,14 +694,30 @@ public partial class DbReader
         _ => "weighted_score DESC, reference_count DESC",
     };
 
-    private static IReadOnlyDictionary<string, int> BuildReferenceKindCounts(int callCount, int instantiateCount, int subscribeCount)
+    private static IReadOnlyDictionary<string, int> ParseReferenceKindCounts(string? aggregate, string primaryKind, int fallbackCount)
     {
-        return new Dictionary<string, int>(StringComparer.Ordinal)
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        counts["call"] = 0;
+        counts["instantiate"] = 0;
+        counts["subscribe"] = 0;
+        if (!string.IsNullOrWhiteSpace(aggregate))
         {
-            ["call"] = callCount,
-            ["instantiate"] = instantiateCount,
-            ["subscribe"] = subscribeCount,
-        };
+            foreach (var entry in aggregate.Split(','))
+            {
+                var separator = entry.LastIndexOf(':');
+                if (separator <= 0 || separator == entry.Length - 1)
+                    continue;
+                var kind = entry[..separator].Trim();
+                if (kind.Length == 0 || !int.TryParse(entry[(separator + 1)..], out var count))
+                    continue;
+                counts[kind] = counts.TryGetValue(kind, out var existing)
+                    ? existing + count
+                    : count;
+            }
+        }
+        if (counts.Count == 0 && !string.IsNullOrEmpty(primaryKind))
+            counts[primaryKind] = fallbackCount;
+        return counts;
     }
 
     /// <summary>
