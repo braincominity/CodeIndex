@@ -10467,7 +10467,7 @@ public class DbReaderTests : IDisposable
                 ChunkIndex = 0,
                 StartLine = 1,
                 EndLine = 12,
-                Content = "public class MixedOwner { public void Setup() { Changed += Handler; Changed(); } }\n",
+                Content = "public class MixedOwner { public void Setup() { Changed += Handler; Changed(); Changed(); Changed(); Changed(); Changed(); } }\n",
             }
         ]);
         _writer.InsertReferences([
@@ -10493,14 +10493,60 @@ public class DbReaderTests : IDisposable
                 ContainerKind = "function",
                 ContainerName = "Setup",
             },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Changed",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 73,
+                Context = "Changed();",
+                ContainerKind = "function",
+                ContainerName = "Setup",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Changed",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 84,
+                Context = "Changed();",
+                ContainerKind = "function",
+                ContainerName = "Setup",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Changed",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 95,
+                Context = "Changed();",
+                ContainerKind = "function",
+                ContainerName = "Setup",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Changed",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 106,
+                Context = "Changed();",
+                ContainerKind = "function",
+                ContainerName = "Setup",
+            },
         ]);
 
         var caller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["mixed_kind_caller"]));
         Assert.Equal("Setup", caller.CallerName);
         Assert.Equal("Changed", caller.CalleeName);
-        Assert.Equal(2, caller.ReferenceCount);
+        Assert.Equal(6, caller.ReferenceCount);
         Assert.True(caller.HasMixedReferenceKinds);
         Assert.Equal(new[] { "event", "invoke" }, caller.ReferenceKinds);
+        Assert.Equal(5, caller.ReferenceKindCounts["call"]);
+        Assert.Equal(1, caller.ReferenceKindCounts["subscribe"]);
         Assert.Equal("event", caller.ReferenceKind);
 
         // `callees` rows are already split per kind, so each grouped row stays
@@ -10513,12 +10559,16 @@ public class DbReaderTests : IDisposable
         Assert.Equal("event", callees[0].ReferenceKind);
         Assert.False(callees[0].HasMixedReferenceKinds);
         Assert.Equal(new[] { "event" }, callees[0].ReferenceKinds);
+        Assert.Equal(1, callees[0].ReferenceKindCounts["subscribe"]);
         Assert.Equal("invoke", callees[1].ReferenceKind);
         Assert.False(callees[1].HasMixedReferenceKinds);
         Assert.Equal(new[] { "invoke" }, callees[1].ReferenceKinds);
+        Assert.Equal(5, callees[1].ReferenceKindCounts["call"]);
 
         var rawCaller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["mixed_kind_caller"], rawKinds: true));
         Assert.Equal(new[] { "call", "subscribe" }, rawCaller.ReferenceKinds);
+        Assert.Equal(5, rawCaller.ReferenceKindCounts["call"]);
+        Assert.Equal(1, rawCaller.ReferenceKindCounts["subscribe"]);
         Assert.Equal("subscribe", rawCaller.ReferenceKind);
     }
 

@@ -1031,6 +1031,118 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessLineAsync_ParseError_WritesResponseBeforeErrorLog()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+        var previousError = Console.Error;
+        Console.SetError(error);
+        try
+        {
+            await server.ProcessLineAsync("not json", new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString())));
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+
+        Assert.Contains("\"code\":-32700", writer.ToString());
+        Assert.Contains("JSON parse error", error.ToString());
+    }
+
+    [Fact]
+    public async Task ProcessLineAsync_OversizedFrame_WritesResponseBeforeErrorLog()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+        var previousError = Console.Error;
+        Console.SetError(error);
+        try
+        {
+            await server.ProcessLineAsync(new string('x', 1_000_001), new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString())));
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+
+        Assert.Contains("Message too large", writer.ToString());
+        Assert.Contains("Message too large", error.ToString());
+    }
+
+    [Fact]
+    public async Task ProcessLineAsync_UnsupportedProtocol_WritesResponseBeforeErrorLog()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+        var previousError = Console.Error;
+        Console.SetError(error);
+        try
+        {
+            await server.ProcessLineAsync(
+                """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2099-01-01"}}""",
+                new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString())));
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+
+        Assert.Contains("Unsupported MCP protocolVersion", writer.ToString());
+        Assert.Contains("Rejecting initialize", error.ToString());
+    }
+
+    [Fact]
+    public async Task ProcessLineAsync_AuthFailure_WritesResponseBeforeErrorLog()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false,
+            new TokenMcpAuthenticator("secret"));
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+        var previousError = Console.Error;
+        Console.SetError(error);
+        try
+        {
+            await server.ProcessLineAsync(
+                """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""",
+                new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString())));
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+
+        Assert.Contains("Unauthorized", writer.ToString());
+        Assert.Contains("Auth failed", error.ToString());
+    }
+
+    [Fact]
+    public async Task RunAsync_ParseErrorWriteFailure_LogsWriteFailureAndParseError()
+    {
+        var transport = new ShutdownProbeTransport("stdio", _ => throw new IOException("pipe closed"), "not json");
+        using var server = new McpServer(_dbPath, "test");
+        using var error = new StringWriter();
+        var previousError = Console.Error;
+        Console.SetError(error);
+        try
+        {
+            await server.RunAsync(transport, CancellationToken.None);
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+
+        var log = error.ToString();
+        Assert.Contains("Error writing response", log);
+        Assert.Contains("pipe closed", log);
+        Assert.Contains("JSON parse error", log);
+    }
+
+    [Fact]
     public void BuildSanitizedLoopErrorMessage_CodeIndexException_EchoesStructuredFields()
     {
         var ex = new CodeIndexException(
@@ -1369,6 +1481,18 @@ public class McpServerTests : IDisposable
         await using var transport = new StdioMcpTransport(input, output, bufferSize: 1024);
 
         await Assert.ThrowsAsync<DecoderFallbackException>(() => transport.ReadFrameAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task StdioTransport_WriteFrameAsync_FlushesBeforeReturning()
+    {
+        await using var input = new MemoryStream();
+        await using var output = new FlushCountingStream();
+        await using var transport = new StdioMcpTransport(input, output, bufferSize: 1024);
+
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":1,"result":{}}""", CancellationToken.None);
+
+        Assert.True(output.FlushCount > 0);
     }
 
     [Fact]
@@ -9167,7 +9291,52 @@ public class McpServerTests : IDisposable
     {
         public override Encoding Encoding => Encoding.UTF8;
 
+        public override Task WriteAsync(char value) =>
+            throw new IOException("pipe closed");
+
+        public override Task WriteAsync(string? value) =>
+            throw new IOException("pipe closed");
+
         public override Task WriteLineAsync(string? value) =>
             throw new IOException("pipe closed");
+    }
+
+    private sealed class AssertingTextWriter : TextWriter
+    {
+        private readonly TextWriter _inner;
+        private readonly Action _beforeWrite;
+
+        public AssertingTextWriter(TextWriter inner, Action beforeWrite)
+        {
+            _inner = inner;
+            _beforeWrite = beforeWrite;
+        }
+
+        public override Encoding Encoding => _inner.Encoding;
+
+        public override async Task WriteAsync(string? value)
+        {
+            _beforeWrite();
+            await _inner.WriteAsync(value).ConfigureAwait(false);
+        }
+
+        public override async Task WriteAsync(char value)
+        {
+            _beforeWrite();
+            await _inner.WriteAsync(value).ConfigureAwait(false);
+        }
+
+        public override Task FlushAsync() => _inner.FlushAsync();
+    }
+
+    private sealed class FlushCountingStream : MemoryStream
+    {
+        public int FlushCount { get; private set; }
+
+        public override Task FlushAsync(CancellationToken cancellationToken)
+        {
+            FlushCount++;
+            return base.FlushAsync(cancellationToken);
+        }
     }
 }

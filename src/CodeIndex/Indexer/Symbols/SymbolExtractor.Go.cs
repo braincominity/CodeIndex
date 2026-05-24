@@ -16,6 +16,9 @@ public static partial class SymbolExtractor
     {
         var trimmed = line.TrimStart();
 
+        if (TryAddGoDirectiveSymbol(fileId, line, lineIndex, symbols, trimmed))
+            return true;
+
         if (inImportBlock)
         {
             if (trimmed.Length == 0
@@ -83,7 +86,8 @@ public static partial class SymbolExtractor
         int lineIndex,
         List<SymbolRecord> symbols,
         string typeText,
-        ref int goTypeBodyDepth)
+        ref int goTypeBodyDepth,
+        ref string? goTypeBodyKind)
     {
         var normalizedTypeText = typeText.StartsWith("type", StringComparison.Ordinal)
             ? typeText["type".Length..].TrimStart()
@@ -99,7 +103,12 @@ public static partial class SymbolExtractor
                 ? "protocol"
                 : "class";
         if (HasGoSymbol(symbols, fileId, lineIndex + 1, kind, name))
+        {
+            if (kind == "struct")
+                TryAddGoStructEmbeddedTypeSymbols(fileId, rawLine, lineIndex, symbols, ExtractGoInlineTypeBody(typeText));
+
             return true;
+        }
         var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
         if (startColumn < 0)
             startColumn = rawLine.Length - rawLine.TrimStart().Length;
@@ -121,8 +130,17 @@ public static partial class SymbolExtractor
             },
             rawLine);
 
-        if (kind is "struct" or "protocol")
+        if (kind == "struct")
+        {
+            TryAddGoStructEmbeddedTypeSymbols(fileId, rawLine, lineIndex, symbols, ExtractGoInlineTypeBody(typeText));
             goTypeBodyDepth = CountGoBraceDelta(typeText);
+            goTypeBodyKind = goTypeBodyDepth > 0 ? kind : null;
+        }
+        else if (kind == "protocol")
+        {
+            goTypeBodyDepth = CountGoBraceDelta(typeText);
+            goTypeBodyKind = goTypeBodyDepth > 0 ? kind : null;
+        }
 
         return true;
     }
@@ -140,6 +158,9 @@ public static partial class SymbolExtractor
 
         foreach (var name in match.Groups["names"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
+            if (name == "_")
+                continue;
+
             if (HasGoSymbol(symbols, fileId, lineIndex + 1, "property", name))
                 continue;
 
@@ -349,6 +370,7 @@ public static partial class SymbolExtractor
             return true;
 
         var name = match.Groups["name"].Value.Trim();
+        var kind = string.Equals(name, @"""C""", StringComparison.Ordinal) ? "cgo" : "import";
         var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
         if (startColumn < 0)
             startColumn = rawLine.IndexOf(importText, StringComparison.Ordinal);
@@ -362,13 +384,53 @@ public static partial class SymbolExtractor
             new SymbolRecord
             {
                 FileId = fileId,
-                Kind = "import",
+                Kind = kind,
                 Name = name,
                 Line = lineIndex + 1,
                 StartLine = lineIndex + 1,
                 StartColumn = startColumn,
                 EndLine = lineIndex + 1,
                 Signature = name,
+            },
+            rawLine);
+        return true;
+    }
+
+    private static bool TryAddGoDirectiveSymbol(
+        long fileId,
+        string rawLine,
+        int lineIndex,
+        List<SymbolRecord> symbols,
+        string trimmed)
+    {
+        if (!trimmed.StartsWith("//go:build", StringComparison.Ordinal)
+            && !trimmed.StartsWith("//go:test", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var name = trimmed[2..].Trim();
+        if (HasGoSymbol(symbols, fileId, lineIndex + 1, "annotation", name))
+            return true;
+
+        var startColumn = rawLine.IndexOf("//go:", StringComparison.Ordinal);
+        if (startColumn < 0)
+            startColumn = rawLine.Length - rawLine.TrimStart().Length;
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineIndex + 1,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "annotation",
+                Name = name,
+                Line = lineIndex + 1,
+                StartLine = lineIndex + 1,
+                StartColumn = startColumn,
+                EndLine = lineIndex + 1,
+                Signature = trimmed,
             },
             rawLine);
         return true;
@@ -527,7 +589,7 @@ public static partial class SymbolExtractor
                 StartLine = lineIndex + 1,
                 StartColumn = startColumn,
                 EndLine = lineIndex + 1,
-                Signature = rawLine.Trim(),
+                Signature = candidate.Trim(),
             },
             rawLine);
         return true;
@@ -574,6 +636,91 @@ public static partial class SymbolExtractor
                 StartColumn = startColumn,
                 EndLine = lineIndex + 1,
                 Signature = rawLine.Trim(),
+            },
+            rawLine);
+        return true;
+    }
+
+    private static string ExtractGoInlineTypeBody(string typeText)
+    {
+        var openBraceIndex = typeText.IndexOf('{');
+        if (openBraceIndex < 0)
+            return string.Empty;
+
+        var body = typeText[(openBraceIndex + 1)..];
+        var closeBraceIndex = body.LastIndexOf('}');
+        return closeBraceIndex >= 0 ? body[..closeBraceIndex] : body;
+    }
+
+    private static void TryAddGoStructEmbeddedTypeSymbols(
+        long fileId,
+        string rawLine,
+        int lineIndex,
+        List<SymbolRecord> symbols,
+        string bodyText)
+    {
+        if (string.IsNullOrWhiteSpace(bodyText))
+            return;
+
+        foreach (var segment in bodyText.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var candidate = segment;
+            var trailingBraceIndex = candidate.IndexOf('}');
+            if (trailingBraceIndex >= 0)
+                candidate = candidate[..trailingBraceIndex].TrimEnd();
+
+            var lineCommentIndex = candidate.IndexOf("//", StringComparison.Ordinal);
+            if (lineCommentIndex >= 0)
+                candidate = candidate[..lineCommentIndex].TrimEnd();
+
+            var blockCommentIndex = candidate.IndexOf("/*", StringComparison.Ordinal);
+            if (blockCommentIndex >= 0)
+                candidate = candidate[..blockCommentIndex].TrimEnd();
+
+            var tagIndex = candidate.IndexOf('`');
+            if (tagIndex >= 0)
+                candidate = candidate[..tagIndex].TrimEnd();
+
+            if (candidate.Length == 0)
+                continue;
+
+            TryAddGoStructEmbeddedTypeSymbol(fileId, rawLine, lineIndex, symbols, candidate);
+        }
+    }
+
+    private static bool TryAddGoStructEmbeddedTypeSymbol(
+        long fileId,
+        string rawLine,
+        int lineIndex,
+        List<SymbolRecord> symbols,
+        string candidate)
+    {
+        var match = GoStructEmbeddedTypeRegex.Match(candidate);
+        if (!match.Success)
+            return false;
+
+        var name = match.Groups["name"].Value.Trim();
+        if (name.Length == 0 || HasGoSymbol(symbols, fileId, lineIndex + 1, "import", name))
+            return true;
+
+        var startColumn = rawLine.IndexOf(name, StringComparison.Ordinal);
+        if (startColumn < 0)
+            startColumn = rawLine.Length - rawLine.TrimStart().Length;
+
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineIndex + 1,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "import",
+                Name = name,
+                Line = lineIndex + 1,
+                StartLine = lineIndex + 1,
+                StartColumn = startColumn,
+                EndLine = lineIndex + 1,
+                Signature = candidate.Trim(),
             },
             rawLine);
         return true;
@@ -820,6 +967,7 @@ public static partial class SymbolExtractor
         string? blockKind = null;
         ExtractGoInterfaceMethods(fileId, lines, symbols);
         var typeBodyDepth = 0;
+        string? typeBodyKind = null;
         var goBlockDepth = 0;
         var goBlockInBlockComment = false;
         var goBlockInRawString = false;
@@ -831,9 +979,14 @@ public static partial class SymbolExtractor
 
             if (typeBodyDepth > 0)
             {
+                if (typeBodyKind == "struct")
+                    TryAddGoStructEmbeddedTypeSymbols(fileId, line, i, symbols, trimmed);
+
                 typeBodyDepth += CountGoBraceDelta(line);
                 if (typeBodyDepth < 0)
                     typeBodyDepth = 0;
+                if (typeBodyDepth == 0)
+                    typeBodyKind = null;
                 continue;
             }
 
@@ -849,6 +1002,7 @@ public static partial class SymbolExtractor
                 || trimmed.StartsWith("//", StringComparison.Ordinal)
                 || trimmed.StartsWith("/*", StringComparison.Ordinal))
             {
+                TryAddGoDirectiveSymbol(fileId, line, i, symbols, trimmed);
                 continue;
             }
 
@@ -856,6 +1010,7 @@ public static partial class SymbolExtractor
             {
                 blockKind = null;
                 typeBodyDepth = 0;
+                typeBodyKind = null;
                 continue;
             }
 
@@ -864,7 +1019,7 @@ public static partial class SymbolExtractor
                 switch (blockKind)
                 {
                     case "type":
-                        TryAddGoTypeSymbol(fileId, line, i, symbols, trimmed, ref typeBodyDepth);
+                        TryAddGoTypeSymbol(fileId, line, i, symbols, trimmed, ref typeBodyDepth, ref typeBodyKind);
                         break;
                     case "const":
                     case "var":
@@ -910,7 +1065,7 @@ public static partial class SymbolExtractor
 
             if (trimmed.StartsWith("type", StringComparison.Ordinal))
             {
-                TryAddGoTypeSymbol(fileId, line, i, symbols, trimmed, ref typeBodyDepth);
+                TryAddGoTypeSymbol(fileId, line, i, symbols, trimmed, ref typeBodyDepth, ref typeBodyKind);
                 continue;
             }
 

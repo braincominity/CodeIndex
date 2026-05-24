@@ -11,6 +11,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.24.5] - 2026-05-25
+
+#### Fixed
+
+- **NuGet package README links now resolve outside GitHub** — the NuGet package now ships a NuGet-specific README with absolute GitHub documentation links so NuGet.org readers can open the user guide, changelog, and policy documents.
+- **Homebrew tap publishing now seeds missing formula files** — the release workflow now writes `Formula/codeindex.rb` directly from the published release checksums and pushes it to `Widthdom/homebrew-tap`, so the first release to an empty tap no longer fails before a formula exists.
+
+### [1.24.4] - 2026-05-25
+
+#### Fixed
+
+- **Release notes now show install and update commands** — GitHub release notes now include Homebrew and NuGet install/update snippets so first-time users and existing users can choose the right command without leaving the release page.
+- **README Quick Start now lists NuGet alongside Homebrew** — the English and Japanese Quick Start snippets now show `dotnet tool install -g cdidx` next to the Homebrew and GitHub-release install paths.
+- **README Quick Start and Highlights are easier to scan** — the English and Japanese README sections now use tables and compact field lists for follow-up commands, output controls, feature areas, and the `status --json` trust contract.
+- **Trimmed publish smoke tests no longer share build output paths** — the published CLI smoke tests now isolate both `obj` and `bin` output paths per publish invocation, avoiding `cdidx.runtimeconfig.json` file-lock collisions between parallel `net8.0` / `net9.0` Linux test runs.
+
+### [1.24.3] - 2026-05-25
+
+#### Fixed
+
+- **Homebrew publishing now authenticates Homebrew's GitHub API calls** — the Homebrew formula bump step now exports `HOMEBREW_GITHUB_API_TOKEN` from the tap token so the action's Homebrew Ruby process can read release and repository metadata without failing with "Requires authentication".
+
+### [1.24.2] - 2026-05-25
+
+#### Fixed
+
+- **C# / Razor trimmed-publish alias tests no longer share compiler intermediates** — the published CLI smoke test for `cshtml` and `razor` search aliases now gives each publish invocation its own intermediate output path and disables shared compilation, avoiding Windows `cdidx.dll` file-lock collisions during parallel `net8.0` / `net9.0` test runs.
+
+### [1.24.1] - 2026-05-25
+
+#### Fixed
+
+- **Windows release trimmed-publish tests no longer share compiler intermediates** — the trimmed `backfill-fold` publish smoke test now gives each publish invocation its own intermediate output path and disables shared compilation, avoiding `cdidx.dll` file-lock collisions between parallel `net8.0` / `net9.0` Windows test runs.
+
 ### [1.24.0] - 2026-05-25
 
 #### Added
@@ -2743,6 +2777,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.24.5] - 2026-05-25
+
+#### 修正
+
+- **NuGet package README のリンクが GitHub 外でも解決できるようになりました** — NuGet package は NuGet 専用 README を同梱し、User Guide、Changelog、policy document への絶対 GitHub URL を載せるようになりました。
+- **Homebrew tap publishing が未作成の formula file を作成するようになりました** — release workflow が公開済み release checksum から `Formula/codeindex.rb` を直接生成して `Widthdom/homebrew-tap` へ push するようになり、空の tap への初回リリースで formula が存在せず失敗する問題を避けます。
+
+### [1.24.4] - 2026-05-25
+
+#### 修正
+
+- **リリースノートに install / update コマンドを表示するようになりました** — GitHub release notes に Homebrew と NuGet の install/update snippet を載せ、初回ユーザーと既存ユーザーが release page だけで適切なコマンドを選べるようにしました。
+- **README Quick Start が Homebrew と並べて NuGet も案内するようになりました** — 英語版と日本語版の Quick Start snippet に、Homebrew と GitHub release からの install 経路に加えて `dotnet tool install -g cdidx` を掲載しました。
+- **README の Quick Start と特長が読みやすくなりました** — 英語版と日本語版の README で、追加コマンド、出力制御、feature area、`status --json` trust contract を表と compact な field list に整理しました。
+- **Trimmed publish smoke test が build output path を共有しなくなりました** — published CLI smoke test は publish 実行ごとに `obj` と `bin` の両方を分離するようになり、Linux の並列 `net8.0` / `net9.0` テスト実行中に `cdidx.runtimeconfig.json` の file-lock 衝突が起きないようにしました。
+
+### [1.24.3] - 2026-05-25
+
+#### 修正
+
+- **Homebrew publishing が Homebrew の GitHub API 呼び出しを認証するようになりました** — Homebrew formula bump step が tap token を `HOMEBREW_GITHUB_API_TOKEN` として export するようになり、action 内の Homebrew Ruby process が release / repository metadata を読む際に "Requires authentication" で失敗しないようにしました。
+
+### [1.24.2] - 2026-05-25
+
+#### 修正
+
+- **C# / Razor の trimmed-publish alias テストが compiler intermediate を共有しなくなりました** — `cshtml` と `razor` の search alias を確認する published CLI smoke test は publish 実行ごとに専用の intermediate output path を使い、shared compilation を無効化することで、Windows の並列 `net8.0` / `net9.0` テスト実行中の `cdidx.dll` file-lock 衝突を避けるようにしました。
+
+### [1.24.1] - 2026-05-25
+
+#### 修正
+
+- **Windows release の trimmed-publish テストが compiler intermediate を共有しなくなりました** — trimmed `backfill-fold` publish smoke test は publish 実行ごとに専用の intermediate output path を使い、shared compilation を無効化することで、Windows の並列 `net8.0` / `net9.0` テスト実行間で `cdidx.dll` の file-lock 衝突が起きないようにしました。
+
 ### [1.24.0] - 2026-05-25
 
 #### 追加
@@ -5464,7 +5532,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.24.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.24.5...HEAD
+[1.24.5]: https://github.com/Widthdom/CodeIndex/compare/v1.24.4...v1.24.5
+[1.24.4]: https://github.com/Widthdom/CodeIndex/compare/v1.24.3...v1.24.4
+[1.24.3]: https://github.com/Widthdom/CodeIndex/compare/v1.24.2...v1.24.3
+[1.24.2]: https://github.com/Widthdom/CodeIndex/compare/v1.24.1...v1.24.2
+[1.24.1]: https://github.com/Widthdom/CodeIndex/compare/v1.24.0...v1.24.1
 [1.24.0]: https://github.com/Widthdom/CodeIndex/compare/v1.23.1...v1.24.0
 [1.23.1]: https://github.com/Widthdom/CodeIndex/compare/v1.23.0...v1.23.1
 [1.23.0]: https://github.com/Widthdom/CodeIndex/compare/v1.22.3...v1.23.0

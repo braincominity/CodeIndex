@@ -178,6 +178,10 @@ After a successful `cdidx index` run, the writer refreshes SQLite planner statis
 
 ## Database schema
 
+Persisted SHA-256 hashes are lowercase hexadecimal strings. New hash emitters
+must format bytes with lowercase hex and comparisons must use ordinal
+case-sensitive equality so format drift is visible instead of silently accepted.
+
 ### Tables
 
 ```sql

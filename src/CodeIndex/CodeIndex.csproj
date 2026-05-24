@@ -37,8 +37,10 @@
     <RepositoryUrl>https://github.com/widthdom/codeindex</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageReleaseNotes>See https://github.com/Widthdom/CodeIndex/blob/main/CHANGELOG.md for release notes.</PackageReleaseNotes>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
     <PackageIcon>cdidx-icon.png</PackageIcon>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
 
   <ItemGroup>
@@ -116,7 +118,7 @@
   </Target>
 
   <ItemGroup>
-    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\docs\NUGET_README.md" Pack="true" PackagePath="\" />
     <None Include="..\..\docs\cdidx-icon.png" Pack="true" PackagePath="\" />
     <None Include="..\..\LICENSE" Pack="true" PackagePath="\" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\COMMERCIAL_LICENSE.md" Pack="true" PackagePath="\" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

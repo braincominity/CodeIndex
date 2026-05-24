@@ -845,6 +845,9 @@ public class FileIndexer
 
         private static bool TryAppendCharacterClassRange(StringBuilder builder, char start, char end, bool ignoreCase)
         {
+            if (start > end)
+                throw new ArgumentException("reversed character class range");
+
             builder.Append(EscapeCharacterClassLiteral(start));
             builder.Append('-');
             builder.Append(EscapeCharacterClassLiteral(end));
@@ -2455,7 +2458,11 @@ public class FileIndexer
         {
             var initialLength = stream.Length;
             if (initialLength > _maxFileSizeBytes)
-                throw new InvalidOperationException(BuildFileTooLargeMessage(initialLength, grewDuringRead: false));
+                throw new FileTooLargeSkippedException(
+                    NormalizePathSeparators(relativePath),
+                    initialLength,
+                    _maxFileSizeBytes,
+                    BuildFileTooLargeMessage(initialLength, grewDuringRead: false));
 
             // Pre-size the accumulator to the observed length but cap initial capacity
             // at the configured limit so a tampered Length cannot force a huge up-front allocation.
@@ -2470,7 +2477,11 @@ public class FileIndexer
             {
                 total += read;
                 if (total > _maxFileSizeBytes)
-                    throw new InvalidOperationException(BuildFileTooLargeMessage(total, grewDuringRead: true));
+                    throw new FileTooLargeSkippedException(
+                        NormalizePathSeparators(relativePath),
+                        total,
+                        _maxFileSizeBytes,
+                        BuildFileTooLargeMessage(total, grewDuringRead: true));
                 accumulator.Write(buffer, 0, read);
             }
             bytes = accumulator.ToArray();
@@ -2575,6 +2586,27 @@ public class FileIndexer
         };
 
         return (record, content, bytes, warning);
+    }
+
+    public FileRecord BuildSkippedFileRecord(string absolutePath)
+    {
+        if (!IsFilePathSyntaxIndexable(absolutePath))
+            throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
+
+        var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
+        var normalizedRelativePath = NormalizePathSeparators(relativePath);
+        var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
+        var info = new FileInfo(ioPath);
+        return new FileRecord
+        {
+            Path = normalizedRelativePath,
+            Lang = TryDetectLanguage(absolutePath).Language,
+            Size = info.Exists ? info.Length : 0,
+            Lines = 0,
+            Checksum = null,
+            Modified = info.Exists ? info.LastWriteTimeUtc : DateTime.MinValue,
+            Generated = HasGeneratedCodeFileName(normalizedRelativePath),
+        };
     }
 
     internal static bool IsFilePathSyntaxIndexable(string path)
@@ -3078,6 +3110,17 @@ public class FileIndexer
 
     internal sealed class BinaryFileSkippedException(string message) : InvalidOperationException(message);
 
+    internal sealed class FileTooLargeSkippedException(
+        string relativePath,
+        long actualBytes,
+        long limitBytes,
+        string message) : InvalidOperationException(message)
+    {
+        public string RelativePath { get; } = relativePath;
+        public long ActualBytes { get; } = actualBytes;
+        public long LimitBytes { get; } = limitBytes;
+    }
+
     public static bool HasConflictMarkers(string content) =>
         TryGetConflictMarkerLine(content, out _);
 
@@ -3236,10 +3279,16 @@ public class FileIndexer
                 return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
             var bytes = buffer[..bytesRead];
-            if (bytes.Contains((byte)0))
+            var shebangEncoding = DetectShebangEncoding(bytes);
+            if (shebangEncoding == ShebangEncoding.Unsupported)
                 return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
-            var lineEnd = bytes.IndexOfAny((byte)'\r', (byte)'\n');
+            if ((shebangEncoding == ShebangEncoding.Utf8 || shebangEncoding == ShebangEncoding.Utf8Bom)
+                && bytes.Contains((byte)0))
+                return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+
+            var preambleLength = GetShebangPreambleLength(shebangEncoding);
+            var lineEnd = FindShebangLineEnd(bytes, shebangEncoding, preambleLength);
             if (lineEnd < 0)
             {
                 if (bytesRead == ShebangProbeByteLimit)
@@ -3247,7 +3296,8 @@ public class FileIndexer
                 lineEnd = bytesRead;
             }
 
-            var firstLine = new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes[..lineEnd]);
+            var firstLineBytes = bytes[preambleLength..lineEnd];
+            var firstLine = DecodeShebangLine(firstLineBytes, shebangEncoding);
 
             if (firstLine.StartsWith('\uFEFF'))
                 firstLine = firstLine[1..];
@@ -3294,6 +3344,70 @@ public class FileIndexer
             return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
         }
     }
+
+    private enum ShebangEncoding
+    {
+        Utf8,
+        Utf8Bom,
+        Utf16LittleEndian,
+        Utf16BigEndian,
+        Unsupported,
+    }
+
+    private static ShebangEncoding DetectShebangEncoding(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length >= 4)
+        {
+            if (bytes[0] == 0x00 && bytes[1] == 0x00 && bytes[2] == 0xFE && bytes[3] == 0xFF)
+                return ShebangEncoding.Unsupported;
+            if (bytes[0] == 0xFF && bytes[1] == 0xFE && bytes[2] == 0x00 && bytes[3] == 0x00)
+                return ShebangEncoding.Unsupported;
+        }
+
+        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+            return ShebangEncoding.Utf8Bom;
+        if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE)
+            return ShebangEncoding.Utf16LittleEndian;
+        if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
+            return ShebangEncoding.Utf16BigEndian;
+
+        return ShebangEncoding.Utf8;
+    }
+
+    private static int GetShebangPreambleLength(ShebangEncoding encoding) => encoding switch
+    {
+        ShebangEncoding.Utf8Bom => 3,
+        ShebangEncoding.Utf16LittleEndian or ShebangEncoding.Utf16BigEndian => 2,
+        _ => 0,
+    };
+
+    private static int FindShebangLineEnd(ReadOnlySpan<byte> bytes, ShebangEncoding encoding, int start)
+    {
+        if (encoding is ShebangEncoding.Utf8 or ShebangEncoding.Utf8Bom)
+            return bytes[start..].IndexOfAny((byte)'\r', (byte)'\n') is var lineEnd && lineEnd >= 0
+                ? start + lineEnd
+                : -1;
+
+        for (var i = start; i + 1 < bytes.Length; i += 2)
+        {
+            var ch = encoding == ShebangEncoding.Utf16LittleEndian
+                ? (bytes[i] | (bytes[i + 1] << 8))
+                : ((bytes[i] << 8) | bytes[i + 1]);
+            if (ch is '\r' or '\n')
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static string DecodeShebangLine(ReadOnlySpan<byte> bytes, ShebangEncoding encoding) => encoding switch
+    {
+        ShebangEncoding.Utf16LittleEndian => new UnicodeEncoding(bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: true)
+            .GetString(bytes),
+        ShebangEncoding.Utf16BigEndian => new UnicodeEncoding(bigEndian: true, byteOrderMark: false, throwOnInvalidBytes: true)
+            .GetString(bytes),
+        _ => new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes),
+    };
 
     private static string? ResolveShebangInterpreter(IReadOnlyList<string> tokens)
     {

@@ -2143,6 +2143,41 @@ public static class IndexCommandRunner
                     continue;
                 }
 
+                if (ex is FileIndexer.FileTooLargeSkippedException fileTooLarge)
+                {
+                    if (fileBatchMarked)
+                        writer.ClearBatchInProgress();
+
+                    DemoteReadinessOnce();
+                    writer.MarkBatchInProgress();
+                    using var txn = writer.BeginTransaction();
+                    var skippedRecord = indexer.BuildSkippedFileRecord(absPath);
+                    writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
+                    if (projectRootWritten)
+                        writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
+                    WriteProjectRootOnce();
+                    var fileId = writer.UpsertFile(skippedRecord);
+                    writer.InsertChunks([]);
+                    writer.InsertSymbols([]);
+                    writer.InsertReferences([]);
+                    writer.InsertIssues(fileId,
+                    [
+                        new FileIssue
+                        {
+                            Path = fileTooLarge.RelativePath,
+                            Kind = "file_too_large",
+                            Line = 0,
+                            Message = fileTooLarge.Message,
+                        },
+                    ]);
+                    writer.ClearBatchInProgress();
+                    txn.Commit();
+
+                    updated++;
+                    ftsMutated = true;
+                    continue;
+                }
+
                 if (ex is FileNotFoundException or DirectoryNotFoundException)
                 {
                     if (fileBatchMarked)
@@ -3471,6 +3506,20 @@ public static class IndexCommandRunner
                         catch (FileIndexer.BinaryFileSkippedException ex)
                         {
                             extractionResults.Add(FullScanFileWorkItem.Skipped(filePath, ex.Message), cancellationToken);
+                        }
+                        catch (FileIndexer.FileTooLargeSkippedException ex)
+                        {
+                            var record = indexer.BuildSkippedFileRecord(filePath);
+                            var issue = new FileIssue
+                            {
+                                Path = ex.RelativePath,
+                                Kind = "file_too_large",
+                                Line = 0,
+                                Message = ex.Message,
+                            };
+                            extractionResults.Add(
+                                FullScanFileWorkItem.Success(filePath, record, string.Empty, [], ex.Message, [], [], [], [issue]),
+                                cancellationToken);
                         }
                         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
                         {

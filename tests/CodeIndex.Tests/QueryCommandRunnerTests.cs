@@ -12323,6 +12323,94 @@ jobs:
     }
 
     [Fact]
+    public void RunDeps_WorkspaceDbJson_AggregatesAndTagsMemberDatabaseEdges()
+    {
+        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_primary");
+        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_member");
+        try
+        {
+            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+            var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
+            InsertFileWithReference(primaryDb, "src/PrimaryCaller.cs", "SharedTarget");
+            InsertFileWithSymbol(memberDb, "src/SharedTarget.cs", "SharedTarget");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var edges = json.GetProperty("edges").EnumerateArray().ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.NotNull(stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            var edge = Assert.Single(edges);
+            Assert.Equal("src/PrimaryCaller.cs", edge.GetProperty("source_path").GetString());
+            Assert.Equal("src/SharedTarget.cs", edge.GetProperty("target_path").GetString());
+            Assert.Equal(Path.GetFullPath(primaryDb), edge.GetProperty("source_db").GetString());
+            Assert.Equal(Path.GetFullPath(memberDb), edge.GetProperty("target_db").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(primaryRoot);
+            TestProjectHelper.DeleteDirectory(memberRoot);
+        }
+    }
+
+    private static void InsertFileWithSymbol(string dbPath, string path, string symbolName)
+    {
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "csharp",
+            Size = 1,
+            Lines = 1,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = symbolName,
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            }
+        ]);
+    }
+
+    private static void InsertFileWithReference(string dbPath, string path, string symbolName)
+    {
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "csharp",
+            Size = 1,
+            Lines = 1,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = symbolName,
+                ReferenceKind = "type_reference",
+                Line = 1,
+                Column = 1,
+                Context = symbolName,
+            }
+        ]);
+    }
+
+    [Fact]
     public void RunImpact_CountOnlyJson_StaleSqlGraphContractIncludesDegradedState()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_impact_sql_graph_contract");
@@ -13120,6 +13208,8 @@ jobs:
             Assert.True(json.GetProperty("has_mixed_reference_kinds").GetBoolean());
             var kinds = json.GetProperty("reference_kinds").EnumerateArray().Select(k => k.GetString()).ToArray();
             Assert.Equal(new[] { "event", "invoke" }, kinds);
+            Assert.Equal(1, json.GetProperty("reference_kind_counts").GetProperty("call").GetInt32());
+            Assert.Equal(1, json.GetProperty("reference_kind_counts").GetProperty("subscribe").GetInt32());
             Assert.Equal("event", json.GetProperty("reference_kind").GetString());
 
             var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
@@ -13127,7 +13217,7 @@ jobs:
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, humanExitCode);
-            Assert.Contains("event+invoke", humanStdout);
+            Assert.Contains("call, subscribe", humanStdout);
             Assert.Contains("SetupAndFire", humanStdout);
             Assert.Contains("-> Changed (2 refs)", humanStdout);
             Assert.Contains("(1 callers in 1 files)", humanStderr);
@@ -13272,9 +13362,9 @@ jobs:
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains("invoke       function   DerivedWidget", stdout);
+            Assert.Contains("call         function   DerivedWidget", stdout);
             Assert.Contains("src/DerivedWidget.cs:3  -> BaseWidget (1 refs)", stdout);
-            Assert.Contains("invoke       function   Make", stdout);
+            Assert.Contains("instantiate  function   Make", stdout);
             Assert.Contains("src/Factory.cs:3  -> BaseWidget (1 refs)", stdout);
             Assert.Contains("(2 callers in 2 files)", stderr);
         }
@@ -31604,6 +31694,8 @@ jobs:
     private static string PublishTrimmedCli(string outputDir)
     {
         Directory.CreateDirectory(outputDir);
+        var buildOutputDir = Path.Combine(outputDir, "bin", "publish") + Path.DirectorySeparatorChar;
+        var intermediateDir = Path.Combine(outputDir, "obj", "publish") + Path.DirectorySeparatorChar;
 
         var psi = new System.Diagnostics.ProcessStartInfo("dotnet")
         {
@@ -31624,6 +31716,9 @@ jobs:
         psi.ArgumentList.Add("-p:PublishTrimmed=true");
         psi.ArgumentList.Add("-p:SelfContained=true");
         psi.ArgumentList.Add("-p:PublishSingleFile=false");
+        psi.ArgumentList.Add($"-p:OutputPath={buildOutputDir}");
+        psi.ArgumentList.Add($"-p:IntermediateOutputPath={intermediateDir}");
+        psi.ArgumentList.Add("-p:UseSharedCompilation=false");
 
         using var process = System.Diagnostics.Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start dotnet publish / dotnet publish の起動に失敗");
