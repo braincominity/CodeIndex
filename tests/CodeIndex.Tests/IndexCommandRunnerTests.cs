@@ -3723,6 +3723,35 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_Rebuild_WhenIndexedFileBecomesBinary_RemovesStaleRow()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.py");
+            File.WriteAllText(sourcePath, "def run():\n    return 1\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Contains("app.py", ReadIndexedPaths(dbPath));
+
+            File.WriteAllBytes(sourcePath, [0, 1, 2, 3]);
+
+            var rebuildExitCode = IndexCommandRunner.Run([projectRoot, "--rebuild", "--yes", "--json"], _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, rebuildExitCode);
+            Assert.DoesNotContain("app.py", ReadIndexedPaths(dbPath));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_WithOversizedFile_PrintsSkipWarningWithoutRecoveryWarning()
     {
         var projectRoot = CreateTempProject();

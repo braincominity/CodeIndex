@@ -3601,7 +3601,7 @@ public static class IndexCommandRunner
                             ResumeIndexSpinnerAfterConsoleWrite();
                         }
 
-                        if (!options.Rebuild && writer.HasFileAtPath(currentJsonIndexFile))
+                        if (writer.HasFileAtPath(currentJsonIndexFile))
                         {
                             using var deleteTxn = writer.BeginTransaction();
                             if (writer.DeleteFileByPath(currentJsonIndexFile))
