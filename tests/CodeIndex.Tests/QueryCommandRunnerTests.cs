@@ -152,6 +152,148 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatusJson_ReportsSqlitePageMetrics_Issue1631()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_page_metrics");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App { }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var settings = document.RootElement.GetProperty("db_pragma_settings");
+            Assert.True(settings.GetProperty("page_count").GetInt64() > 0);
+            Assert.True(settings.GetProperty("page_size").GetInt64() > 0);
+            Assert.True(settings.GetProperty("freelist_count").GetInt64() >= 0);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunVacuum_RejectsMissingDatabase_Issue1631()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_missing_db");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "missing.db");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(CommandErrorCodes.DbNotFound, stderr);
+            Assert.False(File.Exists(dbPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunVacuum_RejectsNonCodeIndexDatabase_Issue1631()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_foreign_db");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "foreign.db");
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "CREATE TABLE user_data(id INTEGER PRIMARY KEY, value TEXT);";
+                command.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(CommandErrorCodes.DbError, stderr);
+            Assert.Contains("not an existing CodeIndex DB", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunVacuum_RejectsLookalikeNonCodeIndexDatabase_Issue1631()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_lookalike_db");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "lookalike.db");
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = @"
+                    CREATE TABLE files (id INTEGER PRIMARY KEY);
+                    CREATE TABLE chunks (id INTEGER PRIMARY KEY);
+                    CREATE TABLE symbols (id INTEGER PRIMARY KEY);";
+                command.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(CommandErrorCodes.DbError, stderr);
+            Assert.Contains("not an existing CodeIndex DB", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunVacuum_RejectsReadOnlyUriWithNeutralWritableMessage_Issue1631()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_readonly_uri");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+                ["--db", dbUri],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(CommandErrorCodes.DbError, stderr);
+            Assert.Contains("database must be writable", stderr);
+            Assert.DoesNotContain("backfill-fold", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_EmitsVisibilityInJsonAndHumanOutput_Issue1868()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_visibility_output");
@@ -189,6 +331,82 @@ public class QueryCommandRunnerTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void RunSearch_JsonArrayEmitsSingleArray_Issue1850()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_json_array");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/auth.cs",
+                "csharp",
+                """
+                public class AuthFixture
+                {
+                    public void Authenticate() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Authenticate", "--db", dbPath, "--lang", "csharp", "--exact", "--json=array"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(JsonValueKind.Array, document.RootElement.ValueKind);
+            Assert.Single(document.RootElement.EnumerateArray());
+            Assert.DoesNotContain("\"done\"", stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_JsonArrayNoResultsEmitsEmptyArray_Issue1850()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_json_array_empty");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/auth.cs",
+                "csharp",
+                "public class AuthFixture { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Missing", "--db", dbPath, "--json=array"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(JsonValueKind.Array, document.RootElement.ValueKind);
+            Assert.Empty(document.RootElement.EnumerateArray());
+            Assert.DoesNotContain("\"done\"", stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_JsonFormatRejectsUnknownValue_Issue1850()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["Authenticate", "--json=pretty"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--json format must be one of ndjson or array", stderr);
     }
 
     [Fact]
@@ -29513,34 +29731,65 @@ jobs:
     [InlineData("${HOME}/cdidx-logs", "cdidx-logs")]
     public void RunStatus_LogPath_ExpandsUserHomeOverrides(string overrideValue, string childDirectory)
     {
-        var originalLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
-        try
-        {
-            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", overrideValue);
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_GLOBAL_TOOL_LOG_DIR",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_RUNTIME_DIR");
+        env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", overrideValue);
+        env.Set("XDG_STATE_HOME", null);
+        env.Set("XDG_CACHE_HOME", null);
+        env.Set("XDG_RUNTIME_DIR", null);
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
-                ["--log-path"],
-                _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--log-path"],
+            _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(Path.GetFullPath(Path.Combine(home, childDirectory)), stdout.Trim());
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", originalLogDir);
-        }
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(Path.GetFullPath(Path.Combine(home, childDirectory)), stdout.Trim());
     }
 
     [Fact]
     public void RunStatus_LogPath_JsonPrintsResolvedDirectoryWithoutDatabase()
     {
         var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_status_log_path_{Guid.NewGuid():N}");
-        var originalLogDir = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_GLOBAL_TOOL_LOG_DIR",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_RUNTIME_DIR");
+        env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+        env.Set("XDG_STATE_HOME", null);
+        env.Set("XDG_CACHE_HOME", null);
+        env.Set("XDG_RUNTIME_DIR", null);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--log-path", "--json"],
+            _jsonOptions));
+
+        using var document = ParseJsonOutput(stdout);
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(Path.GetFullPath(logDir), document.RootElement.GetProperty("log_path").GetString());
+    }
+
+    [Fact]
+    public void RunStatus_LogPath_JsonHonorsXdgCacheHome()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_GLOBAL_TOOL_LOG_DIR",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_RUNTIME_DIR");
+        var cacheHome = Path.Combine(Path.GetTempPath(), $"cdidx_status_log_path_xdg_cache_{Guid.NewGuid():N}");
         try
         {
-            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", null);
+            env.Set("XDG_STATE_HOME", null);
+            env.Set("XDG_CACHE_HOME", cacheHome);
+            env.Set("XDG_RUNTIME_DIR", Path.Combine(Path.GetTempPath(), "ignored-runtime"));
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
                 ["--log-path", "--json"],
@@ -29549,11 +29798,11 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(Path.GetFullPath(logDir), document.RootElement.GetProperty("log_path").GetString());
+            Assert.Equal(Path.Combine(cacheHome, "cdidx", "logs"), document.RootElement.GetProperty("log_path").GetString());
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR", originalLogDir);
+            TestProjectHelper.DeleteDirectory(cacheHome);
         }
     }
 
@@ -30576,6 +30825,46 @@ jobs:
             Assert.Equal(CommandExitCodes.Success, exitCodeLower);
             Assert.Contains("hello", stdoutUpper);
             Assert.Equal(stdoutLower, stdoutUpper);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("route", "/products/{id:int}")]
+    [InlineData("implements", "IDisposable")]
+    [InlineData("attribute", "Authorize")]
+    [InlineData("layout", "MainLayout")]
+    public void RunSymbols_AcceptsRazorDirectiveKindFilters(string kind, string expectedName)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_razor_kind_filter");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "Pages/Product.razor",
+                "csharp",
+                """
+                @page "/products/{id:int}"
+                @implements IDisposable
+                @attribute [Authorize]
+                @layout MainLayout
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--kind", kind, "--json"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout).Select(document => document.RootElement).ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(rows);
+            Assert.Equal(kind, rows[0].GetProperty("kind").GetString());
+            Assert.Equal(expectedName, rows[0].GetProperty("name").GetString());
         }
         finally
         {

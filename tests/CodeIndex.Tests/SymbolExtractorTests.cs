@@ -54,6 +54,34 @@ public class SymbolExtractorTests
     }
 
     [Theory]
+    [InlineData("csharp", "Pages/Product.razor")]
+    [InlineData("csharp", "Views/Product.cshtml")]
+    [InlineData("razor", "Pages/Product.razor")]
+    [InlineData("cshtml", "Views/Product.cshtml")]
+    [InlineData("razor", null)]
+    public void Extract_RazorFile_IndexesDirectiveSymbols(string language, string? filePath)
+    {
+        const string content = """
+            @page "/products/{id:int}"
+            @implements IDisposable
+            @attribute [Authorize]
+            @layout MainLayout
+
+            @code {
+                private void Load() { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, language, content, filePath);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "route" && symbol.Name == "/products/{id:int}" && symbol.Line == 1);
+        Assert.Contains(symbols, symbol => symbol.Kind == "implements" && symbol.Name == "IDisposable" && symbol.Line == 2);
+        Assert.Contains(symbols, symbol => symbol.Kind == "attribute" && symbol.Name == "Authorize" && symbol.Line == 3);
+        Assert.Contains(symbols, symbol => symbol.Kind == "layout" && symbol.Name == "MainLayout" && symbol.Line == 4);
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "Load");
+    }
+
+    [Theory]
     [InlineData("javascript")]
     [InlineData("typescript")]
     public void Extract_JavaScriptTypeScript_ClassifiesReactCustomHookFunctions(string language)
