@@ -24,20 +24,23 @@ internal static class IndexFreshnessChecker
         var workspace = new Dictionary<string, WorkspaceFileSnapshot>(StringComparer.Ordinal);
         var indexedHeadCommit = reader.GetMetaString(DbContext.IndexedHeadCommitMetaKey);
         var indexedHeadSha = reader.GetMetaString(DbContext.IndexedHeadShaMetaKey);
+        var commitScopedFreshHeadSha = reader.GetMetaString(DbContext.CommitScopedFreshHeadShaMetaKey);
         var workspaceHeadCommit = GitHelper.TryGetHeadCommit(projectRoot);
-        var currentHeadAlreadyIndexed = !string.IsNullOrWhiteSpace(indexedHeadSha)
+        var currentHeadCoveredByCommitRefresh = !string.IsNullOrWhiteSpace(indexedHeadSha)
+            && !string.IsNullOrWhiteSpace(commitScopedFreshHeadSha)
             && !string.IsNullOrWhiteSpace(workspaceHeadCommit)
-            && string.Equals(indexedHeadSha, workspaceHeadCommit, StringComparison.Ordinal);
+            && string.Equals(indexedHeadSha, workspaceHeadCommit, StringComparison.Ordinal)
+            && string.Equals(commitScopedFreshHeadSha, workspaceHeadCommit, StringComparison.Ordinal);
         // Only treat HEAD as diverged when we have both sides to compare. A legacy DB (no
         // captured HEAD) or a non-git workspace (no current HEAD) intentionally degrades to
         // "no signal" rather than spuriously flagging every status check as stale. A newer
-        // per-success indexed HEAD stamp also satisfies the check after commit-scoped refreshes.
+        // commit-scoped coverage stamp also satisfies the check after targeted commit refreshes.
         // 比較材料が揃ったときのみ HEAD 不一致と判定する。片側でも欠ければ意図せず stale 化しない。
-        // commit-scoped refresh 後は per-success HEAD stamp が現在 HEAD と一致すれば stale 化しない。
+        // commit-scoped refresh が現在 HEAD を cover した stamp を持つ場合だけ stale 化しない。
         var headChanged = !string.IsNullOrWhiteSpace(indexedHeadCommit)
             && !string.IsNullOrWhiteSpace(workspaceHeadCommit)
             && !string.Equals(indexedHeadCommit, workspaceHeadCommit, StringComparison.Ordinal)
-            && !currentHeadAlreadyIndexed;
+            && !currentHeadCoveredByCommitRefresh;
         var result = new IndexFreshnessCheckResult
         {
             IndexedFileCount = indexed.Count,

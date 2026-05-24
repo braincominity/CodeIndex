@@ -2253,7 +2253,10 @@ public static class IndexCommandRunner
             writer.SetMeta(SymbolKindFilterMetaKey, options.SymbolKindFilter.Signature);
         }
         if (errors == 0)
+        {
             StampIndexedHeadMetadata(writer, projectRoot);
+            StampCommitScopedFreshHeadMetadata(writer, options, currentHeadCommit);
+        }
         stopwatch.Stop();
         // Detect cwd drift between option-parsing and finalize. Paths used in this run are
         // already absolute, but a drifted cwd is a strong signal that an embedded host or
@@ -2632,6 +2635,23 @@ public static class IndexCommandRunner
             // best-effort であり、stamp の失敗で index 全体を失敗扱いにしない。
         }
         StampWorkspacePathCaseSensitivity(writer, projectRoot);
+    }
+
+    private static void StampCommitScopedFreshHeadMetadata(DbWriter writer, IndexCommandOptions options, string? currentHeadCommit)
+    {
+        try
+        {
+            var coveredHead = !string.IsNullOrWhiteSpace(currentHeadCommit)
+                && options.Commits.Any(commit => string.Equals(commit, currentHeadCommit, StringComparison.OrdinalIgnoreCase))
+                ? currentHeadCommit
+                : null;
+            writer.SetMeta(DbContext.CommitScopedFreshHeadShaMetaKey, coveredHead);
+        }
+        catch
+        {
+            // Best-effort metadata only; never fail an otherwise-successful index run.
+            // best-effort のみ。stamp 失敗で index 全体を落とさない。
+        }
     }
 
     // Issue #1546: capture the actual case-sensitivity of the workspace filesystem so
