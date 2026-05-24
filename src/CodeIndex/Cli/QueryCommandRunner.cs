@@ -689,6 +689,8 @@ public static class QueryCommandRunner
             }
 
             var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
+            if (options.IncludeBody)
+                AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
             var exactSignal = reader.GetReferencesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
@@ -731,6 +733,7 @@ public static class QueryCommandRunner
                     var owner = r.ContainerName != null ? $"  in {r.ContainerName}" : "";
                     Console.WriteLine($"{r.ReferenceKind,-12} {r.SymbolName,-32} {r.Path}:{r.Line}:{r.Column}{owner}");
                     Console.WriteLine($"  {r.Context}");
+                    WriteOptionalBodyExcerpt(r.BodyStartLine, r.BodyContent);
                 }
                 var refFileCount = results.Select(r => r.Path).Distinct().Count();
                 Console.Error.WriteLine($"({results.Count} references in {refFileCount} files)");
@@ -741,7 +744,7 @@ public static class QueryCommandRunner
 
     public static int RunCallers(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var previewOptionError = ValidatePreviewOptions("callers", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        var previewOptionError = ValidatePreviewOptions("callers", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
         if (previewOptionError != null)
         {
             Console.Error.WriteLine(previewOptionError);
@@ -815,6 +818,8 @@ public static class QueryCommandRunner
             }
 
             var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.RankMode);
+            if (options.IncludeBody)
+                AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
             var exactSignal = reader.GetCallersExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
@@ -857,6 +862,7 @@ public static class QueryCommandRunner
                 {
                     var kindLabel = FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds);
                     Console.WriteLine($"{kindLabel.PadRight(kindColumnWidth)} {r.CallerKind ?? "?",-10} {r.CallerName ?? "<top-level>",-32} {r.Path}:{r.FirstLine}  -> {r.CalleeName} ({r.ReferenceCount} refs)");
+                    WriteOptionalBodyExcerpt(r.BodyStartLine, r.BodyContent);
                 }
                 var callerFileCount = results.Select(r => r.Path).Distinct().Count();
                 Console.Error.WriteLine($"({results.Count} callers in {callerFileCount} files)");
@@ -867,7 +873,7 @@ public static class QueryCommandRunner
 
     public static int RunCallees(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var previewOptionError = ValidatePreviewOptions("callees", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        var previewOptionError = ValidatePreviewOptions("callees", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
         if (previewOptionError != null)
         {
             Console.Error.WriteLine(previewOptionError);
@@ -941,6 +947,8 @@ public static class QueryCommandRunner
             }
 
             var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.RankMode);
+            if (options.IncludeBody)
+                AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
             var exactSignal = reader.GetCalleesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
@@ -983,12 +991,145 @@ public static class QueryCommandRunner
                 {
                     var kindLabel = FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds);
                     Console.WriteLine($"{kindLabel.PadRight(kindColumnWidth)} {r.CalleeName,-32} {r.Path}:{r.FirstLine}  <- {r.CallerName ?? "<top-level>"} ({r.ReferenceCount} refs)");
+                    WriteOptionalBodyExcerpt(r.BodyStartLine, r.BodyContent);
                 }
                 var calleeFileCount = results.Select(r => r.Path).Distinct().Count();
                 Console.Error.WriteLine($"({results.Count} callees in {calleeFileCount} files)");
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static void AttachBodyExcerpts(DbReader reader, IEnumerable<ReferenceResult> results, int snippetLines, int maxLineWidth)
+    {
+        foreach (var result in results)
+        {
+            var excerpt = result.ContainerName != null
+                ? BuildSymbolBodyExcerpt(reader, result.Path, result.Lang, result.ContainerName, snippetLines, maxLineWidth)
+                : null;
+            excerpt ??= BuildBodyExcerpt(reader, result.Path, result.Line, snippetLines, maxLineWidth, focusColumn: result.Column, focusLength: Math.Max(1, result.SymbolName.Length));
+            ApplyBodyExcerpt(result, excerpt);
+        }
+    }
+
+    private static void AttachBodyExcerpts(DbReader reader, IEnumerable<CallerResult> results, int snippetLines, int maxLineWidth)
+    {
+        foreach (var result in results)
+        {
+            var excerpt = result.CallerName != null
+                ? BuildSymbolBodyExcerpt(reader, result.Path, result.Lang, result.CallerName, snippetLines, maxLineWidth)
+                : null;
+            excerpt ??= BuildBodyExcerpt(reader, result.Path, result.FirstLine, snippetLines, maxLineWidth);
+            ApplyBodyExcerpt(result, excerpt);
+        }
+    }
+
+    private static void AttachBodyExcerpts(DbReader reader, IEnumerable<CalleeResult> results, int snippetLines, int maxLineWidth)
+    {
+        foreach (var result in results)
+        {
+            var excerpt = BuildSymbolBodyExcerpt(reader, result.Path, result.Lang, result.CalleeName, snippetLines, maxLineWidth)
+                ?? BuildBodyExcerpt(reader, result.Path, result.FirstLine, snippetLines, maxLineWidth);
+            ApplyBodyExcerpt(result, excerpt);
+        }
+    }
+
+    private static void AttachBodyExcerpts(DbReader reader, IEnumerable<ImpactResult> results, int snippetLines, int maxLineWidth)
+    {
+        foreach (var result in results)
+        {
+            var excerpt = result.CallerName != null
+                ? BuildSymbolBodyExcerpt(reader, result.Path, result.Lang, result.CallerName, snippetLines, maxLineWidth)
+                : null;
+            excerpt ??= BuildBodyExcerpt(reader, result.Path, result.FirstLine, snippetLines, maxLineWidth);
+            ApplyBodyExcerpt(result, excerpt);
+        }
+    }
+
+    private static FileExcerptResult? BuildSymbolBodyExcerpt(DbReader reader, string path, string? lang, string symbolName, int snippetLines, int maxLineWidth)
+    {
+        var definitions = reader.GetDefinitions(
+            symbolName,
+            limit: 1,
+            kind: null,
+            lang: lang,
+            includeBody: true,
+            pathPatterns: [path],
+            excludePathPatterns: null,
+            excludeTests: false,
+            since: null,
+            exact: true);
+        var definition = definitions.FirstOrDefault();
+        if (definition == null)
+            return null;
+
+        var startLine = definition.StartLine;
+        var naturalEndLine = definition.BodyEndLine ?? definition.EndLine;
+        var cappedEndLine = (int)Math.Min(naturalEndLine, (long)startLine + SearchSnippetFormatter.ClampSnippetLines(snippetLines) - 1);
+        return reader.GetExcerpt(path, startLine, cappedEndLine, maxLineWidth: maxLineWidth, focusLine: startLine);
+    }
+
+    private static FileExcerptResult? BuildBodyExcerpt(DbReader reader, string path, int line, int snippetLines, int maxLineWidth, int? focusColumn = null, int focusLength = 1)
+    {
+        var cappedLines = SearchSnippetFormatter.ClampSnippetLines(snippetLines);
+        var endLine = (int)Math.Min(int.MaxValue, (long)line + cappedLines - 1);
+        return reader.GetExcerpt(
+            path,
+            line,
+            endLine,
+            maxLineWidth: maxLineWidth,
+            focusLine: line,
+            focusColumn: focusColumn,
+            focusLength: focusLength);
+    }
+
+    private static void ApplyBodyExcerpt(ReferenceResult result, FileExcerptResult? excerpt)
+    {
+        if (excerpt == null)
+            return;
+        result.BodyContent = excerpt.Content;
+        result.BodyStartLine = excerpt.StartLine;
+        result.BodyEndLine = excerpt.EndLine;
+        result.BodyContentTruncated = excerpt.ContentTruncated;
+    }
+
+    private static void ApplyBodyExcerpt(CallerResult result, FileExcerptResult? excerpt)
+    {
+        if (excerpt == null)
+            return;
+        result.BodyContent = excerpt.Content;
+        result.BodyStartLine = excerpt.StartLine;
+        result.BodyEndLine = excerpt.EndLine;
+        result.BodyContentTruncated = excerpt.ContentTruncated;
+    }
+
+    private static void ApplyBodyExcerpt(CalleeResult result, FileExcerptResult? excerpt)
+    {
+        if (excerpt == null)
+            return;
+        result.BodyContent = excerpt.Content;
+        result.BodyStartLine = excerpt.StartLine;
+        result.BodyEndLine = excerpt.EndLine;
+        result.BodyContentTruncated = excerpt.ContentTruncated;
+    }
+
+    private static void ApplyBodyExcerpt(ImpactResult result, FileExcerptResult? excerpt)
+    {
+        if (excerpt == null)
+            return;
+        result.BodyContent = excerpt.Content;
+        result.BodyStartLine = excerpt.StartLine;
+        result.BodyEndLine = excerpt.EndLine;
+        result.BodyContentTruncated = excerpt.ContentTruncated;
+    }
+
+    private static void WriteOptionalBodyExcerpt(int? startLine, string? content, string indent = "")
+    {
+        if (startLine == null || content == null)
+            return;
+
+        Console.WriteLine($"{indent}  Body:");
+        WriteNumberedExcerpt(startLine.Value, content, indent + "  ");
     }
 
     /// <summary>
@@ -2281,7 +2422,7 @@ public static class QueryCommandRunner
 
     public static int RunImpact(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var previewOptionError = ValidatePreviewOptions("impact", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        var previewOptionError = ValidatePreviewOptions("impact", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
         if (previewOptionError != null)
         {
             Console.Error.WriteLine(previewOptionError);
@@ -2319,6 +2460,8 @@ public static class QueryCommandRunner
             if (!options.Json && options.ImpactDeprecatedDepthUsed)
                 Console.Error.WriteLine("Warning: --depth is deprecated for impact; use --max-hops instead.");
             var analysis = reader.AnalyzeImpact(options.Query, maxDepth, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.WithPaths);
+            if (options.IncludeBody)
+                AttachBodyExcerpts(reader, analysis.Callers, options.SnippetLines, options.MaxLineWidth);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
                 DbReader.IsSqlLanguage(options.Lang)
@@ -2578,6 +2721,7 @@ public static class QueryCommandRunner
                         {
                             var indent = new string(' ', (r.Depth - 1) * 2);
                             Console.WriteLine($"  {indent}{r.CallerKind ?? "?",-10} {r.CallerName ?? "<top-level>",-32} {r.Path}:{r.FirstLine}  -> {r.CalleeName} ({r.ReferenceCount} refs)");
+                            WriteOptionalBodyExcerpt(r.BodyStartLine, r.BodyContent, $"  {indent}");
                             if (options.WithPaths && r.Paths != null)
                             {
                                 foreach (var p in r.Paths)
@@ -4738,11 +4882,11 @@ public static class QueryCommandRunner
         }.ToJsonString(jsonOptions));
     }
 
-    private static void WriteNumberedExcerpt(int startLine, string content)
+    private static void WriteNumberedExcerpt(int startLine, string content, string indent = "")
     {
         var lines = content.Split('\n');
         for (int i = 0; i < lines.Length; i++)
-            Console.WriteLine($"  {startLine + i,4}: {lines[i]}");
+            Console.WriteLine($"{indent}  {startLine + i,4}: {lines[i]}");
     }
 
     private static bool TryWriteParseError(QueryCommandOptions options, string commandName)

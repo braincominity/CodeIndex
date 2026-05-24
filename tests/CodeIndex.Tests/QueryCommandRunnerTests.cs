@@ -4153,6 +4153,95 @@ jobs:
     }
 
     [Fact]
+    public void GraphCommands_BodyOptionAddsCappedBodyExcerpt_Issue1594()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_graph_body");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Session.cs", "csharp", """
+            class Session
+            {
+                int Run(int user)
+                {
+                    var value = user;
+                    return value;
+                }
+
+                int Login(int user)
+                {
+                    return Run(user);
+                }
+            }
+            """);
+            using (var db = new DbContext(dbPath))
+            {
+                using var select = db.Connection.CreateCommand();
+                select.CommandText = "SELECT id FROM files WHERE path = 'src/Session.cs'";
+                var fileId = Convert.ToInt32(select.ExecuteScalar());
+                var writer = new DbWriter(db.Connection);
+                writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "Run",
+                        ReferenceKind = "call",
+                        Line = 11,
+                        Column = 16,
+                        Context = "        return Run(user);",
+                        ContainerKind = "function",
+                        ContainerName = "Login",
+                    }
+                ]);
+                writer.MarkGraphReady();
+            }
+
+            AssertBodyExcerpt(
+                QueryCommandRunner.RunReferences,
+                ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "1"],
+                "int Login(int user)");
+            AssertBodyExcerpt(
+                QueryCommandRunner.RunCallers,
+                ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "2"],
+                "int Login(int user)");
+            AssertBodyExcerpt(
+                QueryCommandRunner.RunCallees,
+                ["Login", "--db", dbPath, "--json", "--body", "--snippet-lines", "1"],
+                "int Run(int user)");
+
+            var (impactExitCode, impactStdout, impactStderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "2"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, impactExitCode);
+            Assert.Equal(string.Empty, impactStderr);
+            using var impactDocument = ParseJsonOutput(impactStdout);
+            var impactCaller = impactDocument.RootElement.GetProperty("callers")[0];
+            Assert.Contains("int Login(int user)", impactCaller.GetProperty("body_content").GetString());
+            Assert.Equal(2, CountLines(impactCaller.GetProperty("body_content").GetString()!));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    private void AssertBodyExcerpt(
+        Func<string[], JsonSerializerOptions, int> command,
+        string[] args,
+        string expectedContent)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => command(args, _jsonOptions));
+
+        Assert.True(exitCode == CommandExitCodes.Success, $"exit={exitCode}\nstdout={stdout}\nstderr={stderr}");
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        Assert.Contains(expectedContent, document.RootElement.GetProperty("body_content").GetString());
+    }
+
+    private static int CountLines(string text) => text.Split('\n').Length;
+
+    [Fact]
     public void RunSymbols_ExactNameFindsXamlTargetType()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_xaml_target_type");

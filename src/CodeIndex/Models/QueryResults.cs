@@ -204,6 +204,14 @@ public class ReferenceResult
     public string? ContainerName { get; set; }
     public bool IsSelfReference { get; set; }
     public bool IsMutualRecursion { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BodyContent { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyStartLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyEndLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool BodyContentTruncated { get; set; }
 }
 
 public class CallerResult
@@ -231,6 +239,14 @@ public class CallerResult
     public int ReferenceCount { get; set; }
     public bool HasSelfReference { get; set; }
     public bool HasMutualRecursion { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BodyContent { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyStartLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyEndLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool BodyContentTruncated { get; set; }
 }
 
 public class CalleeResult
@@ -249,6 +265,14 @@ public class CalleeResult
     public double ReferenceWeightScore { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BodyContent { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyStartLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyEndLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool BodyContentTruncated { get; set; }
 }
 
 public class ImpactResult
@@ -278,6 +302,14 @@ public class ImpactResult
     // 同一 caller に対して保持上限を超える別経路が存在する場合に true。
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool PathsTruncated { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BodyContent { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyStartLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BodyEndLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool BodyContentTruncated { get; set; }
 }
 
 public class ImpactAnalysisResult
