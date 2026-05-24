@@ -12306,6 +12306,22 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Go_InterfaceMethodSignatureIncludesTypeParameters()
+    {
+        var content = """
+            package demo
+
+            type Ordered interface {
+                Method[T constraints.Ordered](x T) T
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+
+        var method = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "Method");
+        Assert.Equal("Method[T constraints.Ordered](x T) T", method.Signature);
+    }
+
+    [Fact]
     public void Extract_Go_DoesNotIndexBlankIdentifierDeclarations()
     {
         var content = """

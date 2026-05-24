@@ -530,7 +530,7 @@ public static partial class SymbolExtractor
                 StartLine = lineIndex + 1,
                 StartColumn = startColumn,
                 EndLine = lineIndex + 1,
-                Signature = rawLine.Trim(),
+                Signature = candidate.Trim(),
             },
             rawLine);
         return true;
