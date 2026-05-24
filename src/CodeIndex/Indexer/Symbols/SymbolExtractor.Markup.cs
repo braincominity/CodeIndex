@@ -186,6 +186,22 @@ public static partial class SymbolExtractor
                     }
                 }
 
+                if (IsHtmlSemanticStateAttributeName(attrNameLower))
+                {
+                    var attrStartLine = FindHtmlLineNumber(lineStarts, attrNameStart);
+                    var attrSignatureIndex = Math.Clamp(attrStartLine - 1, 0, lines.Length - 1);
+                    symbols.Add(new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "property",
+                        Name = attrNameLower,
+                        Line = attrStartLine,
+                        StartLine = attrStartLine,
+                        EndLine = attrStartLine,
+                        Signature = lines[attrSignatureIndex].Trim(),
+                    });
+                }
+
                 if (attrValue == null || attrValue.Length == 0)
                     continue;
 
@@ -254,6 +270,13 @@ public static partial class SymbolExtractor
         AssignContainers(symbols, lines, null);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
+    }
+
+    private static bool IsHtmlSemanticStateAttributeName(string attrNameLower)
+    {
+        return (attrNameLower.StartsWith("data-", StringComparison.Ordinal) ||
+                attrNameLower.StartsWith("aria-", StringComparison.Ordinal)) &&
+               attrNameLower.Length > 5;
     }
 
     private static List<SymbolRecord> ExtractMarkdownSymbols(long fileId, string[] lines)
