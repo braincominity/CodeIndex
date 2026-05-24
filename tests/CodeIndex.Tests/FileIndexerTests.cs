@@ -2271,9 +2271,16 @@ public class FileIndexerTests
         try
         {
             Directory.CreateDirectory(tempDir);
-            CreateUnixFifo(Path.Combine(tempDir, "tool"));
-            CreateUnixFifo(Path.Combine(tempDir, "tool.sh"));
-            CreateUnixFifo(Path.Combine(tempDir, "Dockerfile"));
+            var extensionlessFifo = Path.Combine(tempDir, "tool");
+            var extensionFifo = Path.Combine(tempDir, "tool.sh");
+            var knownNameFifo = Path.Combine(tempDir, "Dockerfile");
+            CreateUnixFifo(extensionlessFifo);
+            CreateUnixFifo(extensionFifo);
+            CreateUnixFifo(knownNameFifo);
+
+            Assert.False(FileIndexer.CanIndexFile(extensionlessFifo));
+            Assert.False(FileIndexer.CanIndexFile(extensionFifo));
+            Assert.False(FileIndexer.CanIndexFile(knownNameFifo));
 
             var indexer = new FileIndexer(tempDir);
             var scanTask = Task.Run(() => indexer.ScanFiles());
