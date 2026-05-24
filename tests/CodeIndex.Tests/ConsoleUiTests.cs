@@ -137,6 +137,29 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void WrapHelpLine_LongOptionDescription_PreservesOptionColumn()
+    {
+        const string line = "  --max-line-width <n>       search/references/find/excerpt/inspect only: clamp very long single-line snippet/context/excerpt payloads";
+
+        var lines = ConsoleUi.WrapHelpLine(line, maxWidth: 80);
+
+        Assert.All(lines, wrapped => Assert.True(wrapped.Length <= 80, wrapped));
+        Assert.StartsWith("  --max-line-width <n>       search/references/find/excerpt/inspect", lines[0], StringComparison.Ordinal);
+        Assert.StartsWith("                             very long", lines[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WrapHelpLine_LongUsageLine_UsesDetectedWidth()
+    {
+        const string line = "  cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json[=ndjson|array]] [--verbose] [--limit <n>]";
+
+        var lines = ConsoleUi.WrapHelpLine(line, maxWidth: 72);
+
+        Assert.True(lines.Count > 1);
+        Assert.All(lines, wrapped => Assert.True(wrapped.Length <= 72, wrapped));
+    }
+
+    [Fact]
     public void PrintUsage_QueryLinesMatchImplementedOptions()
     {
         var output = CaptureUsageOutput(showBanner: false);

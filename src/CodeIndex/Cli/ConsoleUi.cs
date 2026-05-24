@@ -612,10 +612,23 @@ public static class ConsoleUi
             PrintBanner();
         }
 
+        var helpWidth = ShouldUseInteractiveConsole() ? Math.Min(GetWindowWidth(), 120) : 0;
+        void WriteHelpLine(string line = "")
+        {
+            if (helpWidth <= 0)
+            {
+                Console.WriteLine(line);
+                return;
+            }
+
+            foreach (var wrapped in WrapHelpLine(line, helpWidth))
+                Console.WriteLine(wrapped);
+        }
+
         Console.WriteLine("Usage:");
         Console.WriteLine("  cdidx <projectPath>");
         foreach (var (_, usage) in CommandUsageLines)
-            Console.WriteLine($"  {usage}");
+            WriteHelpLine($"  {usage}");
         Console.WriteLine();
         Console.WriteLine("Commands:");
         Console.WriteLine("  index <projectPath>        Build or update the index for a project");
@@ -657,20 +670,20 @@ public static class ConsoleUi
         Console.WriteLine("  --force                    Bypass the per-database index lock; only use when no other cdidx index is active");
         Console.WriteLine("  --json                     Output results as JSON (for AI/machine use)");
         Console.WriteLine("  --duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms");
-        Console.WriteLine("  --max-file-bytes <bytes>  Index only files up to this size (default: 4MiB; also honors CDIDX_MAX_FILE_BYTES; accepts K/M/G suffixes)");
-        Console.WriteLine("  --parallelism <n>         Full-scan extraction workers (default: CPU count capped at 16; also honors CDIDX_INDEX_PARALLELISM)");
-        Console.WriteLine("  --include-symbol-kind <kind>[,<kind>]  Keep only matching symbol kinds during indexing");
-        Console.WriteLine("  --exclude-symbol-kind <kind>[,<kind>]  Drop matching symbol kinds during indexing");
+        WriteHelpLine("  --max-file-bytes <bytes>  Index only files up to this size (default: 4MiB; also honors CDIDX_MAX_FILE_BYTES; accepts K/M/G suffixes)");
+        WriteHelpLine("  --parallelism <n>         Full-scan extraction workers (default: CPU count capped at 16; also honors CDIDX_INDEX_PARALLELISM)");
+        WriteHelpLine("  --include-symbol-kind <kind>[,<kind>]  Keep only matching symbol kinds during indexing");
+        WriteHelpLine("  --exclude-symbol-kind <kind>[,<kind>]  Drop matching symbol kinds during indexing");
         Console.WriteLine("  --commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)");
         Console.WriteLine("  --changed-between <old-ref> <new-ref>");
         Console.WriteLine("                              Update only files changed between two git refs (useful after branch switches)");
         Console.WriteLine("  --files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed");
-        Console.WriteLine("  --watch                    After the initial scan, stay running and reindex on file changes (FileSystemWatcher / inotify / FSEvents); rejects --commits / --changed-between / --files / --dry-run");
+        WriteHelpLine("  --watch                    After the initial scan, stay running and reindex on file changes (FileSystemWatcher / inotify / FSEvents); rejects --commits / --changed-between / --files / --dry-run");
         Console.WriteLine("  --debounce <ms>            Watch only: coalesce bursts of file events into one update after <ms> of quiet (default: 500)");
         Console.WriteLine("  --optimize                 index only: optimize the existing FTS5 table for this project's DB without scanning files");
-        Console.WriteLine("  --color <when>             Color output: `auto` (default), `always`, or `never`; flag wins over `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR` env vars, which win over TTY auto-detect");
-        Console.WriteLine("  --palette <name>           ANSI palette: `basic` (8-color, default fallback), `256`, or `truecolor`; flag wins over `CDIDX_COLOR_PALETTE` env var, which wins over `COLORTERM` / `TERM` auto-detect");
-        Console.WriteLine("  --ascii                    Use ASCII spinner/progress glyphs instead of Unicode glyphs (also honors CDIDX_ASCII=1, NO_UNICODE, TERM=dumb, accessibility env hints, and non-UTF-8 locales)");
+        WriteHelpLine("  --color <when>             Color output: `auto` (default), `always`, or `never`; flag wins over `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR` env vars, which win over TTY auto-detect");
+        WriteHelpLine("  --palette <name>           ANSI palette: `basic` (8-color, default fallback), `256`, or `truecolor`; flag wins over `CDIDX_COLOR_PALETTE` env var, which wins over `COLORTERM` / `TERM` auto-detect");
+        WriteHelpLine("  --ascii                    Use ASCII spinner/progress glyphs instead of Unicode glyphs (also honors CDIDX_ASCII=1, NO_UNICODE, TERM=dumb, accessibility env hints, and non-UTF-8 locales)");
         Console.WriteLine("  --metrics <path>           Append one JSONL record per CLI command / MCP tool call to <path> (also honors CDIDX_METRICS=<path>)");
         Console.WriteLine("  --help, -h                 Show this help message");
         Console.WriteLine("  --version, -V              Show version information");
@@ -685,40 +698,40 @@ public static class ConsoleUi
         Console.WriteLine();
         Console.WriteLine("Query options:");
         Console.WriteLine("  --db <path>                Database file path (default: .cdidx/codeindex.db in current directory)");
-        Console.WriteLine("  --json                     Output as JSON (search streams ndjson by default; use search --json=array for one array)");
-        Console.WriteLine("  --verbose                  Query commands: emit debug diagnostics to stderr; with --json, append an _debug JSON object");
-        Console.WriteLine("  --profile                  Read commands: append SQL timing, row-count, and EXPLAIN QUERY PLAN JSON after the normal result");
-        Console.WriteLine("  --slow-query-ms <n>        Read commands: log profiled SQL statements that take at least <n> ms (use 0 to log every statement)");
+        WriteHelpLine("  --json                     Output as JSON (search streams ndjson by default; use search --json=array for one array)");
+        WriteHelpLine("  --verbose                  Query commands: emit debug diagnostics to stderr; with --json, append an _debug JSON object");
+        WriteHelpLine("  --profile                  Read commands: append SQL timing, row-count, and EXPLAIN QUERY PLAN JSON after the normal result");
+        WriteHelpLine("  --slow-query-ms <n>        Read commands: log profiled SQL statements that take at least <n> ms (use 0 to log every statement)");
         Console.WriteLine("  --limit <n>, --top <n>     Max results to return (default: 20)");
         Console.WriteLine("  --lang <lang>              Filter by language (aliases: bat, cmd, cshtml, razor, ts, tsx, cts, mts)");
         Console.WriteLine("  --path <glob>              Restrict matches to glob-style path patterns (* and ?)");
-        Console.WriteLine($"  --query <query>            Pass a query literal, useful when the query starts with '-' (`search` max {QueryLimits.MaxQueryLength} chars)");
+        WriteHelpLine($"  --query <query>            Pass a query literal, useful when the query starts with '-' (`search` max {QueryLimits.MaxQueryLength} chars)");
         Console.WriteLine("  --exclude-path <glob>      Exclude glob-style path patterns (* and ?) (repeatable)");
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
         Console.WriteLine("  --include-generated        Include generated files in query results");
         Console.WriteLine("  --snippet-lines <n>        Search snippet length (1-20, default: 8)");
         Console.WriteLine("  --snippet-focus <mode>     search only: long-line focus mode (leftmost|quality|proximity, default: quality)");
-        Console.WriteLine($"  --max-line-width <n>       search/references/find/excerpt/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: {LineWidthFormatter.DefaultMaxLineWidth})");
+        WriteHelpLine($"  --max-line-width <n>       search/references/find/excerpt/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: {LineWidthFormatter.DefaultMaxLineWidth})");
         Console.WriteLine("  --focus-line <line>        excerpt: line whose focused column should stay visible (requires --focus-column)");
         Console.WriteLine("  --focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)");
         Console.WriteLine("  --focus-length <n>         excerpt: width of the focused span (default: 1, requires --focus-column)");
-        Console.WriteLine($"  --fts                      Use raw FTS5 query syntax for search (search query max {QueryLimits.MaxQueryLength} chars; raw FTS parser max {DbReader.MaxRawFtsQueryLength} chars, {DbReader.MaxRawFtsBooleanOperators} boolean ops, {DbReader.MaxRawFtsNearOperators} NEAR ops; trailing * is a prefix shorthand in literal-safe mode)");
-        Console.WriteLine("  --exact                    Backward-compatible shorthand. Prefer --exact-substring for search, keep --exact for find, and prefer --exact-name for symbols/definition/references/callers/callees/inspect. Pass at most one of --exact, --exact-substring, --exact-name; combining two or more is rejected.");
-        Console.WriteLine("  --exact-substring          Search only: case-sensitive exact substring (no FTS5)");
-        Console.WriteLine("  --exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match (legacy/stale-fold DBs fall back to ASCII NOCASE; use `cdidx backfill-fold` or check `status --json` fold_ready)");
-        Console.WriteLine("  --kind <kind>              definition/symbols/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind");
+        WriteHelpLine($"  --fts                      Use raw FTS5 query syntax for search (search query max {QueryLimits.MaxQueryLength} chars; raw FTS parser max {DbReader.MaxRawFtsQueryLength} chars, {DbReader.MaxRawFtsBooleanOperators} boolean ops, {DbReader.MaxRawFtsNearOperators} NEAR ops; trailing * is a prefix shorthand in literal-safe mode)");
+        WriteHelpLine("  --exact                    Backward-compatible shorthand. Prefer --exact-substring for search, keep --exact for find, and prefer --exact-name for symbols/definition/references/callers/callees/inspect. Pass at most one of --exact, --exact-substring, --exact-name; combining two or more is rejected.");
+        WriteHelpLine("  --exact-substring          Search only: case-sensitive exact substring (no FTS5)");
+        WriteHelpLine("  --exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match (legacy/stale-fold DBs fall back to ASCII NOCASE; use `cdidx backfill-fold` or check `status --json` fold_ready)");
+        WriteHelpLine("  --kind <kind>              definition/symbols/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind");
         Console.WriteLine("  --visibility <v[,v]>       Filter symbols/definitions/unused/hotspots by visibility: public, protected, internal, private");
-        Console.WriteLine("  --exclude-visibility <v[,v]> Exclude symbols/definitions/unused/hotspots by visibility");
-        Console.WriteLine("  --count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused ignore --limit, impact/hotspots still use visible page counts");
+        WriteHelpLine("  --exclude-visibility <v[,v]> Exclude symbols/definitions/unused/hotspots by visibility");
+        WriteHelpLine("  --count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused ignore --limit, impact/hotspots still use visible page counts");
         Console.WriteLine("  --since <datetime>         Filter to files modified since this timestamp (ISO 8601)");
         Console.WriteLine("  --bytes                    Show raw byte counts in human output for files/map instead of binary units; JSON always keeps raw integer bytes");
-        Console.WriteLine("  --max-hops <n>             Max BFS hops for impact analysis, inclusive (default: 5; --max-hops 2 returns callers at hop 1 and 2; --max-hops 0 resolves the symbol without traversing callers)");
+        WriteHelpLine("  --max-hops <n>             Max BFS hops for impact analysis, inclusive (default: 5; --max-hops 2 returns callers at hop 1 and 2; --max-hops 0 resolves the symbol without traversing callers)");
         Console.WriteLine("  --depth <n>                Deprecated alias for --max-hops");
         Console.WriteLine("  --reverse                  Reverse direction for deps (show dependents)");
         Console.WriteLine("  --group-by-name            hotspots: collapse rows sharing (name, kind) across files into one line");
-        Console.WriteLine("  --with-paths               impact: also emit `paths` per caller — the shortest call chains [root, ..., caller] (diamond graphs surface every converging route, capped per row)");
-        Console.WriteLine("  unused reflection note     C# nameof/typeof and direct reflection member-name literals such as GetMethod(\"Foo\") are indexed; dynamically constructed reflection names may need manual review");
-        Console.WriteLine("  Note: if a query itself starts with '-', pass it with --query <query> or -- <query>; for option values that start with '--', use --opt=<value>.");
+        WriteHelpLine("  --with-paths               impact: also emit `paths` per caller — the shortest call chains [root, ..., caller] (diamond graphs surface every converging route, capped per row)");
+        WriteHelpLine("  unused reflection note     C# nameof/typeof and direct reflection member-name literals such as GetMethod(\"Foo\") are indexed; dynamically constructed reflection names may need manual review");
+        WriteHelpLine("  Note: if a query itself starts with '-', pass it with --query <query> or -- <query>; for option values that start with '--', use --opt=<value>.");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  cdidx ./myproject                             Index a project");
@@ -769,6 +782,56 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx status --json                            DB stats as JSON");
         Console.WriteLine("  cdidx languages                                Show supported languages");
         Console.WriteLine("  cdidx license                                  Show licensing and commercial-use terms");
+    }
+
+    internal static IReadOnlyList<string> WrapHelpLine(string line, int maxWidth)
+    {
+        if (maxWidth <= 0 || line.Length <= maxWidth)
+            return [line];
+
+        var continuationIndent = GetHelpContinuationIndent(line);
+        return WrapLineByWords(line, maxWidth, continuationIndent);
+    }
+
+    private static string GetHelpContinuationIndent(string line)
+    {
+        var leading = 0;
+        while (leading < line.Length && line[leading] == ' ')
+            leading++;
+
+        for (var i = leading + 1; i < line.Length - 1; i++)
+        {
+            if (line[i] == ' ' && line[i + 1] == ' ')
+            {
+                while (i < line.Length && line[i] == ' ')
+                    i++;
+                if (i < line.Length)
+                    return new string(' ', i);
+                break;
+            }
+        }
+
+        return new string(' ', Math.Min(leading + 2, 8));
+    }
+
+    private static IReadOnlyList<string> WrapLineByWords(string line, int maxWidth, string continuationIndent)
+    {
+        var lines = new List<string>();
+        var current = line;
+        while (current.Length > maxWidth)
+        {
+            var breakAt = current.LastIndexOf(' ', Math.Min(maxWidth, current.Length - 1));
+            if (breakAt <= 0)
+                breakAt = current.IndexOf(' ', maxWidth);
+            if (breakAt <= 0)
+                break;
+
+            lines.Add(current[..breakAt].TrimEnd());
+            current = continuationIndent + current[(breakAt + 1)..].TrimStart();
+        }
+
+        lines.Add(current);
+        return lines;
     }
 
     public static void PrintLicenseSummary()
