@@ -6458,6 +6458,10 @@ jobs:
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
             Assert.Equal(6, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("by_bucket").GetProperty("likely_unused_private").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("by_confidence").GetProperty("medium").GetInt32());
+            Assert.Equal("medium", json.GetProperty("bucket_taxonomy").GetProperty("likely_unused_private").GetProperty("confidence").GetString());
+            Assert.Contains("external API", json.GetProperty("bucket_taxonomy").GetProperty("public_or_exported_no_refs").GetProperty("description").GetString());
             Assert.Equal("Hidden", symbols[0].GetProperty("name").GetString());
             Assert.Equal("likely_unused_private", symbols[0].GetProperty("unused_bucket").GetString());
             Assert.Equal("medium", symbols[0].GetProperty("unused_confidence").GetString());
@@ -6469,6 +6473,33 @@ jobs:
             Assert.Equal("public_or_exported_no_refs", symbols[7].GetProperty("unused_bucket").GetString());
             Assert.Equal("UseIOptions", symbols[8].GetProperty("name").GetString());
             Assert.Equal("public_or_exported_no_refs", symbols[8].GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonByBucketGroupsReturnedSymbolsByTaxonomyBucket()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--by-bucket"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var byBucket = json.GetProperty("by_bucket");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Hidden", byBucket.GetProperty("likely_unused_private")[0].GetProperty("name").GetString());
+            Assert.Equal("InternalOnly", byBucket.GetProperty("maybe_unused_nonpublic")[0].GetProperty("name").GetString());
+            Assert.Equal(6, byBucket.GetProperty("public_or_exported_no_refs").GetArrayLength());
+            Assert.Equal("ConnectionString", byBucket.GetProperty("reflection_or_config_suspect")[0].GetProperty("name").GetString());
         }
         finally
         {
