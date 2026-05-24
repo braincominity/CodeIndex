@@ -120,6 +120,32 @@ public class McpServerTests : IDisposable
     // --- Protocol tests / プロトコルテスト ---
 
     [Fact]
+    public async Task StdioTransport_WriteFrameAsync_UsesLfTerminatorEvenWhenHostNewLineDiffers()
+    {
+        await using var input = new MemoryStream();
+        await using var output = new MemoryStream();
+        await using var transport = new StdioMcpTransport(input, output, bufferSize: 1024);
+
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":1,"result":{}}""", CancellationToken.None);
+
+        var bytes = output.ToArray();
+        Assert.Equal((byte)'\n', bytes[^1]);
+        Assert.DoesNotContain((byte)'\r', bytes);
+    }
+
+    [Fact]
+    public async Task ProcessLineAsync_UsesLfTerminatorEvenWhenWriterNewLineIsCrLf()
+    {
+        using var writer = new StringWriter { NewLine = "\r\n" };
+
+        await _server.ProcessLineAsync("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", writer);
+
+        var response = writer.ToString();
+        Assert.EndsWith("\n", response, StringComparison.Ordinal);
+        Assert.DoesNotContain("\r", response);
+    }
+
+    [Fact]
     public void Initialize_ReturnsProtocolVersion()
     {
         // Issue #1554: negotiation echoes back the client's requested protocolVersion when
