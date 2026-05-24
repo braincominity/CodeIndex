@@ -21470,6 +21470,37 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSS_CapturesMediaFeatureNamesButNotValuesOrOperators()
+    {
+        var content = """
+            @media (min-width: 768px) and (prefers-color-scheme: dark), not screen and (orientation: landscape) {
+              .responsive {
+                color: red;
+              }
+            }
+
+            @supports (display: grid) {
+              @media (width >= 40rem) and (--narrow) {
+                .nested-media {
+                  display: grid;
+                }
+              }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "min-width");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "prefers-color-scheme");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "orientation");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "width");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "--narrow");
+        Assert.DoesNotContain(symbols, s =>
+            s.Kind == "property"
+            && s.Name is "768px" or "dark" or "landscape" or "and" or "not" or "or");
+    }
+
+    [Fact]
     public void Extract_CSS_DoesNotLeakNestedSelectorsAfterSameLineGroupingAndQualifiedRule()
     {
         var content = """
