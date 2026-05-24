@@ -7077,7 +7077,7 @@ public class IndexCommandRunnerTests
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (hotspotsExitCode, hotspotsJson) = RunHotspotsJsonWithPaths(dbPath, "csharp", "function", ["projA/", "projB/"]);
 
-            Assert.Equal(CommandExitCodes.NotFound, hotspotsExitCode);
+            Assert.Equal(CommandExitCodes.Success, hotspotsExitCode);
             Assert.True(hotspotsJson.GetProperty("hotspot_family_ready").GetBoolean());
             Assert.Equal(0, hotspotsJson.GetProperty("count").GetInt32());
             Assert.Empty(hotspotsJson.GetProperty("hotspots").EnumerateArray());
