@@ -1352,6 +1352,8 @@ public class DbContext : IDisposable
     private void EnforceRequiredFileIdConstraints()
     {
         Execute("PRAGMA foreign_keys=OFF");
+        var legacyAlterTable = ExecuteScalar("PRAGMA legacy_alter_table");
+        Execute("PRAGMA legacy_alter_table=ON");
         try
         {
             RebuildTableWithRequiredFileId(
@@ -1443,6 +1445,7 @@ public class DbContext : IDisposable
         }
         finally
         {
+            Execute($"PRAGMA legacy_alter_table={legacyAlterTable}");
             Execute("PRAGMA foreign_keys=ON");
         }
     }
