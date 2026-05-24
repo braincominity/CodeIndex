@@ -3064,6 +3064,15 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ComputeChecksum_ReturnsLowercaseHex()
+    {
+        var checksum = FileIndexer.ComputeChecksum(System.Text.Encoding.UTF8.GetBytes("ABC\n"));
+
+        Assert.Equal(checksum.ToLowerInvariant(), checksum);
+        Assert.DoesNotContain(checksum, c => c is >= 'A' and <= 'F');
+    }
+
+    [Fact]
     public void BuildRecord_BomOnlyFile_ReportsOnePhysicalLine()
     {
         // A file whose on-disk bytes are exactly the UTF-8 BOM (EF BB BF) and
