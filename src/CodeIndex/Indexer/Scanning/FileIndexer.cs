@@ -20,6 +20,7 @@ public class FileIndexer
         Supported,
         Unsupported,
         ProbeFailed,
+        Missing,
     }
 
     internal readonly record struct LanguageDetectionResult(FileProbeStatus Status, string? Language);
@@ -1254,7 +1255,33 @@ public class FileIndexer
         // File.GetAttributes は .NET 上で lstat 相当（symlink target を辿らない）なので、Windows でも Unix でも必要な判定になる。
         // Unix 側の stat() は symlink を辿るため、このガードが無いと symlink→通常ファイルが
         // Supported として通過してしまう。
-        if (HasSkippedAttributes(filePath))
+        FileAttributes attributes;
+        try
+        {
+            attributes = File.GetAttributes(LongPath.EnsureWindowsPrefix(filePath));
+        }
+        catch (FileNotFoundException)
+        {
+            return FileProbeStatus.Missing;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return FileProbeStatus.Missing;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return OperatingSystem.IsWindows()
+                ? FileProbeStatus.Supported
+                : FileProbeStatus.ProbeFailed;
+        }
+        catch (IOException)
+        {
+            return OperatingSystem.IsWindows()
+                ? FileProbeStatus.Supported
+                : FileProbeStatus.ProbeFailed;
+        }
+
+        if (HasSkippedAttributes(attributes))
             return FileProbeStatus.Unsupported;
 
         if (OperatingSystem.IsWindows())
@@ -1753,6 +1780,17 @@ public class FileIndexer
                     // GetFileIndexability もファイル symlink / reparse point を拒否するため、
                     // update モード (--files / --commits) でも同じ skip 挙動が二重プローブ無しで効く。
                     var indexability = GetFileIndexability(file);
+                    if (indexability == FileProbeStatus.Missing)
+                    {
+                        var relativePath = ToRelativePath(file);
+                        errors.Add(new ScanError(
+                            relativePath,
+                            "Skipped file because it was deleted during scanning.",
+                            ScanIssueSeverity.Warning));
+                        nonIndexablePaths.Add(relativePath);
+                        continue;
+                    }
+
                     if (indexability == FileProbeStatus.ProbeFailed)
                     {
                         var relativePath = ToRelativePath(file);
@@ -1771,6 +1809,16 @@ public class FileIndexer
                     // Include files with a known extension/filename or an extensionless recognized shebang
                     // 既知の拡張子・既知ファイル名、または拡張子なしで shebang を認識できるファイルを含める
                     var language = TryDetectLanguage(file);
+                    if (language.Status == FileProbeStatus.Missing)
+                    {
+                        errors.Add(new ScanError(
+                            relativeFile,
+                            "Skipped file because it was deleted during scanning.",
+                            ScanIssueSeverity.Warning));
+                        nonIndexablePaths.Add(relativeFile);
+                        continue;
+                    }
+
                     if (language.Status == FileProbeStatus.ProbeFailed)
                     {
                         errors.Add(new ScanError(relativeFile, "Could not probe file for indexability/language."));
@@ -3134,7 +3182,11 @@ public class FileIndexer
     /// </summary>
     private static LanguageDetectionResult TryDetectLanguageFromShebang(string filePath)
     {
-        if (GetFileIndexability(filePath) != FileProbeStatus.Supported)
+        var indexability = GetFileIndexability(filePath);
+        if (indexability == FileProbeStatus.Missing)
+            return new LanguageDetectionResult(FileProbeStatus.Missing, null);
+
+        if (indexability != FileProbeStatus.Supported)
             return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
         try
@@ -3185,6 +3237,14 @@ public class FileIndexer
             return language != null
                 ? new LanguageDetectionResult(FileProbeStatus.Supported, language)
                 : new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+        }
+        catch (FileNotFoundException)
+        {
+            return new LanguageDetectionResult(FileProbeStatus.Missing, null);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return new LanguageDetectionResult(FileProbeStatus.Missing, null);
         }
         catch (IOException)
         {
