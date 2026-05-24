@@ -2773,7 +2773,9 @@ public static partial class SymbolExtractor
                             ? (i + 1, null, null)
                             : scalaBracelessClassEndLine.HasValue
                                     ? (scalaBracelessClassEndLine.Value + 1, null, null)
-                                    : ResolveRange(rangeLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
+                                    : lang == "csharp" && pattern.BodyStyle == BodyStyle.Brace && csharpMatchLines != null
+                                        ? FindCSharpBraceRange(csharpMatchLines, i, absoluteStartColumn, linesAreSanitized: true)
+                                        : ResolveRange(rangeLines, i, pattern.BodyStyle, lang, absoluteStartColumn);
                     if (fortranContinuationCandidate != null)
                         endLine = Math.Max(endLine, fortranContinuationCandidate.Value.LastConsumedLineIndex + 1);
                     var startLine = i + 1;

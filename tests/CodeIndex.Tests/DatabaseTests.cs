@@ -45,6 +45,60 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InitializeSchema_CreatesFoldedMutualReferenceIndex()
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_symbol_refs_mutual_folded'";
+
+        Assert.Equal("idx_symbol_refs_mutual_folded", (string?)cmd.ExecuteScalar());
+    }
+
+    [Fact]
+    public void InsertReferences_UsesFoldedNamesForMutualRecursion()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/app.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 4,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = "abc",
+        });
+
+        _writer.InsertReferences(
+        [
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Run",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 1,
+                Context = "Start();",
+                ContainerKind = "function",
+                ContainerName = "Start",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Start",
+                ReferenceKind = "call",
+                Line = 2,
+                Column = 1,
+                Context = "Run();",
+                ContainerKind = "function",
+                ContainerName = "Run",
+            },
+        ]);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE is_mutual_recursion = 1";
+
+        Assert.Equal(2L, (long)cmd.ExecuteScalar()!);
+    }
+
+    [Fact]
     public void OptimizeFts_ResetsIncrementalWriteCounterAndStampsTime()
     {
         Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
