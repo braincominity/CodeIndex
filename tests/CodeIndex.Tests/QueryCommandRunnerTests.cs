@@ -334,6 +334,82 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_JsonArrayEmitsSingleArray_Issue1850()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_json_array");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/auth.cs",
+                "csharp",
+                """
+                public class AuthFixture
+                {
+                    public void Authenticate() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Authenticate", "--db", dbPath, "--lang", "csharp", "--exact", "--json=array"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(JsonValueKind.Array, document.RootElement.ValueKind);
+            Assert.Single(document.RootElement.EnumerateArray());
+            Assert.DoesNotContain("\"done\"", stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_JsonArrayNoResultsEmitsEmptyArray_Issue1850()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_json_array_empty");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/auth.cs",
+                "csharp",
+                "public class AuthFixture { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Missing", "--db", dbPath, "--json=array"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(JsonValueKind.Array, document.RootElement.ValueKind);
+            Assert.Empty(document.RootElement.EnumerateArray());
+            Assert.DoesNotContain("\"done\"", stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_JsonFormatRejectsUnknownValue_Issue1850()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["Authenticate", "--json=pretty"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--json format must be one of ndjson or array", stderr);
+    }
+
+    [Fact]
     public void RunSearch_ProfileEmitsSqlPhasesAndQueryPlan_Issue1643()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_profile");

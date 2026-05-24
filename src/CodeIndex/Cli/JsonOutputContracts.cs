@@ -272,6 +272,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(CallerResult))]
 [JsonSerializable(typeof(CliJsonMessage))]
 [JsonSerializable(typeof(CompactSearchResult))]
+[JsonSerializable(typeof(CompactSearchResult[]))]
 [JsonSerializable(typeof(CommandErrorJsonResult))]
 [JsonSerializable(typeof(DbIntegrityCheckJsonResult))]
 [JsonSerializable(typeof(DefinitionResult))]
