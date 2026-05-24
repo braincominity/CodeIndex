@@ -81,6 +81,44 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FileAboveMaxFileBytes_PersistsFileTooLargeIssue()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var filePath = Path.Combine(projectRoot, "large.py");
+            File.WriteAllText(filePath, "print('start')\n" + new string('a', 256));
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--max-file-bytes", "128", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(1, CountRows(dbPath, "files"));
+            Assert.Equal(0, CountRows(dbPath, "chunks"));
+            Assert.Equal(0, CountRows(dbPath, "symbols"));
+            Assert.Equal(0, CountRows(dbPath, "symbol_references"));
+
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
+            var issue = Assert.Single(reader.GetIssues("file_too_large"));
+            Assert.Equal("large.py", issue.Path);
+            Assert.Equal(0, issue.Line);
+            Assert.Contains("File too large", issue.Message);
+            Assert.Contains("--max-file-bytes", issue.Message);
+            Assert.Contains(FileIndexer.MaxFileSizeEnvironmentVariable, issue.Message);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_NewIndexDatabase_RunsAnalyzeAfterSuccessfulIndex()
     {
         var projectRoot = CreateTempProject();

@@ -3401,6 +3401,20 @@ public static class IndexCommandRunner
                         {
                             extractionResults.Add(FullScanFileWorkItem.Skipped(filePath, ex.Message), cancellationToken);
                         }
+                        catch (FileIndexer.FileTooLargeSkippedException ex)
+                        {
+                            var record = indexer.BuildSkippedFileRecord(filePath);
+                            var issue = new FileIssue
+                            {
+                                Path = ex.RelativePath,
+                                Kind = "file_too_large",
+                                Line = 0,
+                                Message = ex.Message,
+                            };
+                            extractionResults.Add(
+                                FullScanFileWorkItem.Success(filePath, record, string.Empty, [], ex.Message, [], [], [], [issue]),
+                                cancellationToken);
+                        }
                         catch (Exception ex)
                         {
                             extractionResults.Add(FullScanFileWorkItem.Failure(filePath, ex), cancellationToken);
