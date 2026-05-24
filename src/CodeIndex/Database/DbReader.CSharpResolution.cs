@@ -158,6 +158,133 @@ public partial class DbReader
         return inheritedContainingTypes;
     }
 
+    private HashSet<string> GetPolymorphicCSharpContainingTypes(CSharpContainingTypeScope containingTypeScope)
+    {
+        var inheritedContainingTypes = new HashSet<string>(StringComparer.Ordinal);
+        var visited = new HashSet<string>(StringComparer.Ordinal)
+        {
+            containingTypeScope.QualifiedName,
+        };
+        CollectPolymorphicCSharpContainingTypes(containingTypeScope, inheritedContainingTypes, visited);
+        return inheritedContainingTypes;
+    }
+
+    private List<string> GetCSharpPolymorphicDispatchSymbolNames(string symbolName)
+    {
+        var memberName = SqlNameResolver.GetLeafName(symbolName);
+        if (string.IsNullOrWhiteSpace(memberName))
+            return [];
+
+        var containingTypeNames = new List<string>();
+        var lastDot = symbolName.LastIndexOf('.');
+        var hasExplicitContainingType = lastDot > 0;
+        if (hasExplicitContainingType)
+        {
+            var explicitContainingTypeName = symbolName[..lastDot];
+            containingTypeNames.Add(explicitContainingTypeName);
+        }
+        else
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = @"
+                SELECT s.container_qualified_name
+                FROM symbols s
+                JOIN files f ON s.file_id = f.id
+                WHERE f.lang = 'csharp'
+                  AND s.kind IN ('function', 'property')
+                  AND s.container_qualified_name IS NOT NULL
+                  AND s.container_qualified_name != ''
+                  AND s.name = @memberName COLLATE NOCASE
+                GROUP BY s.container_qualified_name";
+            cmd.Parameters.AddWithValue("@memberName", memberName);
+
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+                containingTypeNames.Add(reader.GetString(0));
+        }
+
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var containingTypeName in containingTypeNames)
+        {
+            AddCSharpBaseListDispatchNames(containingTypeName, memberName, names);
+        }
+
+        foreach (var containingTypeName in containingTypeNames)
+        {
+            var containingTypeScope = GetCSharpContainingTypeScope(containingTypeName);
+            if (containingTypeScope == null)
+                continue;
+
+            foreach (var inheritedContainingType in GetPolymorphicCSharpContainingTypes(containingTypeScope))
+            {
+                var inheritedMemberName = CombineDbQualifiedName(inheritedContainingType, memberName);
+                if (!string.IsNullOrWhiteSpace(inheritedMemberName))
+                    names.Add(inheritedMemberName);
+                if (!hasExplicitContainingType)
+                    names.Add(memberName);
+            }
+        }
+
+        return names.ToList();
+    }
+
+    private void AddCSharpBaseListDispatchNames(string containingTypeName, string memberName, HashSet<string> names)
+    {
+        var signature = GetCSharpContainingTypeScope(containingTypeName)?.Signature;
+        if (!string.IsNullOrWhiteSpace(signature))
+        {
+            AddCSharpBaseListDispatchNamesFromSignature(containingTypeName, memberName, signature, names);
+            return;
+        }
+
+        var shortTypeName = GetLastQualifiedSegment(containingTypeName);
+        if (string.IsNullOrWhiteSpace(shortTypeName))
+            return;
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.signature
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.lang = 'csharp'
+              AND s.kind IN ('class', 'struct', 'interface')
+              AND (s.name = @shortTypeName COLLATE NOCASE OR s.name = @containingTypeName COLLATE NOCASE)
+            LIMIT 1";
+        cmd.Parameters.AddWithValue("@shortTypeName", shortTypeName);
+        cmd.Parameters.AddWithValue("@containingTypeName", containingTypeName);
+
+        signature = cmd.ExecuteScalar() as string;
+        if (string.IsNullOrWhiteSpace(signature))
+            return;
+
+        AddCSharpBaseListDispatchNamesFromSignature(containingTypeName, memberName, signature, names);
+    }
+
+    private static void AddCSharpBaseListDispatchNamesFromSignature(string containingTypeName, string memberName, string signature, HashSet<string> names)
+    {
+        var namespacePrefix = string.Empty;
+        var lastDot = containingTypeName.LastIndexOf('.');
+        if (lastDot > 0)
+            namespacePrefix = containingTypeName[..lastDot];
+
+        foreach (var baseTypeReference in ParseCSharpBaseTypeReferences(signature))
+        {
+            var normalizedBase = NormalizeCSharpBaseTypeReference(baseTypeReference);
+            if (string.IsNullOrWhiteSpace(normalizedBase))
+                continue;
+
+            var inheritedMemberName = CombineDbQualifiedName(normalizedBase, memberName);
+            if (!string.IsNullOrWhiteSpace(inheritedMemberName))
+                names.Add(inheritedMemberName);
+            if (!string.IsNullOrWhiteSpace(namespacePrefix) && !SqlNameResolver.HasQualifier(normalizedBase))
+            {
+                inheritedMemberName = CombineDbQualifiedName(CombineDbQualifiedName(namespacePrefix, normalizedBase), memberName);
+                if (!string.IsNullOrWhiteSpace(inheritedMemberName))
+                    names.Add(inheritedMemberName);
+            }
+        }
+    }
+
     private void CollectInheritedCSharpContainingTypes(CSharpContainingTypeScope containingTypeScope, HashSet<string> inheritedContainingTypes, HashSet<string> visited)
     {
         var directBaseScope = ResolveDirectCSharpBaseContainingTypeScope(containingTypeScope);
@@ -166,6 +293,53 @@ public partial class DbReader
 
         inheritedContainingTypes.Add(directBaseScope.QualifiedName);
         CollectInheritedCSharpContainingTypes(directBaseScope, inheritedContainingTypes, visited);
+    }
+
+    private void CollectPolymorphicCSharpContainingTypes(CSharpContainingTypeScope containingTypeScope, HashSet<string> inheritedContainingTypes, HashSet<string> visited)
+    {
+        foreach (var inheritedScope in ResolveDirectCSharpInheritedContainingTypeScopes(containingTypeScope))
+        {
+            if (!visited.Add(inheritedScope.QualifiedName))
+                continue;
+
+            inheritedContainingTypes.Add(inheritedScope.QualifiedName);
+            CollectPolymorphicCSharpContainingTypes(inheritedScope, inheritedContainingTypes, visited);
+        }
+    }
+
+    private List<CSharpContainingTypeScope> ResolveDirectCSharpInheritedContainingTypeScopes(CSharpContainingTypeScope containingTypeScope)
+    {
+        if (containingTypeScope.Kind is not ("class" or "struct" or "interface"))
+            return [];
+
+        var baseTypeReferences = ParseCSharpBaseTypeReferences(containingTypeScope.Signature);
+        if (baseTypeReferences.Count == 0)
+            return [];
+
+        var scopes = new List<CSharpContainingTypeScope>();
+        foreach (var baseTypeReference in baseTypeReferences)
+        {
+            var inheritedQualifiedName = ResolveScopedCSharpContainingTypeQualifiedName(
+                containingTypeScope.Path,
+                containingTypeScope.DeclarationLine,
+                baseTypeReference);
+            if (string.IsNullOrWhiteSpace(inheritedQualifiedName))
+                continue;
+
+            var inheritedScope = GetCSharpContainingTypeScope(inheritedQualifiedName);
+            if (inheritedScope == null)
+                continue;
+            if (containingTypeScope.Kind == "class" && inheritedScope.Kind is not ("class" or "interface"))
+                continue;
+            if (containingTypeScope.Kind == "struct" && inheritedScope.Kind != "interface")
+                continue;
+            if (containingTypeScope.Kind == "interface" && inheritedScope.Kind != "interface")
+                continue;
+
+            scopes.Add(inheritedScope);
+        }
+
+        return scopes;
     }
 
     private CSharpContainingTypeScope? GetCSharpContainingTypeScope(string qualifiedName)
@@ -652,8 +826,14 @@ public partial class DbReader
 
     private static string? ParseCSharpBaseTypeReference(string? signature)
     {
+        var references = ParseCSharpBaseTypeReferences(signature);
+        return references.Count == 0 ? null : references[0];
+    }
+
+    private static List<string> ParseCSharpBaseTypeReferences(string? signature)
+    {
         if (string.IsNullOrWhiteSpace(signature))
-            return null;
+            return [];
 
         var text = signature.TrimEnd();
         if (text.EndsWith("{", StringComparison.Ordinal))
@@ -661,15 +841,22 @@ public partial class DbReader
 
         var colonIndex = FindCSharpBaseListColonIndex(text);
         if (colonIndex < 0)
-            return null;
+            return [];
 
         var baseList = text[(colonIndex + 1)..];
         var whereIndex = baseList.IndexOf(" where ", StringComparison.Ordinal);
         if (whereIndex >= 0)
             baseList = baseList[..whereIndex];
 
-        var firstEntry = TakeFirstCSharpBaseListEntry(baseList).Trim();
-        return firstEntry.Length == 0 ? null : firstEntry;
+        var entries = new List<string>();
+        foreach (var entry in EnumerateCSharpBaseListEntries(baseList))
+        {
+            var trimmed = entry.Trim();
+            if (trimmed.Length > 0)
+                entries.Add(trimmed);
+        }
+
+        return entries;
     }
 
     private static int FindCSharpBaseListColonIndex(string signature)
@@ -714,9 +901,18 @@ public partial class DbReader
 
     private static string TakeFirstCSharpBaseListEntry(string baseList)
     {
+        foreach (var entry in EnumerateCSharpBaseListEntries(baseList))
+            return entry;
+
+        return baseList;
+    }
+
+    private static IEnumerable<string> EnumerateCSharpBaseListEntries(string baseList)
+    {
         var angleDepth = 0;
         var parenDepth = 0;
         var squareDepth = 0;
+        var start = 0;
         for (var i = 0; i < baseList.Length; i++)
         {
             switch (baseList[i])
@@ -744,12 +940,15 @@ public partial class DbReader
                     break;
                 case ',':
                     if (angleDepth == 0 && parenDepth == 0 && squareDepth == 0)
-                        return baseList[..i];
+                    {
+                        yield return baseList[start..i];
+                        start = i + 1;
+                    }
                     break;
             }
         }
 
-        return baseList;
+        yield return baseList[start..];
     }
 
     private static string NormalizeCSharpBaseTypeReference(string typeReference)

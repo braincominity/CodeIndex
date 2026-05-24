@@ -798,17 +798,25 @@ public partial class DbReader
         // caller 側も leaf `--exact` と同じく FoldReady なら folded equality、legacy DB では
         // `COLLATE NOCASE` fallback。definition と caller 行の casing 差もここで吸収する。
         var allowSqlLeafFallback = !SqlNameResolver.HasQualifier(symbolName);
+        var polymorphicCSharpSymbolNames = lang is null or "csharp"
+            ? GetCSharpPolymorphicDispatchSymbolNames(symbolName)
+            : [];
+        var polymorphicNameCondition = polymorphicCSharpSymbolNames.Count == 0
+            ? string.Empty
+            : _foldReady
+                ? " OR (f.lang = 'csharp' AND r.symbol_name_folded IN (" + string.Join(", ", polymorphicCSharpSymbolNames.Select((_, i) => $"@polymorphicSymbolNameFolded{i}")) + "))"
+                : " OR (f.lang = 'csharp' AND r.symbol_name COLLATE NOCASE IN (" + string.Join(", ", polymorphicCSharpSymbolNames.Select((_, i) => $"@polymorphicSymbolName{i}")) + "))";
         var nameCondition = _foldReady
             ? allowSqlLeafFallback
                 ? @"
-              AND (r.symbol_name_folded = @symbolNameFolded OR (f.lang = 'sql' AND r.symbol_name_folded = @symbolNameLeafFolded))"
+              AND (r.symbol_name_folded = @symbolNameFolded OR (f.lang = 'sql' AND r.symbol_name_folded = @symbolNameLeafFolded)" + polymorphicNameCondition + ")"
                 : @"
-              AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @symbolNameFolded))"
+              AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @symbolNameFolded)" + polymorphicNameCondition + ")"
             : allowSqlLeafFallback
                 ? @"
-              AND (r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE))"
+              AND (r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE)" + polymorphicNameCondition + ")"
                 : @"
-              AND (((f.lang = 'sql') AND sql_context_has_name_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE))";
+              AND (((f.lang = 'sql') AND sql_context_has_name_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE)" + polymorphicNameCondition + ")";
 
         // impact BFS must share the call-graph contract with `callers`/`callees`/`hotspots`,
         // so event subscriptions (`Click += OnClick`) also participate in the transitive
@@ -848,6 +856,13 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@symbolNameLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(symbolName)) ?? SqlNameResolver.GetLeafName(symbolName));
         if (_foldReady)
             cmd.Parameters.AddWithValue("@symbolNameFolded", NameFold.Fold(symbolName) ?? symbolName);
+        for (var i = 0; i < polymorphicCSharpSymbolNames.Count; i++)
+        {
+            if (_foldReady)
+                cmd.Parameters.AddWithValue($"@polymorphicSymbolNameFolded{i}", NameFold.Fold(polymorphicCSharpSymbolNames[i]) ?? polymorphicCSharpSymbolNames[i]);
+            else
+                cmd.Parameters.AddWithValue($"@polymorphicSymbolName{i}", polymorphicCSharpSymbolNames[i]);
+        }
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
