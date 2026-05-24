@@ -116,7 +116,6 @@ public partial class McpServer : IDisposable
     // を引き続きサポートしつつ、未知バージョンは構造化された `-32602` で明示的に拒否する。
     internal static readonly string[] SupportedProtocolVersions = { "2025-03-26", "2024-11-05" };
     private const int MaxLimit = 200;
-    private const int MaxQueryLength = 1000;
     // Upper bound on the `impact_analysis` `maxHops` argument. Deep monorepos can have
     // legitimate caller chains exceeding 10 hops (e.g. DI container → factory → service →
     // handler → business logic), so the previous cap of 10 silently downgraded such requests.

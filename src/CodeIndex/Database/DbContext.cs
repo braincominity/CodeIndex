@@ -1140,8 +1140,12 @@ public class DbContext : IDisposable
 
     public void InitializeSchema()
     {
-        // Files table / ファイルテーブル
-        Execute(@"
+        using var transaction = _connection.BeginTransaction(deferred: false);
+        _activeMigrationTransaction = transaction;
+        try
+        {
+            // Files table / ファイルテーブル
+            Execute(@"
             CREATE TABLE IF NOT EXISTS files (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 path        TEXT    NOT NULL UNIQUE,
@@ -1316,8 +1320,8 @@ public class DbContext : IDisposable
         Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded_file ON symbol_references(symbol_name_folded, file_id)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_name_folded_kind ON symbol_references(container_name_folded, reference_kind)");
 
-        // Full-text search / 全文検索
-        Execute(@"
+            // Full-text search / 全文検索
+            Execute(@"
             CREATE VIRTUAL TABLE IF NOT EXISTS fts_chunks USING fts5(
                 content,
                 content='chunks',
@@ -1346,6 +1350,13 @@ public class DbContext : IDisposable
                 INSERT INTO fts_chunks(fts_chunks, rowid, content) VALUES('delete', old.id, old.content);
                 INSERT INTO fts_chunks(rowid, content) VALUES (new.id, new.content);
             END");
+            transaction.Commit();
+        }
+        finally
+        {
+            _activeMigrationTransaction = null;
+        }
+
         _schemaCache?.Refresh();
     }
 
@@ -1557,7 +1568,19 @@ public class DbContext : IDisposable
         try
         {
             EnsureForeignKeysEnabled();
-            using var transaction = _connection.BeginTransaction(deferred: true);
+            SqliteTransaction transaction;
+            try
+            {
+                transaction = _connection.BeginTransaction(deferred: false);
+            }
+            catch (SqliteException ex) when (IsReadOnlyOpenError(ex))
+            {
+                RecordMigrationFailure("BEGIN IMMEDIATE schema migration", ex);
+                return;
+            }
+
+            using (transaction)
+            {
             _activeMigrationTransaction = transaction;
 
             try
@@ -1570,13 +1593,7 @@ public class DbContext : IDisposable
                     }
                     catch (SqliteException ex)
                     {
-                        var failure = new DbMigrationFailure(
-                            description,
-                            ex.SqliteErrorCode,
-                            ex.Message,
-                            BuildMigrationSuggestedAction(ex.SqliteErrorCode));
-                        LastMigrationFailure = failure;
-                        EmitMigrationFailureWarning(failure);
+                        RecordMigrationFailure(description, ex);
 
                         // Read-only DB / filesystem / sandbox — stop further steps and degrade.
                         // Catches SQLITE_READONLY (8), SQLITE_IOERR (10), and SQLITE_CANTOPEN (14):
@@ -1600,6 +1617,7 @@ public class DbContext : IDisposable
             {
                 _activeMigrationTransaction = null;
             }
+            }
 
             EnsureForeignKeysEnabled();
         }
@@ -1610,6 +1628,17 @@ public class DbContext : IDisposable
             // マイグレーションで列・index が追加された可能性があるためキャッシュを破棄する。
             _schemaCache?.Refresh();
         }
+    }
+
+    private void RecordMigrationFailure(string description, SqliteException exception)
+    {
+        var failure = new DbMigrationFailure(
+            description,
+            exception.SqliteErrorCode,
+            exception.Message,
+            BuildMigrationSuggestedAction(exception.SqliteErrorCode));
+        LastMigrationFailure = failure;
+        EmitMigrationFailureWarning(failure);
     }
 
     private IEnumerable<(string Description, Action Action)> BuildReadMigrationSteps()
@@ -1877,14 +1906,30 @@ internal static class DbColumnEnsurer
         {
             alterColumn();
         }
-        catch (SqliteException) when (columnExists())
+        catch (SqliteException ex) when (IsDuplicateColumnRace(ex, columnExists))
         {
             // Another process or an earlier partial migration may have added the
             // column between PRAGMA inspection and ALTER. Re-check PRAGMA-derived
-            // state instead of matching SQLite's English error text so localized
-            // builds or future wording changes still recover (#1532).
+            // state and gate on SQLite's generic DDL error code so localized builds
+            // or future wording changes still recover (#1532, #1690).
             // 列存在を PRAGMA 相当の状態で再確認し、SQLite の英語メッセージに依存せず
             // 「移行済み」を判定する (#1532)。
         }
+    }
+
+    private static bool IsDuplicateColumnRace(SqliteException exception, Func<bool> columnExists)
+    {
+        if (!IsDuplicateColumnAddError(exception))
+            return false;
+
+        return columnExists();
+    }
+
+    private static bool IsDuplicateColumnAddError(SqliteException exception)
+    {
+        // SQLite reports duplicate-column ADD COLUMN as SQLITE_ERROR (1). Keep the
+        // message fallback for older providers that may not surface the numeric code.
+        return exception.SqliteErrorCode == 1 ||
+               exception.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase);
     }
 }

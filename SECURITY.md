@@ -1,5 +1,55 @@
 # Security Policy
 
+## MCP Threat Model
+
+`cdidx mcp` is intended for a local, trusted MCP client that the operator
+chooses to run against the current workspace. The default transport is stdio
+JSON-RPC: any process that can write frames to the server's stdin can request
+any enabled MCP tool. Treat that stdin boundary as the authorization boundary
+unless you explicitly add the optional token controls below.
+
+The optional HTTP transport is also a local operator surface, not a public
+multi-tenant service. It rejects wildcard listen hosts, refuses non-loopback
+binds unless `CDIDX_MCP_HTTP_TOKEN` is set, and requires
+`Authorization: Bearer <token>` on every HTTP request when that token is
+configured.
+
+Stdio requests can require a shared secret by setting `CDIDX_MCP_AUTH_TOKEN`.
+When the variable is unset, stdio keeps the historical local-trusted-client
+behavior and does not authenticate individual JSON-RPC frames. Tool allow/deny
+environment variables can reduce the advertised/callable tool set, but they are
+not a substitute for trusting the client or protecting the transport.
+
+### Write-Shaped MCP Tools
+
+Most MCP tools read the existing index, but the following tools intentionally
+write local state or can create remote side effects:
+
+- `index` updates the configured SQLite index and `.cdidx/` state for the
+  selected project path.
+- `backfill_fold` mutates the configured SQLite index to populate folded-name
+  metadata.
+- `suggest_improvement` writes `.cdidx/suggestions-*.json` locally and, when a
+  GitHub repository plus `CDIDX_GITHUB_TOKEN` are configured, can submit the
+  suggestion as a GitHub Issue.
+
+Because the MCP server executes tool requests from the connected client, an
+attacker who controls that client, can write to the stdio stream, obtains the
+HTTP bearer token, or can otherwise man-in-the-middle the transport can trigger
+these write-shaped tools, refresh or rewrite local index data, and submit
+GitHub issues with the configured token's repository permissions. Run `cdidx
+mcp` only in workspaces and client stacks you trust, keep tokens scoped to the
+minimum required repositories, and disable write-shaped tools in environments
+where the MCP client is not fully trusted.
+
+### Network Boundary
+
+The default stdio transport opens no inbound listener. The HTTP transport opens
+only the listener requested by the operator. The MCP server does not need
+outbound network access for normal local indexing and query operations; the
+documented remote side effect is `suggest_improvement` using
+`CDIDX_GITHUB_TOKEN` to create a GitHub Issue when configured.
+
 ## Reporting a Vulnerability
 
 Please do not open a public GitHub issue for a suspected vulnerability.
