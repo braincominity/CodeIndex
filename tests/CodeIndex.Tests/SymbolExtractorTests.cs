@@ -14430,13 +14430,13 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s =>
             s.Kind == "property"
             && s.Name == "Output"
-            && s.ContainerKind == "interface"
+            && s.ContainerKind == "protocol"
             && s.ContainerName == "Builder"
             && s.ReturnType == "()");
         Assert.Contains(symbols, s =>
             s.Kind == "property"
             && s.Name == "Error"
-            && s.ContainerKind == "interface"
+            && s.ContainerKind == "protocol"
             && s.ContainerName == "Builder"
             && s.ReturnType == "String");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Pending");

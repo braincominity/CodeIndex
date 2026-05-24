@@ -1403,6 +1403,8 @@ public static partial class SymbolExtractor
             // file module declarations and inline modules / ファイルモジュール宣言とインラインモジュール
             new("file_module", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?mod\s+(?<name>(?:r#)?\w+)\s*;", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("namespace", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?mod\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Trait associated type defaults / trait 関連型のデフォルト
+            new("property", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?type\s+(?<name>(?:r#)?\w+)(?:\s*<[^=>]+>)?(?:\s*:\s*[^=;]+)?\s*=\s*(?<returnType>[^;]+)", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // type alias / 型エイリアス
             new("import",   new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?type\s+(?<name>(?:r#)?\w+)(?:\s*<[^=]+>)?", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("import",   new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?use\s+(?<name>.+);", RegexOptions.Compiled), BodyStyle.None, "visibility"),
@@ -2111,6 +2113,22 @@ public static partial class SymbolExtractor
         "class", "struct", "interface", "protocol", "namespace", "enum", "object", "heading", "specialization", "class_hook"
     ];
 
+    private static bool IsRustDirectTraitBodyMember(List<SymbolRecord> symbols, int candidateLine)
+    {
+        SymbolRecord? innermostContainer = null;
+        foreach (var symbol in symbols)
+        {
+            if (!symbol.BodyStartLine.HasValue || !symbol.BodyEndLine.HasValue)
+                continue;
+            if (candidateLine < symbol.BodyStartLine.Value || candidateLine > symbol.BodyEndLine.Value)
+                continue;
+            if (innermostContainer == null || symbol.StartLine >= innermostContainer.StartLine)
+                innermostContainer = symbol;
+        }
+
+        return innermostContainer?.Kind == "protocol";
+    }
+
     /// <summary>
     /// Extract symbols from the given source content.
     /// 指定されたソース内容からシンボルを抽出する。
@@ -2698,6 +2716,13 @@ public static partial class SymbolExtractor
                         // Closes #779.
                         lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
                         continue;
+                    }
+                    if (lang == "rust"
+                        && pattern.Kind == "property"
+                        && pattern.BodyStyle == BodyStyle.None
+                        && !IsRustDirectTraitBodyMember(symbols, i + 1))
+                    {
+                        break;
                     }
                     var rawReturnType = NormalizeCSharpImplicitPartialMethodReturnType(
                         lang,
