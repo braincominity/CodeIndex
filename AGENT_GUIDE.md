@@ -56,6 +56,12 @@ This rule applies to code search and repository understanding. It does not forbi
 
 ## Tool-Specific Notes
 
+Command-search enforcement is tool-specific and adapter-driven:
+
+- Codex uses `.codex/hooks.json`, which invokes `.codex/hooks/bash_guard.py` and `.codex/hooks/permission_request_guard.py`.
+- Claude Code uses `.claude/settings.json`, which invokes `.claude/hooks/bash-guard.py`.
+- Both Bash guard adapters delegate shared command policy to `.agent_harness/command_guard_core.py`; update the shared core for common command policy and review both adapters only when tool-specific behavior changes.
+
 ### Claude Code
 
 - Follow the repository-tracked `.claude/settings.json` and `.claude/hooks/bash-guard.py` policy files when running in Claude Code.
