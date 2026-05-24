@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 - **Release notes now show install and update commands** — GitHub release notes now include Homebrew and NuGet install/update snippets so first-time users and existing users can choose the right command without leaving the release page.
+- **README Quick Start now lists NuGet alongside Homebrew** — the English and Japanese Quick Start snippets now show `dotnet tool install -g cdidx` next to the Homebrew and GitHub-release install paths.
 
 ### [1.24.3] - 2026-05-25
 
@@ -2762,6 +2763,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 - **リリースノートに install / update コマンドを表示するようになりました** — GitHub release notes に Homebrew と NuGet の install/update snippet を載せ、初回ユーザーと既存ユーザーが release page だけで適切なコマンドを選べるようにしました。
+- **README Quick Start が Homebrew と並べて NuGet も案内するようになりました** — 英語版と日本語版の Quick Start snippet に、Homebrew と GitHub release からの install 経路に加えて `dotnet tool install -g cdidx` を掲載しました。
 
 ### [1.24.3] - 2026-05-25
 

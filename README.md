@@ -41,6 +41,9 @@ and [cdidx vs VS Code workspace index](USER_GUIDE.md#cdidx-vs-vs-code-workspace-
 # Install is usually seconds. Homebrew is available on macOS/Linux:
 brew install widthdom/tap/codeindex
 
+# Or install as a .NET global tool from NuGet:
+dotnet tool install -g cdidx
+
 # Or install directly from the signed GitHub release assets:
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 
@@ -264,7 +267,13 @@ details.
 ## すぐに試す
 
 ```bash
-# インストールは通常数秒で終わります。
+# インストールは通常数秒で終わります。Homebrew は macOS/Linux で利用できます。
+brew install widthdom/tap/codeindex
+
+# または NuGet から .NET global tool としてインストールできます。
+dotnet tool install -g cdidx
+
+# または署名付き GitHub release asset から直接インストールできます。
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 
 # 初回 index は小規模 repo で約30-60秒、100kファイル級では数分以上かかることがあります。
