@@ -14719,6 +14719,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_AlterTableAddConstraintForeignKeyCapturesReferencedTable()
+    {
+        const string content = """
+            CREATE TABLE orders (id int PRIMARY KEY);
+            CREATE TABLE order_items (order_id int REFERENCES orders(id));
+            ALTER TABLE order_items ADD CONSTRAINT fk_order
+                FOREIGN KEY (order_id) REFERENCES orders(id);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "order_items" && r.ReferenceKind == "reference" && r.Line == 3);
+        Assert.Equal(2, references.Count(r => r.SymbolName == "orders" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "orders" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "orders" && r.ReferenceKind == "reference" && r.Line == 4);
+        Assert.DoesNotContain(references, r => r.SymbolName == "fk_order" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_DropTableCapturesAllTargetReferences()
     {
         // T-SQL teardown migrations should still be searchable by the table names they touch,
