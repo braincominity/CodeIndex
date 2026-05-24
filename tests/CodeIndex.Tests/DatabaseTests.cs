@@ -26,6 +26,83 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void Search_ExactSymbolBoostPrefersChunkContainingSymbol_Issue1977()
+    {
+        var fileId = InsertSearchFile(
+            [
+                new ChunkRecord { ChunkIndex = 0, StartLine = 1, EndLine = 10, Content = "UserManager usage" },
+                new ChunkRecord { ChunkIndex = 1, StartLine = 20, EndLine = 30, Content = "class UserManager" },
+            ],
+            [
+                new SymbolRecord { Kind = "class", Name = "UserManager", Line = 20, StartLine = 20, EndLine = 30 },
+            ]);
+
+        var reader = new DbReader(_db.Connection);
+        var results = reader.Search("UserManager", limit: 2, deduplicate: false);
+
+        Assert.Equal(fileId, Assert.Single(ReadFileIds()));
+        Assert.Equal(20, results[0].StartLine);
+    }
+
+    [Fact]
+    public void Search_SymbolKindWeightPrefersDefinitionsOverGenericMentions_Issue1958()
+    {
+        InsertSearchFile(
+            [
+                new ChunkRecord { ChunkIndex = 0, StartLine = 1, EndLine = 10, Content = "Manager" },
+                new ChunkRecord { ChunkIndex = 1, StartLine = 20, EndLine = 30, Content = "Manager" },
+            ],
+            [
+                new SymbolRecord { Kind = "reference", Name = "HelperReference", Line = 1, StartLine = 1, EndLine = 10 },
+                new SymbolRecord { Kind = "function", Name = "CreateManager", Line = 20, StartLine = 20, EndLine = 30 },
+            ]);
+
+        var reader = new DbReader(_db.Connection);
+        var results = reader.Search("Manager", limit: 2, deduplicate: false);
+
+        Assert.Equal(20, results[0].StartLine);
+    }
+
+    [Fact]
+    public void Search_NestingDepthPrefersScopeRootForOverlappingResults_Issue1975()
+    {
+        InsertSearchFile(
+            [
+                new ChunkRecord { ChunkIndex = 0, StartLine = 1, EndLine = 100, Content = "UserManager" },
+                new ChunkRecord { ChunkIndex = 1, StartLine = 20, EndLine = 40, Content = "UserManager" },
+            ],
+            [
+                new SymbolRecord { Kind = "class", Name = "UserManager", Line = 1, StartLine = 1, EndLine = 100 },
+                new SymbolRecord { Kind = "function", Name = "Login", Line = 20, StartLine = 20, EndLine = 40, ContainerQualifiedName = "UserManager" },
+            ]);
+
+        var reader = new DbReader(_db.Connection);
+        var results = reader.Search("UserManager", limit: 2);
+
+        var result = Assert.Single(results);
+        Assert.Equal(1, result.StartLine);
+    }
+
+    [Fact]
+    public void Search_StructuredFieldScorePrefersSymbolNameHitsOverCommentText_Issue2000()
+    {
+        InsertSearchFile(
+            [
+                new ChunkRecord { ChunkIndex = 0, StartLine = 1, EndLine = 10, Content = "Manager" },
+                new ChunkRecord { ChunkIndex = 1, StartLine = 20, EndLine = 30, Content = "Manager" },
+            ],
+            [
+                new SymbolRecord { Kind = "reference", Name = "CommentOnly", Line = 1, StartLine = 1, EndLine = 10 },
+                new SymbolRecord { Kind = "reference", Name = "BuildUserManagerValue", Line = 20, StartLine = 20, EndLine = 30 },
+            ]);
+
+        var reader = new DbReader(_db.Connection);
+        var results = reader.Search("Manager", limit: 2, deduplicate: false);
+
+        Assert.Equal(20, results[0].StartLine);
+    }
+
+    [Fact]
     public void InitializeSchema_CreatesAllTables()
     {
         // Verify tables exist by querying sqlite_master
@@ -42,6 +119,39 @@ public class DatabaseTests : IDisposable
         Assert.Contains("symbols", tables);
         Assert.Contains("symbol_references", tables);
         Assert.Contains("fts_chunks", tables);
+    }
+
+    private long InsertSearchFile(IReadOnlyList<ChunkRecord> chunks, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/search.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 120,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+
+        foreach (var chunk in chunks)
+            chunk.FileId = fileId;
+        foreach (var symbol in symbols)
+            symbol.FileId = fileId;
+
+        _writer.InsertChunks(chunks);
+        _writer.InsertSymbols(symbols);
+        return fileId;
+    }
+
+    private List<long> ReadFileIds()
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT id FROM files ORDER BY id";
+        using var reader = cmd.ExecuteReader();
+        var ids = new List<long>();
+        while (reader.Read())
+            ids.Add(reader.GetInt64(0));
+        return ids;
     }
 
     [Fact]

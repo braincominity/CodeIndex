@@ -422,6 +422,8 @@ FTS5 works through a **virtual table** — a table that looks and behaves like a
 
 Search result ordering must remain deterministic for identical inputs and an unchanged index. Ranking `ORDER BY` clauses should finish with stable persisted keys after user-visible relevance keys, so ties in FTS rank, file timestamp, and path never fall through to SQLite's implementation-defined row order. The chunk search `ORDER BY` ends with `f.path, c.id ASC` for this reason (#1731).
 
+Chunk search ranking uses symbol structure before falling back to bare BM25 ties. Exact and prefix symbol-name boosts distinguish a chunk that overlaps the matching symbol definition from a different chunk in the same file, then fall back to file-level symbol presence. When text relevance ties, chunks with query hits in overlapping symbol names/signatures, higher-value symbol kinds (class/interface/struct/enum, then function/method/property), and shallower overlapping symbol scopes rank ahead of comment-only or deeply nested matches. This keeps scope-root and definition-like results ahead of redundant inner or unstructured mentions while preserving deterministic fallback ordering.
+
 ### What is an inverted index?
 
 An inverted index maps each word (token) to the list of documents (or rows) that contain it — like the index at the back of a textbook.

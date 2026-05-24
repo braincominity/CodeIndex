@@ -222,10 +222,77 @@ public partial class DbReader
     // once per query, using SARGable `name COLLATE NOCASE` / `name LIKE ... COLLATE NOCASE`
     // predicates so the planner can use the existing indexes.
     // バケット順位は LEFT JOIN 結果の NULL 判定だけで決まり、`f.id` ごとの再評価は不要。
-    internal const string ExactSymbolMatchOrder =
-        "CASE WHEN exact_symbol_match.file_id IS NULL THEN 1 ELSE 0 END";
-    internal const string PrefixSymbolMatchOrder =
-        "CASE WHEN prefix_symbol_match.file_id IS NULL THEN 1 ELSE 0 END";
+    internal const string ExactSymbolMatchOrder = @"
+        CASE
+            WHEN EXISTS (
+                SELECT 1
+                FROM symbols sx
+                WHERE sx.file_id = f.id
+                  AND sx.name = @rankingQuery COLLATE NOCASE
+                  AND COALESCE(sx.start_line, sx.line) <= c.end_line
+                  AND COALESCE(sx.end_line, sx.line) >= c.start_line
+            ) THEN 0
+            WHEN exact_symbol_match.file_id IS NOT NULL THEN 1
+            ELSE 2
+        END";
+    internal const string PrefixSymbolMatchOrder = @"
+        CASE
+            WHEN EXISTS (
+                SELECT 1
+                FROM symbols sx
+                WHERE sx.file_id = f.id
+                  AND sx.name LIKE @rankingQueryPrefix ESCAPE '\' COLLATE NOCASE
+                  AND COALESCE(sx.start_line, sx.line) <= c.end_line
+                  AND COALESCE(sx.end_line, sx.line) >= c.start_line
+            ) THEN 0
+            WHEN prefix_symbol_match.file_id IS NOT NULL THEN 1
+            ELSE 2
+        END";
+    internal const string ChunkSymbolKindOrder = @"
+        COALESCE((
+            SELECT MIN(
+                CASE lower(COALESCE(sx.kind, ''))
+                    WHEN 'class' THEN 0
+                    WHEN 'interface' THEN 0
+                    WHEN 'struct' THEN 0
+                    WHEN 'enum' THEN 0
+                    WHEN 'function' THEN 1
+                    WHEN 'method' THEN 1
+                    WHEN 'test.method' THEN 1
+                    WHEN 'property' THEN 2
+                    WHEN 'field' THEN 2
+                    WHEN 'import' THEN 4
+                    WHEN 'reference' THEN 4
+                    ELSE 3
+                END)
+            FROM symbols sx
+            WHERE sx.file_id = f.id
+              AND COALESCE(sx.start_line, sx.line) <= c.end_line
+              AND COALESCE(sx.end_line, sx.line) >= c.start_line
+        ), 5)";
+    internal const string ChunkStructuredFieldOrder = @"
+        CASE
+            WHEN EXISTS (
+                SELECT 1
+                FROM symbols sx
+                WHERE sx.file_id = f.id
+                  AND COALESCE(sx.start_line, sx.line) <= c.end_line
+                  AND COALESCE(sx.end_line, sx.line) >= c.start_line
+                  AND (
+                      instr(lower(COALESCE(sx.name, '')), lower(@rankingQuery)) > 0 OR
+                      instr(lower(COALESCE(sx.signature, '')), lower(@rankingQuery)) > 0
+                  )
+            ) THEN 0
+            ELSE 1
+        END";
+    internal const string ChunkSymbolDepthOrder = @"
+        COALESCE((
+            SELECT MIN(sql_segment_count(COALESCE(NULLIF(sx.container_qualified_name, ''), NULLIF(sx.container_name, ''), sx.name)))
+            FROM symbols sx
+            WHERE sx.file_id = f.id
+              AND COALESCE(sx.start_line, sx.line) <= c.end_line
+              AND COALESCE(sx.end_line, sx.line) >= c.start_line
+        ), 999)";
 
     // Derived-table joins that supply the per-file match and visibility buckets referenced by
     // search ranking. GROUP BY keeps the symbol predicates out of the outer per-hit scan while
