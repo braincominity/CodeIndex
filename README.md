@@ -114,6 +114,8 @@ file completion.
   can enrich symbols and references before persistence.
 - Exact DB/worktree freshness checks with `status --check`, including an
   overridable age threshold via `--stale-after` / `CDIDX_STALE_AFTER`.
+- Default SQLite storage can be moved out of the workspace with `--data-dir <dir>`,
+  `CDIDX_DATA_DIR`, or `XDG_DATA_HOME`; explicit `--db <path>` still wins.
 - Human `status` output translates readiness flags and `status --explain <field>`
   describes one readiness field/remediation; `status --json` keeps raw fields for
   automation, including the last full-scan unknown-extension count.
@@ -133,7 +135,8 @@ file completion.
   `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`,
   `index_writer_version`, `index_newer_than_reader`,
   `index_newer_than_reader_reason`, `unknown_extension_file_count`,
-  `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `db_pragma_settings`, `hooks`, `stale_after_seconds`,
+  `path_case_sensitive`, `data_dir`, `data_dir_source`, `data_dir_mode`,
+  `mac_profile`, `db_pragma_settings`, `hooks`, `stale_after_seconds`,
   `index_age_seconds`, `degraded_reason`, `recommended_action`, and `alternative_action`; keep this
   list synchronized with `DEVELOPER_GUIDE.md` and `AGENT_GUIDE.md`.
   `hotspot_family_degraded_reason` distinguishes legacy DBs without hotspot-family
@@ -314,6 +317,8 @@ script / CI では `--yes`（または `--force`）が必要です。
   永続化前のシンボルと参照を拡張できます。
 - `status --check` による DB と作業ツリーの完全一致確認。`--stale-after` /
   `CDIDX_STALE_AFTER` で age threshold を上書き可能。
+- 既定の SQLite 保存先は `--data-dir <dir>`、`CDIDX_DATA_DIR`、`XDG_DATA_HOME`
+  で workspace 外へ移せます。明示的な `--db <path>` は引き続き最優先です。
 - 人間向け `status` は readiness flag を翻訳し、`status --explain <field>` は
   個別 field の意味と対処を説明します。自動化向けの `status --json` は raw field
   と直近 full scan の未知拡張子数を維持します。
@@ -333,7 +338,8 @@ script / CI では `--yes`（または `--force`）が必要です。
   `indexed_head_branch`、`indexed_head_timestamp`、`commits_ahead_of_indexed_head`、
   `index_writer_version`、`index_newer_than_reader`、
   `index_newer_than_reader_reason`、`unknown_extension_file_count`、
-  `path_case_sensitive`、`mac_profile`、`db_pragma_settings`、`hooks`、`stale_after_seconds`、
+  `path_case_sensitive`、`mac_profile`、`data_dir`、`data_dir_source`、
+  `db_pragma_settings`、`hooks`、`stale_after_seconds`、
   `index_age_seconds`、`degraded_reason`、`recommended_action`、`alternative_action` を対象にします。
   この一覧は `DEVELOPER_GUIDE.md` と `AGENT_GUIDE.md` に同期してください。
   `hotspot_family_degraded_reason` は、hotspot-family 未対応の legacy DB

@@ -1,5 +1,7 @@
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace CodeIndex.Cli;
 
@@ -9,6 +11,12 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class DbPathResolver
 {
+    public const string DataDirEnvironmentVariable = "CDIDX_DATA_DIR";
+    public const string DataDirSourceFlag = "flag";
+    public const string DataDirSourceEnv = "env";
+    public const string DataDirSourceXdg = "xdg";
+    public const string DataDirSourceWorkspace = "workspace";
+
     /// <summary>
     /// Resolve the DB path for indexing. When no explicit path is provided,
     /// store the DB under the indexed project's .cdidx directory.
@@ -16,11 +24,52 @@ public static class DbPathResolver
     /// 対象プロジェクトの .cdidx ディレクトリ配下に保存する。
     /// </summary>
     public static string ResolveForIndex(string projectPath, string? explicitDbPath)
+        => ResolveForIndex(projectPath, explicitDbPath, explicitDataDir: null).DbPath;
+
+    public static DbPathResolution ResolveForIndex(string projectPath, string? explicitDbPath, string? explicitDataDir)
     {
         if (!string.IsNullOrWhiteSpace(explicitDbPath))
-            return explicitDbPath;
+            return new DbPathResolution(explicitDbPath, null, null);
 
-        return Path.Combine(Path.GetFullPath(projectPath), ".cdidx", "codeindex.db");
+        return ResolveDataDir(projectPath, explicitDataDir, Environment.GetEnvironmentVariable(DataDirEnvironmentVariable), Environment.GetEnvironmentVariable("XDG_DATA_HOME"));
+    }
+
+    public static DbPathResolution ResolveForQuery(string workspacePath, string? explicitDbPath, string? explicitDataDir)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitDbPath))
+            return new DbPathResolution(explicitDbPath, null, null);
+
+        return ResolveDataDir(workspacePath, explicitDataDir, Environment.GetEnvironmentVariable(DataDirEnvironmentVariable), Environment.GetEnvironmentVariable("XDG_DATA_HOME"));
+    }
+
+    internal static DbPathResolution ResolveDataDir(string workspacePath, string? explicitDataDir, string? environmentDataDir, string? xdgDataHome)
+    {
+        var fullWorkspacePath = Path.GetFullPath(workspacePath);
+        if (!string.IsNullOrWhiteSpace(explicitDataDir))
+            return BuildDataDirResolution(explicitDataDir, DataDirSourceFlag);
+
+        if (!string.IsNullOrWhiteSpace(environmentDataDir))
+            return BuildDataDirResolution(environmentDataDir, DataDirSourceEnv);
+
+        if (!string.IsNullOrWhiteSpace(xdgDataHome))
+        {
+            var workspaceHash = ComputeWorkspaceHash(fullWorkspacePath);
+            return BuildDataDirResolution(Path.Combine(xdgDataHome, "cdidx", workspaceHash), DataDirSourceXdg);
+        }
+
+        return BuildDataDirResolution(Path.Combine(fullWorkspacePath, ".cdidx"), DataDirSourceWorkspace);
+    }
+
+    private static DbPathResolution BuildDataDirResolution(string dataDir, string source)
+    {
+        var fullDataDir = Path.GetFullPath(dataDir);
+        return new DbPathResolution(Path.Combine(fullDataDir, "codeindex.db"), fullDataDir, source);
+    }
+
+    private static string ComputeWorkspaceHash(string workspacePath)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(workspacePath)));
+        return Convert.ToHexString(bytes, 0, 8).ToLowerInvariant();
     }
 
     /// <summary>
@@ -406,3 +455,5 @@ public static class DbPathResolver
     private readonly record struct SampleMatchResult(int ChecksumMatches, int PathExistsMatches);
     private sealed record IndexedFileSample(string RelativePath, string Checksum);
 }
+
+public sealed record DbPathResolution(string DbPath, string? DataDir, string? DataDirSource);
