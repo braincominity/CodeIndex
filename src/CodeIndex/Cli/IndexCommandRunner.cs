@@ -2788,6 +2788,14 @@ public static class IndexCommandRunner
     internal static string FormatIndexPhasePath(string path, string phase) =>
         $"{path} ({phase})";
 
+    internal static string? GetJsonIndexHeartbeatPath(string? currentFile, IEnumerable<string> activeExtractionPhases)
+    {
+        if (!string.IsNullOrEmpty(currentFile))
+            return currentFile;
+
+        return activeExtractionPhases.FirstOrDefault(static phase => !string.IsNullOrEmpty(phase));
+    }
+
     private static string CollapseLineBreaks(string value)
     {
         if (string.IsNullOrEmpty(value))
@@ -3260,13 +3268,14 @@ public static class IndexCommandRunner
         int processed = 0, skipped = 0, warnings = warningList.Count, errors = errorList.Count;
         var symbolsDroppedByKindFilter = 0;
 
-          var interactiveIndexSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
+        var interactiveIndexSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
         var redirectedIndexingMessagePrinted = false;
         var indexProgressVisible = false;
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
         var skippedSymbolExtractorLanguages = new HashSet<string>(StringComparer.Ordinal);
         var lastJsonProgressAt = Stopwatch.GetTimestamp();
         string? currentJsonIndexFile = null;
+        var activeJsonExtractionPhases = new ConcurrentDictionary<int, string>();
         CancellationTokenSource? jsonHeartbeatCts = null;
         Task? jsonHeartbeatTask = null;
         using var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
@@ -3381,7 +3390,9 @@ public static class IndexCommandRunner
                     if (token.IsCancellationRequested)
                         break;
 
-                    var file = currentJsonIndexFile;
+                    var file = GetJsonIndexHeartbeatPath(
+                        currentJsonIndexFile,
+                        activeJsonExtractionPhases.OrderBy(static kvp => kvp.Key).Select(static kvp => kvp.Value));
                     var fileSuffix = string.IsNullOrEmpty(file) ? string.Empty : $": {file}";
                     Console.Error.WriteLine($"cdidx: still indexing {processed:N0}/{files.Count:N0} file(s){fileSuffix}...");
                 }
@@ -3448,7 +3459,7 @@ public static class IndexCommandRunner
             using var extractionResults = new BlockingCollection<FullScanFileWorkItem>(Math.Max(1, extractionParallelism * 4));
             var nextFileIndex = -1;
             var workers = Enumerable.Range(0, extractionParallelism)
-                .Select(_ => Task.Factory.StartNew(() =>
+                .Select(workerIndex => Task.Factory.StartNew(() =>
                 {
                     while (true)
                     {
@@ -3460,6 +3471,8 @@ public static class IndexCommandRunner
                         var filePath = files[fileIndex];
                         try
                         {
+                            var relativeFilePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, filePath));
+                            activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(relativeFilePath, "reading");
                             var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(filePath);
                             IReadOnlyList<ChunkRecord>? chunks = null;
                             IReadOnlyList<SymbolRecord>? symbols = null;
@@ -3467,9 +3480,12 @@ public static class IndexCommandRunner
                             IReadOnlyList<FileIssue>? issues = null;
                             if (parallelizeExtraction)
                             {
+                                activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "chunking");
                                 chunks = ChunkSplitter.Split(0, content);
+                                activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "symbols");
                                 symbols = SymbolExtractor.Extract(0, record.Lang, content, filePath, Path.GetFullPath(options.ProjectPath!));
                                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
+                                activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "references");
                                 references = ReferenceExtractor.Extract(
                                     0,
                                     record.Lang,
@@ -3477,6 +3493,7 @@ public static class IndexCommandRunner
                                     symbols,
                                     record.Path,
                                     record.Lang == "csharp" ? csharpWorkspace.Symbols : null);
+                                activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
                                 issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
                             }
                             extractionResults.Add(
@@ -3501,6 +3518,10 @@ public static class IndexCommandRunner
                         catch (Exception ex)
                         {
                             extractionResults.Add(FullScanFileWorkItem.Failure(filePath, ex), cancellationToken);
+                        }
+                        finally
+                        {
+                            activeJsonExtractionPhases.TryRemove(workerIndex, out _);
                         }
                     }
                 }, cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default))

@@ -70,6 +70,26 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void GetJsonIndexHeartbeatPath_UsesWorkerPhaseWhenMainThreadIsIdle()
+    {
+        var message = IndexCommandRunner.GetJsonIndexHeartbeatPath(
+            currentFile: null,
+            activeExtractionPhases: ["src/App.cs (references)"]);
+
+        Assert.Equal("src/App.cs (references)", message);
+    }
+
+    [Fact]
+    public void GetJsonIndexHeartbeatPath_PrefersMainThreadPhaseWhenCommittingResults()
+    {
+        var message = IndexCommandRunner.GetJsonIndexHeartbeatPath(
+            "src/App.cs (committing)",
+            ["src/Other.cs (references)"]);
+
+        Assert.Equal("src/App.cs (committing)", message);
+    }
+
+    [Fact]
     public void Run_NullByteFile_SkipsWithoutPersistingPartialRows()
     {
         var projectRoot = CreateTempProject();
