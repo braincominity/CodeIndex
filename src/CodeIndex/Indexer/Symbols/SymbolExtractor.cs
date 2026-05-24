@@ -3895,6 +3895,8 @@ public static partial class SymbolExtractor
             ExtractRustUseSymbols(fileId, lines, symbols);
         if (lang == "rust")
             ExtractRustMultilineImplSymbols(fileId, lines, symbols);
+        if (lang == "rust")
+            ExtractRustAssociatedTypeDefaultSymbols(fileId, lines, symbols);
         if (lang == "go")
             ExtractGoGroupedDeclarations(fileId, lines, symbols);
         if (lang == "cpp")
@@ -10018,6 +10020,52 @@ public static partial class SymbolExtractor
         }
 
         return false;
+    }
+
+    private static readonly Regex RustAssociatedTypeDefaultRegex = new(
+        @"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?type\s+(?<name>(?:r#)?\w+)(?:\s*<[^=;]+>)?(?:\s*:[^=;]+)?\s*=\s*(?<returnType>[^;]+)\s*;",
+        RegexOptions.Compiled);
+
+    private static void ExtractRustAssociatedTypeDefaultSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        var traits = symbols
+            .Where(symbol => symbol.Kind == "interface"
+                && symbol.BodyStartLine is > 0
+                && symbol.BodyEndLine is > 0)
+            .OrderBy(symbol => symbol.StartLine)
+            .ToList();
+
+        foreach (var trait in traits)
+        {
+            var startLineIndex = Math.Max(trait.BodyStartLine!.Value - 1, 0);
+            var endLineIndex = Math.Min(trait.BodyEndLine!.Value - 1, lines.Length - 1);
+            for (var lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
+            {
+                var match = RustAssociatedTypeDefaultRegex.Match(lines[lineIndex]);
+                if (!match.Success)
+                    continue;
+
+                var nameGroup = match.Groups["name"];
+                var name = RustSymbolNameNormalizer.Normalize(nameGroup.Value);
+                var lineNumber = lineIndex + 1;
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "property",
+                    Name = name,
+                    Line = lineNumber,
+                    StartLine = lineNumber,
+                    StartColumn = nameGroup.Index,
+                    EndLine = lineNumber,
+                    Signature = lines[lineIndex].Trim(),
+                    ContainerKind = trait.Kind,
+                    ContainerName = trait.Name,
+                    ContainerQualifiedName = trait.ContainerQualifiedName,
+                    Visibility = match.Groups["visibility"].Success ? match.Groups["visibility"].Value : null,
+                    ReturnType = match.Groups["returnType"].Value.Trim(),
+                });
+            }
+        }
     }
 
     private static string StripVisualBasicIdentifierEscapes(string segment) =>
