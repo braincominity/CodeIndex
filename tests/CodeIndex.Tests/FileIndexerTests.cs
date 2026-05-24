@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 using CodeIndex.Database;
 using CodeIndex.Cli;
@@ -1511,6 +1512,29 @@ public class FileIndexerTests
 
             Assert.Equal(["Root.cs"], files);
             Assert.Equal(["nested"], result.NestedRepositories);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void EvaluatePathFilter_SkipsNestedGitRepositoryBoundary()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, "nested", ".git"));
+            var nestedFile = Path.Combine(tempDir, "nested", "Nested.cs");
+            File.WriteAllText(nestedFile, "class Nested { }");
+
+            var indexer = new FileIndexer(tempDir);
+            var filter = indexer.EvaluatePathFilter(nestedFile);
+
+            Assert.Equal(FileIndexer.PathFilterKind.ExcludedByDefaultDirectory, filter.FilterKind);
+            Assert.True(filter.ShouldDeleteExisting);
         }
         finally
         {
@@ -3044,6 +3068,31 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void IndexFilesUpdate_UsesOriginalUnicodePathForIoAndNfcPathForDb()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var nfdPath = "Cafe\u0301.cs";
+            File.WriteAllText(Path.Combine(tempDir, nfdPath), "class FirstCafe { }\n");
+
+            var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([tempDir, "--json", "--quiet"], jsonOptions));
+
+            File.WriteAllText(Path.Combine(tempDir, nfdPath), "class UpdatedCafe { }\n");
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([tempDir, "--files", nfdPath, "--json", "--quiet"], jsonOptions));
+
+            var dbPath = Path.Combine(tempDir, ".cdidx", "codeindex.db");
+            Assert.Equal("class UpdatedCafe { }", ReadSingleChunkContent(dbPath, "Caf\u00e9.cs"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_RespectsSubmoduleGitignore()
     {
         // Submodules brought back into the scan must still honor their own .gitignore so
@@ -4219,5 +4268,20 @@ public class FileIndexerTests
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM files";
         return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    private static string ReadSingleChunkContent(string dbPath, string filePath)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT c.content
+            FROM chunks c
+            JOIN files f ON f.id = c.file_id
+            WHERE f.path = @path
+            ORDER BY c.chunk_index
+            """;
+        cmd.Parameters.AddWithValue("@path", filePath);
+        return Assert.IsType<string>(cmd.ExecuteScalar());
     }
 }

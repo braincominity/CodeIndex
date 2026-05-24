@@ -1587,6 +1587,9 @@ public class FileIndexer
             var isSubmodule = _submodulePaths.Contains(cumulativeRelPath);
             var isSubmoduleAncestor = _submoduleAncestorPaths.Contains(cumulativeRelPath);
 
+            if (IsNestedGitRepository(childDirectory) && !isSubmodule && !isSubmoduleAncestor)
+                return new PathFilterResult(PathFilterKind.ExcludedByDefaultDirectory, errors);
+
             if (SkipDirs.Contains(directoryName))
             {
                 if (!isSubmodule && !isSubmoduleAncestor)
