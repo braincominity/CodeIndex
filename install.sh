@@ -490,6 +490,9 @@ existing_install_is_reusable() {
     if [ ! -f "${INSTALL_DIR}/version.json" ]; then
         return 1
     fi
+    if ! grep -Eq '"integrity_ok"[[:space:]]*:[[:space:]]*true' "${INSTALL_DIR}/version.json"; then
+        return 1
+    fi
 
     [ -f "${INSTALL_DIR}/LICENSE" ] || return 1
     [ -f "${INSTALL_DIR}/COMMERCIAL_LICENSE.md" ] || return 1
@@ -550,6 +553,13 @@ verify_payload_manifest() {
             error "Release payload checksum mismatch for ${path}.\n  Expected: ${expected}\n  Actual:   ${actual}"
         fi
     done < "$manifest"
+}
+
+write_integrity_version_json() {
+    local target="$1"
+    local version="${VERSION#v}"
+
+    printf '{"version":"%s","integrity_ok":true}\n' "$version" > "$target"
 }
 
 restore_backed_up_files() {
@@ -928,6 +938,7 @@ download_and_install() {
             staged_assets="${staged_assets} ${asset}"
         fi
     done
+    write_integrity_version_json "${stage_dir}/version.json"
     chmod +x "${stage_dir}/${BINARY_NAME}"
 
     local backup_dir
@@ -1090,7 +1101,7 @@ echo "mock ${BINARY_NAME} (${rehearsal_version}) for local mirror self-test" >&2
 exit 2
 EOF
     chmod +x "${local_payload_dir}/${BINARY_NAME}"
-    printf '{"version":"%s"}\n' "$rehearsal_version_no_prefix" > "${local_payload_dir}/version.json"
+    printf '{"version":"%s","integrity_ok":true}\n' "$rehearsal_version_no_prefix" > "${local_payload_dir}/version.json"
     : > "${local_payload_dir}/${runtime_asset}"
 
     (
