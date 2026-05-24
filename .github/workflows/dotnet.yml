@@ -29,7 +29,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       # The Windows lane is still dominated by temp-heavy test I/O even after
       # the Defender exclusions from #394. Pinning TMP/TEMP to RUNNER_TEMP
@@ -135,14 +135,14 @@ jobs:
           }
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: |
             8.0.x
             9.0.x
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.nuget/packages
@@ -190,7 +190,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: TestResults-${{ matrix.os }}-${{ matrix.test-framework }}
           if-no-files-found: warn
@@ -202,7 +202,7 @@ jobs:
 
       - name: Upload build artifact
         if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: CodeIndex
           path: publish/**
