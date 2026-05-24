@@ -71,6 +71,8 @@ If a directory cannot be scanned because of permissions or an I/O error,
 `cdidx` records the scan error, keeps scanning other directories, and writes a
 temporary `.cdidx/scan-checkpoint.json` so a same-HEAD retry can skip directories
 that already completed successfully.
+On POSIX systems, persistent global tool stderr logs are forced to owner-only
+`0600` permissions on every open, including existing date-stamped log files.
 Terminals that request ASCII-only output with `--ascii`, `CDIDX_ASCII=1`,
 `NO_UNICODE`, `TERM=dumb`, accessibility env hints, or a non-UTF-8 locale render
 spinner frames as `|` / `/` / `-` / `\` and progress bars with `#` / `-` instead
@@ -282,6 +284,8 @@ script / CI では `--yes`（または `--force`）が必要です。
 権限や I/O エラーでディレクトリを走査できない場合でも、`cdidx` は scan error を
 記録して他のディレクトリの走査を続け、同じ HEAD の再実行で成功済みディレクトリを
 読み飛ばせるように一時的な `.cdidx/scan-checkpoint.json` を書き込みます。
+POSIX 環境では、persistent global tool stderr log は開くたびに所有者のみ読み書き可能な
+`0600` 権限へ補正され、既存の日付付き log file も同じ扱いになります。
 `--ascii`、`CDIDX_ASCII=1`、`NO_UNICODE`、`TERM=dumb`、accessibility 系の環境変数、
 または非 UTF-8 locale により ASCII-only 出力が要求されている端末では、スピナーは
 `|` / `/` / `-` / `\`、進捗バーは `#` / `-` で描画されます。Unicode を利用できる端末でも
