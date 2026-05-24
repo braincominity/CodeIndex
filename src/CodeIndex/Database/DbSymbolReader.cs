@@ -1796,7 +1796,16 @@ public partial class DbReader
                 GROUP BY lang, name
             ),
             filtered_candidates AS (
-                SELECT *
+                SELECT id,
+                       file_id,
+                       name,
+                       kind,
+                       path,
+                       lang,
+                       line,
+                       visibility,
+                       container_name,
+                       logical_target_key
                 FROM all_candidate_symbols
                 WHERE 1 = 1";
         if (pathPatterns != null && pathPatterns.Count > 0)
@@ -2159,7 +2168,16 @@ public partial class DbReader
                 GROUP BY lang, name
             ),
             filtered_candidates AS (
-                SELECT *
+                SELECT id,
+                       file_id,
+                       name,
+                       kind,
+                       path,
+                       lang,
+                       line,
+                       visibility,
+                       container_name,
+                       logical_target_key
                 FROM all_candidate_symbols
                 WHERE 1 = 1";
         if (pathPatterns is { Count: > 0 })
