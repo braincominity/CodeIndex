@@ -53,6 +53,39 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "StructuralLineMasker");
     }
 
+    [Fact]
+    public void Extract_PythonDataclassField_IndexesFieldAndMetadataKeys()
+    {
+        const string content = """
+            from dataclasses import dataclass, field
+
+            @dataclass
+            class Job:
+                callback: Callable[[Payload], Result] = field(
+                    default_factory=list,
+                    metadata={"wire_name": "callback", "role": "handler"},
+                )
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "property"
+            && symbol.SubKind == "dataclass_field"
+            && symbol.Name == "callback"
+            && symbol.Line == 5);
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "reference"
+            && symbol.SubKind == "dataclass_field_metadata"
+            && symbol.Name == "wire_name"
+            && symbol.Line == 7);
+        Assert.Contains(symbols, symbol =>
+            symbol.Kind == "reference"
+            && symbol.SubKind == "dataclass_field_metadata"
+            && symbol.Name == "role"
+            && symbol.Line == 7);
+    }
+
     [Theory]
     [InlineData("csharp", "Pages/Product.razor")]
     [InlineData("csharp", "Views/Product.cshtml")]
@@ -853,6 +886,31 @@ public class SymbolExtractorTests
         Assert.Contains(imports, symbol => symbol.Name == "package.subpackage");
         Assert.Contains(imports, symbol => symbol.Name == "alias");
         Assert.Contains(imports, symbol => symbol.Name == "helper");
+    }
+
+    [Fact]
+    public void Extract_Python_IndexesDynamicImportLiteralModules()
+    {
+        var content = """
+            importlib.import_module("plugins.alpha")
+            loaded = importlib.import_module("plugins.beta")
+            __import__('legacy.loader')
+            importlib.util.find_spec("optional.backend")
+            importlib.import_module(module_name)
+            note = "importlib.import_module('not.real')"
+            # importlib.import_module("commented.out")
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var imports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
+
+        Assert.Contains("plugins.alpha", imports);
+        Assert.Contains("plugins.beta", imports);
+        Assert.Contains("legacy.loader", imports);
+        Assert.Contains("optional.backend", imports);
+        Assert.DoesNotContain("module_name", imports);
+        Assert.DoesNotContain("not.real", imports);
+        Assert.DoesNotContain("commented.out", imports);
     }
 
     [Fact]

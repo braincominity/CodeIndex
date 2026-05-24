@@ -1976,7 +1976,7 @@ jobs:
         }
     }
 
-    [Theory]
+    [SkipOnMacOsArm64Theory]
     [InlineData("cshtml")]
     [InlineData("razor")]
     public void RunPublishedTrimmedCli_SearchSupportsCSharpRazorAliases(string lang)

@@ -11,11 +11,14 @@ public static partial class SymbolExtractor
     private readonly record struct PythonExportSymbolEntry(string Name, int LineIndex, int StartColumn);
     private static readonly Regex PythonDirectImportRegex = new(@"^import\s+(?<imports>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonFromImportRegex = new(@"^from\s+(?<module>(?:\.+[\w.]*|[\w.]+))\s+import\s+(?<imports>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonDynamicImportLiteralRegex = new(@"\b(?:importlib\.import_module|importlib\.util\.find_spec|__import__)\s*\(\s*(?<quote>['""])(?<module>[^'""]+)\k<quote>", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonAllAssignmentRegex = new(@"^\s*__all__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonAllAppendRegex = new(@"^\s*__all__\.append\(\s*(?<quote>['""])(?<name>[^'""]+)\k<quote>\s*\)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonAllExtendRegex = new(@"^\s*__all__\.extend\(\s*(?<values>.*)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonClassAnnotatedAttributeRegex = new(@"^\s*(?<name>[_\p{L}]\w*)\s*:\s*[^=].*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonClassAssignedAttributeRegex = new(@"^\s*(?<name>[_\p{L}]\w*)\s*=(?!=).*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonDataclassFieldAttributeRegex = new(@"^\s*(?<name>[_\p{L}]\w*)\s*(?::\s*[^=]+)?=\s*(?:(?:dataclasses\.)?field)\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonDataclassFieldMetadataRegex = new(@"\bmetadata\s*=\s*(?<values>\{)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonClassSlotsAssignmentRegex = new(@"^\s*__slots__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonClassMatchArgsAssignmentRegex = new(@"^\s*__match_args__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonClassAnnotationsAssignmentRegex = new(@"^\s*__annotations__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -193,6 +196,20 @@ public static partial class SymbolExtractor
 
         var entries = new List<PythonImportSymbolEntry>();
         var seenNames = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (Match match in PythonDynamicImportLiteralRegex.Matches(statement))
+        {
+            AddPythonImportEntry(
+                line,
+                absoluteStartColumn,
+                match.Groups["module"].Value,
+                entries,
+                seenNames,
+                ref absoluteStartColumn);
+        }
+
+        if (entries.Count > 0)
+            return entries;
 
         var directImportMatch = PythonDirectImportRegex.Match(statement);
         if (directImportMatch.Success)
@@ -381,6 +398,36 @@ public static partial class SymbolExtractor
                     continue;
                 }
 
+                var fieldMatch = PythonDataclassFieldAttributeRegex.Match(line);
+                if (fieldMatch.Success)
+                {
+                    AddPythonClassPropertySymbol(
+                        fileId,
+                        lines,
+                        symbols,
+                        fieldMatch.Groups["name"].Value,
+                        i,
+                        fieldMatch.Groups["name"].Index,
+                        subKind: "dataclass_field");
+
+                    var metadataKeys = TryExpandPythonDataclassFieldMetadataKeys(lines, i, fieldMatch.Groups["name"].Index);
+                    if (metadataKeys != null)
+                    {
+                        foreach (var key in metadataKeys)
+                        {
+                            AddPythonDataclassFieldMetadataSymbol(
+                                fileId,
+                                lines,
+                                symbols,
+                                key.Name,
+                                key.LineIndex,
+                                key.StartColumn);
+                        }
+                    }
+
+                    continue;
+                }
+
                 var match = PythonClassAnnotatedAttributeRegex.Match(line);
                 if (!match.Success)
                     match = PythonClassAssignedAttributeRegex.Match(line);
@@ -404,7 +451,8 @@ public static partial class SymbolExtractor
         List<SymbolRecord> symbols,
         string name,
         int lineIndex,
-        int startColumn)
+        int startColumn,
+        string? subKind = null)
     {
         AddSymbolRecord(
             symbols,
@@ -414,6 +462,34 @@ public static partial class SymbolExtractor
             {
                 FileId = fileId,
                 Kind = "property",
+                SubKind = subKind,
+                Name = name,
+                Line = lineIndex + 1,
+                StartLine = lineIndex + 1,
+                StartColumn = startColumn,
+                EndLine = lineIndex + 1,
+                Signature = lines[lineIndex].Trim(),
+            },
+            lines[lineIndex]);
+    }
+
+    private static void AddPythonDataclassFieldMetadataSymbol(
+        long fileId,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        string name,
+        int lineIndex,
+        int startColumn)
+    {
+        AddSymbolRecord(
+            symbols,
+            cssSeenSymbols: null,
+            lineIndex + 1,
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "reference",
+                SubKind = "dataclass_field_metadata",
                 Name = name,
                 Line = lineIndex + 1,
                 StartLine = lineIndex + 1,
@@ -557,6 +633,73 @@ public static partial class SymbolExtractor
         }
 
         return entries.Count > 0 ? entries : null;
+    }
+
+    private static List<PythonExportSymbolEntry>? TryExpandPythonDataclassFieldMetadataKeys(
+        string[] lines,
+        int fieldLineIndex,
+        int fieldStartColumn)
+    {
+        var currentLineIndex = fieldLineIndex;
+        var currentColumn = fieldStartColumn;
+        var depth = 0;
+        var sawFieldCall = false;
+        var inString = false;
+        var quoteChar = '\0';
+
+        while (currentLineIndex < lines.Length)
+        {
+            var currentLine = lines[currentLineIndex];
+            var metadataMatch = PythonDataclassFieldMetadataRegex.Match(currentLine);
+            if (metadataMatch.Success)
+                return TryExpandPythonStringDictionaryKeys(lines, currentLineIndex, metadataMatch.Groups["values"].Index);
+
+            for (; currentColumn < currentLine.Length; currentColumn++)
+            {
+                var ch = currentLine[currentColumn];
+                if (inString)
+                {
+                    if (ch == '\\')
+                    {
+                        currentColumn++;
+                        continue;
+                    }
+
+                    if (ch == quoteChar)
+                        inString = false;
+                    continue;
+                }
+
+                if (ch == '#')
+                    break;
+                if (ch is '\'' or '"')
+                {
+                    inString = true;
+                    quoteChar = ch;
+                    continue;
+                }
+
+                if (ch == '(')
+                {
+                    depth++;
+                    sawFieldCall = true;
+                }
+                else if (ch == ')' && depth > 0)
+                {
+                    depth--;
+                    if (sawFieldCall && depth == 0)
+                        return null;
+                }
+            }
+
+            if (sawFieldCall && depth <= 0)
+                return null;
+
+            currentLineIndex++;
+            currentColumn = 0;
+        }
+
+        return null;
     }
 
     private static List<PythonExportSymbolEntry>? TryExpandPythonAllExportSymbols(string[] lines, int lineIndex)

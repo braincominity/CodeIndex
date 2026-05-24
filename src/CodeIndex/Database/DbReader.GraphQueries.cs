@@ -681,6 +681,7 @@ public partial class DbReader
     private static string ReferenceWeightedScoreSql(string columnSql) => $@"
         SUM(CASE {columnSql}
             WHEN 'instantiate' THEN 3.0
+            WHEN 'generic_type_argument' THEN 0.5
             WHEN 'call' THEN 1.0
             WHEN 'subscribe' THEN 0.1
             ELSE 0.0
@@ -689,7 +690,7 @@ public partial class DbReader
     private static string BuildReferenceRankOrderSql(ReferenceRankMode rankMode) => rankMode switch
     {
         ReferenceRankMode.Count => "reference_count DESC",
-        ReferenceRankMode.Kind => "CASE reference_kind WHEN 'instantiate' THEN 0 WHEN 'invoke' THEN 0 WHEN 'call' THEN 1 WHEN 'subscribe' THEN 2 WHEN 'event' THEN 2 ELSE 3 END, reference_count DESC",
+        ReferenceRankMode.Kind => "CASE reference_kind WHEN 'instantiate' THEN 0 WHEN 'invoke' THEN 0 WHEN 'call' THEN 1 WHEN 'generic_type_argument' THEN 2 WHEN 'subscribe' THEN 3 WHEN 'event' THEN 3 ELSE 4 END, reference_count DESC",
         _ => "weighted_score DESC, reference_count DESC",
     };
 

@@ -58,6 +58,50 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonDataclassField_EmitsMetadataAndDefaultFactoryReferences()
+    {
+        const string content = """
+            from dataclasses import dataclass, field, fields
+
+            @dataclass
+            class Job:
+                callback: Callable[[Payload], Result] = field(
+                    default_factory=list,
+                    metadata={
+                        "wire_name": "callback",
+                    },
+                )
+
+            def inspect_job():
+                return fields(Job)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Payload"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Job");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Job");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "list"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Job");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "wire_name"
+            && reference.ReferenceKind == "annotation"
+            && reference.ContainerName == "Job");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Job"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "inspect_job");
+    }
+
+    [Fact]
     public void BuildReferenceDedupeKey_IncludesFileIdAndLanguage()
     {
         var javaKey = ReferenceExtractor.BuildReferenceDedupeKey(1, "java", 3, 5, "type_reference", "Runner");
@@ -81,6 +125,31 @@ public class ReferenceExtractorTests
         Assert.Equal(2, references.Count);
         Assert.Contains(references, reference => reference.FileId == 1 && reference.SymbolName == "Runner");
         Assert.Contains(references, reference => reference.FileId == 2 && reference.SymbolName == "Runner");
+    }
+
+    [Fact]
+    public void Extract_CSharpGenericInvocation_EmitsGraphTypeArgumentReference()
+    {
+        const string content = """
+            interface IFoo {}
+            class Runner
+            {
+                void Process<T>(T item) {}
+                void Run(IFoo value) { Process<IFoo>(value); }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "IFoo"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Run");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "IFoo"
+            && reference.ReferenceKind == "generic_type_argument"
+            && reference.ContainerName == "Run");
     }
 
     [Fact]
@@ -1143,6 +1212,47 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference =>
             reference.SymbolName == "super"
             && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_PythonDynamicImports_EmitImportAndImportlibReferences()
+    {
+        const string content = """
+            import importlib
+
+            def load(module_name):
+                importlib.import_module("plugins.alpha")
+                __import__('legacy.loader')
+                importlib.util.find_spec("optional.backend")
+                importlib.import_module(module_name)
+                note = "importlib.import_module('not.real')"
+                # importlib.import_module("commented.out")
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Equal(3, references.Count(reference =>
+            reference.SymbolName == "importlib"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "load"));
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "plugins.alpha"
+            && reference.ReferenceKind == "import"
+            && reference.ContainerName == "load");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "legacy.loader"
+            && reference.ReferenceKind == "import"
+            && reference.ContainerName == "load");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "optional.backend"
+            && reference.ReferenceKind == "import"
+            && reference.ContainerName == "load");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "module_name"
+            && reference.ReferenceKind == "import");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "not.real");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "commented.out");
     }
 
     [Fact]
@@ -14774,6 +14884,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_AlterTableAddConstraintForeignKeyCapturesReferencedTable()
+    {
+        const string content = """
+            CREATE TABLE orders (id int PRIMARY KEY);
+            CREATE TABLE order_items (order_id int REFERENCES orders(id));
+            ALTER TABLE order_items ADD CONSTRAINT fk_order
+                FOREIGN KEY (order_id) REFERENCES orders(id);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "order_items" && r.ReferenceKind == "reference" && r.Line == 3);
+        Assert.Equal(2, references.Count(r => r.SymbolName == "orders" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "orders" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "orders" && r.ReferenceKind == "reference" && r.Line == 4);
+        Assert.DoesNotContain(references, r => r.SymbolName == "fk_order" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_GeneratedColumnsCaptureExpressionDependencies()
     {
         const string content = """
@@ -18026,6 +18156,28 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "fake_basic");
         Assert.DoesNotContain(references, r => r.SymbolName == "fake_nested");
         Assert.Contains(references, r => r.SymbolName == "real_call" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_RustAttributeRawString_DoesNotLeakPhantomUseReferences()
+    {
+        const string content = """
+            #[doc = r"use baz::qux;"]
+            pub fn f() {
+                real_call();
+            }
+
+            use crate::actual::Thing;
+
+            fn real_call() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "qux");
+        Assert.Contains(references, r => r.SymbolName == "Thing" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "real_call" && r.ContainerName == "f");
     }
 
     [Fact]
@@ -31859,6 +32011,82 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "./public-api" && r.ReferenceKind == "reference" && r.Line == 11);
         Assert.Contains(references, r => r.SymbolName == "./api" && r.ReferenceKind == "reference" && r.Line == 15);
         Assert.Contains(references, r => r.SymbolName == "./public-api" && r.ReferenceKind == "reference" && r.Line == 16);
+    }
+
+    [Fact]
+    public void Extract_CSharpLambdaCapture_EmitsCaptureReferenceForEnclosingLocal()
+    {
+        const string content = """
+            class Demo
+            {
+                void Run()
+                {
+                    var seed = 1;
+                    System.Func<int> next = () => seed + 1;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var capture = Assert.Single(references.Where(r =>
+            r.SymbolName == "seed"
+            && r.ReferenceKind == "capture"));
+        Assert.Equal(6, capture.Line);
+        Assert.Equal("function", capture.ContainerKind);
+        Assert.Equal("Run", capture.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharpLambdaCapture_DoesNotCaptureLambdaParameterShadow()
+    {
+        const string content = """
+            class Demo
+            {
+                void Run()
+                {
+                    var seed = 1;
+                    System.Func<int, int> next = seed => seed + 1;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "seed"
+            && r.ReferenceKind == "capture");
+    }
+
+    [Fact]
+    public void Extract_CSharpLambdaCapture_DoesNotShareLocalsAcrossSameNamedMethods()
+    {
+        const string content = """
+            class First
+            {
+                void Run()
+                {
+                    var seed = 1;
+                }
+            }
+
+            class Second
+            {
+                void Run()
+                {
+                    System.Func<int> next = () => seed + 1;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "seed"
+            && r.ReferenceKind == "capture");
     }
 
     private static SymbolRecord Container(string name, string kind, int startLine, int endLine) =>
