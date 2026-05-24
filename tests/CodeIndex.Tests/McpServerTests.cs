@@ -120,6 +120,32 @@ public class McpServerTests : IDisposable
     // --- Protocol tests / プロトコルテスト ---
 
     [Fact]
+    public async Task StdioTransport_WriteFrameAsync_UsesLfTerminatorEvenWhenHostNewLineDiffers()
+    {
+        await using var input = new MemoryStream();
+        await using var output = new MemoryStream();
+        await using var transport = new StdioMcpTransport(input, output, bufferSize: 1024);
+
+        await transport.WriteFrameAsync("""{"jsonrpc":"2.0","id":1,"result":{}}""", CancellationToken.None);
+
+        var bytes = output.ToArray();
+        Assert.Equal((byte)'\n', bytes[^1]);
+        Assert.DoesNotContain((byte)'\r', bytes);
+    }
+
+    [Fact]
+    public async Task ProcessLineAsync_UsesLfTerminatorEvenWhenWriterNewLineIsCrLf()
+    {
+        using var writer = new StringWriter { NewLine = "\r\n" };
+
+        await _server.ProcessLineAsync("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", writer);
+
+        var response = writer.ToString();
+        Assert.EndsWith("\n", response, StringComparison.Ordinal);
+        Assert.DoesNotContain("\r", response);
+    }
+
+    [Fact]
     public void Initialize_ReturnsProtocolVersion()
     {
         // Issue #1554: negotiation echoes back the client's requested protocolVersion when
@@ -1659,6 +1685,32 @@ public class McpServerTests : IDisposable
         Assert.NotNull(properties["path"]);
         Assert.NotNull(properties["excludePaths"]);
         Assert.NotNull(properties["excludeTests"]);
+    }
+
+    [Fact]
+    public void ToolsList_NavigationDescriptionsIncludeConcreteExamples()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var expectedExamples = new Dictionary<string, string[]>
+        {
+            ["search"] = ["Examples:", "例:", "search {\"query\":\"handleRequest\",\"lang\":\"csharp\"}", "\"prefix\":true"],
+            ["definition"] = ["Examples:", "例:", "definition {\"query\":\"McpServer\"}", "\"includeBody\":true", "\"exactName\":true"],
+            ["references"] = ["Examples:", "例:", "references {\"query\":\"Run\"}", "\"kind\":\"type_reference\""],
+            ["callers"] = ["Examples:", "例:", "callers {\"query\":\"HandleRequest\"}", "\"rankBy\":\"weighted\""],
+            ["callees"] = ["Examples:", "例:", "callees {\"query\":\"Run\"}", "\"kind\":\"instantiate\"", "\"limit\":10"],
+            ["symbols"] = ["Examples:", "例:", "symbols {\"query\":\"Service\"}", "\"kind\":\"function\"", "\"exactName\":true"],
+        };
+
+        foreach (var (name, fragments) in expectedExamples)
+        {
+            var tool = tools.First(t => t!["name"]!.GetValue<string>() == name)!;
+            var description = tool["description"]!.GetValue<string>();
+            foreach (var fragment in fragments)
+                Assert.Contains(fragment, description, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

@@ -16,11 +16,17 @@ GitHub releases publish and checksum these first-class runtime identifiers:
 | `win-x64` | `CodeIndex-win-x64.zip` | 64-bit Windows. |
 | `win-arm64` | `CodeIndex-win-arm64.zip` | Windows on ARM64. |
 
-The one-line `install.sh` installer supports the Unix tarball path for Linux and
-macOS. It validates the detected RID against the official release asset list
-before downloading, so unsupported RIDs fail with platform guidance instead of a
-release-asset 404. Windows users should install from the release ZIP, use the
-NuGet global tool, or build from source.
+Homebrew users on macOS/Linux can install from the official tap:
+
+```bash
+brew install widthdom/tap/codeindex
+```
+
+The one-line `install.sh` installer also supports the Unix tarball path for
+Linux and macOS. It validates the detected RID against the official release
+asset list before downloading, so unsupported RIDs fail with platform guidance
+instead of a release-asset 404. Windows users should install from the release
+ZIP, use the NuGet global tool, or build from source.
 
 ## Not Published As Release Assets
 
@@ -67,7 +73,13 @@ checksum 対象にしています。
 | `win-x64` | `CodeIndex-win-x64.zip` | 64-bit Windows 向けです。 |
 | `win-arm64` | `CodeIndex-win-arm64.zip` | Windows on ARM64 向けです。 |
 
-ワンライナーの `install.sh` は Linux と macOS の Unix tarball 経路を対象に
+macOS/Linux の Homebrew ユーザーは、公式 tap から install できます。
+
+```bash
+brew install widthdom/tap/codeindex
+```
+
+ワンライナーの `install.sh` も Linux と macOS の Unix tarball 経路を対象に
 しています。download 前に検出 RID を公式 release asset 一覧と照合するため、
 未対応 RID は release asset の 404 ではなく platform guidance として失敗します。
 Windows では release ZIP、NuGet global tool、または source build を使ってください。

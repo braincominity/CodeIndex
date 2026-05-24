@@ -174,6 +174,7 @@ internal static class ProgramRunner
                     "hooks" => HookCommandRunner.Run(subArgs, jsonOptions),
                     "backfill-fold" => IndexCommandRunner.RunBackfillFold(subArgs, jsonOptions),
                     "optimize" => IndexCommandRunner.RunOptimizeFts(subArgs, jsonOptions),
+                    "vacuum" => QueryCommandRunner.RunVacuum(subArgs, jsonOptions),
                     "db" => DbCommandRunner.RunIntegrityCheck(subArgs, jsonOptions),
                     "report" => ReportCommandRunner.Run(subArgs, jsonOptions, appVersion),
                     _ when IsProjectPathArg(commandName)

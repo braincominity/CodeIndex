@@ -117,7 +117,10 @@ For implementation details (schema, indexing pipeline, MCP behavior), see [DEVEL
 ## First Query Quick Start
 
 ```bash
-# One-liner install (no .NET required; usually seconds)
+# Homebrew install (macOS/Linux)
+brew install widthdom/tap/codeindex
+
+# Or one-liner install from GitHub release assets (no .NET required; usually seconds)
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 
 # First index: ~30-60s on small repos; minutes or longer on 100k-file trees.
@@ -245,6 +248,20 @@ sections below show examples and option details for the most common workflows.
 Stable since values are intentionally not repeated in this guide because the
 release changelog is the source of truth for when each command first shipped.
 Run `cdidx --help` for the full syntax line for every command.
+
+## JSON output format
+
+Most query commands emit one complete JSON value when `--json` is set. `search
+--json` is intentionally stream-oriented: it writes one `CompactSearchResult`
+per line as newline-delimited JSON (ndjson), then a final `{"done":true,...}`
+line. Stream consumers can parse each line as it arrives; array-oriented tools
+can use `jq -s '.'` or pass `--json=array` to `search` to emit the result set as
+one JSON array.
+
+```bash
+cdidx search authenticate --json          # ndjson stream, one result per line
+cdidx search authenticate --json=array    # single JSON array
+```
 
 ## Flag compatibility and migrations
 
@@ -1146,11 +1163,13 @@ Inside `batch_query`, each inner slot is also checked against the inner tool's b
 Persistent lifecycle logs are written to the first available directory in this order:
 
 1. `CDIDX_GLOBAL_TOOL_LOG_DIR` (`~`, `~/...`, `$HOME/...`, and `${HOME}/...` are expanded)
-2. Windows: `%LOCALAPPDATA%\cdidx\logs`
-3. macOS: `~/Library/Logs/cdidx`
-4. Linux and other Unix-like systems: `$XDG_STATE_HOME/cdidx/logs`
-5. Linux and other Unix-like systems without `XDG_STATE_HOME`: `~/.local/state/cdidx/logs`
-6. fallback: the OS local-app-data directory, then the temp directory under `cdidx/logs`
+2. `XDG_STATE_HOME/cdidx/logs`
+3. `XDG_CACHE_HOME/cdidx/logs`
+4. `XDG_RUNTIME_DIR/cdidx/logs`
+5. Windows: `%LOCALAPPDATA%\cdidx\logs`
+6. macOS: `~/Library/Logs/cdidx`
+7. Linux and other Unix-like systems without an XDG log directory: `~/.local/state/cdidx/logs`
+8. fallback: the OS local-app-data directory, then the temp directory under `cdidx/logs`
 
 Run `cdidx status --log-path` to print the active log directory without opening the index database. Add `--json` to receive `{"log_path":"..."}`. Set `CDIDX_DISABLE_PERSISTENT_LOG=1` to disable persistent lifecycle logs.
 
@@ -1640,6 +1659,8 @@ OpenAI Codex CLI (`codex.json` or `~/.codex/config.json`):
 
 Once configured, the AI can directly call these tools:
 
+The MCP `tools/list` descriptions include compact English/Japanese usage examples for the primary search and navigation tools, so AI clients can discover valid argument shapes directly from the server response.
+
 | Tool | Description |
 |---|---|
 | `search` | Full-text search across code chunks |
@@ -2080,6 +2101,20 @@ cdidx index . --quiet
 Stable since の値はこのガイドでは重複管理しません。各コマンドがいつ入ったかは
 release changelog を source of truth とします。完全な syntax line は `cdidx --help`
 を参照してください。
+
+## JSON 出力形式
+
+ほとんどの query command は `--json` 指定時に 1 つの完全な JSON 値を出力します。
+`search --json` は stream 向けの形式で、1 行に 1 件の `CompactSearchResult` を
+newline-delimited JSON (ndjson) として出力し、最後に `{"done":true,...}` 行を
+出力します。stream consumer は各行を到着順に parse できます。array 前提の tool
+では `jq -s '.'` を使うか、`search` に `--json=array` を渡すと result set を
+1 つの JSON array として出力できます。
+
+```bash
+cdidx search authenticate --json          # ndjson stream、1 行 1 result
+cdidx search authenticate --json=array    # 単一 JSON array
+```
 
 ## フラグ互換性と移行
 
@@ -2955,11 +2990,13 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 永続 lifecycle log は、利用可能な最初のディレクトリに書き込まれます。解決順は次のとおりです。
 
 1. `CDIDX_GLOBAL_TOOL_LOG_DIR`（`~`、`~/...`、`$HOME/...`、`${HOME}/...` は展開されます）
-2. Windows: `%LOCALAPPDATA%\cdidx\logs`
-3. macOS: `~/Library/Logs/cdidx`
-4. Linux などの Unix 系: `$XDG_STATE_HOME/cdidx/logs`
-5. `XDG_STATE_HOME` がない Linux などの Unix 系: `~/.local/state/cdidx/logs`
-6. fallback: OS の local-app-data ディレクトリ、それも無い場合は temp 配下の `cdidx/logs`
+2. `XDG_STATE_HOME/cdidx/logs`
+3. `XDG_CACHE_HOME/cdidx/logs`
+4. `XDG_RUNTIME_DIR/cdidx/logs`
+5. Windows: `%LOCALAPPDATA%\cdidx\logs`
+6. macOS: `~/Library/Logs/cdidx`
+7. XDG のログディレクトリがない Linux などの Unix 系: `~/.local/state/cdidx/logs`
+8. fallback: OS の local-app-data ディレクトリ、それも無い場合は temp 配下の `cdidx/logs`
 
 有効なログディレクトリだけを確認したい場合は `cdidx status --log-path` を実行してください。このコマンドは index database を開きません。`--json` を付けると `{"log_path":"..."}` を返します。永続 lifecycle log を無効化するには `CDIDX_DISABLE_PERSISTENT_LOG=1` を設定します。
 

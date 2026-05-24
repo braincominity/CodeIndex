@@ -627,7 +627,20 @@ public class StatusDbPragmaSettings
     public string? JournalMode { get; set; }
     public string? Synchronous { get; set; }
     public long? WalAutocheckpoint { get; set; }
+    public long? PageCount { get; set; }
+    public long? FreelistCount { get; set; }
+    public long? PageSize { get; set; }
 }
+
+public sealed record VacuumResult(
+    string Status,
+    long PageSize,
+    long PageCountBefore,
+    long FreelistCountBefore,
+    long PageCountAfter,
+    long FreelistCountAfter,
+    long PagesReclaimed,
+    long BytesReclaimed);
 
 public class PostExtractionHookStatus
 {

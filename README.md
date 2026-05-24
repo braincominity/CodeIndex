@@ -38,7 +38,10 @@ and [cdidx vs VS Code workspace index](USER_GUIDE.md#cdidx-vs-vs-code-workspace-
 ## Quick Start
 
 ```bash
-# Install is usually seconds.
+# Install is usually seconds. Homebrew is available on macOS/Linux:
+brew install widthdom/tap/codeindex
+
+# Or install directly from the signed GitHub release assets:
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 
 # First index: ~30-60s on small repos; minutes or longer on 100k-file trees.
@@ -68,6 +71,8 @@ If a directory cannot be scanned because of permissions or an I/O error,
 `cdidx` records the scan error, keeps scanning other directories, and writes a
 temporary `.cdidx/scan-checkpoint.json` so a same-HEAD retry can skip directories
 that already completed successfully.
+On POSIX systems, persistent global tool stderr logs are forced to owner-only
+`0600` permissions on every open, including existing date-stamped log files.
 Terminals that request ASCII-only output with `--ascii`, `CDIDX_ASCII=1`,
 `NO_UNICODE`, `TERM=dumb`, accessibility env hints, or a non-UTF-8 locale render
 spinner frames as `|` / `/` / `-` / `\` and progress bars with `#` / `-` instead
@@ -110,6 +115,10 @@ file completion.
   `suggestion_dedup_threshold` controlling the score cutoff.
 - Parallel full-scan extraction with configurable `--parallelism`, incremental refreshes
   with `--files` and `--commits`, plus continuous `--watch` mode.
+- New index databases use SQLite incremental auto-vacuum, `cdidx vacuum` reclaims
+  free pages from existing DBs (including a one-time full `VACUUM` conversion for
+  legacy no-autovacuum DBs), and `status --json` reports page/free-list metrics
+  under `db_pragma_settings`.
 - Post-extraction hooks from `~/.config/cdidx/hooks/*.dll` (or `CDIDX_HOOKS_DIR`)
   can enrich symbols and references before persistence.
 - Exact DB/worktree freshness checks with `status --check`, including an
@@ -275,6 +284,8 @@ script / CI では `--yes`（または `--force`）が必要です。
 権限や I/O エラーでディレクトリを走査できない場合でも、`cdidx` は scan error を
 記録して他のディレクトリの走査を続け、同じ HEAD の再実行で成功済みディレクトリを
 読み飛ばせるように一時的な `.cdidx/scan-checkpoint.json` を書き込みます。
+POSIX 環境では、persistent global tool stderr log は開くたびに所有者のみ読み書き可能な
+`0600` 権限へ補正され、既存の日付付き log file も同じ扱いになります。
 `--ascii`、`CDIDX_ASCII=1`、`NO_UNICODE`、`TERM=dumb`、accessibility 系の環境変数、
 または非 UTF-8 locale により ASCII-only 出力が要求されている端末では、スピナーは
 `|` / `/` / `-` / `\`、進捗バーは `#` / `-` で描画されます。Unicode を利用できる端末でも
@@ -312,6 +323,10 @@ script / CI では `--yes`（または `--force`）が必要です。
   MCP 提案は GitHub 送信前に近似重複排除され、しきい値は
   `cdidx mcp --suggestion-dedup-threshold`、`CDIDX_SUGGESTION_DEDUP_THRESHOLD`、
   または `.cdidxrc.json` の `suggestion_dedup_threshold` で調整できます。
+- 新規 index DB は SQLite incremental auto-vacuum を使い、既存 DB は
+  `cdidx vacuum` で free page を回収できます（legacy no-autovacuum DB は
+  初回だけ full `VACUUM` で変換）。`status --json` は `db_pragma_settings`
+  配下に page / freelist metrics を出力します。
 - `--files` と `--commits` による差分更新、および `--watch` による継続更新モード。
 - `~/.config/cdidx/hooks/*.dll`（または `CDIDX_HOOKS_DIR`）の post-extraction hook で、
   永続化前のシンボルと参照を拡張できます。
