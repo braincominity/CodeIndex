@@ -56,6 +56,157 @@ internal static class RustReferenceExtractor
         @"(?<![\w$])(?<name>(?:(?:r#)?\w+::)*r#\w+(?:::(?:r#)?\w+)*)(?:<[^>\n]+>)?\s*\(",
         RegexOptions.Compiled);
 
+    public static void EmitMultilineAttributeReferences(
+        string[] preparedLines,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, int, SymbolRecord?> resolveContainer)
+    {
+        for (var lineIndex = 0; lineIndex < preparedLines.Length; lineIndex++)
+        {
+            var line = preparedLines[lineIndex];
+            for (var column = 0; column < line.Length; column++)
+            {
+                if (line[column] != '#')
+                    continue;
+
+                var openBracket = FindRustAttributeOpenBracket(line, column);
+                if (openBracket < 0)
+                    continue;
+
+                var (attribute, endLineIndex, endColumn) = ReadRustAttribute(preparedLines, lineIndex, openBracket);
+                EmitDeriveReferencesFromAttribute(
+                    attribute,
+                    lineIndex,
+                    openBracket,
+                    references,
+                    seen,
+                    fileId,
+                    resolveContainer);
+
+                if (endLineIndex == lineIndex)
+                    column = Math.Max(column, endColumn);
+                else
+                    break;
+            }
+        }
+    }
+
+    private static int FindRustAttributeOpenBracket(string line, int hashIndex)
+    {
+        var cursor = hashIndex + 1;
+        while (cursor < line.Length && char.IsWhiteSpace(line[cursor]))
+            cursor++;
+        if (cursor < line.Length && line[cursor] == '!')
+        {
+            cursor++;
+            while (cursor < line.Length && char.IsWhiteSpace(line[cursor]))
+                cursor++;
+        }
+
+        return cursor < line.Length && line[cursor] == '[' ? cursor : -1;
+    }
+
+    private static (string Attribute, int EndLineIndex, int EndColumn) ReadRustAttribute(
+        string[] lines,
+        int startLineIndex,
+        int openBracket)
+    {
+        var parts = new List<string>();
+        var depth = 0;
+        for (var lineIndex = startLineIndex; lineIndex < lines.Length; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var startColumn = lineIndex == startLineIndex ? openBracket : 0;
+            parts.Add(line[startColumn..]);
+
+            for (var column = startColumn; column < line.Length; column++)
+            {
+                var c = line[column];
+                if (c == 'r')
+                {
+                    var rawEnd = TrySkipRawString(line, column);
+                    if (rawEnd > column)
+                    {
+                        column = rawEnd;
+                        continue;
+                    }
+                }
+
+                if (c == '"' || c == '\'')
+                {
+                    column = SkipQuotedString(line, column, c);
+                    continue;
+                }
+
+                if (c == '[' || c == '(')
+                {
+                    depth++;
+                    continue;
+                }
+
+                if (c != ']' && c != ')')
+                    continue;
+
+                depth--;
+                if (c == ']' && depth == 0)
+                    return (string.Join('\n', parts), lineIndex, column);
+            }
+        }
+
+        return (string.Join('\n', parts), lines.Length - 1, lines[^1].Length);
+    }
+
+    private static void EmitDeriveReferencesFromAttribute(
+        string attribute,
+        int startLineIndex,
+        int startColumn,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, int, SymbolRecord?> resolveContainer)
+    {
+        var deriveIndex = FindRustAttributeDeriveIndex(attribute);
+        if (deriveIndex < 0)
+            return;
+
+        var openParen = SkipWhitespace(attribute, deriveIndex + "derive".Length);
+        if (openParen >= attribute.Length || attribute[openParen] != '(')
+            return;
+
+        var closeParen = FindMatchingDelimiter(attribute, openParen, '(', ')');
+        if (closeParen <= openParen)
+            return;
+
+        var typesStart = openParen + 1;
+        var (lineNumber, column) = GetLineColumn(attribute, startLineIndex, startColumn, typesStart);
+        EmitDeriveTypeList(
+            attribute.Substring(typesStart, closeParen - typesStart),
+            column,
+            references,
+            seen,
+            fileId,
+            attribute.Trim(),
+            lineNumber,
+            resolveContainer(lineNumber, column));
+    }
+
+    private static int FindRustAttributeDeriveIndex(string attribute)
+    {
+        for (var index = 0; index < attribute.Length; index++)
+        {
+            if (!IsIdentifierAt(attribute, index, "derive"))
+                continue;
+
+            var cursor = SkipWhitespace(attribute, index + "derive".Length);
+            if (cursor < attribute.Length && attribute[cursor] == '(')
+                return index;
+        }
+
+        return -1;
+    }
+
     public static string MaskAttributeBodies(string line)
     {
         var masked = default(char[]);
@@ -235,10 +386,29 @@ internal static class RustReferenceExtractor
         string context,
         int lineNumber,
         SymbolRecord? container)
+        => EmitDeriveTypeList(
+            typesGroup.Value,
+            typesGroup.Index,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            container);
+
+    private static void EmitDeriveTypeList(
+        string types,
+        int typesStartIndex,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
     {
-        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(typesGroup.Value))
+        foreach (var (segmentStart, segmentLength) in ReferenceExtractor.SplitTopLevelCommaSpans(types))
         {
-            var fragment = typesGroup.Value.Substring(segmentStart, segmentLength);
+            var fragment = types.Substring(segmentStart, segmentLength);
             var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(fragment, 0);
             var typeEnd = TypedLanguageReferenceExtractor.FindTypeExpressionEnd(fragment, typeStart);
             if (typeEnd <= typeStart)
@@ -246,7 +416,7 @@ internal static class RustReferenceExtractor
 
             TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
                 fragment.Substring(typeStart, typeEnd - typeStart),
-                typesGroup.Index + segmentStart + typeStart,
+                typesStartIndex + segmentStart + typeStart,
                 "rust",
                 references,
                 seen,
@@ -255,6 +425,79 @@ internal static class RustReferenceExtractor
                 lineNumber,
                 container);
         }
+    }
+
+    private static int FindMatchingDelimiter(string text, int openIndex, char open, char close)
+    {
+        var depth = 0;
+        for (var index = openIndex; index < text.Length; index++)
+        {
+            var c = text[index];
+            if (c == 'r')
+            {
+                var rawEnd = TrySkipRawString(text, index);
+                if (rawEnd > index)
+                {
+                    index = rawEnd;
+                    continue;
+                }
+            }
+
+            if (c == '"' || c == '\'')
+            {
+                index = SkipQuotedString(text, index, c);
+                continue;
+            }
+
+            if (c == open)
+            {
+                depth++;
+                continue;
+            }
+
+            if (c != close)
+                continue;
+
+            depth--;
+            if (depth == 0)
+                return index;
+        }
+
+        return -1;
+    }
+
+    private static bool IsIdentifierAt(string text, int index, string identifier)
+    {
+        if (index > 0 && IsRustIdentifierPart(text[index - 1]))
+            return false;
+        if (index + identifier.Length > text.Length)
+            return false;
+        if (!text.AsSpan(index, identifier.Length).SequenceEqual(identifier))
+            return false;
+        return index + identifier.Length >= text.Length || !IsRustIdentifierPart(text[index + identifier.Length]);
+    }
+
+    private static (int LineNumber, int Column) GetLineColumn(
+        string text,
+        int startLineIndex,
+        int startColumn,
+        int offset)
+    {
+        var lineNumber = startLineIndex + 1;
+        var column = startColumn;
+        for (var index = 0; index < offset && index < text.Length; index++)
+        {
+            if (text[index] == '\n')
+            {
+                lineNumber++;
+                column = 0;
+                continue;
+            }
+
+            column++;
+        }
+
+        return (lineNumber, column);
     }
 
     public static void EmitTypePositionReferences(
