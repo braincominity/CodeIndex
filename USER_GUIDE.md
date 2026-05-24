@@ -951,6 +951,7 @@ cdidx report --output report.tgz --json
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude glob-style path patterns. `*` and `?` are wildcards (repeatable) |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude likely test files and prefer production code |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots` | Include files detected as generated code; generated files are excluded from query results by default |
+| `--workspace-db <path>` | `deps` | Add another CodeIndex database to the file-dependency query. Repeat it to aggregate multiple workspace member DBs; JSON edges include `source_db` and `target_db` so same relative paths can be disambiguated. |
 | `--snippet-lines <n>` | `search`, `references`, `callers`, `callees`, `impact` | Search snippet length or graph `--body` excerpt length (default: 8, max: 20) |
 | `--snippet-focus <leftmost\|quality\|proximity>` | `search` | Choose how long search-result lines pick the visible focus when clamped. `quality` (default) prefers full-query matches and strong tokens; `proximity` favors dense multi-token clusters; `leftmost` keeps legacy earliest-match behavior. |
 | `--max-line-width <n>` | `search`, `references`, `callers`, `callees`, `find`, `excerpt`, `impact`, `inspect` | Clamp very long single-line snippet/reference/excerpt payloads around the relevant match (`0` disables clamping; default: 512, max: 4096) |
@@ -1857,9 +1858,9 @@ When SQLite returns permission-style errors such as `SQLITE_AUTH`, `SQLITE_PERM`
     - Recovery: fix file/directory permissions, or exclude the path via `.cdidxignore`. The index keeps running across the rest of the tree; no rebuild is required after permissions are fixed — a normal `cdidx index .` will pick up the now-readable files.
 
 12. **File rejected: too large**
-    - Symptom: `--verbose` shows `[ERR ] <path>: File too large (N MiB > M MiB limit). Override with --max-file-bytes <bytes> or CDIDX_MAX_FILE_BYTES=<bytes> when this source file is intentionally indexable.` (the file becomes part of the run's `errors` count), and the file does not appear in search.
+    - Symptom: `validate --kind file_too_large` reports `File too large (N MiB > M MiB limit). Override with --max-file-bytes <bytes> or CDIDX_MAX_FILE_BYTES=<bytes> when this source file is intentionally indexable.` The file is listed in `files`, but no chunks, symbols, or references are indexed for it, so it does not appear in search.
     - Cause: the file exceeds the configured per-file size limit. Indexing huge generated files would waste tokens and bloat the DB.
-    - Recovery: shrink or split the file, add it to `.cdidxignore`, or raise the limit with `cdidx index . --max-file-bytes 50M` / `CDIDX_MAX_FILE_BYTES=50M` when the file is legitimate source. Generated artifacts should generally be gitignored too. Note that any `[ERR ]` files in a run leave readiness flags unstamped, so resolve oversize entries before depending on `graph_table_available` / `issues_table_available` results.
+    - Recovery: shrink or split the file, add it to `.cdidxignore`, or raise the limit with `cdidx index . --max-file-bytes 50M` / `CDIDX_MAX_FILE_BYTES=50M` when the file is legitimate source. Generated artifacts should generally be gitignored too.
 
 13. **Feature unavailable on trimmed / AOT build** (`E009_FEATURE_UNAVAILABLE`)
     - Symptom: `Error [E009_FEATURE_UNAVAILABLE]: ...` when invoking flags such as `--json` on a build that lacks the required code paths.
@@ -2817,15 +2818,13 @@ cdidx report --output report.tgz --json
 | `--visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | `public`, `protected`, `internal`, `private` の可視性でシンボルを絞り込む。`public` は `pub`、`open`、`export` などの保存済み exported alias にも一致し、`private` は `fileprivate` にも一致 |
 | `--exclude-visibility <v[,v]>` | `definition`, `symbols`, `unused`, `hotspots` | 指定した可視性のシンボルを除外する。値と alias 展開は `--visibility` と同じ |
 | `--path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | glob 形式のパスパターンで結果を絞る。`*` と `?` がワイルドカード。繰り返し指定可（複数値は OR で結合） |
-| `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | glob 形式のパスパターンを除外する。`*` と `?` がワイルドカード。繰り返し指定可 |
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | クエリを明示的なリテラルとして渡す。クエリが `-` で始まる場合に有用。`find` 以外のクエリ系コマンドでは `-- <query>` も1トークンのクエリエスケープとして受け付け、その後のオプション解析を続ける。 |
 | `--exclude-path <glob>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | glob 形式のパスパターンを除外する。`*` と `?` がワイルドカード。繰り返し指定可 |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |
+| `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `deps`, `impact`, `unused`, `hotspots` | 生成コードとして検出されたファイルを含める。生成ファイルは既定でクエリ結果から除外される |
 | `--snippet-lines <n>` | `search`, `references`, `callers`, `callees`, `impact` | search スニペット、または graph `--body` 抜粋の行数（デフォルト: 8、最大: 20） |
 | `--snippet-focus <leftmost\|quality\|proximity>` | `search` | 長い検索結果行をクランプするときの焦点選択。`quality`（デフォルト）は全文一致や強いトークンを優先し、`proximity` は近接した複数トークンを優先し、`leftmost` は従来の最左一致を使う。 |
 | `--max-line-width <n>` | `search`, `references`, `callers`, `callees`, `find`, `excerpt`, `impact`, `inspect` | 極端に長い1行のスニペット・参照文脈・抜粋を、関連箇所の周辺だけに切り詰める（`0` でクランプ解除、デフォルト: 512、最大: 4096） |
-| `--fts` | `search` | リテラル安全な引用ではなく生のFTS5クエリ構文を使う。`fts_chunks` が公開する列は `content` のみのため、列修飾子は `content:` だけが有効 |
-| `--max-line-width <n>` | `search`, `references`, `find`, `excerpt`, `inspect` | 極端に長い1行のスニペット・参照文脈・抜粋を、関連箇所の周辺だけに切り詰める（`0` でクランプ解除、デフォルト: 512、最大: 4096） |
 | `--fts` | `search` | リテラル安全な引用ではなく生のFTS5クエリ構文を使う。壊れた入力はヒント付きの使用エラーになり、列修飾子は `content:` だけが有効 |
 | `--exact` | `search`, `find`, `symbols`, `definition`, `references`, `callers`, `callees`, `inspect` | 後方互換の短縮形。`search` では `--exact-substring`、`find` では `--exact` を使い、symbol / graph 系コマンドと `inspect` では `--exact-name` を推奨。CLI JSON と MCP `structuredContent` は `exact_index_available` / `degraded_reason` を返し、MCP では後方互換の camelCase alias も維持する。 |
 | `--exact-substring` | `search` | `search` 用の推奨 explicit alias。大文字小文字を区別する完全部分一致（FTS5 バイパス）。 |
@@ -2860,6 +2859,7 @@ cdidx report --output report.tgz --json
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | 指定タイムスタンプ以降に変更されたファイルのみ（ISO 8601）。オフセットなしの値（例: `2024-01-01T00:00:00`）は UTC として解釈されるため、どのタイムゾーンから呼び出しても同じ UTC 時点になります。明示したい場合は末尾に `Z` または `+09:00` 等のオフセットを付与してください。 |
 | `--no-dedup` | `search` | オーバーラップチャンク重複排除を無効化 |
 | `--reverse` | `deps` | 逆引き: 指定パスに依存しているファイルを表示 |
+| `--workspace-db <path>` | `deps` | file dependency query に別の CodeIndex DB を追加する。複数 member DB を集約する場合は繰り返し指定でき、JSON edge には同じ相対パスを区別できるよう `source_db` / `target_db` が含まれる。 |
 | `--top <n>` | クエリ系 | `--limit` のエイリアス |
 | `--color <when>` | 全コマンド | ANSI カラー出力の制御。`auto`（既定）、`always`、`never` を受け付ける。優先順位: `--color` フラグ > `CLICOLOR_FORCE` > `NO_COLOR` > `CLICOLOR=0` > 端末能力の自動判定。auto では redirected stdout と StringWriter 風のテスト capture を非 ANSI とみなし、Windows では ConPTY / Windows Terminal の virtual-terminal 対応と `WT_SESSION`、`WT_PROFILE_ID`、`TERM_PROGRAM`、非 `dumb` の `TERM` などの端末ヒントも見る。`cdidx symbols Foo \| less -R` のような pager pipe でも色を維持したい場合は `--color=always`、TTY 上でも ANSI を抑止したい場合は `--color=never`（または `NO_COLOR=1`）を指定する。 |
 | `--palette <name>` | 全コマンド | カラー出力が有効なときに用いる ANSI パレットを選択する。`basic`（標準8色 SGR 30–37、最小 SSH/CI 端末向けの既定フォールバック）、`256`（256色 `\x1b[38;5;Nm`）、`truecolor`（24ビット RGB `\x1b[38;2;R;G;Bm`）を受け付ける。優先順位: `--palette` フラグ > `CDIDX_COLOR_PALETTE` 環境変数 > `COLORTERM` / `TERM` 自動判定。`basic` パレットは最小端末で読みにくい `\x1b[90m`（暗灰 / dim）を避ける。 |

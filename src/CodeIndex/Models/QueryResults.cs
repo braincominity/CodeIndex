@@ -277,6 +277,7 @@ public class CalleeResult
 
 public class ImpactResult
 {
+    public string ResultKind { get; set; } = ImpactResultKinds.Graph;
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
     public string? CallerKind { get; set; }
@@ -310,6 +311,12 @@ public class ImpactResult
     public int? BodyEndLine { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool BodyContentTruncated { get; set; }
+}
+
+public static class ImpactResultKinds
+{
+    public const string Graph = "graph";
+    public const string FileHeuristic = "file_heuristic";
 }
 
 public class ImpactAnalysisResult
@@ -873,8 +880,14 @@ internal sealed class RepoFileStat
 
 public class FileDependencyResult
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ResultKind { get; set; }
     public string SourcePath { get; set; } = string.Empty;
     public string TargetPath { get; set; } = string.Empty;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SourceDb { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TargetDb { get; set; }
     public int ReferenceCount { get; set; }
     public string Symbols { get; set; } = string.Empty;
 }

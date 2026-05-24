@@ -857,10 +857,10 @@ public static class QueryCommandRunner
             }
             else
             {
-                var kindColumnWidth = ComputeReferenceKindColumnWidth(results, r => FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds));
+                var kindColumnWidth = ComputeReferenceKindColumnWidth(results, r => FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds, r.ReferenceKindCounts));
                 foreach (var r in results)
                 {
-                    var kindLabel = FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds);
+                    var kindLabel = FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds, r.ReferenceKindCounts);
                     Console.WriteLine($"{kindLabel.PadRight(kindColumnWidth)} {r.CallerKind ?? "?",-10} {r.CallerName ?? "<top-level>",-32} {r.Path}:{r.FirstLine}  -> {r.CalleeName} ({r.ReferenceCount} refs)");
                     WriteOptionalBodyExcerpt(r.BodyStartLine, r.BodyContent);
                 }
@@ -986,10 +986,10 @@ public static class QueryCommandRunner
             }
             else
             {
-                var kindColumnWidth = ComputeReferenceKindColumnWidth(results, r => FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds));
+                var kindColumnWidth = ComputeReferenceKindColumnWidth(results, r => FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds, r.ReferenceKindCounts));
                 foreach (var r in results)
                 {
-                    var kindLabel = FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds);
+                    var kindLabel = FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds, r.ReferenceKindCounts);
                     Console.WriteLine($"{kindLabel.PadRight(kindColumnWidth)} {r.CalleeName,-32} {r.Path}:{r.FirstLine}  <- {r.CallerName ?? "<top-level>"} ({r.ReferenceCount} refs)");
                     WriteOptionalBodyExcerpt(r.BodyStartLine, r.BodyContent);
                 }
@@ -2774,7 +2774,7 @@ public static class QueryCommandRunner
         return WithDb(options, jsonOptions, reader =>
         {
             var reverse = cmdArgs.Any(a => a == "--reverse");
-            var results = reader.GetFileDependencies(options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse);
+            var results = GetWorkspaceFileDependencies(reader, options, reverse);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var sqlGraphSignal = results.Count == 0
                 ? baseSqlGraphSignal
@@ -2820,6 +2820,163 @@ public static class QueryCommandRunner
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static List<FileDependencyResult> GetWorkspaceFileDependencies(DbReader primaryReader, QueryCommandOptions options, bool reverse)
+    {
+        var results = primaryReader.GetFileDependencies(options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse);
+        if (options.WorkspaceDbPaths.Count == 0)
+            return results;
+
+        var primaryDb = Path.GetFullPath(DbPathResolver.NormalizeDbPath(options.DbPath));
+        var memberDbs = options.WorkspaceDbPaths
+            .Select(path => Path.GetFullPath(DbPathResolver.NormalizeDbPath(path)))
+            .Prepend(primaryDb)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        TagFileDependencyResults(results, primaryDb);
+        foreach (var normalizedDbPath in memberDbs.Skip(1))
+        {
+            using var db = new DbContext(normalizedDbPath);
+            db.TryMigrateForRead();
+            var reader = new DbReader(db) { IncludeGenerated = primaryReader.IncludeGenerated };
+            var memberResults = reader.GetFileDependencies(options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse);
+            TagFileDependencyResults(memberResults, normalizedDbPath);
+            results.AddRange(memberResults);
+        }
+
+        foreach (var sourceDb in memberDbs)
+        foreach (var targetDb in memberDbs)
+        {
+            if (string.Equals(sourceDb, targetDb, StringComparison.Ordinal))
+                continue;
+            results.AddRange(GetCrossDatabaseFileDependencies(sourceDb, targetDb, options, reverse));
+        }
+
+        return results
+            .OrderByDescending(result => result.ReferenceCount)
+            .ThenBy(result => result.SourceDb, StringComparer.Ordinal)
+            .ThenBy(result => result.SourcePath, StringComparer.Ordinal)
+            .ThenBy(result => result.TargetDb, StringComparer.Ordinal)
+            .ThenBy(result => result.TargetPath, StringComparer.Ordinal)
+            .Take(options.Limit)
+            .ToList();
+    }
+
+    private static List<FileDependencyResult> GetCrossDatabaseFileDependencies(string sourceDbPath, string targetDbPath, QueryCommandOptions options, bool reverse)
+    {
+        var builder = new SqliteConnectionStringBuilder
+        {
+            DataSource = sourceDbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+        };
+        using var connection = new SqliteConnection(builder.ConnectionString);
+        connection.Open();
+        using var attach = connection.CreateCommand();
+        attach.CommandText = "ATTACH DATABASE @targetDb AS targetdb";
+        attach.Parameters.AddWithValue("@targetDb", targetDbPath);
+        attach.ExecuteNonQuery();
+
+        using var cmd = connection.CreateCommand();
+        var sourcePathExpr = reverse ? "dst.path" : "src.path";
+        var targetPathExpr = reverse ? "src.path" : "dst.path";
+        cmd.CommandText = $@"
+            SELECT {sourcePathExpr} AS source_path,
+                   {targetPathExpr} AS target_path,
+                   COUNT(*) AS reference_count,
+                   GROUP_CONCAT(DISTINCT r.symbol_name) AS symbols
+            FROM symbol_references r
+            JOIN files src ON src.id = r.file_id
+            JOIN targetdb.symbols s ON s.name = r.symbol_name
+            JOIN targetdb.files dst ON dst.id = s.file_id
+            WHERE 1 = 1";
+        if (options.Lang != null)
+        {
+            cmd.CommandText += " AND src.lang = @lang AND dst.lang = @lang";
+            cmd.Parameters.AddWithValue("@lang", options.Lang);
+        }
+        AddCrossDatabasePathFilters(cmd, "src", options.PathPatterns, include: !reverse);
+        AddCrossDatabasePathFilters(cmd, "dst", options.PathPatterns, include: reverse);
+        AddCrossDatabaseExcludeFilters(cmd, "src", options.ExcludePaths, include: !reverse);
+        AddCrossDatabaseExcludeFilters(cmd, "dst", options.ExcludePaths, include: reverse);
+        if (options.ExcludeTests)
+            cmd.CommandText += reverse
+                ? " AND dst.path NOT LIKE '%test%' COLLATE NOCASE"
+                : " AND src.path NOT LIKE '%test%' COLLATE NOCASE";
+        cmd.CommandText += @"
+            GROUP BY source_path, target_path
+            ORDER BY reference_count DESC, source_path, target_path
+            LIMIT @limit";
+        cmd.Parameters.AddWithValue("@limit", options.Limit);
+
+        var results = new List<FileDependencyResult>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add(new FileDependencyResult
+            {
+                SourcePath = reader.GetString(0),
+                TargetPath = reader.GetString(1),
+                SourceDb = reverse ? targetDbPath : sourceDbPath,
+                TargetDb = reverse ? sourceDbPath : targetDbPath,
+                ReferenceCount = reader.GetInt32(2),
+                Symbols = reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
+            });
+        }
+        return results;
+    }
+
+    private static void AddCrossDatabasePathFilters(SqliteCommand cmd, string alias, IReadOnlyList<string> patterns, bool include)
+    {
+        if (!include || patterns.Count == 0)
+            return;
+        var parts = new List<string>(patterns.Count);
+        for (var i = 0; i < patterns.Count; i++)
+        {
+            var name = $"@crossPath{alias}{i}";
+            parts.Add($"{alias}.path LIKE {name} ESCAPE '\\'");
+            cmd.Parameters.AddWithValue(name, CrossDatabaseGlobToLikePattern(patterns[i]));
+        }
+        cmd.CommandText += " AND (" + string.Join(" OR ", parts) + ")";
+    }
+
+    private static void AddCrossDatabaseExcludeFilters(SqliteCommand cmd, string alias, IReadOnlyList<string> patterns, bool include)
+    {
+        if (!include || patterns.Count == 0)
+            return;
+        for (var i = 0; i < patterns.Count; i++)
+        {
+            var name = $"@crossExclude{alias}{i}";
+            cmd.CommandText += $" AND {alias}.path NOT LIKE {name} ESCAPE '\\'";
+            cmd.Parameters.AddWithValue(name, CrossDatabaseGlobToLikePattern(patterns[i]));
+        }
+    }
+
+    private static string CrossDatabaseGlobToLikePattern(string pattern)
+    {
+        var builder = new System.Text.StringBuilder(pattern.Length);
+        foreach (var ch in pattern)
+        {
+            builder.Append(ch switch
+            {
+                '*' => '%',
+                '?' => '_',
+                '%' => "\\%",
+                '_' => "\\_",
+                '\\' => "\\\\",
+                _ => ch,
+            });
+        }
+        return builder.ToString();
+    }
+
+    private static void TagFileDependencyResults(IEnumerable<FileDependencyResult> results, string dbPath)
+    {
+        foreach (var result in results)
+        {
+            result.SourceDb = dbPath;
+            result.TargetDb = dbPath;
+        }
     }
 
     public static int RunHotspots(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -3494,7 +3651,7 @@ public static class QueryCommandRunner
     // `--kind replacement_chra` のようなタイプミスを did-you-mean で救うため、
     // FileIndexer.cs 内の `Kind = "..."` 代入と同期させる (#1582)。
     private static readonly string[] AllValidValidateKinds =
-        ["bom", "cr_only_line_endings", "line_too_long", "mixed_line_endings", "mixed_line_endings_three_way", "non_utf8_likely", "null_byte", "replacement_char", "utf16_bom"];
+        ["bom", "cr_only_line_endings", "file_too_large", "line_too_long", "mixed_line_endings", "mixed_line_endings_three_way", "non_utf8_likely", "null_byte", "replacement_char", "utf16_bom"];
 
     public static int RunValidate(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -3660,6 +3817,7 @@ public static class QueryCommandRunner
         bool contextAfterExplicit = false;
         var pathPatterns = new List<string>();
         var userPathPatterns = new List<string>();
+        var workspaceDbPaths = new List<string>();
         var projectFilters = new List<string>();
         string? solutionFilter = null;
         var excludePaths = new List<string>();
@@ -3786,6 +3944,12 @@ public static class QueryCommandRunner
                     }
                     else
                         AddParseError(dbPathError!);
+                    break;
+                case "--workspace-db":
+                    if (TryReadStringOptionValue(args, ref i, "--workspace-db", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var workspaceDbPath, out var workspaceDbError))
+                        workspaceDbPaths.Add(workspaceDbPath!);
+                    else
+                        AddParseError(workspaceDbError!);
                     break;
                 case "--data-dir":
                     if (TryReadStringOptionValue(args, ref i, "--data-dir", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var dataDirValue, out var dataDirError))
@@ -4272,6 +4436,7 @@ public static class QueryCommandRunner
             SnippetFocus = snippetFocus,
             MaxLineWidth = maxLineWidth,
             PathPatterns = pathPatterns,
+            WorkspaceDbPaths = workspaceDbPaths,
             ProjectFilters = projectFilters,
             SolutionFilter = solutionFilter,
             ExcludePaths = excludePaths,
@@ -5153,17 +5318,25 @@ public static class QueryCommandRunner
         ConsoleUi.GetUsageLine(commandName)
         ?? throw new InvalidOperationException($"Missing usage line for command '{commandName}'.");
 
-    // Human-readable reference_kind label for a grouped caller/callee row. When the
-    // group spans multiple kinds (e.g. `call` + `subscribe`), render them joined with
-    // `+` so the operator sees that the grouped row hides mixed semantics (issue #501).
-    // 単一ラベルに畳まれた reference_kind を人間向けに整形する。複数 kind が混在する
-    // 行 (`call` + `subscribe` など) は `+` 区切りで並べ、畳まれて見えなくなる意味の
-    // 違いを運用者が気付けるようにする (issue #501)。
-    private static string FormatReferenceKindLabel(string primary, IReadOnlyList<string> kinds, bool hasMixed)
+    // Human-readable reference_kind label for a grouped caller/callee row. Counts
+    // keep high-volume relationships visible without requiring JSON re-querying.
+    // grouped caller/callee 行の人間向け reference_kind ラベル。count を併記して、
+    // JSON で再取得しなくても高頻度の関係が見えるようにする。
+    private static string FormatReferenceKindLabel(string primary, IReadOnlyList<string> kinds, bool hasMixed, IReadOnlyDictionary<string, int>? counts)
     {
-        if (!hasMixed || kinds == null || kinds.Count <= 1)
-            return primary ?? string.Empty;
-        return string.Join("+", kinds);
+        if (counts == null || counts.Count == 0)
+        {
+            if (!hasMixed || kinds == null || kinds.Count <= 1)
+                return primary ?? string.Empty;
+            return string.Join("+", kinds);
+        }
+
+        var orderedKinds = kinds is { Count: > 0 } && kinds.Any(kind => counts.TryGetValue(kind, out var count) && count > 0)
+            ? kinds
+            : counts.Keys.Where(kind => counts[kind] > 0).OrderBy(kind => kind, StringComparer.Ordinal).ToArray();
+        return string.Join(", ", orderedKinds
+            .Where(kind => counts.TryGetValue(kind, out var count) && count > 0)
+            .Select(kind => counts[kind] == 1 ? kind : $"{kind} x{counts[kind]}"));
     }
 
     // Pick a column width that fits every label in the current batch so mixed-kind
@@ -6382,6 +6555,7 @@ public static class QueryCommandRunner
     private static readonly Dictionary<string, string> MissingOptionValueHints = new(StringComparer.Ordinal)
     {
         ["--db"] = "pass a path to a CodeIndex SQLite database, e.g. `--db .cdidx/codeindex.db` or `--db file:///absolute/path/to/codeindex.db?immutable=1`, or omit `--db` to use `.cdidx/codeindex.db`.",
+        ["--workspace-db"] = "pass a path to another workspace member CodeIndex SQLite database. Repeat the flag to aggregate multiple member DBs.",
         ["--data-dir"] = "pass a directory where cdidx should store `codeindex.db`, e.g. `--data-dir /var/cache/cdidx`.",
         ["--limit"] = "pass a positive integer, e.g. `--limit 20` (default 20).",
         ["--top"] = "pass a positive integer, e.g. `--top 20` (alias for `--limit`, default 20).",
@@ -6717,6 +6891,7 @@ public sealed class QueryCommandOptions
     public SearchSnippetFocusMode SnippetFocus { get; init; } = SearchSnippetFocusMode.Quality;
     public int MaxLineWidth { get; init; } = LineWidthFormatter.DefaultMaxLineWidth;
     public List<string> PathPatterns { get; init; } = [];
+    public List<string> WorkspaceDbPaths { get; init; } = [];
     public List<string> ProjectFilters { get; init; } = [];
     public string? SolutionFilter { get; init; }
     public List<string> ExcludePaths { get; init; } = [];
