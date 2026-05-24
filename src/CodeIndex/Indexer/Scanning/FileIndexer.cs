@@ -406,7 +406,7 @@ public class FileIndexer
     private readonly string _ignoreRuleRoot;
     private readonly IReadOnlyList<string> _ancestorIgnoreDirectories;
     private readonly bool _ignoreCase;
-    private readonly Func<string, bool> _directoryIgnoreCaseProbe;
+    private readonly Func<string, bool?> _directoryIgnoreCaseProbe;
     private readonly Func<string, IEnumerable<string>> _enumerateFiles;
     private readonly Dictionary<string, bool> _directoryIgnoreCaseCache;
     private readonly long _maxFileSizeBytes;
@@ -920,14 +920,14 @@ public class FileIndexer
         bool ignoreCase,
         string? ignoreRuleRoot,
         long? maxFileSizeBytes,
-        Func<string, bool>? directoryIgnoreCaseProbe,
+        Func<string, bool?>? directoryIgnoreCaseProbe,
         Func<string, IEnumerable<string>>? enumerateFiles = null)
     {
         _projectRoot = Path.GetFullPath(projectRoot);
         _ignoreRuleRoot = NormalizeIgnoreRuleRoot(ignoreRuleRoot);
         _ancestorIgnoreDirectories = BuildAncestorIgnoreDirectories(_ignoreRuleRoot, _projectRoot);
         _ignoreCase = ignoreCase;
-        _directoryIgnoreCaseProbe = directoryIgnoreCaseProbe ?? ProbeFileSystemIgnoreCase;
+        _directoryIgnoreCaseProbe = directoryIgnoreCaseProbe ?? ProbeExistingDirectoryIgnoreCase;
         _enumerateFiles = enumerateFiles ?? (dir => Directory.EnumerateFiles(LongPath.EnsureWindowsPrefix(dir)));
         _directoryIgnoreCaseCache = new Dictionary<string, bool>(StringComparer.Ordinal);
         _maxFileSizeBytes = ResolveMaxFileSizeBytes(maxFileSizeBytes);
@@ -1027,13 +1027,28 @@ public class FileIndexer
         return false;
     }
 
+    private static bool? ProbeExistingDirectoryIgnoreCase(string directory)
+    {
+        try
+        {
+            var normalizedDirectory = Path.GetFullPath(directory);
+            return TryCreateCaseVariant(normalizedDirectory, out var variant)
+                ? Directory.Exists(LongPath.EnsureWindowsPrefix(variant))
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private bool DirectoryUsesIgnoreCase(string directory)
     {
         var fullPath = Path.GetFullPath(directory);
         if (_directoryIgnoreCaseCache.TryGetValue(fullPath, out var ignoreCase))
             return ignoreCase;
 
-        ignoreCase = _directoryIgnoreCaseProbe(fullPath);
+        ignoreCase = _directoryIgnoreCaseProbe(fullPath) ?? _ignoreCase;
         _directoryIgnoreCaseCache[fullPath] = ignoreCase;
         return ignoreCase;
     }
