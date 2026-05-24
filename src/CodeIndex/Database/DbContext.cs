@@ -648,6 +648,10 @@ public class DbContext : IDisposable
                     ? segmentCount
                     : null));
         connection.CreateFunction(
+            "sql_reference_matches_target_at",
+            (string? symbolName, string? context, string? containerName, long? columnNumber, string? targetName) =>
+                SqlNameResolver.ReferenceMatchesTargetAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber), targetName) ? 1 : 0);
+        connection.CreateFunction(
             "sql_allow_leaf_fallback_at",
             (string? symbolName, string? context, string? containerName, long? columnNumber) =>
                 SqlNameResolver.AllowLeafFallbackAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber)) ? 1 : 0);

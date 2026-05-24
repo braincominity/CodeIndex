@@ -5,10 +5,11 @@ namespace CodeIndex.Indexer;
 
 internal static class SqlNameResolver
 {
-    private readonly record struct SqlNameParts(string NormalizedName, string LeafName, int SegmentCount);
+    private readonly record struct SqlNameParts(string NormalizedName, string LeafName, int SegmentCount, bool HasCaseSensitiveQuote);
     private readonly record struct QualifiedNameMatch(
         string NormalizedName,
         int SegmentCount,
+        bool HasCaseSensitiveQuote,
         int StartIndex,
         int EndIndexExclusive,
         int LeafStartIndex,
@@ -34,7 +35,7 @@ internal static class SqlNameResolver
 
         return TryGetQualifiedNameAtColumn(context, columnNumber, out var match)
             && match.SegmentCount == queryParts.SegmentCount
-            && string.Equals(match.NormalizedName, queryParts.NormalizedName, StringComparison.OrdinalIgnoreCase);
+            && NamesEqual(match.NormalizedName, queryParts.NormalizedName, match.HasCaseSensitiveQuote || queryParts.HasCaseSensitiveQuote);
     }
 
     public static bool ContextContainsQualifiedNameLikeAtColumn(string? context, string? query, int? columnNumber)
@@ -45,7 +46,7 @@ internal static class SqlNameResolver
 
         return TryGetQualifiedNameAtColumn(context, columnNumber, out var match)
             && match.SegmentCount == queryParts.SegmentCount
-            && string.Equals(match.NormalizedName, queryParts.NormalizedName, StringComparison.OrdinalIgnoreCase);
+            && NamesEqual(match.NormalizedName, queryParts.NormalizedName, match.HasCaseSensitiveQuote || queryParts.HasCaseSensitiveQuote);
     }
 
     public static bool ContextContainsQualifiedName(string? context, string? query)
@@ -57,7 +58,7 @@ internal static class SqlNameResolver
         foreach (var candidate in EnumerateQualifiedNameMatches(context))
         {
             if (candidate.SegmentCount == queryParts.SegmentCount
-                && string.Equals(candidate.NormalizedName, queryParts.NormalizedName, StringComparison.OrdinalIgnoreCase))
+                && NamesEqual(candidate.NormalizedName, queryParts.NormalizedName, candidate.HasCaseSensitiveQuote || queryParts.HasCaseSensitiveQuote))
             {
                 return true;
             }
@@ -114,7 +115,7 @@ internal static class SqlNameResolver
         if (leafName.Length > 0 && columnNumber.HasValue && columnNumber.Value > 0)
         {
             if (TryGetQualifiedNameAtColumn(context, columnNumber, out var match)
-                && string.Equals(GetLeafName(match.NormalizedName), leafName, StringComparison.OrdinalIgnoreCase))
+                && NamesEqual(GetLeafName(match.NormalizedName), leafName, match.HasCaseSensitiveQuote || ParseParts(symbolName).HasCaseSensitiveQuote))
             {
                 return match.NormalizedName;
             }
@@ -160,6 +161,28 @@ internal static class SqlNameResolver
         return GetSegmentCount(ResolveReferenceName(symbolName, context, containerName));
     }
 
+    public static bool ReferenceMatchesTargetAtColumn(
+        string? symbolName,
+        string? context,
+        string? containerName,
+        int? columnNumber,
+        string? targetName)
+    {
+        var targetParts = ParseParts(targetName);
+        if (targetParts.NormalizedName.Length == 0)
+            return false;
+
+        var resolved = ResolveReferenceNameAtColumn(symbolName, context, containerName, columnNumber);
+        if (resolved.Length == 0)
+            return false;
+
+        var preserveCase = targetParts.HasCaseSensitiveQuote;
+        if (TryGetQualifiedNameAtColumn(context, columnNumber, out var match))
+            preserveCase |= match.HasCaseSensitiveQuote;
+
+        return NamesEqual(resolved, targetParts.NormalizedName, preserveCase);
+    }
+
     public static bool AllowLeafFallbackAtColumn(string? symbolName, string? context, string? containerName, int? columnNumber)
     {
         var normalizedSymbolName = NormalizeQualifiedName(symbolName);
@@ -169,7 +192,7 @@ internal static class SqlNameResolver
         var leafName = GetLeafName(symbolName);
         if (leafName.Length > 0
             && TryGetQualifiedNameAtColumn(context, columnNumber, out var match)
-            && string.Equals(GetLeafName(match.NormalizedName), leafName, StringComparison.OrdinalIgnoreCase))
+            && NamesEqual(GetLeafName(match.NormalizedName), leafName, match.HasCaseSensitiveQuote || ParseParts(symbolName).HasCaseSensitiveQuote))
         {
             return false;
         }
@@ -194,8 +217,9 @@ internal static class SqlNameResolver
         if (!TryGetQualifiedNameAtColumn(context, columnNumber, out var match))
             return false;
 
-        var foldedCandidate = NameFold.Fold(match.NormalizedName) ?? match.NormalizedName;
-        var foldedQuery = NameFold.Fold(queryParts.NormalizedName) ?? queryParts.NormalizedName;
+        var preserveCase = match.HasCaseSensitiveQuote || queryParts.HasCaseSensitiveQuote;
+        var foldedCandidate = preserveCase ? match.NormalizedName : NameFold.Fold(match.NormalizedName) ?? match.NormalizedName;
+        var foldedQuery = preserveCase ? queryParts.NormalizedName : NameFold.Fold(queryParts.NormalizedName) ?? queryParts.NormalizedName;
         return match.SegmentCount == queryParts.SegmentCount
             && string.Equals(foldedCandidate, foldedQuery, StringComparison.Ordinal);
     }
@@ -208,8 +232,9 @@ internal static class SqlNameResolver
         if (!TryGetQualifiedNameAtColumn(context, columnNumber, out var match))
             return false;
 
-        var foldedCandidate = NameFold.Fold(match.NormalizedName) ?? match.NormalizedName;
-        var foldedQuery = NameFold.Fold(queryParts.NormalizedName) ?? queryParts.NormalizedName;
+        var preserveCase = match.HasCaseSensitiveQuote || queryParts.HasCaseSensitiveQuote;
+        var foldedCandidate = preserveCase ? match.NormalizedName : NameFold.Fold(match.NormalizedName) ?? match.NormalizedName;
+        var foldedQuery = preserveCase ? queryParts.NormalizedName : NameFold.Fold(queryParts.NormalizedName) ?? queryParts.NormalizedName;
         return match.SegmentCount == queryParts.SegmentCount
             && string.Equals(foldedCandidate, foldedQuery, StringComparison.Ordinal);
     }
@@ -220,10 +245,11 @@ internal static class SqlNameResolver
         if (queryParts.NormalizedName.Length == 0 || queryParts.SegmentCount <= 1 || string.IsNullOrWhiteSpace(context))
             return false;
 
-        var foldedQuery = NameFold.Fold(queryParts.NormalizedName) ?? queryParts.NormalizedName;
         foreach (var candidate in EnumerateQualifiedNameMatches(context))
         {
-            var foldedCandidate = NameFold.Fold(candidate.NormalizedName) ?? candidate.NormalizedName;
+            var preserveCase = candidate.HasCaseSensitiveQuote || queryParts.HasCaseSensitiveQuote;
+            var foldedCandidate = preserveCase ? candidate.NormalizedName : NameFold.Fold(candidate.NormalizedName) ?? candidate.NormalizedName;
+            var foldedQuery = preserveCase ? queryParts.NormalizedName : NameFold.Fold(queryParts.NormalizedName) ?? queryParts.NormalizedName;
             if (candidate.SegmentCount == queryParts.SegmentCount
                 && string.Equals(foldedCandidate, foldedQuery, StringComparison.Ordinal))
             {
@@ -266,12 +292,13 @@ internal static class SqlNameResolver
     private static SqlNameParts ParseParts(string? qualifiedName)
     {
         if (string.IsNullOrWhiteSpace(qualifiedName))
-            return new SqlNameParts(string.Empty, string.Empty, 0);
+            return new SqlNameParts(string.Empty, string.Empty, 0, false);
 
         var trimmed = qualifiedName.Trim();
         var segments = new List<string>();
         var current = new StringBuilder();
         char quote = '\0';
+        var hasCaseSensitiveQuote = false;
 
         for (var i = 0; i < trimmed.Length; i++)
         {
@@ -323,6 +350,7 @@ internal static class SqlNameResolver
             if (ch is '[' or '"' or '`')
             {
                 quote = ch;
+                hasCaseSensitiveQuote |= ch == '"';
                 continue;
             }
 
@@ -338,10 +366,10 @@ internal static class SqlNameResolver
         AppendNormalizedSegment(segments, current);
         var segmentCount = segments.Count;
         if (segmentCount == 0)
-            return new SqlNameParts(string.Empty, string.Empty, 0);
+            return new SqlNameParts(string.Empty, string.Empty, 0, hasCaseSensitiveQuote);
 
         var normalized = string.Join(".", segments);
-        return new SqlNameParts(normalized, segments[^1], segmentCount);
+        return new SqlNameParts(normalized, segments[^1], segmentCount, hasCaseSensitiveQuote);
     }
 
     private static IEnumerable<string> EnumerateQualifiedNames(string text)
@@ -420,13 +448,15 @@ internal static class SqlNameResolver
         var index = startIndex;
         var leafStartIndex = startIndex;
         var leafEndIndexExclusive = startIndex;
+        var hasCaseSensitiveQuote = false;
         while (true)
         {
             var segmentStartIndex = index;
-            if (!TryReadQualifiedNameSegment(text, ref index, out var segment))
+            if (!TryReadQualifiedNameSegment(text, ref index, out var segment, out var segmentHasCaseSensitiveQuote))
                 return false;
 
             segments.Add(segment);
+            hasCaseSensitiveQuote |= segmentHasCaseSensitiveQuote;
             leafStartIndex = segmentStartIndex;
             leafEndIndexExclusive = index;
             var scan = index;
@@ -454,13 +484,14 @@ internal static class SqlNameResolver
         if (normalizedName.Length == 0)
             return false;
 
-        match = new QualifiedNameMatch(normalizedName, segments.Count, startIndex, index, leafStartIndex, leafEndIndexExclusive);
+        match = new QualifiedNameMatch(normalizedName, segments.Count, hasCaseSensitiveQuote, startIndex, index, leafStartIndex, leafEndIndexExclusive);
         return true;
     }
 
-    private static bool TryReadQualifiedNameSegment(string text, ref int index, out string segment)
+    private static bool TryReadQualifiedNameSegment(string text, ref int index, out string segment, out bool hasCaseSensitiveQuote)
     {
         segment = string.Empty;
+        hasCaseSensitiveQuote = false;
         if (index >= text.Length)
             return false;
 
@@ -468,6 +499,7 @@ internal static class SqlNameResolver
         var quote = text[index];
         if (quote is '[' or '"' or '`')
         {
+            hasCaseSensitiveQuote = quote == '"';
             index++;
             while (index < text.Length)
             {
@@ -528,15 +560,15 @@ internal static class SqlNameResolver
         out QualifiedNameMatch match)
     {
         match = default;
-        var segments = new List<(string Name, int StartIndex, int EndIndexExclusive)>();
+        var segments = new List<(string Name, bool HasCaseSensitiveQuote, int StartIndex, int EndIndexExclusive)>();
         var index = startIndex;
         while (true)
         {
             var segmentStartIndex = index;
-            if (!TryReadQualifiedNameSegment(text, ref index, out var segment))
+            if (!TryReadQualifiedNameSegment(text, ref index, out var segment, out var segmentHasCaseSensitiveQuote))
                 return false;
 
-            segments.Add((segment, segmentStartIndex, index));
+            segments.Add((segment, segmentHasCaseSensitiveQuote, segmentStartIndex, index));
             var scan = index;
             while (scan < text.Length && char.IsWhiteSpace(text[scan]))
                 scan++;
@@ -560,10 +592,12 @@ internal static class SqlNameResolver
             if (zeroBasedColumn < segment.StartIndex || zeroBasedColumn >= segment.EndIndexExclusive)
                 continue;
 
-            var normalizedName = string.Join(".", segments.Take(i + 1).Select(part => part.Name));
+            var matchedSegments = segments.Take(i + 1).ToList();
+            var normalizedName = string.Join(".", matchedSegments.Select(part => part.Name));
             match = new QualifiedNameMatch(
                 normalizedName,
                 i + 1,
+                matchedSegments.Any(part => part.HasCaseSensitiveQuote),
                 startIndex,
                 segment.EndIndexExclusive,
                 segment.StartIndex,
@@ -581,4 +615,7 @@ internal static class SqlNameResolver
     private static bool IsSqlIdentifierChar(char ch)
         => ch is '_' or '$' or '#'
            || char.IsLetterOrDigit(ch);
+
+    private static bool NamesEqual(string left, string right, bool preserveCase)
+        => string.Equals(left, right, preserveCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase);
 }
