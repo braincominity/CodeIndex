@@ -62,6 +62,7 @@ internal sealed class StdioMcpTransport : IMcpTransport
         if (frame is null)
             return; // notifications produce no wire output on stdio.
         await _writer.WriteLineAsync(frame.AsMemory(), cancellationToken).ConfigureAwait(false);
+        await _writer.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public ValueTask DisposeAsync()
