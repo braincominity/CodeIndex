@@ -801,7 +801,7 @@ See [Exit codes](USER_GUIDE.md#exit-codes) in USER_GUIDE.
 
 ## Error code taxonomy
 
-Process exit codes are coarse (`0` success, `1` usage, `2` not-found, `3` db, `4` feature-unavailable, `5` stale). Scripts, oncall runbooks, and AI agents that need to react to *which* failure happened — not just the bucket — should read the stable `Exxx_NAME` taxonomy emitted on every CLI / MCP error path. The user-facing table lives in [Error codes](USER_GUIDE.md#error-codes); this section captures the developer contract.
+Process exit codes are coarse (`0` success including valid zero-row queries, `1` usage, `2` not-found or strict zero-row query, `3` db, `4` feature-unavailable, `5` stale). Query commands return `0` for genuine zero-row results by default and reserve `2` for missing indexed data or callers that opt into `--strict-not-found`. Scripts, oncall runbooks, and AI agents that need to react to *which* failure happened — not just the bucket — should read the stable `Exxx_NAME` taxonomy emitted on every CLI / MCP error path. The user-facing table lives in [Error codes](USER_GUIDE.md#error-codes); this section captures the developer contract.
 
 **Where it surfaces**
 
