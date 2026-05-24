@@ -3896,7 +3896,7 @@ public static partial class SymbolExtractor
         if (lang == "rust")
             ExtractRustMultilineImplSymbols(fileId, lines, symbols);
         if (lang == "rust")
-            ExtractRustAssociatedTypeDefaultSymbols(fileId, lines, symbols);
+            ExtractRustAssociatedTypeDefaultSymbols(fileId, lines, structuralLines, symbols);
         if (lang == "go")
             ExtractGoGroupedDeclarations(fileId, lines, symbols);
         if (lang == "cpp")
@@ -10026,7 +10026,7 @@ public static partial class SymbolExtractor
         @"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?type\s+(?<name>(?:r#)?\w+)(?:\s*<[^=;]+>)?(?:\s*:[^=;]+)?\s*=\s*(?<returnType>[^;]+)\s*;",
         RegexOptions.Compiled);
 
-    private static void ExtractRustAssociatedTypeDefaultSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    private static void ExtractRustAssociatedTypeDefaultSymbols(long fileId, string[] lines, string[] structuralLines, List<SymbolRecord> symbols)
     {
         var traits = symbols
             .Where(symbol => symbol.Kind == "interface"
@@ -10037,8 +10037,9 @@ public static partial class SymbolExtractor
 
         foreach (var trait in traits)
         {
-            var startLineIndex = Math.Max(trait.BodyStartLine!.Value - 1, 0);
-            var endLineIndex = Math.Min(trait.BodyEndLine!.Value - 1, lines.Length - 1);
+            if (!TryFindRustBraceBodyBounds(structuralLines, trait.StartLine - 1, out var startLineIndex, out var endLineIndex))
+                continue;
+
             var depth = 1;
             for (var lineIndex = startLineIndex + 1; lineIndex < endLineIndex; lineIndex++)
             {
@@ -10069,16 +10070,83 @@ public static partial class SymbolExtractor
                     }
                 }
 
-                depth = Math.Max(1, depth + CountBraceDelta(lines[lineIndex]));
+                depth = Math.Max(1, depth + CountBraceDelta(structuralLines[lineIndex]));
             }
         }
+    }
+
+    private static bool TryFindRustBraceBodyBounds(string[] structuralLines, int startLineIndex, out int bodyStartLineIndex, out int bodyEndLineIndex)
+    {
+        bodyStartLineIndex = 0;
+        bodyEndLineIndex = 0;
+        if (startLineIndex < 0 || startLineIndex >= structuralLines.Length)
+            return false;
+
+        var depth = 0;
+        var opened = false;
+        for (var lineIndex = startLineIndex; lineIndex < structuralLines.Length; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            if (!opened)
+            {
+                var openColumn = line.IndexOf('{');
+                if (openColumn < 0)
+                    continue;
+
+                opened = true;
+                bodyStartLineIndex = lineIndex;
+                depth = 1 + CountBraceDelta(line[(openColumn + 1)..]);
+            }
+            else
+            {
+                depth += CountBraceDelta(line);
+            }
+
+            if (opened && depth == 0)
+            {
+                bodyEndLineIndex = lineIndex;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static int CountBraceDelta(string line)
     {
         var delta = 0;
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var escapeNext = false;
         for (var index = 0; index < line.Length; index++)
         {
+            if (escapeNext)
+            {
+                escapeNext = false;
+                continue;
+            }
+
+            if ((inSingleQuote || inDoubleQuote) && line[index] == '\\')
+            {
+                escapeNext = true;
+                continue;
+            }
+
+            if (!inDoubleQuote && line[index] == '\'')
+            {
+                inSingleQuote = !inSingleQuote;
+                continue;
+            }
+
+            if (!inSingleQuote && line[index] == '"')
+            {
+                inDoubleQuote = !inDoubleQuote;
+                continue;
+            }
+
+            if (inSingleQuote || inDoubleQuote)
+                continue;
+
             if (index + 1 < line.Length && line[index] == '/' && line[index + 1] == '/')
                 break;
 

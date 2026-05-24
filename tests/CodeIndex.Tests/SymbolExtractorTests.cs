@@ -14326,6 +14326,9 @@ public class SymbolExtractorTests
     {
         const string content = """
             trait Builder {
+                fn before(&self) {
+                    println!("{");
+                }
                 type Output = ();
                 type Error: std::error::Error = String;
                 type Pending;
