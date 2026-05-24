@@ -574,13 +574,19 @@ public partial class McpServer : IDisposable
         {
             try
             {
-                await writer.WriteLineAsync(response).ConfigureAwait(false);
+                await WriteJsonLineAsync(writer, response).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
             {
                 Console.Error.WriteLine(BuildResponseWriteErrorLog(ex.Message));
             }
         }
+    }
+
+    private static async Task WriteJsonLineAsync(TextWriter writer, string response)
+    {
+        await writer.WriteAsync(response).ConfigureAwait(false);
+        await writer.WriteAsync('\n').ConfigureAwait(false);
     }
 
     private static async Task WriteFrameSafelyAsync(IMcpTransport transport, string? response, CancellationToken cancellationToken)
