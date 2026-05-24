@@ -98,6 +98,7 @@ public class ProgramCliTests
         Assert.Equal(1, exitCode);
         Assert.Equal(string.Empty, stdout);
         Assert.Contains("requires a shell value, got option-like token '-h'", stderr);
+        Assert.Contains("powershell", stderr);
         Assert.Contains("Usage: cdidx --completions <shell>", stderr);
     }
 
@@ -109,6 +110,7 @@ public class ProgramCliTests
         Assert.Equal(1, exitCode);
         Assert.Equal(string.Empty, stdout);
         Assert.Contains("--completions requires a shell value", stderr);
+        Assert.Contains("powershell", stderr);
         Assert.Contains("Usage: cdidx --completions <shell>", stderr);
         Assert.DoesNotContain("Unknown command: --completions", stderr);
     }
@@ -121,6 +123,7 @@ public class ProgramCliTests
         Assert.Equal(1, exitCode);
         Assert.Equal(string.Empty, stdout);
         Assert.Contains("requires a shell value, got option-like token '--json'", stderr);
+        Assert.Contains("powershell", stderr);
         Assert.Contains("Usage: cdidx --completions <shell>", stderr);
         Assert.DoesNotContain("Unknown shell", stderr);
     }
@@ -133,6 +136,7 @@ public class ProgramCliTests
         Assert.Equal(1, exitCode);
         Assert.Equal(string.Empty, stdout);
         Assert.Contains("accepts exactly one shell value", stderr);
+        Assert.Contains("powershell", stderr);
         Assert.Contains("Usage: cdidx --completions <shell>", stderr);
     }
 

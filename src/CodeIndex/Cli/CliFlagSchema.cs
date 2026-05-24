@@ -6,14 +6,14 @@ namespace CodeIndex.Cli;
 /// <summary>
 /// Single source of truth for cdidx CLI flags. Drives the unsupported-option allowlists
 /// (`TryWriteUnsupportedOptionError`, `ValidateFindArgs`) and the generated shell
-/// completion scripts (bash / zsh / fish). Adding a new flag means appending one row
-/// here instead of editing four places (help text + three completion templates);
+/// completion scripts (bash / zsh / fish / PowerShell). Adding a new flag means appending one row
+/// here instead of editing every completion template;
 /// `CliFlagSchemaTests` fails closed if the schema and the per-command allowlists drift
 /// apart (#1570).
 /// cdidx CLI フラグの単一情報源。未対応オプション拒否リスト
-/// (`TryWriteUnsupportedOptionError` / `ValidateFindArgs`) と bash / zsh / fish の
-/// 補完スクリプト生成を駆動する。新しいフラグを追加しても 4 箇所（help テキストと 3 種の
-/// 補完テンプレート）を同期する必要はなく、スキーマとコマンド別 allowlist がずれた場合は
+/// (`TryWriteUnsupportedOptionError` / `ValidateFindArgs`) と bash / zsh / fish / PowerShell の
+/// 補完スクリプト生成を駆動する。新しいフラグを追加しても各補完テンプレートを
+/// 個別に同期する必要はなく、スキーマとコマンド別 allowlist がずれた場合は
 /// `CliFlagSchemaTests` のカバレッジ検査が失敗する (#1570)。
 /// </summary>
 internal sealed record CliFlag
@@ -108,6 +108,7 @@ internal static class CliFlagSchema
     ];
     private static readonly string[] RawKindsCommands = ["callers", "callees"];
     private static readonly string[] RankByCommands = ["callers", "callees"];
+    private static readonly string[] ByBucketCommands = ["unused"];
 
     private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files"];
     private static readonly string[] ByteFormatCommands = ["files", "map"];
@@ -178,7 +179,7 @@ internal static class CliFlagSchema
         {
             new() { Name = "--db", ValuePlaceholder = "<path>", Description = "Database path", Commands = Set(DbPathCommands) },
             new() { Name = "--data-dir", ValuePlaceholder = "<dir>", Description = "Directory containing codeindex.db; overrides CDIDX_DATA_DIR/XDG/workspace defaults", Commands = Set(DataDirCommands) },
-            new() { Name = "--json", Description = "JSON output", Commands = Set(JsonCommands) },
+            new() { Name = "--json", Description = "JSON output; search also accepts --json=array for a single JSON array", Commands = Set(JsonCommands) },
             new() { Name = "--profile", Description = "Emit SQL timing and EXPLAIN QUERY PLAN profile JSON after the normal result", Commands = Set(ProfileCommands) },
             new() { Name = "--verbose", Description = "Emit query debug diagnostics to stderr, or _debug JSON when combined with --json", Commands = Set(VerboseQueryCommands.Concat(new[] { "index" }).ToArray()) },
             new() { Name = "--slow-query-ms", ValuePlaceholder = "<n>", Description = "Log profiled SQL statements at or above this millisecond threshold", Commands = Set(ProfileCommands) },
@@ -194,6 +195,7 @@ internal static class CliFlagSchema
             new() { Name = "--kind", ValuePlaceholder = "<kind>", Description = "Filter by kind", Commands = Set(KindCommands) },
             new() { Name = "--visibility", ValuePlaceholder = "<visibility[,visibility]>", Description = "Filter by symbol visibility", Commands = Set(VisibilityCommands) },
             new() { Name = "--exclude-visibility", ValuePlaceholder = "<visibility[,visibility]>", Description = "Exclude symbol visibility", Commands = Set(VisibilityCommands) },
+            new() { Name = "--by-bucket", Description = "Unused: include per-bucket grouped result arrays in JSON output", Commands = Set(ByBucketCommands) },
             new() { Name = "--rank-by", ValuePlaceholder = "<weighted|count|kind>", Description = "Rank callers/callees by weighted structural score, raw count, or kind bucket", Commands = Set(RankByCommands) },
             new() { Name = "--raw-kinds", Description = "Show raw reference kinds instead of logical graph kinds", Commands = Set(RawKindsCommands) },
             new() { Name = "--count", Description = "Count only", Commands = Set(CountCommands) },

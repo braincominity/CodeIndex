@@ -1688,6 +1688,32 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsList_NavigationDescriptionsIncludeConcreteExamples()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var expectedExamples = new Dictionary<string, string[]>
+        {
+            ["search"] = ["Examples:", "例:", "search {\"query\":\"handleRequest\",\"lang\":\"csharp\"}", "\"prefix\":true"],
+            ["definition"] = ["Examples:", "例:", "definition {\"query\":\"McpServer\"}", "\"includeBody\":true", "\"exactName\":true"],
+            ["references"] = ["Examples:", "例:", "references {\"query\":\"Run\"}", "\"kind\":\"type_reference\""],
+            ["callers"] = ["Examples:", "例:", "callers {\"query\":\"HandleRequest\"}", "\"rankBy\":\"weighted\""],
+            ["callees"] = ["Examples:", "例:", "callees {\"query\":\"Run\"}", "\"kind\":\"instantiate\"", "\"limit\":10"],
+            ["symbols"] = ["Examples:", "例:", "symbols {\"query\":\"Service\"}", "\"kind\":\"function\"", "\"exactName\":true"],
+        };
+
+        foreach (var (name, fragments) in expectedExamples)
+        {
+            var tool = tools.First(t => t!["name"]!.GetValue<string>() == name)!;
+            var description = tool["description"]!.GetValue<string>();
+            foreach (var fragment in fragments)
+                Assert.Contains(fragment, description, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void ToolsList_ExactAliasParametersAreExposed()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
@@ -6758,6 +6784,10 @@ public class McpServerTests : IDisposable
         Assert.Equal(1, structured["returned_bucket_counts"]!["maybe_unused_nonpublic"]!.GetValue<int>());
         Assert.Equal(6, structured["returned_bucket_counts"]!["public_or_exported_no_refs"]!.GetValue<int>());
         Assert.Equal(1, structured["returned_bucket_counts"]!["reflection_or_config_suspect"]!.GetValue<int>());
+        Assert.Equal(1, structured["summary"]!["by_bucket"]!["likely_unused_private"]!.GetValue<int>());
+        Assert.Equal(8, structured["summary"]!["by_confidence"]!["low"]!.GetValue<int>());
+        Assert.Equal("low", structured["bucket_taxonomy"]!["reflection_or_config_suspect"]!["confidence"]!.GetValue<string>());
+        Assert.Contains("reflection", structured["bucket_taxonomy"]!["reflection_or_config_suspect"]!["description"]!.GetValue<string>());
         Assert.Equal("Hidden", symbols[0]!["name"]!.GetValue<string>());
         Assert.Equal("likely_unused_private", symbols[0]!["unusedBucket"]!.GetValue<string>());
         Assert.Equal("medium", symbols[0]!["unusedConfidence"]!.GetValue<string>());

@@ -68,7 +68,7 @@ public static class ConsoleUi
         ("index-commits", "cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-changed-between", "cdidx index <projectPath> --changed-between <old-ref> <new-ref> [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
-        ("search", "cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup] [--no-visibility-rank]"),
+        ("search", "cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json[=ndjson|array]] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup] [--no-visibility-rank]"),
         ("definition", "cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
         ("references", "cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
         ("callers", "cdidx callers <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--kind <kind>] [--rank-by <weighted|count|kind>] [--raw-kinds] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count]"),
@@ -660,7 +660,7 @@ public static class ConsoleUi
         Console.WriteLine();
         Console.WriteLine("Query options:");
         Console.WriteLine("  --db <path>                Database file path (default: .cdidx/codeindex.db in current directory)");
-        Console.WriteLine("  --json                     Output as JSON (streaming hits use JSON lines; counts/summaries use one object)");
+        Console.WriteLine("  --json                     Output as JSON (search streams ndjson by default; use search --json=array for one array)");
         Console.WriteLine("  --verbose                  Query commands: emit debug diagnostics to stderr; with --json, append an _debug JSON object");
         Console.WriteLine("  --profile                  Read commands: append SQL timing, row-count, and EXPLAIN QUERY PLAN JSON after the normal result");
         Console.WriteLine("  --slow-query-ms <n>        Read commands: log profiled SQL statements that take at least <n> ms (use 0 to log every statement)");
@@ -711,6 +711,7 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx search \"auth*\"                          Prefix shorthand in literal-safe mode");
         Console.WriteLine("  cdidx search --query --path --path README.md   Search for a literal option token");
         Console.WriteLine("  cdidx search \"Run();\" --exact-substring        Case-sensitive exact substring search");
+        Console.WriteLine("  cdidx search authenticate --json=array         Emit search results as one JSON array");
         Console.WriteLine("  cdidx search authenticate --profile            Append SQL profile JSON for slow-query debugging");
         Console.WriteLine("  cdidx search authenticate --verbose            Emit query debug diagnostics on stderr");
         Console.WriteLine("  cdidx definition ResolveGitCommonDir --body   Show a symbol definition and body");
@@ -905,7 +906,7 @@ public static class ConsoleUi
         }
         catch (ArgumentOutOfRangeException)
         {
-            Console.Error.WriteLine($"Unknown shell: {shell}. Supported: bash, zsh, fish");
+            Console.Error.WriteLine($"Unknown shell: {shell}. Supported: bash, zsh, fish, powershell");
             return false;
         }
     }
@@ -916,6 +917,7 @@ public static class ConsoleUi
             "bash" => GetBashCompletions(),
             "zsh" => GetZshCompletions(),
             "fish" => GetFishCompletions(),
+            "powershell" or "pwsh" => GetPowerShellCompletions(),
             _ => throw new ArgumentOutOfRangeException(nameof(shell), shell, "Unknown shell"),
         };
 
@@ -1221,6 +1223,92 @@ public static class ConsoleUi
         }
         return string.Join(Environment.NewLine, lines);
     }
+
+    private static string GetPowerShellCompletions()
+    {
+        var cmds = FormatPowerShellArray(Commands);
+        var langs = FormatPowerShellArray(GetCompletionLangs().Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        var kinds = FormatPowerShellArray(GetCompletionKinds().Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        var sb = new StringBuilder();
+        sb.AppendLine("# cdidx PowerShell completions");
+        sb.AppendLine("Register-ArgumentCompleter -Native -CommandName cdidx -ScriptBlock {");
+        sb.AppendLine("    param($wordToComplete, $commandAst, $cursorPosition)");
+        sb.AppendLine($"    $commands = @({cmds})");
+        sb.AppendLine($"    $langs = @({langs})");
+        sb.AppendLine($"    $kinds = @({kinds})");
+        sb.AppendLine("    $elements = @($commandAst.CommandElements)");
+        sb.AppendLine("    $tokens = @($elements | ForEach-Object { $_.Extent.Text })");
+        sb.AppendLine("    $lastElement = if ($elements.Count -ge 1) { $elements[$elements.Count - 1] } else { $null }");
+        sb.AppendLine("    $afterLastToken = $lastElement -and $cursorPosition -gt $lastElement.Extent.EndOffset");
+        sb.AppendLine("    $subcmd = $tokens | Where-Object { $_ -ne 'cdidx' -and -not $_.StartsWith('-') } | Select-Object -First 1");
+        sb.AppendLine("    $prev = if ([string]::IsNullOrEmpty($wordToComplete) -and $tokens.Count -ge 1) { $tokens[$tokens.Count - 1] } elseif ($tokens.Count -ge 2) { $tokens[$tokens.Count - 2] } else { '' }");
+        sb.AppendLine("    function New-CdidxCompletion($value, $kind = 'ParameterValue') {");
+        sb.AppendLine("        [System.Management.Automation.CompletionResult]::new($value, $value, $kind, $value)");
+        sb.AppendLine("    }");
+        sb.AppendLine("    switch ($prev) {");
+        sb.AppendLine("        { $_ -in @('--db', '--path', '--exclude-path', '--output', '-o') } {");
+        sb.AppendLine("            Get-ChildItem -Name \"$wordToComplete*\" -ErrorAction SilentlyContinue | ForEach-Object { New-CdidxCompletion $_ 'ProviderItem' }");
+        sb.AppendLine("            return");
+        sb.AppendLine("        }");
+        sb.AppendLine("        '--lang' { $langs | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
+        sb.AppendLine("        '--kind' { $kinds | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
+        sb.AppendLine("    }");
+        sb.AppendLine("    if (-not $subcmd -or ($tokens.Count -le 2 -and -not ([string]::IsNullOrEmpty($wordToComplete)) -and -not $afterLastToken)) {");
+        sb.AppendLine("        $commands + @('--help', '--version', '--license') | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ 'ParameterName' }");
+        sb.AppendLine("        return");
+        sb.AppendLine("    }");
+        sb.AppendLine("    switch ($subcmd) {");
+        foreach (var command in EnumeratedCompletionCommands)
+            sb.AppendLine($"        '{EscapePowerShellSingleQuoted(command)}' {{ $flags = @({FormatPowerShellArray(BuildPowerShellFlagList(command))}) }}");
+        sb.AppendLine($"        default {{ $flags = @({FormatPowerShellArray(BuildPowerShellGenericFlagList())}) }}");
+        sb.AppendLine("    }");
+        sb.AppendLine("    $flags | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ 'ParameterName' }");
+        sb.Append("}");
+        return sb.ToString();
+    }
+
+    private static List<string> BuildPowerShellFlagList(string command)
+    {
+        var tokens = new List<string>();
+        foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(command))
+        {
+            tokens.Add(flag.Name);
+            if (flag.ShortName is not null)
+                tokens.Add(flag.ShortName);
+        }
+        tokens.Add("--help");
+        if (command == "find")
+            tokens.Add("--");
+        return tokens;
+    }
+
+    private static List<string> BuildPowerShellGenericFlagList()
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var tokens = new List<string>();
+        foreach (var command in GenericBranchRepresentativeCommands)
+        {
+            foreach (var flag in CliFlagSchema.GetCompletionFlagsForCommand(command))
+            {
+                if (IsEnumeratedBranchScopedFlag(flag.Name))
+                    continue;
+                if (seen.Add(flag.Name))
+                {
+                    tokens.Add(flag.Name);
+                    if (flag.ShortName is not null)
+                        tokens.Add(flag.ShortName);
+                }
+            }
+        }
+        tokens.Add("--help");
+        return tokens;
+    }
+
+    private static string FormatPowerShellArray(IEnumerable<string> values) =>
+        string.Join(", ", values.Select(value => $"'{EscapePowerShellSingleQuoted(value)}'"));
+
+    private static string EscapePowerShellSingleQuoted(string value) =>
+        value.Replace("'", "''", StringComparison.Ordinal);
 
     // --- Helpers / ヘルパー ---
 

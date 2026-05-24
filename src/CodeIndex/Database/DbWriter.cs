@@ -1695,7 +1695,9 @@ public class DbWriter
             if (stampCurrentSymbolExtractorVersions)
                 StampSymbolExtractorVersions();
 
-            if (!AllFoldedColumnsBackfilled(requireCurrentFoldKeys: true))
+            if (!AllFoldedColumnsBackfilledCore(
+                    requireCurrentSymbolExtractorVersions: false,
+                    requireCurrentFoldKeys: true))
             {
                 if (ownTransaction)
                 {
@@ -2858,6 +2860,34 @@ public class DbWriter
         bool requireCurrentSymbolExtractorVersions = false,
         bool requireCurrentFoldKeys = false)
     {
+        if (IsInTransaction())
+            return AllFoldedColumnsBackfilledCore(requireCurrentSymbolExtractorVersions, requireCurrentFoldKeys);
+
+        bool ownTransaction = true;
+        Execute("BEGIN DEFERRED");
+        try
+        {
+            var result = AllFoldedColumnsBackfilledCore(requireCurrentSymbolExtractorVersions, requireCurrentFoldKeys);
+            Execute("COMMIT");
+            ownTransaction = false;
+            return result;
+        }
+        catch
+        {
+            if (ownTransaction)
+            {
+                try { Execute("ROLLBACK"); }
+                catch (SqliteException) { /* best effort */ }
+            }
+
+            throw;
+        }
+    }
+
+    private bool AllFoldedColumnsBackfilledCore(
+        bool requireCurrentSymbolExtractorVersions,
+        bool requireCurrentFoldKeys)
+    {
         if (requireCurrentSymbolExtractorVersions && !SymbolExtractorVersionsMatchCurrent())
             return false;
 
@@ -2922,13 +2952,41 @@ public class DbWriter
 
     public bool AllFoldedColumnsBackfilled(IReadOnlyCollection<string> requireCurrentSymbolExtractorLanguages)
     {
+        if (IsInTransaction())
+            return AllFoldedColumnsBackfilledCore(requireCurrentSymbolExtractorLanguages);
+
+        bool ownTransaction = true;
+        Execute("BEGIN DEFERRED");
+        try
+        {
+            var result = AllFoldedColumnsBackfilledCore(requireCurrentSymbolExtractorLanguages);
+            Execute("COMMIT");
+            ownTransaction = false;
+            return result;
+        }
+        catch
+        {
+            if (ownTransaction)
+            {
+                try { Execute("ROLLBACK"); }
+                catch (SqliteException) { /* best effort */ }
+            }
+
+            throw;
+        }
+    }
+
+    private bool AllFoldedColumnsBackfilledCore(IReadOnlyCollection<string> requireCurrentSymbolExtractorLanguages)
+    {
         if (requireCurrentSymbolExtractorLanguages.Count > 0
             && !SymbolExtractorVersionsMatchCurrent(requireCurrentSymbolExtractorLanguages))
         {
             return false;
         }
 
-        return AllFoldedColumnsBackfilled();
+        return AllFoldedColumnsBackfilledCore(
+            requireCurrentSymbolExtractorVersions: false,
+            requireCurrentFoldKeys: false);
     }
 
     public bool SymbolExtractorVersionsMatchCurrent()

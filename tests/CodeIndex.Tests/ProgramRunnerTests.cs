@@ -196,6 +196,51 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void Run_ForcedGlobalToolLogging_OnUnix_HardensExistingAndCurrentLogFiles()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_permissions_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(logDir);
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+            "CDIDX_DISABLE_PERSISTENT_LOG",
+            "CDIDX_GLOBAL_TOOL_LOG_DIR");
+
+        try
+        {
+            var oldLogPath = Path.Combine(logDir, "stderr-20240101.log");
+            File.WriteAllText(oldLogPath, "old log");
+            File.SetUnixFileMode(oldLogPath,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite |
+                UnixFileMode.GroupRead |
+                UnixFileMode.OtherRead);
+
+            env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["definitely-not-a-command"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("Unknown command: definitely-not-a-command", stderr);
+
+            var expectedMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            Assert.Equal(expectedMode, File.GetUnixFileMode(oldLogPath));
+
+            var currentLogPath = Directory.GetFiles(logDir, $"stderr-{DateTime.UtcNow:yyyyMMdd}.log", SearchOption.TopDirectoryOnly).Single();
+            Assert.Equal(expectedMode, File.GetUnixFileMode(currentLogPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(logDir);
+        }
+    }
+
+    [Fact]
     public void Run_ForcedGlobalToolLogging_WritesUnhandledExceptionChain()
     {
         var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_exception_chain_{Guid.NewGuid():N}");

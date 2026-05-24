@@ -334,6 +334,82 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_JsonArrayEmitsSingleArray_Issue1850()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_json_array");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/auth.cs",
+                "csharp",
+                """
+                public class AuthFixture
+                {
+                    public void Authenticate() { }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Authenticate", "--db", dbPath, "--lang", "csharp", "--exact", "--json=array"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(JsonValueKind.Array, document.RootElement.ValueKind);
+            Assert.Single(document.RootElement.EnumerateArray());
+            Assert.DoesNotContain("\"done\"", stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_JsonArrayNoResultsEmitsEmptyArray_Issue1850()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_json_array_empty");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/auth.cs",
+                "csharp",
+                "public class AuthFixture { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Missing", "--db", dbPath, "--json=array"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(JsonValueKind.Array, document.RootElement.ValueKind);
+            Assert.Empty(document.RootElement.EnumerateArray());
+            Assert.DoesNotContain("\"done\"", stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_JsonFormatRejectsUnknownValue_Issue1850()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["Authenticate", "--json=pretty"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--json format must be one of ndjson or array", stderr);
+    }
+
+    [Fact]
     public void RunSearch_ProfileEmitsSqlPhasesAndQueryPlan_Issue1643()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_profile");
@@ -6382,6 +6458,10 @@ jobs:
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("maybe_unused_nonpublic").GetInt32());
             Assert.Equal(6, json.GetProperty("returned_bucket_counts").GetProperty("public_or_exported_no_refs").GetInt32());
             Assert.Equal(1, json.GetProperty("returned_bucket_counts").GetProperty("reflection_or_config_suspect").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("by_bucket").GetProperty("likely_unused_private").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("by_confidence").GetProperty("medium").GetInt32());
+            Assert.Equal("medium", json.GetProperty("bucket_taxonomy").GetProperty("likely_unused_private").GetProperty("confidence").GetString());
+            Assert.Contains("external API", json.GetProperty("bucket_taxonomy").GetProperty("public_or_exported_no_refs").GetProperty("description").GetString());
             Assert.Equal("Hidden", symbols[0].GetProperty("name").GetString());
             Assert.Equal("likely_unused_private", symbols[0].GetProperty("unused_bucket").GetString());
             Assert.Equal("medium", symbols[0].GetProperty("unused_confidence").GetString());
@@ -6393,6 +6473,33 @@ jobs:
             Assert.Equal("public_or_exported_no_refs", symbols[7].GetProperty("unused_bucket").GetString());
             Assert.Equal("UseIOptions", symbols[8].GetProperty("name").GetString());
             Assert.Equal("public_or_exported_no_refs", symbols[8].GetProperty("unused_bucket").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_WithJsonByBucketGroupsReturnedSymbolsByTaxonomyBucket()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--by-bucket"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var byBucket = json.GetProperty("by_bucket");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Hidden", byBucket.GetProperty("likely_unused_private")[0].GetProperty("name").GetString());
+            Assert.Equal("InternalOnly", byBucket.GetProperty("maybe_unused_nonpublic")[0].GetProperty("name").GetString());
+            Assert.Equal(6, byBucket.GetProperty("public_or_exported_no_refs").GetArrayLength());
+            Assert.Equal("ConnectionString", byBucket.GetProperty("reflection_or_config_suspect")[0].GetProperty("name").GetString());
         }
         finally
         {
@@ -6912,7 +7019,7 @@ jobs:
     }
 
     [Fact]
-    public void RunSymbols_SwiftKindFiltersSeparateTypealiasAndAssociatedtype()
+    public void RunSymbols_SwiftKindFiltersSeparateTypealiasAssociatedtypeAndProtocol()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_swift_kind_filters");
         try
@@ -6938,9 +7045,13 @@ jobs:
             var (associatedtypeExitCode, associatedtypeStdout, associatedtypeStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["--db", dbPath, "--json", "--lang", "swift", "--kind", "associatedtype"],
                 _jsonOptions));
+            var (protocolExitCode, protocolStdout, protocolStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "swift", "--kind", "protocol"],
+                _jsonOptions));
 
             var typealiasRows = ParseJsonLines(typealiasStdout);
             var associatedtypeRows = ParseJsonLines(associatedtypeStdout);
+            var protocolRows = ParseJsonLines(protocolStdout);
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
@@ -6956,6 +7067,12 @@ jobs:
             Assert.Single(associatedtypeRows);
             Assert.Equal("associatedtype", associatedtypeRows[0].RootElement.GetProperty("kind").GetString());
             Assert.Contains("Item", associatedtypeRows[0].RootElement.GetProperty("name").GetString(), StringComparison.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, protocolExitCode);
+            Assert.Equal(string.Empty, protocolStderr);
+            Assert.Single(protocolRows);
+            Assert.Equal("protocol", protocolRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Equal("Store", protocolRows[0].RootElement.GetProperty("name").GetString());
         }
         finally
         {
@@ -30749,6 +30866,46 @@ jobs:
             Assert.Equal(CommandExitCodes.Success, exitCodeLower);
             Assert.Contains("hello", stdoutUpper);
             Assert.Equal(stdoutLower, stdoutUpper);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("route", "/products/{id:int}")]
+    [InlineData("implements", "IDisposable")]
+    [InlineData("attribute", "Authorize")]
+    [InlineData("layout", "MainLayout")]
+    public void RunSymbols_AcceptsRazorDirectiveKindFilters(string kind, string expectedName)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_razor_kind_filter");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "Pages/Product.razor",
+                "csharp",
+                """
+                @page "/products/{id:int}"
+                @implements IDisposable
+                @attribute [Authorize]
+                @layout MainLayout
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--kind", kind, "--json"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout).Select(document => document.RootElement).ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(rows);
+            Assert.Equal(kind, rows[0].GetProperty("kind").GetString());
+            Assert.Equal(expectedName, rows[0].GetProperty("name").GetString());
         }
         finally
         {

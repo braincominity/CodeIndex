@@ -43,7 +43,7 @@ The test project mirrors the production areas closely.
 - `SymbolExtractorTests.Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget`
   is a coarse runaway guard for the real `InstallScriptTests.cs` C# extraction fixture. Its wall-clock budget is intentionally broader than a benchmark so slower or noisy CI hosts do not fail the suite for ordinary variance.
 - `IndexCommandRunnerTests.RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson`
-  publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
+  publishes a trimmed RID-specific CLI and runs whichever entry point the SDK emits (`cdidx.dll` through `dotnet` or the native `cdidx`/`cdidx.exe` apphost). It is reported as skipped on macOS arm64 while the current SDK/ILLink path can crash before exercising `cdidx`. Do not assume every SDK/runtime pair writes a `cdidx.dll` into self-contained publish output.
 - `McpServerTests.cs`
   MCP JSON-RPC behavior and tool outputs.
 - `HttpMcpTransportTests.cs`
@@ -58,6 +58,8 @@ The test project mirrors the production areas closely.
   Source code leak prevention: allowed natural-language inputs vs rejected code blocks (fenced, indented, import runs, etc.).
 - `GitHubIssueReporterTests.cs`
   GitHub token resolution logic (CDIDX_GITHUB_TOKEN only; generic GITHUB_TOKEN is ignored), outbound code scrubbing, idempotency checks, and rate-limit diagnostics.
+- `PackagesLockTests.cs`
+  NuGet lock-file guard coverage for direct package references that must remain synchronized across all target frameworks, including the net9.0 compatibility references that keep locked CI restore green.
 - `ConcurrencyTests.cs`
   Concurrent read and read-during-write scenarios (WAL mode validation), including the issue #180 bug-catching snapshot-isolation regressions for all three multi-statement reader entry points: (1) `GetStatus` seeds `refs == files * refsPerFile` and asserts every concurrent observation preserves that invariant; (2) `AnalyzeSymbol` seeds one symbol `S` plus matching reference/caller pairs, toggles a second file symmetrically, and asserts `references.Count == callers.Count` across every `inspect`/`analyze_symbol` bundle; (3) `GetRepoMap` seeds a baseline modified timestamp and toggles a newer file, asserting `latest_modified == workspace_latest_modified` across every map call. Each test fails without the DEFERRED-transaction wrap on the matching reader and passes with it.
 - `PerformanceTests.cs`
@@ -127,7 +129,7 @@ For boundary tests, use the smallest fixture that still crosses the boundary. If
 ### CLI and console tests
 
 - Capture stdout and stderr explicitly.
-- Lock console mutations with `TestConsoleLock.Gate`.
+- Prefer `ConsoleCapture` for simple stdout/stderr capture, and lock direct console mutations with `TestConsoleLock.Gate`.
 - Assert exit codes with `CommandExitCodes`.
 - For JSON output, parse it with `JsonDocument` instead of asserting raw strings.
 
@@ -237,6 +239,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   ソースコード漏洩防止: 許容される自然言語入力 vs 拒否されるコードブロック（フェンス、インデント、import連打等）。
 - `GitHubIssueReporterTests.cs`
   GitHubトークン解決ロジック（CDIDX_GITHUB_TOKENのみ。汎用GITHUB_TOKENは無視）。
+- `PackagesLockTests.cs`
+  すべての target framework で同期が必要な direct package reference の NuGet lock-file guard。CI の locked restore を通すための net9.0 compatibility reference も対象です。
 - `ConcurrencyTests.cs`
   並行読み取りと書き込み中読み取りシナリオ（WALモード検証）。issue #180 の bug-catching な snapshot 隔離回帰テストを 3 つの multi-statement reader 経路について含む。(1) `GetStatus` は `refs == files * refsPerFile` の seed 不変条件を立て、並行観測が常にこの条件を維持することを要求する。(2) `AnalyzeSymbol` はシンボル `S` に対して reference/caller を対称に 1 対 1 で seed し、もう 1 ファイルを対称に toggle することで `inspect` / `analyze_symbol` bundle の `references.Count == callers.Count` を常に保証する。(3) `GetRepoMap` はベースラインの modified と新しい toggle 対象ファイルを用意し、`latest_modified == workspace_latest_modified` が常に一致することを要求する。各テストは対応する reader の DEFERRED transaction を外すと落ち、戻すと通ることを確認済み。
 - `PerformanceTests.cs`
@@ -305,7 +309,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 ### CLI / コンソール系テスト
 
 - stdout と stderr を明示的にキャプチャする。
-- コンソール差し替えは `TestConsoleLock.Gate` で直列化する。
+- 単純な stdout/stderr capture では `ConsoleCapture` を優先し、直接コンソールを差し替える場合は `TestConsoleLock.Gate` で直列化する。
 - 終了コードは `CommandExitCodes` で検証する。
 - JSON 出力は生文字列比較ではなく `JsonDocument` で解析して検証する。
 

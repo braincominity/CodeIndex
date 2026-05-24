@@ -17,6 +17,52 @@ namespace CodeIndex.Tests;
 public class FileIndexerTests
 {
     [Fact]
+    public void ScanFilesDetailed_CaseInsensitiveChildDirectory_SkipsCaseOnlyDuplicatePathWithWarning()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-dedupe-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var childDir = Path.Combine(tempDir, "LinkedVolume");
+            Directory.CreateDirectory(childDir);
+            var sourceFile = Path.Combine(childDir, "File.cs");
+            File.WriteAllText(sourceFile, "class CaseDuplicateFixture { }\n");
+            var duplicateCasePath = Path.Combine(childDir, "file.cs");
+
+            var indexer = new FileIndexer(
+                tempDir,
+                ignoreCase: false,
+                ignoreRuleRoot: null,
+                maxFileSizeBytes: null,
+                directoryIgnoreCaseProbe: dir => Path.GetFullPath(dir) == Path.GetFullPath(childDir),
+                enumerateFiles: dir => Path.GetFullPath(dir) == Path.GetFullPath(childDir)
+                    ? [sourceFile, duplicateCasePath]
+                    : Directory.EnumerateFiles(dir));
+
+            var result = indexer.ScanFilesDetailed();
+
+            var file = Assert.Single(result.Files);
+            Assert.Equal(sourceFile, file);
+            Assert.Contains("LinkedVolume/file.cs", result.NonIndexablePaths);
+            Assert.Contains(
+                result.Errors,
+                error => error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Message.Contains("case-sensitivity differs", StringComparison.OrdinalIgnoreCase)
+                    && error.Path == "LinkedVolume");
+            Assert.Contains(
+                result.Errors,
+                error => error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Message.Contains("differs only by case", StringComparison.OrdinalIgnoreCase)
+                    && error.Path == "LinkedVolume/file.cs");
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFilesDetailed_HardlinkedFiles_SkipsDuplicatePathWithWarning()
     {
         if (OperatingSystem.IsWindows())
@@ -2271,9 +2317,16 @@ public class FileIndexerTests
         try
         {
             Directory.CreateDirectory(tempDir);
-            CreateUnixFifo(Path.Combine(tempDir, "tool"));
-            CreateUnixFifo(Path.Combine(tempDir, "tool.sh"));
-            CreateUnixFifo(Path.Combine(tempDir, "Dockerfile"));
+            var extensionlessFifo = Path.Combine(tempDir, "tool");
+            var extensionFifo = Path.Combine(tempDir, "tool.sh");
+            var knownNameFifo = Path.Combine(tempDir, "Dockerfile");
+            CreateUnixFifo(extensionlessFifo);
+            CreateUnixFifo(extensionFifo);
+            CreateUnixFifo(knownNameFifo);
+
+            Assert.False(FileIndexer.CanIndexFile(extensionlessFifo));
+            Assert.False(FileIndexer.CanIndexFile(extensionFifo));
+            Assert.False(FileIndexer.CanIndexFile(knownNameFifo));
 
             var indexer = new FileIndexer(tempDir);
             var scanTask = Task.Run(() => indexer.ScanFiles());

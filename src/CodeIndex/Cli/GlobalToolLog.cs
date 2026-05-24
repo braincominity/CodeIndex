@@ -21,11 +21,13 @@ internal static class GlobalToolLog
 
             var logDirectory = ResolveLogDirectory();
             Directory.CreateDirectory(logDirectory);
+            HardenLogFiles(logDirectory);
             var logPath = Path.Combine(logDirectory, $"stderr-{DateTime.UtcNow:yyyyMMdd}.log");
             var writer = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), new UTF8Encoding(false))
             {
                 AutoFlush = true,
             };
+            SetLogFilePermissions(logPath);
             PruneOldLogs(logDirectory);
 
             var session = new Session(writer, logPath);
@@ -249,6 +251,37 @@ internal static class GlobalToolLog
 
             foreach (var file in oldLogs)
                 file.Delete();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best-effort only / ベストエフォートのみ
+        }
+    }
+
+    private static void HardenLogFiles(string logDirectory)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        try
+        {
+            foreach (var file in new DirectoryInfo(logDirectory).EnumerateFiles("stderr-*.log", SearchOption.TopDirectoryOnly))
+                SetLogFilePermissions(file.FullName);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best-effort only / ベストエフォートのみ
+        }
+    }
+
+    private static void SetLogFilePermissions(string logPath)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        try
+        {
+            File.SetUnixFileMode(logPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

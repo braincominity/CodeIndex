@@ -31,6 +31,8 @@ public static class QueryCommandRunner
     private const string HotspotsGroupedBySymbol = "symbol";
     private const string HotspotsGroupedByFile = "file";
     private const string HotspotsGroupedByStatement = "statement";
+    private const string JsonOutputFormatNdjson = "ndjson";
+    private const string JsonOutputFormatArray = "array";
     private static readonly Dictionary<string, string[]> LanguageDisplayAliases = new(StringComparer.Ordinal)
     {
         ["javascript"] = ["js", "jsx", "cjs", "mjs"],
@@ -160,11 +162,14 @@ public static class QueryCommandRunner
         "--version",
         "-V",
         "--verbose",
+        "--by-bucket",
         "--group-by-name",
         "--with-paths",
         "--bytes",
         "--profile",
     ];
+    private static readonly HashSet<string> InlineValueOptions =
+        new(ValueTakingOptions.Concat(["--json"]), StringComparer.Ordinal);
     private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
 
     public static int RunBatch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -381,8 +386,17 @@ public static class QueryCommandRunner
             {
                 if (options.Json)
                 {
-                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, queryOptions: options).ToJsonString(jsonOptions));
-                    jsonDoneCount = 0;
+                    if (options.JsonOutputFormat == JsonOutputFormatArray)
+                    {
+                        Console.WriteLine(JsonSerializer.Serialize(
+                            Array.Empty<CompactSearchResult>(),
+                            CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResultArray));
+                    }
+                    else
+                    {
+                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, queryOptions: options).ToJsonString(jsonOptions));
+                        jsonDoneCount = 0;
+                    }
                 }
                 else if (!options.Json)
                 {
@@ -395,11 +409,23 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                foreach (var r in results)
+                var compactResults = results
+                    .Select(r => SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus))
+                    .ToArray();
+                if (options.JsonOutputFormat == JsonOutputFormatArray)
+                {
                     Console.WriteLine(JsonSerializer.Serialize(
-                        SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus),
-                        CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResult));
-                jsonDoneCount = results.Count;
+                        compactResults,
+                        CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResultArray));
+                }
+                else
+                {
+                    foreach (var result in compactResults)
+                        Console.WriteLine(JsonSerializer.Serialize(
+                            result,
+                            CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResult));
+                    jsonDoneCount = compactResults.Length;
+                }
             }
             else
             {
@@ -417,7 +443,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.Success;
         }, exitCode =>
         {
-            if (options.Json && jsonDoneCount.HasValue)
+            if (options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && jsonDoneCount.HasValue)
                 WriteJsonStreamDone(jsonDoneCount.Value, jsonOptions);
         });
     }
@@ -3056,6 +3082,7 @@ public static class QueryCommandRunner
 
     public static int RunUnused(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
+        var byBucket = cmdArgs.Any(arg => arg == "--by-bucket");
         var previewOptionError = ValidatePreviewOptions("unused", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
@@ -3099,6 +3126,8 @@ public static class QueryCommandRunner
                         ["count"] = countSummary.Count,
                         ["files"] = countSummary.FileCount,
                         ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(new Dictionary<string, int>(), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
+                        ["summary"] = BuildUnusedSummaryJson(Array.Empty<UnusedSymbolResult>(), jsonOptions),
+                        ["bucket_taxonomy"] = BuildUnusedBucketTaxonomyJson(),
                         ["graph_supported"] = graphSupported,
                         ["graph_support_reason"] = graphSupportReason,
                         ["graph_table_available"] = reader._hasReferencesTable,
@@ -3150,7 +3179,7 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, sqlGraphSignal, reader._hasReferencesTable, jsonOptions));
+                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, sqlGraphSignal, reader._hasReferencesTable, jsonOptions, byBucket: byBucket));
             }
             else
             {
@@ -3181,7 +3210,7 @@ public static class QueryCommandRunner
         });
     }
 
-    private static readonly string[] OrderedUnusedBuckets =
+    internal static readonly string[] OrderedUnusedBuckets =
     [
         "likely_unused_private",
         "maybe_unused_nonpublic",
@@ -3189,7 +3218,7 @@ public static class QueryCommandRunner
         "reflection_or_config_suspect",
     ];
 
-    private static Dictionary<string, int> BuildUnusedBucketCounts(IEnumerable<UnusedSymbolResult> results)
+    internal static Dictionary<string, int> BuildUnusedBucketCounts(IEnumerable<UnusedSymbolResult> results)
     {
         var grouped = results
             .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
@@ -3203,7 +3232,60 @@ public static class QueryCommandRunner
         return ordered;
     }
 
-    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions = null)
+    internal static Dictionary<string, int> BuildUnusedConfidenceCounts(IEnumerable<UnusedSymbolResult> results)
+        => results
+            .GroupBy(result => result.UnusedConfidence, StringComparer.Ordinal)
+            .OrderBy(group => GetUnusedConfidenceOrder(group.Key))
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+
+    internal static JsonObject BuildUnusedSummaryJson(IEnumerable<UnusedSymbolResult> results, JsonSerializerOptions jsonOptions)
+    {
+        var resultList = results as List<UnusedSymbolResult> ?? results.ToList();
+        return new JsonObject
+        {
+            ["by_bucket"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
+            ["by_confidence"] = JsonSerializer.SerializeToNode(BuildUnusedConfidenceCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
+        };
+    }
+
+    internal static JsonObject BuildUnusedBucketTaxonomyJson()
+    {
+        var taxonomy = new JsonObject();
+        foreach (var bucket in OrderedUnusedBuckets)
+            taxonomy[bucket] = new JsonObject
+            {
+                ["confidence"] = GetUnusedBucketConfidence(bucket),
+                ["description"] = GetUnusedBucketDescription(bucket),
+            };
+        return taxonomy;
+    }
+
+    private static int GetUnusedConfidenceOrder(string confidence) => confidence switch
+    {
+        "medium" => 0,
+        "low" => 1,
+        _ => 2,
+    };
+
+    private static string GetUnusedBucketConfidence(string bucket) => bucket switch
+    {
+        "likely_unused_private" => "medium",
+        "maybe_unused_nonpublic" => "low",
+        "public_or_exported_no_refs" => "low",
+        "reflection_or_config_suspect" => "low",
+        _ => "unknown",
+    };
+
+    private static string GetUnusedBucketDescription(string bucket) => bucket switch
+    {
+        "likely_unused_private" => "Private symbols with no indexed references; usually the highest-signal unused candidates.",
+        "maybe_unused_nonpublic" => "Internal, protected, or otherwise non-public symbols with no indexed references; review call paths and framework entry points before removal.",
+        "public_or_exported_no_refs" => "Public or exported symbols with no indexed references; may still be external API surface.",
+        "reflection_or_config_suspect" => "Symbols with no indexed references that look reachable through reflection, attributes, config, or binding conventions.",
+        _ => "Unknown unused-symbol bucket.",
+    };
+
+    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions = null, bool byBucket = false)
     {
         var resultList = results as List<UnusedSymbolResult> ?? results.ToList();
         var payload = new JsonObject
@@ -3212,8 +3294,12 @@ public static class QueryCommandRunner
             ["graph_supported"] = graphSupported,
             ["graph_support_reason"] = graphSupportReason,
             ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), CliJsonSerializerContextFactory.Create(jsonOptions).DictionaryStringInt32),
+            ["summary"] = BuildUnusedSummaryJson(resultList, jsonOptions),
+            ["bucket_taxonomy"] = BuildUnusedBucketTaxonomyJson(),
             ["symbols"] = JsonSerializer.SerializeToNode(resultList, CliJsonSerializerContextFactory.Create(jsonOptions).ListUnusedSymbolResult)
         };
+        if (byBucket)
+            payload["by_bucket"] = BuildUnusedResultsByBucketJson(resultList, jsonOptions);
 
         if (!hasReferencesTable)
         {
@@ -3226,6 +3312,22 @@ public static class QueryCommandRunner
         if (queryOptions != null)
             payload["query_context"] = BuildQueryContextJson(queryOptions, jsonOptions);
         return payload.ToJsonString(jsonOptions);
+    }
+
+    private static JsonObject BuildUnusedResultsByBucketJson(IEnumerable<UnusedSymbolResult> results, JsonSerializerOptions jsonOptions)
+    {
+        var grouped = results
+            .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+        var byBucket = new JsonObject();
+        foreach (var bucket in OrderedUnusedBuckets)
+        {
+            if (grouped.TryGetValue(bucket, out var bucketResults))
+                byBucket[bucket] = JsonSerializer.SerializeToNode(bucketResults, CliJsonSerializerContextFactory.Create(jsonOptions).ListUnusedSymbolResult);
+            else
+                byBucket[bucket] = new JsonArray();
+        }
+        return byBucket;
     }
 
     private static string GetUnusedBucketHeading(string bucket) => bucket switch
@@ -3390,6 +3492,7 @@ public static class QueryCommandRunner
         string? dbPath = null;
         string? dataDir = null;
         bool? json = null;
+        string jsonOutputFormat = JsonOutputFormatNdjson;
         int limit = 20;
         string? lang = null;
         string? kind = null;
@@ -3547,7 +3650,19 @@ public static class QueryCommandRunner
                         AddParseError(dataDirError!);
                     break;
                 case "--json":
-                    json = true;
+                    if (inlineValue == null)
+                    {
+                        json = true;
+                    }
+                    else if (TryParseJsonOutputFormat(inlineValue, out var parsedJsonOutputFormat))
+                    {
+                        json = true;
+                        jsonOutputFormat = parsedJsonOutputFormat;
+                    }
+                    else
+                    {
+                        AddParseError($"Error: --json format must be one of ndjson or array, got '{inlineValue}'. Hint: use `--json` or `--json=ndjson` for newline-delimited JSON, or `--json=array` for a single JSON array.");
+                    }
                     break;
                 case "--limit":
                 case "--top":
@@ -3638,6 +3753,8 @@ public static class QueryCommandRunner
                     break;
                 case "--count":
                     countOnly = true;
+                    break;
+                case "--by-bucket":
                     break;
                 case "--no-dedup":
                     noDedup = true;
@@ -3988,6 +4105,7 @@ public static class QueryCommandRunner
             DataDir = dbResolution.DataDir,
             DataDirSource = dbResolution.DataDirSource,
             Json = json ?? jsonDefault,
+            JsonOutputFormat = jsonOutputFormat,
             Limit = limit,
             Lang = lang,
             Kind = kind,
@@ -4049,6 +4167,23 @@ public static class QueryCommandRunner
             ValidatePathGlobPattern("--path", pattern, addParseError);
         foreach (var pattern in excludePaths)
             ValidatePathGlobPattern("--exclude-path", pattern, addParseError);
+    }
+
+    private static bool TryParseJsonOutputFormat(string rawValue, out string format)
+    {
+        if (string.Equals(rawValue, JsonOutputFormatArray, StringComparison.OrdinalIgnoreCase))
+        {
+            format = JsonOutputFormatArray;
+            return true;
+        }
+        if (string.Equals(rawValue, JsonOutputFormatNdjson, StringComparison.OrdinalIgnoreCase))
+        {
+            format = JsonOutputFormatNdjson;
+            return true;
+        }
+
+        format = JsonOutputFormatNdjson;
+        return false;
     }
 
     private static void ValidatePathGlobPattern(string optionName, string pattern, Action<string> addParseError)
@@ -4648,6 +4783,7 @@ public static class QueryCommandRunner
     {
         "accessor",
         "associatedtype",
+        "attribute",
         "class",
         "class_hook",
         "constant",
@@ -4660,10 +4796,12 @@ public static class QueryCommandRunner
         "heading",
         "hook",
         "impl",
+        "implements",
         "import",
         "interface",
         "label",
         "lambda",
+        "layout",
         "method",
         "module",
         "namespace",
@@ -4671,8 +4809,10 @@ public static class QueryCommandRunner
         "operator",
         "procedure",
         "property",
+        "protocol",
         "record",
         "reference",
+        "route",
         "specialization",
         "struct",
         "test.method",
@@ -4754,6 +4894,14 @@ public static class QueryCommandRunner
                 : arg;
             if (arg.StartsWith("--check=", StringComparison.Ordinal) && supported.Contains("--check"))
                 normalizedArg = "--check";
+            if (normalizedArg == "--json" && !string.Equals(arg, "--json", StringComparison.Ordinal) && commandName != "search")
+            {
+                CommandErrorWriter.Write(
+                    "--json=<format> is only supported by 'search'.",
+                    "use plain `--json` here, or rerun search with `--json=array`.",
+                    GetUsageLineOrThrow(commandName));
+                return true;
+            }
 
             if (supported.Contains(normalizedArg))
             {
@@ -6336,7 +6484,7 @@ public static class QueryCommandRunner
             return false;
 
         var candidate = token[..separator];
-        if (!ValueTakingOptions.Contains(candidate))
+        if (!InlineValueOptions.Contains(candidate))
             return false;
 
         optionName = candidate;
@@ -6400,6 +6548,7 @@ public sealed class QueryCommandOptions
     public string? DataDir { get; init; }
     public string? DataDirSource { get; init; }
     public bool Json { get; init; }
+    public string JsonOutputFormat { get; init; } = "ndjson";
     public int Limit { get; init; } = 20;
     public string? Lang { get; init; }
     public string? Kind { get; init; }
