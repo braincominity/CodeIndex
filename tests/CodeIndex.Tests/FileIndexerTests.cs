@@ -1259,6 +1259,28 @@ public class FileIndexerTests
     }
 
     [Theory]
+    [InlineData(@"\\.\COM1")]
+    [InlineData(@"\\.\NUL")]
+    [InlineData(@"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1")]
+    [InlineData(@"C:\repo\AUX.cs")]
+    [InlineData(@"C:\repo\con.txt")]
+    [InlineData(@"C:\repo\COM9")]
+    [InlineData(@"C:\repo\LPT1.log")]
+    public void IsWindowsDevicePath_RejectsReservedDeviceNames(string path)
+    {
+        Assert.True(FileIndexer.IsWindowsDevicePath(path));
+    }
+
+    [Theory]
+    [InlineData(@"C:\repo\COM10.cs")]
+    [InlineData(@"C:\repo\company.cs")]
+    [InlineData(@"C:\repo\template1.cs")]
+    public void IsWindowsDevicePath_AllowsOrdinaryNames(string path)
+    {
+        Assert.False(FileIndexer.IsWindowsDevicePath(path));
+    }
+
+    [Theory]
     [InlineData(FileAttributes.ReparsePoint, false, true)]
     [InlineData(FileAttributes.ReparsePoint, true, true)]
     [InlineData(FileAttributes.Hidden, false, false)]

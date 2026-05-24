@@ -1202,6 +1202,49 @@ public class FileIndexer
     internal static bool CanIndexFile(string filePath)
         => GetFileIndexability(filePath) == FileProbeStatus.Supported;
 
+    internal static bool IsWindowsDevicePath(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+            return false;
+
+        var normalized = filePath.Replace('\\', '/');
+        if (normalized.StartsWith("//./", StringComparison.Ordinal)
+            || normalized.StartsWith("//?/GLOBALROOT/Device/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        foreach (var segment in normalized.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var name = segment;
+            var extensionIndex = name.IndexOf('.');
+            if (extensionIndex >= 0)
+                name = name[..extensionIndex];
+
+            if (IsWindowsReservedDeviceName(name))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsWindowsReservedDeviceName(string name)
+    {
+        if (name.Equals("CON", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("PRN", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("AUX", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("NUL", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return name.Length == 4
+            && (name.StartsWith("COM", StringComparison.OrdinalIgnoreCase)
+                || name.StartsWith("LPT", StringComparison.OrdinalIgnoreCase))
+            && name[3] >= '1'
+            && name[3] <= '9';
+    }
+
     internal static bool HasSkippedAttributes(FileAttributes attributes, bool isWindows)
     {
         if ((attributes & FileAttributes.ReparsePoint) != 0)
@@ -1246,6 +1289,9 @@ public class FileIndexer
 
     internal static FileProbeStatus GetFileIndexability(string filePath)
     {
+        if (OperatingSystem.IsWindows() && IsWindowsDevicePath(filePath))
+            return FileProbeStatus.Unsupported;
+
         // Reject symlinks/reparse points here so every caller (full scan, --files / --commits update mode,
         // dry-run) gets the same skip behavior. On Windows, Hidden/System paths are also rejected to avoid
         // indexing OS-owned caches such as System Volume Information and $Recycle.Bin during broad scans.
