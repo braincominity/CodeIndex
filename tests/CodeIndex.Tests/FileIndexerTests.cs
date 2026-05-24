@@ -2234,6 +2234,39 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void DetectLanguage_ExtensionlessShebangs_HonorsUnicodeBomEncodings()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+
+            var files = new Dictionary<string, Encoding>
+            {
+                ["utf8"] = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                ["utf8-bom"] = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true),
+                ["utf16-le"] = new UnicodeEncoding(bigEndian: false, byteOrderMark: true),
+                ["utf16-be"] = new UnicodeEncoding(bigEndian: true, byteOrderMark: true),
+            };
+
+            foreach (var (name, encoding) in files)
+            {
+                var path = Path.Combine(tempDir, name);
+                File.WriteAllText(path, "#!/usr/bin/env bash\nprintf 'ok'\n", encoding);
+            }
+
+            var detected = files.Keys
+                .ToDictionary(name => name, name => FileIndexer.DetectLanguage(Path.Combine(tempDir, name)));
+
+            Assert.All(detected, pair => Assert.Equal("shell", pair.Value));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_IncludesModernNodeModuleExtensions()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
