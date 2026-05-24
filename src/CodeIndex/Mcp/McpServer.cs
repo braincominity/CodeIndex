@@ -1753,7 +1753,36 @@ public partial class McpServer : IDisposable
         // 出力する。Stopwatch.Stop は冪等。TryEmitAudit 内部でベストエフォート化済み (#1562)。
         metricsStopwatch.Stop();
         TryEmitAudit(toolName, id, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, errorType: metricsError);
+        EmitToolInvocationTelemetry(toolName, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, metricsError);
         return response;
+    }
+
+    private void EmitToolInvocationTelemetry(string toolName, JsonNode? args, JsonNode response, DateTimeOffset startedAt, double elapsedMs, string? errorType)
+    {
+        var context = CurrentCorrelationContext.Value;
+        var (errorCode, observedErrorType) = ExtractErrorCode(response);
+        var resultCount = ExtractResultCount(response);
+        var (argKeys, argLengths, _) = SanitizeArgs(args, includeValues: false);
+        var argsObject = new JsonObject();
+        foreach (var pair in argLengths)
+            argsObject[pair.Key] = pair.Value;
+
+        var evt = new JsonObject
+        {
+            ["event"] = "mcp.tool.invocation",
+            ["timestamp"] = startedAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            ["tool"] = toolName,
+            ["request_id"] = context?.RequestId,
+            ["correlation_id"] = context?.CorrelationId,
+            ["elapsed_ms"] = Math.Round(elapsedMs, 3),
+            ["status"] = errorCode == 0 ? "success" : "error",
+            ["error_code"] = errorCode == 0 ? null : errorCode,
+            ["error_type"] = errorType ?? observedErrorType,
+            ["result_count"] = resultCount,
+            ["arg_keys"] = JsonSerializer.SerializeToNode(argKeys, _jsonOptions),
+            ["arg_lengths"] = argsObject,
+        };
+        DeferFrameLog(() => WriteMcpLogLine(evt.ToJsonString(_jsonOptions)));
     }
 
     private static JsonNode? TryReadProgressToken(JsonNode? callParams)

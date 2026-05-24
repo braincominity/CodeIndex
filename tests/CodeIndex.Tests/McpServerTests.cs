@@ -146,6 +146,45 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessLineAsync_ToolCallEmitsInvocationTelemetry()
+    {
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+
+        Monitor.Enter(TestConsoleLock.Gate);
+        try
+        {
+            var previousError = Console.Error;
+            try
+            {
+                Console.SetError(error);
+                await _server.ProcessLineAsync("""{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"ping","arguments":{}}}""", writer);
+            }
+            finally
+            {
+                Console.SetError(previousError);
+            }
+        }
+        finally
+        {
+            Monitor.Exit(TestConsoleLock.Gate);
+        }
+
+        var line = error.ToString()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Single(l => l.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal));
+        var jsonStart = line.IndexOf('{');
+        using var document = JsonDocument.Parse(line[jsonStart..]);
+        var root = document.RootElement;
+        Assert.Equal("mcp.tool.invocation", root.GetProperty("event").GetString());
+        Assert.Equal("ping", root.GetProperty("tool").GetString());
+        Assert.Equal("123", root.GetProperty("request_id").GetString());
+        Assert.Equal("success", root.GetProperty("status").GetString());
+        Assert.True(root.TryGetProperty("correlation_id", out var correlationId));
+        Assert.False(string.IsNullOrWhiteSpace(correlationId.GetString()));
+    }
+
+    [Fact]
     public void Initialize_ReturnsProtocolVersion()
     {
         // Issue #1554: negotiation echoes back the client's requested protocolVersion when
