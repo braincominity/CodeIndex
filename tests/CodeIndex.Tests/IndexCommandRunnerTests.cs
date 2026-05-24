@@ -7638,8 +7638,9 @@ public class IndexCommandRunnerTests
             RunGit(projectRoot, "add", ".");
             RunGit(projectRoot, "commit", "-m", "add run");
             var currentHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+            var shortCurrentHead = currentHead[..12];
 
-            var (refreshExitCode, _) = RunAndCaptureJson([projectRoot, "--commits", currentHead, "--json"]);
+            var (refreshExitCode, _) = RunAndCaptureJson([projectRoot, "--commits", shortCurrentHead, "--json"]);
             Assert.Equal(CommandExitCodes.Success, refreshExitCode);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");

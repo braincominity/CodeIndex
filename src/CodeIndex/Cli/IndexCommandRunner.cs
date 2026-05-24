@@ -2642,7 +2642,7 @@ public static class IndexCommandRunner
         try
         {
             var coveredHead = !string.IsNullOrWhiteSpace(currentHeadCommit)
-                && options.Commits.Any(commit => string.Equals(commit, currentHeadCommit, StringComparison.OrdinalIgnoreCase))
+                && options.Commits.Any(commit => currentHeadCommit.StartsWith(commit, StringComparison.OrdinalIgnoreCase))
                 ? currentHeadCommit
                 : null;
             writer.SetMeta(DbContext.CommitScopedFreshHeadShaMetaKey, coveredHead);
