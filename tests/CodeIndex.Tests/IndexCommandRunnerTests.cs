@@ -9,6 +9,15 @@ using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
+public sealed class SkipOnMacOsArm64FactAttribute : FactAttribute
+{
+    public SkipOnMacOsArm64FactAttribute()
+    {
+        if (OperatingSystem.IsMacOS() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
+            Skip = "macOS arm64 SDK/ILLink currently crashes before this test can exercise cdidx (#2570).";
+    }
+}
+
 /// <summary>
 /// Tests for indexing command argument handling.
 /// インデックスコマンドの引数処理テスト。
@@ -2059,7 +2068,7 @@ public class IndexCommandRunnerTests
         }
     }
 
-    [Fact]
+    [SkipOnMacOsArm64Fact]
     public void RunBackfillFold_PublishedTrimmedBinary_SerializesSuccessAndErrorJson()
     {
         var publishDir = Path.Combine(Path.GetTempPath(), $"cdidx_trimmed_publish_{Guid.NewGuid():N}");
