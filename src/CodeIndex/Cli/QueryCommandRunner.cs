@@ -1794,7 +1794,7 @@ public static class QueryCommandRunner
                 WriteRepoMapSection("Callees", analysis.Callees.Select(item => $"{item.CallerName ?? "<top-level>"} -> {item.CalleeName}  ({item.ReferenceCount} refs)"));
             }
 
-            return CommandExitCodes.Success;
+            return IsEmptySymbolAnalysis(analysis) ? ZeroResultExitCode(options) : CommandExitCodes.Success;
         });
     }
 
@@ -4452,6 +4452,14 @@ public static class QueryCommandRunner
 
     private static int ZeroResultExitCode(QueryCommandOptions options)
         => options.StrictNotFound ? CommandExitCodes.NotFound : CommandExitCodes.Success;
+
+    private static bool IsEmptySymbolAnalysis(SymbolAnalysisResult analysis)
+        => analysis.File == null
+           && analysis.Definitions.Count == 0
+           && analysis.NearbySymbols.Count == 0
+           && analysis.References.Count == 0
+           && analysis.Callers.Count == 0
+           && analysis.Callees.Count == 0;
 
     private static int WithDb(QueryCommandOptions options, JsonSerializerOptions jsonOptions, Func<DbReader, int> action, Action<int>? afterProfile = null)
     {

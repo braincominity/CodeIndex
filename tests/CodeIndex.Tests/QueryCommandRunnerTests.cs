@@ -426,6 +426,36 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_StrictNotFoundReturnsNotFoundForEmptyAnalysis_Issue1425()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_strict_not_found");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/auth.cs",
+                "csharp",
+                "public class AuthFixture { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Missing", "--db", dbPath, "--json", "--strict-not-found"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal("Missing", document.RootElement.GetProperty("query").GetString());
+            Assert.Empty(document.RootElement.GetProperty("definitions").EnumerateArray());
+            Assert.Empty(document.RootElement.GetProperty("references").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_JsonFormatRejectsUnknownValue_Issue1850()
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
