@@ -126,6 +126,70 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void DbContext_OpenWithBatchInProgress_Warns()
+    {
+        _writer.MarkBatchInProgress();
+
+        var stderr = ConsoleCapture.CaptureError(() =>
+        {
+            using var reopened = new DbContext(_dbPath);
+        });
+
+        Assert.Contains("Last batch did not complete", stderr);
+        Assert.Contains("cdidx index --rebuild", stderr);
+    }
+
+    [Fact]
+    public void DbContext_OpenWithBatchInProgress_DemotesReadiness()
+    {
+        _writer.MarkGraphReady();
+        _writer.MarkIssuesReady();
+        _writer.MarkBatchInProgress();
+
+        using (var reopened = new DbContext(_dbPath))
+        {
+            Assert.Equal(0, reopened.GetUserVersion());
+        }
+    }
+
+    [Fact]
+    public void BatchInProgress_ClearInsideCommittedTransaction_PersistsCleanState()
+    {
+        _writer.MarkBatchInProgress();
+
+        using (var txn = _writer.BeginTransaction())
+        {
+            _writer.ClearBatchInProgress();
+            txn.Commit();
+        }
+
+        var stderr = ConsoleCapture.CaptureError(() =>
+        {
+            using var reopened = new DbContext(_dbPath);
+        });
+
+        Assert.DoesNotContain("Last batch did not complete", stderr);
+    }
+
+    [Fact]
+    public void BatchInProgress_ClearInsideRolledBackTransaction_LeavesRecoveryWarning()
+    {
+        _writer.MarkBatchInProgress();
+
+        using (var txn = _writer.BeginTransaction())
+        {
+            _writer.ClearBatchInProgress();
+        }
+
+        var stderr = ConsoleCapture.CaptureError(() =>
+        {
+            using var reopened = new DbContext(_dbPath);
+        });
+
+        Assert.Contains("Last batch did not complete", stderr);
+    }
+
+    [Fact]
     public void Constructor_NewDatabaseEnablesIncrementalAutoVacuum()
     {
         using var cmd = _db.Connection.CreateCommand();

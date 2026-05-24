@@ -128,6 +128,55 @@ public class ProgramCliTests
         Assert.DoesNotContain("Unknown shell", stderr);
     }
 
+    [Theory]
+    [InlineData("index", "cdidx index <projectPath>")]
+    [InlineData("search", "cdidx search <query>")]
+    [InlineData("references", "cdidx references <query>")]
+    [InlineData("callers", "cdidx callers <query>")]
+    [InlineData("callees", "cdidx callees <query>")]
+    [InlineData("impact", "cdidx impact <query>")]
+    [InlineData("unused", "cdidx unused")]
+    [InlineData("validate", "cdidx validate")]
+    [InlineData("backfill-fold", "cdidx backfill-fold")]
+    [InlineData("outline", "cdidx outline <path>")]
+    [InlineData("inspect", "cdidx inspect <query>")]
+    [InlineData("definition", "cdidx definition <query>")]
+    [InlineData("find", "cdidx find <query>")]
+    [InlineData("excerpt", "cdidx excerpt <path>")]
+    [InlineData("hotspots", "cdidx hotspots")]
+    [InlineData("deps", "cdidx deps")]
+    [InlineData("map", "cdidx map")]
+    [InlineData("status", "cdidx status")]
+    [InlineData("completions", "cdidx completions <shell>")]
+    [InlineData("license", "cdidx license")]
+    public void SubcommandHelp_PrintsCommandSpecificUsage(string command, string expectedUsage)
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([command, "--help"]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Usage:", stdout);
+        Assert.Contains(expectedUsage, stdout);
+        Assert.Contains("Run `cdidx --help`", stdout);
+        Assert.DoesNotContain("Commands:", stdout);
+        Assert.DoesNotContain("Index and update options:", stdout);
+        Assert.DoesNotContain("██████╗", stdout);
+    }
+
+    [Theory]
+    [InlineData("completions")]
+    [InlineData("completions", "--json")]
+    [InlineData("completions", "bash", "extra")]
+    public void CompletionsCommand_ErrorsUseCommandUsage(params string[] args)
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(args);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("Usage: cdidx completions <shell>", stderr);
+        Assert.DoesNotContain("Usage: cdidx --completions <shell>", stderr);
+    }
+
     [Fact]
     public void Completions_ExtraArgsReturnUsageError()
     {
