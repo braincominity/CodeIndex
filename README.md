@@ -142,6 +142,8 @@ version 2.
 | [Platform Support](docs/platform-support.md) | Official release asset RIDs, unsupported platforms, and source-build alternatives. |
 | [Developer Guide](DEVELOPER_GUIDE.md) | Architecture, implementation notes, release workflow, and the [`reference_kind` filtering matrix](DEVELOPER_GUIDE.md#reference-kind-filtering-matrix) for `callers` / `impact` / `deps` count reconciliation. |
 | [Testing Guide](TESTING_GUIDE.md) | Test conventions and validation commands. |
+| [Agent Guide](AGENT_GUIDE.md) | Shared agent entry point, workflow index, search policy, and status contract maintenance rules. |
+| [Claude Code Entry Point](CLAUDE.md) | Thin Claude Code entry point that redirects to the shared agent guide. |
 | [Self-Improvement Contract](SELF_IMPROVEMENT.md) | Rules for agents improving CodeIndex itself. |
 | [Integration Policy](INTEGRATION_POLICY.md) | Permitted CLI, JSON, MCP, and integration use. |
 | [Security Policy](SECURITY.md) | Private vulnerability reporting and coordinated disclosure policy. |
@@ -323,6 +325,8 @@ hotspot-family readiness は、hotspot-family contract version 2 で導入され
 | [プラットフォームサポート](docs/platform-support.md#プラットフォームサポート) | 公式リリースアセットの RID、未対応 platform、source build の代替手段。 |
 | [開発者ガイド](DEVELOPER_GUIDE.md#開発者ガイド) | アーキテクチャ、実装メモ、リリース手順、`callers` / `impact` / `deps` の件数差を照合する [`reference_kind` フィルタの対応表](DEVELOPER_GUIDE.md#reference-kind-filtering-matrix)。 |
 | [テストガイド](TESTING_GUIDE.md#テストガイド) | テスト規約と検証コマンド。 |
+| [エージェントガイド](AGENT_GUIDE.md) | 共有エージェント入口、workflow index、検索ポリシー、status contract の保守ルール。 |
+| [Claude Code 入口](CLAUDE.md) | 共有エージェントガイドへリダイレクトする薄い Claude Code entry point。 |
 | [自己改善コントラクト](SELF_IMPROVEMENT.md#自己改善ループ) | CodeIndex 自身を改善するエージェント向けルール。 |
 | [統合ポリシー](INTEGRATION_POLICY.md) | CLI、JSON、MCP、各種統合で許可される利用。 |
 | [セキュリティポリシー](SECURITY.md) | 非公開の脆弱性報告と協調的開示の方針。 |
