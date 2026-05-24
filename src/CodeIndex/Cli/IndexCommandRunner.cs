@@ -1854,6 +1854,37 @@ public static class IndexCommandRunner
 
                 var indexability = FileIndexer.GetFileIndexability(absPath);
                 var detection = FileIndexer.TryDetectLanguage(absPath);
+                if (indexability == FileIndexer.FileProbeStatus.Missing || detection.Status == FileIndexer.FileProbeStatus.Missing)
+                {
+                    var message = $"{relPath}: skipped because it was deleted during indexing.";
+                    warnings++;
+                    warningList.Add(new CliJsonMessage(relPath, message));
+                    if (!options.Json && !options.Quiet)
+                    {
+                        PauseUpdateSpinnerForConsoleWrite();
+                        ConsoleUi.PrintWarning(message);
+                        ResumeUpdateSpinnerAfterConsoleWrite();
+                    }
+
+                    if (writer.HasFileAtPath(relPath))
+                    {
+                        DemoteReadinessOnce();
+                        using var deleteTxn = writer.BeginTransaction();
+                        if (writer.DeleteFileByPath(relPath))
+                        {
+                            WriteProjectRootOnce();
+                            deleteTxn.Commit();
+                            removed++;
+                            ftsMutated = true;
+                        }
+                    }
+                    else
+                    {
+                        skipped++;
+                    }
+                    continue;
+                }
+
                 if (indexability == FileIndexer.FileProbeStatus.ProbeFailed || detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
                 {
                     DemoteReadinessOnce();
@@ -2089,6 +2120,40 @@ public static class IndexCommandRunner
                     {
                         PauseUpdateSpinnerForConsoleWrite();
                         ConsoleUi.PrintWarning(ex.Message);
+                        ResumeUpdateSpinnerAfterConsoleWrite();
+                    }
+
+                    if (writer.HasFileAtPath(relPath))
+                    {
+                        DemoteReadinessOnce();
+                        using var deleteTxn = writer.BeginTransaction();
+                        if (writer.DeleteFileByPath(relPath))
+                        {
+                            WriteProjectRootOnce();
+                            deleteTxn.Commit();
+                            removed++;
+                            ftsMutated = true;
+                        }
+                    }
+                    else
+                    {
+                        skipped++;
+                    }
+                    continue;
+                }
+
+                if (ex is FileNotFoundException or DirectoryNotFoundException)
+                {
+                    if (fileBatchMarked)
+                        writer.ClearBatchInProgress();
+
+                    var message = $"{relPath}: skipped because it was deleted during indexing.";
+                    warnings++;
+                    warningList.Add(new CliJsonMessage(relPath, message));
+                    if (!options.Json && !options.Quiet)
+                    {
+                        PauseUpdateSpinnerForConsoleWrite();
+                        ConsoleUi.PrintWarning(message);
                         ResumeUpdateSpinnerAfterConsoleWrite();
                     }
 
@@ -3400,6 +3465,13 @@ public static class IndexCommandRunner
                         catch (FileIndexer.BinaryFileSkippedException ex)
                         {
                             extractionResults.Add(FullScanFileWorkItem.Skipped(filePath, ex.Message), cancellationToken);
+                        }
+                        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+                        {
+                            var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, filePath));
+                            extractionResults.Add(
+                                FullScanFileWorkItem.Skipped(filePath, $"{relativePath}: skipped because it was deleted during indexing."),
+                                cancellationToken);
                         }
                         catch (Exception ex)
                         {
