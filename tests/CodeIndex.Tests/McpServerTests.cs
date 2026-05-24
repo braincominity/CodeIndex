@@ -1105,6 +1105,9 @@ public class McpServerTests : IDisposable
         Assert.Equal(42, root.GetProperty("id").GetInt32());
         Assert.Equal(-32603, root.GetProperty("error").GetProperty("code").GetInt32());
         Assert.Contains("serializing MCP response", root.GetProperty("error").GetProperty("message").GetString());
+        var data = root.GetProperty("error").GetProperty("data");
+        Assert.Equal("42", data.GetProperty("request_id").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(data.GetProperty("correlation_id").GetString()));
     }
 
     [Fact]

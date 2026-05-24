@@ -832,6 +832,7 @@ public partial class McpServer : IDisposable
         var message = $"Internal error while serializing MCP response ({ex.GetType().Name}). See cdidx server stderr for details.";
         var builder = new StringBuilder("{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,\"message\":");
         builder.Append(JsonSerializer.Serialize(message));
+        AppendMinimalCorrelationData(builder);
         builder.Append('}');
         if (hasId)
         {
@@ -840,6 +841,22 @@ public partial class McpServer : IDisposable
         }
         builder.Append('}');
         return builder.ToString();
+    }
+
+    private static void AppendMinimalCorrelationData(StringBuilder builder)
+    {
+        var context = CurrentCorrelationContext.Value;
+        if (context is null)
+            return;
+
+        builder.Append(",\"data\":{\"correlation_id\":");
+        builder.Append(JsonSerializer.Serialize(context.CorrelationId));
+        if (context.RequestId != null)
+        {
+            builder.Append(",\"request_id\":");
+            builder.Append(JsonSerializer.Serialize(context.RequestId));
+        }
+        builder.Append('}');
     }
 
     /// <summary>
