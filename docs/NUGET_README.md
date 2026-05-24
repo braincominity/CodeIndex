@@ -28,13 +28,13 @@ absolute GitHub URLs.
 
 | Document | Link |
 |---|---|
-| README | https://github.com/Widthdom/CodeIndex/blob/main/README.md |
-| User Guide | https://github.com/Widthdom/CodeIndex/blob/main/USER_GUIDE.md |
-| Platform Support | https://github.com/Widthdom/CodeIndex/blob/main/docs/platform-support.md |
-| Developer Guide | https://github.com/Widthdom/CodeIndex/blob/main/DEVELOPER_GUIDE.md |
-| Integration Policy | https://github.com/Widthdom/CodeIndex/blob/main/INTEGRATION_POLICY.md |
-| Security Policy | https://github.com/Widthdom/CodeIndex/blob/main/SECURITY.md |
-| Changelog | https://github.com/Widthdom/CodeIndex/blob/main/CHANGELOG.md |
+| README | https://github.com/Widthdom/CodeIndex/blob/{{RELEASE_REF}}/README.md |
+| User Guide | https://github.com/Widthdom/CodeIndex/blob/{{RELEASE_REF}}/USER_GUIDE.md |
+| Platform Support | https://github.com/Widthdom/CodeIndex/blob/{{RELEASE_REF}}/docs/platform-support.md |
+| Developer Guide | https://github.com/Widthdom/CodeIndex/blob/{{RELEASE_REF}}/DEVELOPER_GUIDE.md |
+| Integration Policy | https://github.com/Widthdom/CodeIndex/blob/{{RELEASE_REF}}/INTEGRATION_POLICY.md |
+| Security Policy | https://github.com/Widthdom/CodeIndex/blob/{{RELEASE_REF}}/SECURITY.md |
+| Changelog | https://github.com/Widthdom/CodeIndex/blob/{{RELEASE_REF}}/CHANGELOG.md |
 
 `cdidx` is distributed as a CLI and MCP server only. The NuGet package is a
 global tool package and does not provide a public library or SDK API.
