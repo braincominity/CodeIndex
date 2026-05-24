@@ -133,6 +133,7 @@ public class DatabaseTests : IDisposable
                 using var cmd = connection.CreateCommand();
                 cmd.CommandText = @"
                     PRAGMA auto_vacuum=NONE;
+                    PRAGMA application_id=1128544600;
                     CREATE TABLE files (id INTEGER PRIMARY KEY);
                     CREATE TABLE chunks (id INTEGER PRIMARY KEY);
                     CREATE TABLE symbols (id INTEGER PRIMARY KEY);

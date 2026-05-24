@@ -236,6 +236,39 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunVacuum_RejectsLookalikeNonCodeIndexDatabase_Issue1631()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_lookalike_db");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "lookalike.db");
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = @"
+                    CREATE TABLE files (id INTEGER PRIMARY KEY);
+                    CREATE TABLE chunks (id INTEGER PRIMARY KEY);
+                    CREATE TABLE symbols (id INTEGER PRIMARY KEY);";
+                command.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(CommandErrorCodes.DbError, stderr);
+            Assert.Contains("not an existing CodeIndex DB", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunVacuum_RejectsReadOnlyUriWithNeutralWritableMessage_Issue1631()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_vacuum_readonly_uri");

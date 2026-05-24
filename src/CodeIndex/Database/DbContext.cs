@@ -130,6 +130,13 @@ public class DbContext : IDisposable
                 dbPath: dbPath);
 
             using var cmd = connection.CreateCommand();
+            cmd.CommandText = "PRAGMA application_id";
+            if (Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) != ApplicationId)
+            {
+                message = $"database is not an existing CodeIndex DB: {dbPath}";
+                return false;
+            }
+
             cmd.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table'";
             using var reader = cmd.ExecuteReader();
             var tables = new HashSet<string>(StringComparer.Ordinal);
