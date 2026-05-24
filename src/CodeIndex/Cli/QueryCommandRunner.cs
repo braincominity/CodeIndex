@@ -4626,6 +4626,7 @@ public static class QueryCommandRunner
         "operator",
         "procedure",
         "property",
+        "protocol",
         "record",
         "reference",
         "specialization",
