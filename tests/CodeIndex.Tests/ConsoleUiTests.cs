@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Reflection.Emit;
 using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Cli;
@@ -11,6 +13,33 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class ConsoleUiTests
 {
+    private static readonly Dictionary<short, OpCode> SingleByteOpCodes = typeof(OpCodes)
+        .GetFields(BindingFlags.Public | BindingFlags.Static)
+        .Where(field => field.GetValue(null) is OpCode opCode && opCode.Size == 1)
+        .Select(field => (OpCode)field.GetValue(null)!)
+        .ToDictionary(opCode => opCode.Value);
+
+    private static readonly Dictionary<short, OpCode> MultiByteOpCodes = typeof(OpCodes)
+        .GetFields(BindingFlags.Public | BindingFlags.Static)
+        .Where(field => field.GetValue(null) is OpCode opCode && opCode.Size == 2)
+        .Select(field => (OpCode)field.GetValue(null)!)
+        .ToDictionary(opCode => (short)(opCode.Value & 0xff));
+
+    [Fact]
+    public void StartSpinner_BackgroundLoop_DoesNotBlockOnTaskWait()
+    {
+        var methods = typeof(ConsoleUi).GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+            .Concat(typeof(ConsoleUi)
+                .GetNestedTypes(BindingFlags.NonPublic)
+                .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance)))
+            .Where(method => method.Name.Contains("StartSpinner", StringComparison.Ordinal)
+                || (method.DeclaringType?.Name.Contains("StartSpinner", StringComparison.Ordinal) ?? false))
+            .ToArray();
+
+        Assert.NotEmpty(methods);
+        Assert.DoesNotContain(methods, CallsTaskWait);
+    }
+
     [Fact]
     public void PrintUsage_WithBanner_IncludesAsciiArt()
     {
@@ -1505,6 +1534,67 @@ public class ConsoleUiTests
 
         public override string ToString() => builder.ToString();
     }
+
+    private static bool CallsTaskWait(MethodInfo method)
+    {
+        var body = method.GetMethodBody();
+        var il = body?.GetILAsByteArray();
+        if (il == null)
+            return false;
+
+        var module = method.Module;
+        for (var i = 0; i < il.Length;)
+        {
+            var opCode = ReadOpCode(il, ref i);
+            if ((opCode == OpCodes.Call || opCode == OpCodes.Callvirt) && i + 4 <= il.Length)
+            {
+                var token = BitConverter.ToInt32(il, i);
+                i += 4;
+                if (module.ResolveMember(token) is MethodInfo called
+                    && called.Name == nameof(Task.Wait)
+                    && called.DeclaringType == typeof(Task))
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
+            i += OperandByteCount(opCode, il, i);
+        }
+
+        return false;
+    }
+
+    private static OpCode ReadOpCode(byte[] il, ref int offset)
+    {
+        var first = il[offset++];
+        if (first != 0xfe)
+            return SingleByteOpCodes[(short)first];
+
+        var second = il[offset++];
+        return MultiByteOpCodes[(short)second];
+    }
+
+    private static int OperandByteCount(OpCode opCode, byte[] il, int operandOffset)
+        => opCode.OperandType switch
+        {
+            OperandType.InlineNone => 0,
+            OperandType.ShortInlineBrTarget or OperandType.ShortInlineI or OperandType.ShortInlineVar => 1,
+            OperandType.InlineVar => 2,
+            OperandType.InlineBrTarget
+                or OperandType.InlineField
+                or OperandType.InlineI
+                or OperandType.InlineMethod
+                or OperandType.InlineSig
+                or OperandType.InlineString
+                or OperandType.InlineTok
+                or OperandType.InlineType
+                or OperandType.ShortInlineR => 4,
+            OperandType.InlineI8 or OperandType.InlineR => 8,
+            OperandType.InlineSwitch => 4 + (4 * BitConverter.ToInt32(il, operandOffset)),
+            _ => throw new NotSupportedException($"Unsupported IL operand type: {opCode.OperandType}"),
+        };
 
     private static string CaptureUsageOutput(bool showBanner = true)
     {
