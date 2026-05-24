@@ -148,6 +148,8 @@ internal static class CliFlagSchema
         "validate", "deps", "impact", "unused", "hotspots", "db", "vacuum", "report", "batch", "mcp",
     ];
 
+    private static readonly string[] WorkspaceDbCommands = ["deps"];
+
     private static readonly string[] DataDirCommands =
     [
         "index", "search", "definition", "references", "callers", "callees",
@@ -178,6 +180,7 @@ internal static class CliFlagSchema
         return new List<CliFlag>
         {
             new() { Name = "--db", ValuePlaceholder = "<path>", Description = "Database path", Commands = Set(DbPathCommands) },
+            new() { Name = "--workspace-db", ValuePlaceholder = "<path>", Description = "Additional workspace member database path for dependency aggregation", Commands = Set(WorkspaceDbCommands) },
             new() { Name = "--data-dir", ValuePlaceholder = "<dir>", Description = "Directory containing codeindex.db; overrides CDIDX_DATA_DIR/XDG/workspace defaults", Commands = Set(DataDirCommands) },
             new() { Name = "--json", Description = "JSON output; search also accepts --json=array for a single JSON array", Commands = Set(JsonCommands) },
             new() { Name = "--profile", Description = "Emit SQL timing and EXPLAIN QUERY PLAN profile JSON after the normal result", Commands = Set(ProfileCommands) },

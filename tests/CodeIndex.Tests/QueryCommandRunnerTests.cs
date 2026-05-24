@@ -12323,6 +12323,94 @@ jobs:
     }
 
     [Fact]
+    public void RunDeps_WorkspaceDbJson_AggregatesAndTagsMemberDatabaseEdges()
+    {
+        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_primary");
+        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_member");
+        try
+        {
+            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+            var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
+            InsertFileWithReference(primaryDb, "src/PrimaryCaller.cs", "SharedTarget");
+            InsertFileWithSymbol(memberDb, "src/SharedTarget.cs", "SharedTarget");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var edges = json.GetProperty("edges").EnumerateArray().ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.NotNull(stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            var edge = Assert.Single(edges);
+            Assert.Equal("src/PrimaryCaller.cs", edge.GetProperty("source_path").GetString());
+            Assert.Equal("src/SharedTarget.cs", edge.GetProperty("target_path").GetString());
+            Assert.Equal(Path.GetFullPath(primaryDb), edge.GetProperty("source_db").GetString());
+            Assert.Equal(Path.GetFullPath(memberDb), edge.GetProperty("target_db").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(primaryRoot);
+            TestProjectHelper.DeleteDirectory(memberRoot);
+        }
+    }
+
+    private static void InsertFileWithSymbol(string dbPath, string path, string symbolName)
+    {
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "csharp",
+            Size = 1,
+            Lines = 1,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = symbolName,
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            }
+        ]);
+    }
+
+    private static void InsertFileWithReference(string dbPath, string path, string symbolName)
+    {
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "csharp",
+            Size = 1,
+            Lines = 1,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Guid.NewGuid().ToString("N"),
+        });
+        writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = symbolName,
+                ReferenceKind = "type_reference",
+                Line = 1,
+                Column = 1,
+                Context = symbolName,
+            }
+        ]);
+    }
+
+    [Fact]
     public void RunImpact_CountOnlyJson_StaleSqlGraphContractIncludesDegradedState()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_impact_sql_graph_contract");
