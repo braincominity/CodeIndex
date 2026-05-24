@@ -14335,6 +14335,9 @@ public class SymbolExtractorTests
                 fn build(&self) {
                     type Local = String;
                 }
+                fn helper<'a>(&self) {
+                    type Borrowed = &'a str;
+                }
             }
             """;
 
@@ -14354,6 +14357,7 @@ public class SymbolExtractorTests
             && s.ReturnType == "String");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Pending");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Local");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Borrowed");
     }
 
     [Fact]

@@ -10115,7 +10115,6 @@ public static partial class SymbolExtractor
     private static int CountBraceDelta(string line)
     {
         var delta = 0;
-        var inSingleQuote = false;
         var inDoubleQuote = false;
         var escapeNext = false;
         for (var index = 0; index < line.Length; index++)
@@ -10126,25 +10125,19 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            if ((inSingleQuote || inDoubleQuote) && line[index] == '\\')
+            if (inDoubleQuote && line[index] == '\\')
             {
                 escapeNext = true;
                 continue;
             }
 
-            if (!inDoubleQuote && line[index] == '\'')
-            {
-                inSingleQuote = !inSingleQuote;
-                continue;
-            }
-
-            if (!inSingleQuote && line[index] == '"')
+            if (line[index] == '"')
             {
                 inDoubleQuote = !inDoubleQuote;
                 continue;
             }
 
-            if (inSingleQuote || inDoubleQuote)
+            if (inDoubleQuote)
                 continue;
 
             if (index + 1 < line.Length && line[index] == '/' && line[index + 1] == '/')
