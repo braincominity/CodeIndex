@@ -332,13 +332,19 @@ and then `cdidx validate` again.
 cdidx unused --lang csharp --exclude-tests
 cdidx unused --kind function --path src/ --limit 50
 cdidx unused --json --count
+cdidx unused --json --by-bucket
 ```
 
 `unused` compares definitions with indexed references and groups results by
-confidence. Public APIs, framework entrypoints, generated hooks, reflection, and
-configuration-based usage can be false positives. C# `nameof(...)`, `typeof(...)`,
-and direct reflection member-name literals such as `GetMethod("Foo")` are
-indexed, but dynamically constructed names still require manual review.
+confidence. JSON output includes `summary.by_bucket`, `summary.by_confidence`,
+and `bucket_taxonomy` for the `likely_unused_private`,
+`maybe_unused_nonpublic`, `public_or_exported_no_refs`, and
+`reflection_or_config_suspect` buckets; `--by-bucket` also groups returned
+symbols under those bucket keys. Public APIs, framework entrypoints, generated
+hooks, reflection, and configuration-based usage can be false positives. C#
+`nameof(...)`, `typeof(...)`, and direct reflection member-name literals such as
+`GetMethod("Foo")` are indexed, but dynamically constructed names still require
+manual review.
 
 ### Rank hotspots
 
@@ -2181,13 +2187,18 @@ hygiene の問題として扱い、修正後に `cdidx index .`、続いて `cdi
 cdidx unused --lang csharp --exclude-tests
 cdidx unused --kind function --path src/ --limit 50
 cdidx unused --json --count
+cdidx unused --json --by-bucket
 ```
 
 `unused` は definitions と indexed references を比較し、confidence ごとに結果を
-分類します。Public API、framework entrypoint、generated hook、reflection、config
-経由の使用は false positive になりえます。C# の `nameof(...)`、`typeof(...)`、
-`GetMethod("Foo")` のような直接的な reflection member-name literal は indexed されますが、
-動的に組み立てられる名前は手動確認が必要です。
+分類します。JSON 出力には `likely_unused_private`、`maybe_unused_nonpublic`、
+`public_or_exported_no_refs`、`reflection_or_config_suspect` bucket 用の
+`summary.by_bucket`、`summary.by_confidence`、`bucket_taxonomy` が含まれます。
+`--by-bucket` は返却された symbols も bucket key ごとに grouped します。Public API、
+framework entrypoint、generated hook、reflection、config 経由の使用は false positive
+になりえます。C# の `nameof(...)`、`typeof(...)`、`GetMethod("Foo")` のような
+直接的な reflection member-name literal は indexed されますが、動的に組み立てられる
+名前は手動確認が必要です。
 
 ### Hotspots を ranking する
 

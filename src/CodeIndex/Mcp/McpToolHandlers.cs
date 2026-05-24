@@ -2201,16 +2201,15 @@ public partial class McpServer
                     baseSqlGraphSignal,
                     results.Select(result => result.Lang),
                     lang);
-            var bucketCounts = results
-                .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
-                .OrderBy(group => Array.IndexOf(new[] { "likely_unused_private", "maybe_unused_nonpublic", "public_or_exported_no_refs", "reflection_or_config_suspect" }, group.Key))
-                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+            var bucketCounts = QueryCommandRunner.BuildUnusedBucketCounts(results);
             var payload = new JsonObject
             {
                 ["count"] = results.Count,
                 ["graph_supported"] = graphSupported,
                 ["graph_support_reason"] = graphSupportReason,
                 ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(bucketCounts, _jsonOptions),
+                ["summary"] = QueryCommandRunner.BuildUnusedSummaryJson(results, _jsonOptions),
+                ["bucket_taxonomy"] = QueryCommandRunner.BuildUnusedBucketTaxonomyJson(),
                 ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
