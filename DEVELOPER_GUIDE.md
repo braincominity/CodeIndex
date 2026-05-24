@@ -678,10 +678,11 @@ The direct MCP graph tools (`references`, `callers`, `callees`) also emit `graph
 ## Release Workflow
 
 The version string has a single source of truth: `version.json` at the repository root.
-Official GitHub Release and NuGet publishing jobs are restricted to the
-canonical `Widthdom/CodeIndex` repository. Do not reuse the official release
-workflow, NuGet package ID, or cdidx/CodeIndex branding for derivative
-distributions without a separate written agreement.
+Official GitHub Release, NuGet publishing, and Homebrew tap update jobs are
+restricted to the canonical `Widthdom/CodeIndex` repository. Do not reuse the
+official release workflow, NuGet package ID, Homebrew tap/formula, or
+cdidx/CodeIndex branding for derivative distributions without a separate
+written agreement.
 
 ### Version flow
 
@@ -703,8 +704,8 @@ The version numbers below use `1.9.0` only as an example. Replace them with the 
 2. Review the generated `CHANGELOG.md`, `version.json`, and `changelog.d/unreleased/` diff. Do not hand-edit release headings or compare links unless you are fixing a tool bug; fix fragments or the tool input and rerun `prepare` instead.
 3. Run the release validation from `.codex/workflows/release-changelog.md` (`restore`, `build`, `test`, and `pack` in Release configuration).
 4. Commit the generated release prep, for example `Prepare release v1.9.0`.
-5. After the release PR merges, tag the merge commit `v1.9.0` and push the tag. `.github/workflows/release.yml` triggers on `v*` tags and builds the per-platform tarballs plus the NuGet package.
-6. After the release is published, run the one-liner installer on a clean machine and verify `cdidx --version` prints the released version before announcing it.
+5. After the release PR merges, tag the merge commit `v1.9.0` and push the tag. `.github/workflows/release.yml` triggers on `v*` tags, builds the per-platform tarballs, publishes the NuGet package, and bumps the `Widthdom/homebrew-tap` `codeindex` formula with `HOMEBREW_TAP_TOKEN`.
+6. After the release is published, run the one-liner installer and the Homebrew install path on a clean machine and verify `cdidx --version` prints the released version before announcing it.
 
 If a clean install reports `cdidx v0.0.0`, treat it as a release regression: either the tarball did not bundle `version.json`, or `install.sh` did not copy it next to the binary. Use `CLOUD_BOOTSTRAP_PROMPT.md` for the clean-install smoke path.
 

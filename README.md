@@ -38,7 +38,10 @@ and [cdidx vs VS Code workspace index](USER_GUIDE.md#cdidx-vs-vs-code-workspace-
 ## Quick Start
 
 ```bash
-# Install is usually seconds.
+# Install is usually seconds. Homebrew is available on macOS/Linux:
+brew install widthdom/tap/codeindex
+
+# Or install directly from the signed GitHub release assets:
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 
 # First index: ~30-60s on small repos; minutes or longer on 100k-file trees.

@@ -117,7 +117,10 @@ For implementation details (schema, indexing pipeline, MCP behavior), see [DEVEL
 ## First Query Quick Start
 
 ```bash
-# One-liner install (no .NET required; usually seconds)
+# Homebrew install (macOS/Linux)
+brew install widthdom/tap/codeindex
+
+# Or one-liner install from GitHub release assets (no .NET required; usually seconds)
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 
 # First index: ~30-60s on small repos; minutes or longer on 100k-file trees.
