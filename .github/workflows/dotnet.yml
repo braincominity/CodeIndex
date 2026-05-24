@@ -25,6 +25,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+        test-framework: [net8.0, net9.0]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -136,7 +137,9 @@ jobs:
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: |
+            8.0.x
+            9.0.x
 
       - name: Cache NuGet packages
         uses: actions/cache@v4
@@ -176,10 +179,10 @@ jobs:
           }
 
       - name: Build
-        run: dotnet build CodeIndex.sln --configuration Release --no-restore
+        run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore
 
       - name: Test
-        run: dotnet test CodeIndex.sln --configuration Release --no-build --nologo --logger "trx;LogFileName=test_results.trx" --results-directory ./TestResults
+        run: dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-build --nologo --logger "trx;LogFileName=test_results.trx" --results-directory ./TestResults
 
       - name: Summarize TRX telemetry
         if: always()
@@ -189,16 +192,16 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: TestResults-${{ matrix.os }}
+          name: TestResults-${{ matrix.os }}-${{ matrix.test-framework }}
           if-no-files-found: warn
           path: TestResults/**/*.trx
 
       - name: Publish
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'
         run: dotnet publish src/CodeIndex/CodeIndex.csproj --configuration Release --no-build --output publish
 
       - name: Upload build artifact
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'
         uses: actions/upload-artifact@v4
         with:
           name: CodeIndex

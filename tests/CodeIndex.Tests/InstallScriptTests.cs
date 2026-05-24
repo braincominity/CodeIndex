@@ -1649,6 +1649,104 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void DownloadAndInstall_RestrictsStageAndBackupDirectories()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "strict_install_dirs_target");
+        var payloadDir = Path.Combine(_tempRoot, "strict_install_dirs_payload");
+        var archivePath = Path.Combine(_tempRoot, "strict_install_dirs.tar.gz");
+        var checksumsPath = Path.Combine(_tempRoot, "strict_install_dirs.sha256sums.txt");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            mkdir -p "{{payloadDir}}"
+            cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "cdidx v1.2.3"
+            EOF
+            chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
+            printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
+            printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
+            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+
+            if command -v sha256sum > /dev/null 2>&1; then
+                checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
+            elif command -v shasum > /dev/null 2>&1; then
+                checksum="$(shasum -a 256 "{{archivePath}}" | awk '{print $1}')"
+            else
+                checksum="$(openssl dgst -sha256 "{{archivePath}}" | awk '{print $NF}')"
+            fi
+            printf '%s  CodeIndex-linux-x64.tar.gz\n' "$checksum" > "{{checksumsPath}}"
+
+            VERSION="v1.2.3"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            url="$1"
+                            shift
+                            ;;
+                    esac
+                done
+
+                case "$url" in
+                    */sha256sums.txt) cp "{{checksumsPath}}" "$output_path" ;;
+                    *) cp "{{archivePath}}" "$output_path" ;;
+                esac
+
+                printf '200'
+                return 0
+            }
+
+            dir_mode() {
+                if stat -c '%a' "$1" > /dev/null 2>&1; then
+                    stat -c '%a' "$1"
+                else
+                    stat -f '%Lp' "$1"
+                fi
+            }
+
+            promote_staged_install() {
+                echo "STAGE_MODE:$(dir_mode "$1")"
+                echo "BACKUP_MODE:$(dir_mode "$2")"
+                return 1
+            }
+
+            mkdir -p "{{installDir}}"
+            chmod 0755 "{{installDir}}"
+            if download_and_install; then
+                echo "UNEXPECTED_SUCCESS"
+            fi
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("UNEXPECTED_SUCCESS", stdout);
+        Assert.Contains("STAGE_MODE:700", stdout);
+        Assert.Contains("BACKUP_MODE:700", stdout);
+        Assert.DoesNotContain("Failed to restrict", stderr);
+    }
+
+    [Fact]
     public void DownloadReleaseFile_Http404_PrintsHttpSpecificError()
     {
         if (OperatingSystem.IsWindows())
