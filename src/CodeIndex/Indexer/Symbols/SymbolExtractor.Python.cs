@@ -11,6 +11,7 @@ public static partial class SymbolExtractor
     private readonly record struct PythonExportSymbolEntry(string Name, int LineIndex, int StartColumn);
     private static readonly Regex PythonDirectImportRegex = new(@"^import\s+(?<imports>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonFromImportRegex = new(@"^from\s+(?<module>(?:\.+[\w.]*|[\w.]+))\s+import\s+(?<imports>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PythonDynamicImportLiteralRegex = new(@"\b(?:importlib\.import_module|importlib\.util\.find_spec|__import__)\s*\(\s*(?<quote>['""])(?<module>[^'""]+)\k<quote>", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonAllAssignmentRegex = new(@"^\s*__all__\s*(?:\+?=)\s*(?<values>.+)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonAllAppendRegex = new(@"^\s*__all__\.append\(\s*(?<quote>['""])(?<name>[^'""]+)\k<quote>\s*\)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PythonAllExtendRegex = new(@"^\s*__all__\.extend\(\s*(?<values>.*)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -193,6 +194,20 @@ public static partial class SymbolExtractor
 
         var entries = new List<PythonImportSymbolEntry>();
         var seenNames = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (Match match in PythonDynamicImportLiteralRegex.Matches(statement))
+        {
+            AddPythonImportEntry(
+                line,
+                absoluteStartColumn,
+                match.Groups["module"].Value,
+                entries,
+                seenNames,
+                ref absoluteStartColumn);
+        }
+
+        if (entries.Count > 0)
+            return entries;
 
         var directImportMatch = PythonDirectImportRegex.Match(statement);
         if (directImportMatch.Success)

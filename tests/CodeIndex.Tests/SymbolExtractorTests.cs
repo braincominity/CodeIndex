@@ -856,6 +856,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Python_IndexesDynamicImportLiteralModules()
+    {
+        var content = """
+            importlib.import_module("plugins.alpha")
+            __import__('legacy.loader')
+            importlib.util.find_spec("optional.backend")
+            importlib.import_module(module_name)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var imports = symbols.Where(symbol => symbol.Kind == "import").Select(symbol => symbol.Name).ToList();
+
+        Assert.Contains("plugins.alpha", imports);
+        Assert.Contains("legacy.loader", imports);
+        Assert.Contains("optional.backend", imports);
+        Assert.DoesNotContain("module_name", imports);
+    }
+
+    [Fact]
     public void Extract_Python_IndexesAllExportsFromInitModules()
     {
         var content = """

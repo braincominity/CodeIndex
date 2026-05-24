@@ -114,6 +114,12 @@ internal static class PythonReferenceExtractor
     private static readonly Regex ContextlibSuppressTypeRegex = new(
         @"\bcontextlib\.suppress\s*\(\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)",
         RegexOptions.Compiled);
+    private static readonly Regex ImportlibDynamicImportRegex = new(
+        @"\bimportlib(?:\.util)?\.(?:import_module|find_spec)\s*\(\s*(?:(?<quote>['""])(?<module>[^'""]+)\k<quote>)?",
+        RegexOptions.Compiled);
+    private static readonly Regex BuiltinDynamicImportRegex = new(
+        @"(?<!\.)\b__import__\s*\(\s*(?<quote>['""])(?<module>[^'""]+)\k<quote>",
+        RegexOptions.Compiled);
 
     private static string NormalizePythonAnnotationExpression(string expression)
     {
@@ -1018,6 +1024,63 @@ internal static class PythonReferenceExtractor
                 fileId,
                 name,
                 match.Groups["name"].Index,
+                context,
+                lineNumber,
+                container,
+                "python");
+        }
+    }
+
+    public static void EmitDynamicImportReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (Match match in ImportlibDynamicImportRegex.Matches(preparedLine))
+        {
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                "importlib",
+                match.Index,
+                "call",
+                context,
+                lineNumber,
+                container,
+                "python");
+
+            var moduleGroup = match.Groups["module"];
+            if (moduleGroup.Success && moduleGroup.Value.Length > 0)
+            {
+                ReferenceExtractor.AddReference(
+                    references,
+                    seen,
+                    fileId,
+                    moduleGroup.Value,
+                    moduleGroup.Index,
+                    "import",
+                    context,
+                    lineNumber,
+                    container,
+                    "python");
+            }
+        }
+
+        foreach (Match match in BuiltinDynamicImportRegex.Matches(preparedLine))
+        {
+            var moduleGroup = match.Groups["module"];
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                moduleGroup.Value,
+                moduleGroup.Index,
+                "import",
                 context,
                 lineNumber,
                 container,
