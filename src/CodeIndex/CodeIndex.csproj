@@ -36,7 +36,10 @@
     <PackageProjectUrl>https://github.com/widthdom/codeindex</PackageProjectUrl>
     <RepositoryUrl>https://github.com/widthdom/codeindex</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageReleaseNotes>See https://github.com/Widthdom/CodeIndex/blob/main/CHANGELOG.md for release notes.</PackageReleaseNotes>
+    <NuGetReleaseRef>v$(Version)</NuGetReleaseRef>
+    <NuGetReadmeTemplatePath>$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '..', '..', 'docs', 'NUGET_README.md'))</NuGetReadmeTemplatePath>
+    <NuGetReadmeOutputPath>$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', 'obj', 'NuGet', 'NUGET_README.md'))</NuGetReadmeOutputPath>
+    <PackageReleaseNotes>See https://github.com/Widthdom/CodeIndex/blob/$(NuGetReleaseRef)/CHANGELOG.md for release notes.</PackageReleaseNotes>
     <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
     <PackageIcon>cdidx-icon.png</PackageIcon>
     <IncludeSymbols>true</IncludeSymbols>
@@ -117,8 +120,16 @@
     </ItemGroup>
   </Target>
 
+  <Target Name="GenerateNuGetReadme" BeforeTargets="GenerateNuspec">
+    <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(NuGetReadmeOutputPath)'))" />
+    <WriteLinesToFile
+      File="$(NuGetReadmeOutputPath)"
+      Lines="$([System.IO.File]::ReadAllText('$(NuGetReadmeTemplatePath)').Replace('{{RELEASE_REF}}', '$(NuGetReleaseRef)'))"
+      Overwrite="true" />
+  </Target>
+
   <ItemGroup>
-    <None Include="..\..\docs\NUGET_README.md" Pack="true" PackagePath="\" />
+    <None Include="$(NuGetReadmeOutputPath)" Pack="true" PackagePath="\" />
     <None Include="..\..\docs\cdidx-icon.png" Pack="true" PackagePath="\" />
     <None Include="..\..\LICENSE" Pack="true" PackagePath="\" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\COMMERCIAL_LICENSE.md" Pack="true" PackagePath="\" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
