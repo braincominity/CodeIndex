@@ -31,6 +31,8 @@ public static class QueryCommandRunner
     private const string HotspotsGroupedBySymbol = "symbol";
     private const string HotspotsGroupedByFile = "file";
     private const string HotspotsGroupedByStatement = "statement";
+    private const string JsonOutputFormatNdjson = "ndjson";
+    private const string JsonOutputFormatArray = "array";
     private static readonly Dictionary<string, string[]> LanguageDisplayAliases = new(StringComparer.Ordinal)
     {
         ["javascript"] = ["js", "jsx", "cjs", "mjs"],
@@ -165,6 +167,8 @@ public static class QueryCommandRunner
         "--bytes",
         "--profile",
     ];
+    private static readonly HashSet<string> InlineValueOptions =
+        new(ValueTakingOptions.Concat(["--json"]), StringComparer.Ordinal);
     private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
 
     public static int RunBatch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -381,8 +385,17 @@ public static class QueryCommandRunner
             {
                 if (options.Json)
                 {
-                    Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, queryOptions: options).ToJsonString(jsonOptions));
-                    jsonDoneCount = 0;
+                    if (options.JsonOutputFormat == JsonOutputFormatArray)
+                    {
+                        Console.WriteLine(JsonSerializer.Serialize(
+                            Array.Empty<CompactSearchResult>(),
+                            CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResultArray));
+                    }
+                    else
+                    {
+                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, queryOptions: options).ToJsonString(jsonOptions));
+                        jsonDoneCount = 0;
+                    }
                 }
                 else if (!options.Json)
                 {
@@ -395,11 +408,23 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                foreach (var r in results)
+                var compactResults = results
+                    .Select(r => SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus))
+                    .ToArray();
+                if (options.JsonOutputFormat == JsonOutputFormatArray)
+                {
                     Console.WriteLine(JsonSerializer.Serialize(
-                        SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus),
-                        CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResult));
-                jsonDoneCount = results.Count;
+                        compactResults,
+                        CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResultArray));
+                }
+                else
+                {
+                    foreach (var result in compactResults)
+                        Console.WriteLine(JsonSerializer.Serialize(
+                            result,
+                            CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResult));
+                    jsonDoneCount = compactResults.Length;
+                }
             }
             else
             {
@@ -417,7 +442,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.Success;
         }, exitCode =>
         {
-            if (options.Json && jsonDoneCount.HasValue)
+            if (options.Json && options.JsonOutputFormat == JsonOutputFormatNdjson && jsonDoneCount.HasValue)
                 WriteJsonStreamDone(jsonDoneCount.Value, jsonOptions);
         });
     }
@@ -3390,6 +3415,7 @@ public static class QueryCommandRunner
         string? dbPath = null;
         string? dataDir = null;
         bool? json = null;
+        string jsonOutputFormat = JsonOutputFormatNdjson;
         int limit = 20;
         string? lang = null;
         string? kind = null;
@@ -3547,7 +3573,19 @@ public static class QueryCommandRunner
                         AddParseError(dataDirError!);
                     break;
                 case "--json":
-                    json = true;
+                    if (inlineValue == null)
+                    {
+                        json = true;
+                    }
+                    else if (TryParseJsonOutputFormat(inlineValue, out var parsedJsonOutputFormat))
+                    {
+                        json = true;
+                        jsonOutputFormat = parsedJsonOutputFormat;
+                    }
+                    else
+                    {
+                        AddParseError($"Error: --json format must be one of ndjson or array, got '{inlineValue}'. Hint: use `--json` or `--json=ndjson` for newline-delimited JSON, or `--json=array` for a single JSON array.");
+                    }
                     break;
                 case "--limit":
                 case "--top":
@@ -3988,6 +4026,7 @@ public static class QueryCommandRunner
             DataDir = dbResolution.DataDir,
             DataDirSource = dbResolution.DataDirSource,
             Json = json ?? jsonDefault,
+            JsonOutputFormat = jsonOutputFormat,
             Limit = limit,
             Lang = lang,
             Kind = kind,
@@ -4049,6 +4088,23 @@ public static class QueryCommandRunner
             ValidatePathGlobPattern("--path", pattern, addParseError);
         foreach (var pattern in excludePaths)
             ValidatePathGlobPattern("--exclude-path", pattern, addParseError);
+    }
+
+    private static bool TryParseJsonOutputFormat(string rawValue, out string format)
+    {
+        if (string.Equals(rawValue, JsonOutputFormatArray, StringComparison.OrdinalIgnoreCase))
+        {
+            format = JsonOutputFormatArray;
+            return true;
+        }
+        if (string.Equals(rawValue, JsonOutputFormatNdjson, StringComparison.OrdinalIgnoreCase))
+        {
+            format = JsonOutputFormatNdjson;
+            return true;
+        }
+
+        format = JsonOutputFormatNdjson;
+        return false;
     }
 
     private static void ValidatePathGlobPattern(string optionName, string pattern, Action<string> addParseError)
@@ -4648,6 +4704,7 @@ public static class QueryCommandRunner
     {
         "accessor",
         "associatedtype",
+        "attribute",
         "class",
         "class_hook",
         "constant",
@@ -4660,10 +4717,12 @@ public static class QueryCommandRunner
         "heading",
         "hook",
         "impl",
+        "implements",
         "import",
         "interface",
         "label",
         "lambda",
+        "layout",
         "method",
         "module",
         "namespace",
@@ -4673,6 +4732,7 @@ public static class QueryCommandRunner
         "property",
         "record",
         "reference",
+        "route",
         "specialization",
         "struct",
         "test.method",
@@ -4754,6 +4814,14 @@ public static class QueryCommandRunner
                 : arg;
             if (arg.StartsWith("--check=", StringComparison.Ordinal) && supported.Contains("--check"))
                 normalizedArg = "--check";
+            if (normalizedArg == "--json" && !string.Equals(arg, "--json", StringComparison.Ordinal) && commandName != "search")
+            {
+                CommandErrorWriter.Write(
+                    "--json=<format> is only supported by 'search'.",
+                    "use plain `--json` here, or rerun search with `--json=array`.",
+                    GetUsageLineOrThrow(commandName));
+                return true;
+            }
 
             if (supported.Contains(normalizedArg))
             {
@@ -6336,7 +6404,7 @@ public static class QueryCommandRunner
             return false;
 
         var candidate = token[..separator];
-        if (!ValueTakingOptions.Contains(candidate))
+        if (!InlineValueOptions.Contains(candidate))
             return false;
 
         optionName = candidate;
@@ -6400,6 +6468,7 @@ public sealed class QueryCommandOptions
     public string? DataDir { get; init; }
     public string? DataDirSource { get; init; }
     public bool Json { get; init; }
+    public string JsonOutputFormat { get; init; } = "ndjson";
     public int Limit { get; init; } = 20;
     public string? Lang { get; init; }
     public string? Kind { get; init; }

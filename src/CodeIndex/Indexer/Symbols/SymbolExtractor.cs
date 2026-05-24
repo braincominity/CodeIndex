@@ -14,12 +14,14 @@ namespace CodeIndex.Indexer;
 public static partial class SymbolExtractor
 {
     public const int DefaultContractVersion = 1;
+    public const int CSharpContractVersion = 2;
 
     public static int GetContractVersion(string? lang)
     {
         return lang switch
         {
             null or "" => DefaultContractVersion,
+            "csharp" => CSharpContractVersion,
             _ => DefaultContractVersion,
         };
     }
@@ -2070,7 +2072,7 @@ public static partial class SymbolExtractor
     /// </summary>
     public static IReadOnlyCollection<string> GetSupportedLanguages()
       => PatternCache.Keys
-          .Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown" })
+          .Concat(new[] { "commonlisp", "racket", "vue", "svelte", "markdown", "razor", "blazor", "cshtml" })
           .Concat(ExtractorPluginRegistry.SymbolLanguages)
           .Distinct(StringComparer.Ordinal)
           .ToArray();
@@ -2081,7 +2083,11 @@ public static partial class SymbolExtractor
             return null;
 
         lang = lang.Trim().ToLowerInvariant();
-        return lang is "vue" or "svelte" ? "typescript" : lang;
+        return lang is "vue" or "svelte"
+            ? "typescript"
+            : lang is "razor" or "blazor" or "cshtml"
+                ? "csharp"
+                : lang;
     }
 
     private static string? NormalizePluginLanguage(string? lang)
@@ -3932,6 +3938,8 @@ public static partial class SymbolExtractor
             ExtractSqlDefinerSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols);
             ExtractSqlRoutineResultColumnSymbols(fileId, lines, sqlSyntheticSymbolLines, symbols);
         }
+        if (IsRazorLanguage(originalLang) || IsRazorFilePath(filePath))
+            ExtractRazorDirectiveSymbols(fileId, lines, symbols);
         AssignContainers(symbols, lines, csharpLineStartStates);
         if (lang == "csharp")
             NormalizeCSharpImplicitPartialConstructorReturnTypes(symbols);
