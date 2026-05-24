@@ -14952,6 +14952,47 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_WindowOverClausesEmitColumnReferences()
+    {
+        const string content = """
+            SELECT
+                ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY created_at DESC) AS rn,
+                SUM(amount) OVER (PARTITION BY [region] ORDER BY COALESCE(sale_date, fallback_date) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total
+            FROM sales.orders;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "customer_id" && r.ReferenceKind == "column_reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "created_at" && r.ReferenceKind == "column_reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "region" && r.ReferenceKind == "column_reference" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "sale_date" && r.ReferenceKind == "column_reference" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "fallback_date" && r.ReferenceKind == "column_reference" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "COALESCE" && r.ReferenceKind == "column_reference");
+        Assert.DoesNotContain(references, r => (r.SymbolName is "ROW_NUMBER" or "SUM") && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName is "ROWS" or "UNBOUNDED" or "PRECEDING" or "CURRENT" or "ROW");
+    }
+
+    [Fact]
+    public void Extract_SQL_MultilineWindowOverClausesSuppressFunctionCalls()
+    {
+        const string content = """
+            SELECT
+                SUM(amount)
+                    OVER (PARTITION BY customer_id ORDER BY created_at DESC) AS running_total
+            FROM sales.orders;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "customer_id" && r.ReferenceKind == "column_reference" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "created_at" && r.ReferenceKind == "column_reference" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "SUM" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_SQL_CreateSynonymCapturesBaseObjectReference()
     {
         // T-SQL/Oracle synonym definitions should point reference search at the base object after `FOR`,
