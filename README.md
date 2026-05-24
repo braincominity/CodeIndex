@@ -135,6 +135,10 @@ file completion.
 - Read commands accept `--profile` to append SQL timing, row-count, and
   `EXPLAIN QUERY PLAN` JSON after the normal result; `--slow-query-ms <n>` logs
   profiled SQL statements that meet the threshold.
+- Read commands also accept `--trace=stderr|file|none` (default `none`) to emit
+  one structured JSON trace line with sanitized parameters, elapsed time,
+  result count when available, exit code, and error status. `file` writes daily
+  `query-trace-YYYYMMDD.jsonl` files next to the persistent lifecycle log.
 - `cdidx diff <db1> <db2>` compares two index databases for CI or drift
   debugging, reporting schema, file, symbol, and reference deltas with stable
   exit codes: `0` identical, `1` drift, `2` schema mismatch, `3` unreadable DB.
@@ -348,6 +352,10 @@ informational stderr 出力を抑制し、error 行だけを残せます。stder
 - read 系コマンドは `--profile` で通常結果の後に SQL の時間、行数、
   `EXPLAIN QUERY PLAN` の JSON を追加できます。`--slow-query-ms <n>` は
   閾値以上の profiled SQL をログに記録します。
+- read 系コマンドは `--trace=stderr|file|none`（既定は `none`）も受け付け、
+  sanitise 済みパラメータ、経過時間、取得可能な場合の result count、exit code、
+  error 状態を含む構造化 JSON trace を 1 行出力できます。`file` は persistent
+  lifecycle log と同じ場所に日次 `query-trace-YYYYMMDD.jsonl` を書きます。
 - `cdidx diff <db1> <db2>` は CI や drift 調査向けに 2 つの index DB を比較し、
   schema、file、symbol、reference の差分を報告します。exit code は `0` identical、
   `1` drift、`2` schema mismatch、`3` unreadable DB です。
