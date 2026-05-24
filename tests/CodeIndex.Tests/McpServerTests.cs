@@ -183,7 +183,7 @@ public class McpServerTests : IDisposable
     [Fact]
     public void Initialize_CapturesClientCapabilitiesAndRootsForSessionStatus()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientCapabilities":{"experimental":{"progress":true}},"rootUri":"file:///workspace","roots":[{"uri":"file:///workspace/src"}]}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{"experimental":{"progress":true}},"rootUri":"file:///workspace","roots":[{"uri":"file:///workspace/src"}]}}""")!;
         _server.HandleMessage(request);
 
         Assert.True(_server.ClientCapabilitiesForTests!["experimental"]!["progress"]!.GetValue<bool>());
@@ -1613,7 +1613,7 @@ public class McpServerTests : IDisposable
                 ["method"] = "initialize",
                 ["params"] = new JsonObject
                 {
-                    ["clientCapabilities"] = new JsonObject
+                    ["capabilities"] = new JsonObject
                     {
                         ["experimental"] = new JsonObject { ["progress"] = true },
                     },

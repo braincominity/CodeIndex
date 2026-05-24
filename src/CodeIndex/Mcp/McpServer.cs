@@ -1161,7 +1161,9 @@ public partial class McpServer : IDisposable
         if (initializeParams is not JsonObject obj)
             return;
 
-        if (obj.TryGetPropertyValue("clientCapabilities", out var capabilities) && capabilities is not null)
+        if (!obj.TryGetPropertyValue("capabilities", out var capabilities))
+            obj.TryGetPropertyValue("clientCapabilities", out capabilities);
+        if (capabilities is not null)
             _clientCapabilities = JsonNode.Parse(capabilities.ToJsonString());
 
         if (TryReadStringValue(obj["rootUri"]) is { Length: > 0 } rootUri)
