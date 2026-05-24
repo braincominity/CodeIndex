@@ -14739,6 +14739,32 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_GeneratedColumnsCaptureExpressionDependencies()
+    {
+        const string content = """
+            CREATE TABLE dbo.Orders (
+                subtotal int,
+                tax int,
+                total int GENERATED ALWAYS AS (round(subtotal + tax, 2)) STORED,
+                invoice_no int DEFAULT NEXT VALUE FOR billing.invoice_seq,
+                created_at timestamp DEFAULT CURRENT_TIMESTAMP
+            );
+            ALTER TABLE dbo.Orders ADD computed_total AS (subtotal + tax) PERSISTED;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "round" && r.ReferenceKind == "generated_column_dependency");
+        Assert.Contains(references, r => r.SymbolName == "subtotal" && r.ReferenceKind == "generated_column_dependency");
+        Assert.Contains(references, r => r.SymbolName == "tax" && r.ReferenceKind == "generated_column_dependency");
+        Assert.Contains(references, r => r.SymbolName.EndsWith("invoice_seq", StringComparison.Ordinal) && r.ReferenceKind == "generated_column_dependency");
+        Assert.DoesNotContain(references, r => r.SymbolName == "GENERATED" && r.ReferenceKind == "generated_column_dependency");
+        Assert.DoesNotContain(references, r => r.SymbolName == "DEFAULT" && r.ReferenceKind == "generated_column_dependency");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CURRENT_TIMESTAMP" && r.ReferenceKind == "generated_column_dependency");
+    }
+
+    [Fact]
     public void Extract_SQL_DropTableCapturesAllTargetReferences()
     {
         // T-SQL teardown migrations should still be searchable by the table names they touch,
