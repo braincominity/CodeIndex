@@ -1098,8 +1098,7 @@ public partial class McpServer : IDisposable
                 {
                     ["listChanged"] = false
                 },
-                ["logging"] = new JsonObject(),
-                ["sampling"] = false
+                ["logging"] = new JsonObject()
             },
             ["serverInfo"] = new JsonObject
             {

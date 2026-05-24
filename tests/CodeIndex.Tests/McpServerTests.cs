@@ -177,7 +177,7 @@ public class McpServerTests : IDisposable
         Assert.False(capabilities["resources"]!["listChanged"]!.GetValue<bool>());
         Assert.False(capabilities["prompts"]!["listChanged"]!.GetValue<bool>());
         Assert.NotNull(capabilities["logging"]);
-        Assert.False(capabilities["sampling"]!.GetValue<bool>());
+        Assert.Null(capabilities["sampling"]);
     }
 
     [Fact]
