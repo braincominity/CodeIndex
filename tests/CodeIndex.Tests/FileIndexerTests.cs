@@ -343,7 +343,7 @@ public class FileIndexerTests
 
             var indexer = new FileIndexer(tempDir, ignoreCase: false, ignoreRuleRoot: null, maxFileSizeBytes: 4);
 
-            var ex = Assert.Throws<InvalidOperationException>(() => indexer.BuildRecordWithRawBytes(path));
+            var ex = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(() => indexer.BuildRecordWithRawBytes(path));
             Assert.Contains("File too large", ex.Message);
             Assert.Contains("--max-file-bytes", ex.Message);
             Assert.Contains(FileIndexer.MaxFileSizeEnvironmentVariable, ex.Message);
@@ -2266,6 +2266,7 @@ public class FileIndexerTests
             Assert.Equal(7, scanResult.Errors.Count);
             Assert.All(scanResult.Errors, error => Assert.Contains(".gitignore:", error.Path, StringComparison.Ordinal));
             Assert.All(scanResult.Errors, error => Assert.Contains("Invalid ignore rule skipped", error.Message, StringComparison.Ordinal));
+            Assert.Contains(scanResult.Errors, error => error.Message == "Invalid ignore rule skipped: reversed character class range");
             Assert.All(scanResult.Errors, error => Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, error.Severity));
         }
         finally
@@ -2296,6 +2297,39 @@ public class FileIndexerTests
             Assert.Contains("tool", scanResult.NonIndexablePaths);
             Assert.DoesNotContain("tool", scanResult.UnknownExtensionFiles);
             Assert.DoesNotContain("ignored.mystery", scanResult.UnknownExtensionFiles);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void DetectLanguage_ExtensionlessShebangs_HonorsUnicodeBomEncodings()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+
+            var files = new Dictionary<string, Encoding>
+            {
+                ["utf8"] = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                ["utf8-bom"] = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true),
+                ["utf16-le"] = new UnicodeEncoding(bigEndian: false, byteOrderMark: true),
+                ["utf16-be"] = new UnicodeEncoding(bigEndian: true, byteOrderMark: true),
+            };
+
+            foreach (var (name, encoding) in files)
+            {
+                var path = Path.Combine(tempDir, name);
+                File.WriteAllText(path, "#!/usr/bin/env bash\nprintf 'ok'\n", encoding);
+            }
+
+            var detected = files.Keys
+                .ToDictionary(name => name, name => FileIndexer.DetectLanguage(Path.Combine(tempDir, name)));
+
+            Assert.All(detected, pair => Assert.Equal("shell", pair.Value));
         }
         finally
         {
@@ -3177,6 +3211,15 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ComputeChecksum_ReturnsLowercaseHex()
+    {
+        var checksum = FileIndexer.ComputeChecksum(System.Text.Encoding.UTF8.GetBytes("ABC\n"));
+
+        Assert.Equal(checksum.ToLowerInvariant(), checksum);
+        Assert.DoesNotContain(checksum, c => c is >= 'A' and <= 'F');
+    }
+
+    [Fact]
     public void BuildRecord_BomOnlyFile_ReportsOnePhysicalLine()
     {
         // A file whose on-disk bytes are exactly the UTF-8 BOM (EF BB BF) and
@@ -3470,10 +3513,10 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void BuildRecord_ThrowsForOversizedFile()
+    public void BuildRecord_ThrowsFileTooLargeSkippedExceptionForOversizedFile()
     {
-        // Files exceeding the default cap should throw InvalidOperationException
-        // 既定上限を超えるファイルはInvalidOperationExceptionを投げる
+        // Files exceeding the default cap should carry structured skip metadata.
+        // 既定上限を超えるファイルは structured skip metadata を持つ例外を投げる。
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
         try
         {
@@ -3485,7 +3528,10 @@ public class FileIndexerTests
                 stream.SetLength(FileIndexer.DefaultMaxFileSizeBytes + 1);
 
             var indexer = new FileIndexer(tempDir);
-            Assert.Throws<InvalidOperationException>(() => indexer.BuildRecord(filePath));
+            var ex = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(() => indexer.BuildRecord(filePath));
+            Assert.Equal("large.py", ex.RelativePath);
+            Assert.Equal(FileIndexer.DefaultMaxFileSizeBytes + 1, ex.ActualBytes);
+            Assert.Equal(FileIndexer.DefaultMaxFileSizeBytes, ex.LimitBytes);
         }
         finally
         {
@@ -3512,7 +3558,7 @@ public class FileIndexerTests
             var indexer = new FileIndexer(tempDir);
             var before = GC.GetAllocatedBytesForCurrentThread();
 
-            var ex = Assert.Throws<InvalidOperationException>(() => indexer.BuildRecord(filePath));
+            var ex = Assert.Throws<FileIndexer.FileTooLargeSkippedException>(() => indexer.BuildRecord(filePath));
 
             var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
             Assert.Contains("File too large", ex.Message);

@@ -439,7 +439,7 @@ public static class DbPathResolver
                 // FileIndexer のヘルパを使い、OS をまたいだ clone (CRLF と LF) でも、
                 // 他 OS で生成された checksum と引き続き一致するようにする。
                 var checksum = FileIndexer.ComputeChecksum(File.ReadAllBytes(ioPath));
-                if (string.Equals(checksum, sample.Checksum, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(checksum, sample.Checksum, StringComparison.Ordinal))
                     checksumMatches++;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

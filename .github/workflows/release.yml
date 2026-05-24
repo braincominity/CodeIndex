@@ -324,6 +324,26 @@ jobs:
           cd release-files
           sha256sum * > sha256sums.txt
 
+      - name: Write release install notes
+        run: |
+          cat > release-install-notes.md <<'EOF'
+          ## Install or update
+
+          Homebrew:
+
+          ```bash
+          brew install widthdom/tap/codeindex
+          brew upgrade widthdom/tap/codeindex
+          ```
+
+          NuGet:
+
+          ```bash
+          dotnet tool install -g cdidx
+          dotnet tool update -g cdidx
+          ```
+          EOF
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -350,6 +370,7 @@ jobs:
             gh release create "${TAG_NAME}" \
               release-files/* \
               --verify-tag \
+              --notes-file release-install-notes.md \
               --generate-notes
           fi
 
@@ -597,18 +618,29 @@ jobs:
         run: |
           set -euo pipefail
           expected_package="nupkg/cdidx.${VERSION}.nupkg"
+          expected_symbols="nupkg/cdidx.${VERSION}.snupkg"
           if [ ! -f "$expected_package" ]; then
             echo "Expected packed package ${expected_package} was not produced." >&2
             printf 'Produced packages:\n' >&2
             ls -la nupkg >&2
             exit 1
           fi
+          if [ ! -f "$expected_symbols" ]; then
+            echo "Expected packed symbol package ${expected_symbols} was not produced." >&2
+            printf 'Produced packages:\n' >&2
+            ls -la nupkg >&2
+            exit 1
+          fi
 
       - name: Publish to NuGet
-        run: >
-          dotnet nuget push nupkg/*.nupkg
-          --api-key ${{ secrets.NUGET_API_KEY }}
-          --source https://api.nuget.org/v3/index.json
+        run: |
+          set -euo pipefail
+          dotnet nuget push nupkg/*.nupkg \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json
+          dotnet nuget push nupkg/*.snupkg \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json
 
   publish-homebrew:
     if: github.repository == 'Widthdom/CodeIndex'
@@ -636,10 +668,79 @@ jobs:
           echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Bump Homebrew formula
-        uses: dawidd6/action-homebrew-bump-formula@v5
-        with:
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          tap: Widthdom/homebrew-tap
-          formula: codeindex
-          tag: ${{ steps.release.outputs.tag }}
-          revision: ${{ steps.release.outputs.revision }}
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG_NAME: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_TOKEN}" ]; then
+            echo "HOMEBREW_TAP_TOKEN is required to update Widthdom/homebrew-tap." >&2
+            exit 1
+          fi
+
+          VERSION="${TAG_NAME#v}"
+          REPO_URL="https://github.com/${GITHUB_REPOSITORY}"
+          RELEASE_URL="${REPO_URL}/releases/download/${TAG_NAME}"
+          CHECKSUMS_URL="${RELEASE_URL}/sha256sums.txt"
+          checksums="$(mktemp)"
+          curl -fsSL "$CHECKSUMS_URL" -o "$checksums"
+
+          sha_for() {
+            awk -v name="$1" '$2 == name { print $1; found=1 } END { exit found ? 0 : 1 }' "$checksums"
+          }
+
+          linux_x64_sha="$(sha_for CodeIndex-linux-x64.tar.gz)"
+          linux_arm64_sha="$(sha_for CodeIndex-linux-arm64.tar.gz)"
+          osx_arm64_sha="$(sha_for CodeIndex-osx-arm64.tar.gz)"
+
+          tap_dir="$(mktemp -d)"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/Widthdom/homebrew-tap.git" "$tap_dir"
+          mkdir -p "$tap_dir/Formula"
+
+          cat > "$tap_dir/Formula/codeindex.rb" <<EOF
+          class Codeindex < Formula
+            desc "CLI code indexing and MCP search for local repositories"
+            homepage "${REPO_URL}"
+            version "${VERSION}"
+            license "FSL-1.1-ALv2"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "${RELEASE_URL}/CodeIndex-osx-arm64.tar.gz"
+                sha256 "${osx_arm64_sha}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "${RELEASE_URL}/CodeIndex-linux-arm64.tar.gz"
+                sha256 "${linux_arm64_sha}"
+              else
+                url "${RELEASE_URL}/CodeIndex-linux-x64.tar.gz"
+                sha256 "${linux_x64_sha}"
+              end
+            end
+
+            def install
+              bin.install "cdidx"
+              prefix.install "version.json"
+              prefix.install "LICENSE", "COMMERCIAL_LICENSE.md", "INTEGRATION_POLICY.md", "TRADEMARKS.md"
+              prefix.install "LICENSES" if File.directory?("LICENSES")
+            end
+
+            test do
+              assert_match "cdidx v#{version}", shell_output("#{bin}/cdidx --version")
+            end
+          end
+          EOF
+
+          git -C "$tap_dir" config user.name "Widthdom"
+          git -C "$tap_dir" config user.email "125688807+Widthdom@users.noreply.github.com"
+          git -C "$tap_dir" add Formula/codeindex.rb
+          if git -C "$tap_dir" diff --cached --quiet; then
+            echo "Homebrew formula is already up to date."
+            exit 0
+          fi
+
+          git -C "$tap_dir" commit -m "Update codeindex to ${TAG_NAME}"
+          git -C "$tap_dir" push origin HEAD:main

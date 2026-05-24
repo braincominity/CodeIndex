@@ -19,4 +19,13 @@ public class NameFoldTests
         Assert.Equal("i", NameFold.Fold("i"));
         Assert.NotEqual(NameFold.Fold("İ"), NameFold.Fold("i"));
     }
+
+    [Fact]
+    public void Fingerprint_ReturnsLowercaseHex()
+    {
+        var fingerprint = NameFold.Fingerprint();
+
+        Assert.Equal(fingerprint.ToLowerInvariant(), fingerprint);
+        Assert.DoesNotContain(fingerprint, c => c is >= 'A' and <= 'F');
+    }
 }
