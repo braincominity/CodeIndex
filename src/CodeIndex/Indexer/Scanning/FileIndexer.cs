@@ -48,7 +48,8 @@ public class FileIndexer
         IReadOnlyList<string> FullyScannedDirectories,
         IReadOnlySet<string> CheckpointedDirectories,
         IReadOnlyList<string> AncestorIgnoreDirectories,
-        IReadOnlyList<string> AttributePrunedDirectories)
+        IReadOnlyList<string> AttributePrunedDirectories,
+        IReadOnlyList<string> NestedRepositories)
     {
         public bool HadErrors => Errors.Any(error => error.IsFatal);
     }
@@ -1646,12 +1647,13 @@ public class FileIndexer
             ? new HashSet<string>(checkpointedDirectories, StringComparer.Ordinal)
             : new HashSet<string>(StringComparer.Ordinal);
         var attributePrunedDirectories = new HashSet<string>(StringComparer.Ordinal);
+        var nestedRepositories = new HashSet<string>(StringComparer.Ordinal);
         var visitedFileIdentities = new HashSet<FileIdentity>();
         var fullyScanned = true;
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         if (preloadResult.IgnoreRulesAvailable)
         {
-            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeCheckpointedDirectories, attributePrunedDirectories, visitedFileIdentities, preloadResult.Rules, isProjectRoot: true, continueOnError);
+            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeCheckpointedDirectories, attributePrunedDirectories, nestedRepositories, visitedFileIdentities, preloadResult.Rules, isProjectRoot: true, continueOnError);
         }
         return new ScanFilesResult(
             files,
@@ -1663,7 +1665,8 @@ public class FileIndexer
             fullyScannedDirectories.ToList(),
             activeCheckpointedDirectories.Concat(fullyScannedDirectories).ToHashSet(StringComparer.Ordinal),
             _ancestorIgnoreDirectories.ToList(),
-            attributePrunedDirectories.ToList());
+            attributePrunedDirectories.ToList(),
+            nestedRepositories.OrderBy(path => path, StringComparer.Ordinal).ToList());
     }
 
     private bool ScanDirectory(
@@ -1677,6 +1680,7 @@ public class FileIndexer
         HashSet<string> fullyScannedDirectories,
         HashSet<string> checkpointedDirectories,
         HashSet<string> attributePrunedDirectories,
+        HashSet<string> nestedRepositories,
         HashSet<FileIdentity> visitedFileIdentities,
         IgnoreRuleSet activeIgnoreRules,
         bool isProjectRoot = false,
@@ -1695,7 +1699,16 @@ public class FileIndexer
             return true;
         }
 
-        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, visitedFileIdentities, activeIgnoreRules, continueOnError);
+        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, visitedFileIdentities, activeIgnoreRules, continueOnError);
+    }
+
+    private bool IsNestedGitRepository(string dir)
+    {
+        if (PathsEqual(dir, _projectRoot))
+            return false;
+
+        return Directory.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(dir, ".git"))) ||
+            File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(dir, ".git")));
     }
 
     private bool EnumerateDirectory(
@@ -1709,6 +1722,7 @@ public class FileIndexer
         HashSet<string> fullyScannedDirectories,
         HashSet<string> checkpointedDirectories,
         HashSet<string> attributePrunedDirectories,
+        HashSet<string> nestedRepositories,
         HashSet<FileIdentity> visitedFileIdentities,
         IgnoreRuleSet inheritedIgnoreRules,
         bool continueOnError)
@@ -1862,6 +1876,15 @@ public class FileIndexer
             foreach (var enumeratedSubDir in Directory.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir)))
             {
                 var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
+                if (IsNestedGitRepository(subDir))
+                {
+                    var subRelative = ToRelativePath(subDir);
+                    listedDirectories.Add(subRelative);
+                    fullyScannedDirectories.Add(subRelative);
+                    nestedRepositories.Add(subRelative);
+                    continue;
+                }
+
                 // In passthrough mode, only descend into subdirectories that are themselves
                 // submodules or submodule ancestors. Treat siblings the same way SkipDirs
                 // would have treated them at this point.
@@ -1895,7 +1918,7 @@ public class FileIndexer
                     continue;
                 }
 
-                var childFullyScanned = ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, visitedFileIdentities, activeIgnoreRules, continueOnError: continueOnError);
+                var childFullyScanned = ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, visitedFileIdentities, activeIgnoreRules, continueOnError: continueOnError);
                 fullyScanned &= childFullyScanned;
                 if (!continueOnError && !childFullyScanned)
                     break;
@@ -2184,6 +2207,24 @@ public class FileIndexer
             : new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: false);
     }
 
+    private IgnoreRuleLoadResult LoadWorkspaceConfigIgnoreRules(
+        IgnoreRuleSet inheritedIgnoreRules,
+        List<ScanError> errors,
+        ref bool fullyScanned)
+    {
+        var configIgnorePath = Path.Combine(_projectRoot, ".codeindex", ".cdidxignore");
+        if (!File.Exists(LongPath.EnsureWindowsPrefix(configIgnorePath)))
+            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: true);
+
+        return LoadIgnoreRulesFile(
+            sourceDirectory: _projectRoot,
+            ignorePath: configIgnorePath,
+            ignoreFileName: ".codeindex/.cdidxignore",
+            inheritedIgnoreRules,
+            errors,
+            ref fullyScanned);
+    }
+
     private IgnoreRuleLoadResult LoadAncestorIgnoreRules(List<ScanError> errors, ref bool fullyScanned)
     {
         var activeIgnoreRules = IgnoreRuleSet.Empty;
@@ -2202,7 +2243,46 @@ public class FileIndexer
                 return new IgnoreRuleLoadResult(activeIgnoreRules, IgnoreRulesAvailable: false);
         }
 
-        return new IgnoreRuleLoadResult(activeIgnoreRules, IgnoreRulesAvailable: true);
+        return LoadWorkspaceConfigIgnoreRules(activeIgnoreRules, errors, ref fullyScanned);
+    }
+
+    private IgnoreRuleLoadResult LoadIgnoreRulesFile(
+        string sourceDirectory,
+        string ignorePath,
+        string ignoreFileName,
+        IgnoreRuleSet inheritedIgnoreRules,
+        List<ScanError> errors,
+        ref bool fullyScanned)
+    {
+        var rules = new List<IgnoreRule>();
+        var prefixedIgnorePath = LongPath.EnsureWindowsPrefix(ignorePath);
+
+        try
+        {
+            var lineNumber = 0;
+            foreach (var line in File.ReadLines(prefixedIgnorePath, Encoding.UTF8))
+            {
+                lineNumber++;
+                if (IgnoreRule.TryParse(sourceDirectory, line, _ignoreCase, out var rule, out var errorMessage) && rule != null)
+                    rules.Add(rule);
+                else if (errorMessage != null)
+                    errors.Add(new ScanError($"{ToRelativePath(ignorePath)}:{lineNumber}", errorMessage, ScanIssueSeverity.Warning));
+            }
+        }
+        catch (UnauthorizedAccessException)
+        {
+            errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName}."));
+            fullyScanned = false;
+            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: false);
+        }
+        catch (IOException)
+        {
+            errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName}."));
+            fullyScanned = false;
+            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: false);
+        }
+
+        return new IgnoreRuleLoadResult(IgnoreRuleSet.CreateChild(inheritedIgnoreRules, rules), IgnoreRulesAvailable: true);
     }
 
     private string NormalizeIgnoreRuleRoot(string? ignoreRuleRoot)
@@ -2401,6 +2481,13 @@ public class FileIndexer
         => Path.DirectorySeparatorChar == '\\' ? path.Replace('\\', '/') : path;
 
     /// <summary>
+    /// Normalize index paths to the DB invariant: platform separators plus Unicode NFC.
+    /// DB 保存・lookup 用 path は区切り文字正規化に加えて Unicode NFC に正規化する。
+    /// </summary>
+    public static string NormalizeIndexPath(string path)
+        => NormalizePathSeparators(path).Normalize(NormalizationForm.FormC);
+
+    /// <summary>
     /// Build a FileRecord and return file content (avoids reading the file twice).
     /// FileRecordを構築しファイル内容も返す（二重読み込み防止）。
     /// </summary>
@@ -2426,6 +2513,7 @@ public class FileIndexer
             throw new InvalidOperationException("Only regular files can be indexed");
 
         var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
+        var normalizedRelativePath = NormalizeIndexPath(relativePath);
 
         // Read raw bytes through a single FileStream and cap the accumulated payload at
         // the configured max-file limit so a file that grew between the size probe and the read can no
@@ -2459,7 +2547,7 @@ public class FileIndexer
             var initialLength = stream.Length;
             if (initialLength > _maxFileSizeBytes)
                 throw new FileTooLargeSkippedException(
-                    NormalizePathSeparators(relativePath),
+                    normalizedRelativePath,
                     initialLength,
                     _maxFileSizeBytes,
                     BuildFileTooLargeMessage(initialLength, grewDuringRead: false));
@@ -2478,7 +2566,7 @@ public class FileIndexer
                 total += read;
                 if (total > _maxFileSizeBytes)
                     throw new FileTooLargeSkippedException(
-                        NormalizePathSeparators(relativePath),
+                        normalizedRelativePath,
                         total,
                         _maxFileSizeBytes,
                         BuildFileTooLargeMessage(total, grewDuringRead: true));
@@ -2576,13 +2664,13 @@ public class FileIndexer
         content = StripLineLeadingInvisibles(content);
         var record = new FileRecord
         {
-            Path = NormalizePathSeparators(relativePath),
+            Path = normalizedRelativePath,
             Lang = TryDetectLanguage(absolutePath, content).Language,
             Size = sizeBytes,
             Lines = lineCount,
             Checksum = checksum,
             Modified = modifiedUtc,
-            Generated = IsGeneratedCodeFile(NormalizePathSeparators(relativePath), content),
+            Generated = IsGeneratedCodeFile(normalizedRelativePath, content),
         };
 
         return (record, content, bytes, warning);
@@ -2594,7 +2682,7 @@ public class FileIndexer
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
 
         var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
-        var normalizedRelativePath = NormalizePathSeparators(relativePath);
+        var normalizedRelativePath = NormalizeIndexPath(relativePath);
         var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
         var info = new FileInfo(ioPath);
         return new FileRecord

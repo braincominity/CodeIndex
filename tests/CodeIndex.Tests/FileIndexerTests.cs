@@ -1465,6 +1465,85 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_RespectsWorkspaceConfigCdidxignore()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, ".codeindex"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "generated"));
+            File.WriteAllText(Path.Combine(tempDir, ".codeindex", ".cdidxignore"), "generated/\n*.cache.js\n");
+            File.WriteAllText(Path.Combine(tempDir, "generated", "Ignored.cs"), "class Ignored { }");
+            File.WriteAllText(Path.Combine(tempDir, "app.cache.js"), "export const ignored = true;");
+            File.WriteAllText(Path.Combine(tempDir, "app.js"), "export const app = true;");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["app.js"], files);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_SkipsNestedGitRepositoryBoundary()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, "nested", ".git"));
+            File.WriteAllText(Path.Combine(tempDir, "Root.cs"), "class Root { }");
+            File.WriteAllText(Path.Combine(tempDir, "nested", "Nested.cs"), "class Nested { }");
+
+            var indexer = new FileIndexer(tempDir);
+            var result = indexer.ScanFilesDetailed();
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["Root.cs"], files);
+            Assert.Equal(["nested"], result.NestedRepositories);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecord_NormalizesRelativePathToNfc()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var nfdName = "Cafe\u0301.cs";
+            var filePath = Path.Combine(tempDir, nfdName);
+            File.WriteAllText(filePath, "class Cafe { }");
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, _, _) = indexer.BuildRecord(filePath);
+
+            Assert.Equal("Caf\u00e9.cs", record.Path);
+            Assert.True(record.Path.IsNormalized(NormalizationForm.FormC));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_FailsClosedWhenRootIgnoreFileIsUnreadable()
     {
         if (OperatingSystem.IsWindows())

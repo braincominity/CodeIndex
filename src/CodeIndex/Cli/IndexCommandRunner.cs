@@ -2626,7 +2626,7 @@ public static class IndexCommandRunner
             if (FileIndexer.IsIgnoreFilePath(absolutePath) && IsRelevantIgnoreFileForProjectRoot(projectRoot, absolutePath))
                 relevantIgnoreFileChanged = true;
 
-            var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, absolutePath));
+            var relativePath = FileIndexer.NormalizeIndexPath(Path.GetRelativePath(projectRoot, absolutePath));
             if (IsOutsideProjectRoot(relativePath))
                 continue;
 
@@ -2663,7 +2663,7 @@ public static class IndexCommandRunner
         foreach (var file in updateFiles)
         {
             var absPath = Path.IsPathRooted(file) ? file : Path.GetFullPath(Path.Combine(projectRoot, file));
-            var relPath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, absPath));
+            var relPath = FileIndexer.NormalizeIndexPath(Path.GetRelativePath(projectRoot, absPath));
             if (IsOutsideProjectRoot(relPath))
             {
                 if (!json)

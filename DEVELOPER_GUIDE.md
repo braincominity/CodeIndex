@@ -188,7 +188,7 @@ case-sensitive equality so format drift is visible instead of silently accepted.
 -- File metadata
 files (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    path        TEXT NOT NULL UNIQUE,       -- relative path from project root
+    path        TEXT NOT NULL UNIQUE,       -- relative path from project root, slash-normalized and Unicode NFC
     lang        TEXT,                       -- detected language (e.g. "python")
     size        INTEGER,                    -- file size in bytes
     lines       INTEGER,                    -- line count
