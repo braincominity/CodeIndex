@@ -498,7 +498,9 @@ internal static class GitHubIssueReporter
 
             var next = i + 1 < text.Length ? text[i + 1] : '\0';
             var previous = i > start ? text[i - 1] : '\0';
-            if ((char.IsWhiteSpace(previous) || previous == '=') && char.IsLetterOrDigit(next))
+            if ((char.IsWhiteSpace(previous) || previous == '=') &&
+                char.IsLetterOrDigit(next) &&
+                HasLaterInlineBacktick(text, i + 1))
                 continue;
 
             while (i + 1 < text.Length && text[i + 1] == '`')
@@ -515,6 +517,19 @@ internal static class GitHubIssueReporter
         for (var i = index - 1; i >= 0 && text[i] == '\\'; i--)
             slashCount++;
         return slashCount % 2 == 1;
+    }
+
+    private static bool HasLaterInlineBacktick(string text, int start)
+    {
+        for (var i = start; i < text.Length; i++)
+        {
+            if (text[i] == '\r' || text[i] == '\n')
+                return false;
+            if (text[i] == '`' && !IsEscaped(text, i) && !IsTripleBacktickAt(text, i))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool IsTripleBacktickAt(string text, int index)

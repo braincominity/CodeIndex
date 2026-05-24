@@ -144,6 +144,15 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public void ScrubInlineCode_RemovesInlineSpanWithTrailingSpaceBeforeAdjacentText()
+    {
+        var input = "Use `secret `and retry";
+        var result = GitHubIssueReporter.ScrubInlineCode(input);
+        Assert.Equal("Use [code example removed]and retry", result);
+        Assert.DoesNotContain("secret", result);
+    }
+
+    [Fact]
     public void ScrubInlineCode_PreservesPlainText()
     {
         var input = "Symbol extraction misses Kotlin data classes";
