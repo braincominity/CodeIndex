@@ -173,6 +173,7 @@ public class McpServerTests : IDisposable
         var line = error.ToString()
             .Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Single(l => l.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal));
+        Assert.Contains("[rid=123 cid=", line);
         var jsonStart = line.IndexOf('{');
         using var document = JsonDocument.Parse(line[jsonStart..]);
         var root = document.RootElement;

@@ -736,14 +736,29 @@ public partial class McpServer : IDisposable
 
     private void DeferFrameLog(Action writeLog)
     {
+        var context = CurrentCorrelationContext.Value;
         var logs = _deferredFrameLogs.Value;
         if (logs is null)
         {
-            writeLog();
+            WriteWithCorrelationContext(context, writeLog);
             return;
         }
 
-        logs.Add(writeLog);
+        logs.Add(() => WriteWithCorrelationContext(context, writeLog));
+    }
+
+    private static void WriteWithCorrelationContext(RequestCorrelationContext? context, Action writeLog)
+    {
+        var previous = CurrentCorrelationContext.Value;
+        try
+        {
+            CurrentCorrelationContext.Value = context;
+            writeLog();
+        }
+        finally
+        {
+            CurrentCorrelationContext.Value = previous;
+        }
     }
 
     private void BeginDeferredFrameLogs()
