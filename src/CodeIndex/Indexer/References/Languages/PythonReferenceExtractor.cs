@@ -166,6 +166,61 @@ internal static class PythonReferenceExtractor
         }
     }
 
+    private static IEnumerable<(string Text, int Offset)> EnumeratePythonTopLevelCommaSegments(string value)
+    {
+        var start = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var inString = false;
+        var quote = '\0';
+
+        for (var index = 0; index < value.Length; index++)
+        {
+            var ch = value[index];
+            if (inString)
+            {
+                if (ch == '\\')
+                {
+                    index++;
+                    continue;
+                }
+
+                if (ch == quote)
+                    inString = false;
+                continue;
+            }
+
+            if (ch is '\'' or '"')
+            {
+                inString = true;
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '(')
+                parenDepth++;
+            else if (ch == ')' && parenDepth > 0)
+                parenDepth--;
+            else if (ch == '[')
+                bracketDepth++;
+            else if (ch == ']' && bracketDepth > 0)
+                bracketDepth--;
+            else if (ch == '{')
+                braceDepth++;
+            else if (ch == '}' && braceDepth > 0)
+                braceDepth--;
+            else if (ch == ',' && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+            {
+                yield return (value[start..index], start);
+                start = index + 1;
+            }
+        }
+
+        if (start <= value.Length)
+            yield return (value[start..], start);
+    }
+
     public static void EmitDecoratorReferences(
         string preparedLine,
         List<ReferenceRecord> references,
@@ -608,39 +663,42 @@ internal static class PythonReferenceExtractor
         foreach (Match functionMatch in FunctionParameterListRegex.Matches(preparedLine))
         {
             var paramsGroup = functionMatch.Groups["params"];
-            foreach (Match annotationMatch in AnnotationExpressionTypeRegex.Matches(paramsGroup.Value))
+            foreach (var (parameterSegment, parameterOffset) in EnumeratePythonTopLevelCommaSegments(paramsGroup.Value))
             {
-                var typeGroup = annotationMatch.Groups["type"];
-                EmitPythonTypeExpressionReferences(
-                    typeGroup,
-                    references,
-                    seen,
-                    fileId,
-                    context,
-                    lineNumber,
-                    container,
-                    index => resolveContainerForReference(paramsGroup.Index + index),
-                    isIgnoredName,
-                    paramsGroup.Index);
-            }
+                foreach (Match annotationMatch in AnnotationExpressionTypeRegex.Matches(parameterSegment))
+                {
+                    var typeGroup = annotationMatch.Groups["type"];
+                    EmitPythonTypeExpressionReferences(
+                        typeGroup,
+                        references,
+                        seen,
+                        fileId,
+                        context,
+                        lineNumber,
+                        container,
+                        index => resolveContainerForReference(paramsGroup.Index + parameterOffset + index),
+                        isIgnoredName,
+                        paramsGroup.Index + parameterOffset);
+                }
 
-            foreach (Match annotationMatch in DirectAnnotationTypeRegex.Matches(paramsGroup.Value))
-            {
-                var name = annotationMatch.Groups["name"].Value;
-                if (isIgnoredName(name))
-                    continue;
+                foreach (Match annotationMatch in DirectAnnotationTypeRegex.Matches(parameterSegment))
+                {
+                    var name = annotationMatch.Groups["name"].Value;
+                    if (isIgnoredName(name))
+                        continue;
 
-                var nameIndex = paramsGroup.Index + annotationMatch.Groups["name"].Index;
-                ReferenceExtractor.AddTypeReferenceSegments(
-                    references,
-                    seen,
-                    fileId,
-                    name,
-                    nameIndex,
-                    context,
-                    lineNumber,
-                    resolveContainerForReference(nameIndex) ?? container,
-                    "python");
+                    var nameIndex = paramsGroup.Index + parameterOffset + annotationMatch.Groups["name"].Index;
+                    ReferenceExtractor.AddTypeReferenceSegments(
+                        references,
+                        seen,
+                        fileId,
+                        name,
+                        nameIndex,
+                        context,
+                        lineNumber,
+                        resolveContainerForReference(nameIndex) ?? container,
+                        "python");
+                }
             }
         }
     }

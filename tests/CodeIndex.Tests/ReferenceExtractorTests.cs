@@ -1456,6 +1456,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonCallableParameterAnnotation_DoesNotCaptureNextParameterName()
+    {
+        const string content = """
+            def bind(callback: Callable[P.args, results.Result], Request=None):
+                return callback
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Result"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "bind");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Request"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_PythonTypeVarTupleUnpack_CapturesTupleTypeReference()
     {
         const string content = """
