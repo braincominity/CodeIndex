@@ -463,6 +463,39 @@ public class ConsoleUiTests
         Assert.Contains("razor_event_binding", fish);
     }
 
+    [Fact]
+    public void PrintCompletions_PowerShellRegistersNativeCompleter()
+    {
+        var output = ConsoleUi.GetCompletionScript("powershell");
+
+        Assert.Contains("Register-ArgumentCompleter -Native -CommandName cdidx", output);
+        Assert.Contains("$commands = @('index', 'backfill-fold'", output);
+        Assert.Contains("'--help', '--version', '--license'", output);
+        Assert.Contains("'search' { $flags = @(", output);
+        Assert.Contains("'--lang' { $langs", output);
+        Assert.Contains("'--kind' { $kinds", output);
+        Assert.Contains("Get-ChildItem -Name \"$wordToComplete*\"", output);
+        Assert.Contains("CompletionResult", output);
+        Assert.Contains("[string]::IsNullOrEmpty($wordToComplete) -and $tokens.Count -ge 1", output);
+        Assert.Contains("$afterLastToken = $lastElement -and $cursorPosition -gt $lastElement.Extent.EndOffset", output);
+        Assert.Contains("$tokens.Count -le 2 -and -not ([string]::IsNullOrEmpty($wordToComplete)) -and -not $afterLastToken", output);
+    }
+
+    [Fact]
+    public void PrintCompletions_PowerShellIncludesSharedFlagValues()
+    {
+        var output = ConsoleUi.GetCompletionScript("pwsh");
+
+        Assert.Contains("'csharp'", output);
+        Assert.Contains("'python'", output);
+        Assert.Contains("'type_reference'", output);
+        Assert.Contains("'razor_event_binding'", output);
+        Assert.Contains("'--max-line-width'", output);
+        Assert.Contains("'--no-dedup'", output);
+        Assert.Contains("'--group-by-name'", output);
+        Assert.Contains("default { $flags = @(", output);
+    }
+
     [Theory]
     [InlineData("bash", "if [ \"$cmd\" = \"hotspots\" ]", "--group-by-name", "--exact-name")]
     [InlineData("zsh", "elif [[ $subcmd == hotspots ]]; then", "--group-by-name[Hotspots: collapse same-name rows across files]", "--exact-name[Exact symbol-name equality]")]
@@ -692,8 +725,9 @@ public class ConsoleUiTests
     {
         using var capture = ConsoleCapture.Start(captureError: true);
 
-        Assert.False(ConsoleUi.PrintCompletions("powershell"));
+        Assert.False(ConsoleUi.PrintCompletions("nu"));
         Assert.Contains("Unknown shell", capture.Error!.ToString());
+        Assert.Contains("powershell", capture.Error!.ToString());
     }
 
     [Fact]

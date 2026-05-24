@@ -1083,21 +1083,21 @@ internal static class ProgramRunner
             return CommandErrorWriter.Write(
                 "--completions requires a shell value.",
                 CommandExitCodes.UsageError,
-                "rerun with one of `bash`, `zsh`, or `fish`.",
+                "rerun with one of `bash`, `zsh`, `fish`, or `powershell`.",
                 "cdidx --completions <shell>");
 
         if (cmdArgs[0].StartsWith("-", StringComparison.Ordinal))
             return CommandErrorWriter.Write(
                 $"--completions requires a shell value, got option-like token '{cmdArgs[0]}'.",
                 CommandExitCodes.UsageError,
-                "rerun with one of `bash`, `zsh`, or `fish`.",
+                "rerun with one of `bash`, `zsh`, `fish`, or `powershell`.",
                 "cdidx --completions <shell>");
 
         if (cmdArgs.Length > 1)
             return CommandErrorWriter.Write(
                 $"--completions accepts exactly one shell value, got extra {ConsoleUi.Counted(cmdArgs.Length - 1, "argument")}: {string.Join(", ", cmdArgs.Skip(1).Select(arg => $"`{arg}`"))}.",
                 CommandExitCodes.UsageError,
-                "rerun with exactly one shell name: `bash`, `zsh`, or `fish`.",
+                "rerun with exactly one shell name: `bash`, `zsh`, `fish`, or `powershell`.",
                 "cdidx --completions <shell>");
 
         if (ConsoleUi.PrintCompletions(cmdArgs[0]))
@@ -1106,7 +1106,7 @@ internal static class ProgramRunner
         return CommandErrorWriter.Write(
             $"unsupported completion shell `{cmdArgs[0]}`.",
             CommandExitCodes.UsageError,
-            "rerun with one of `bash`, `zsh`, or `fish`.",
+            "rerun with one of `bash`, `zsh`, `fish`, or `powershell`.",
             "cdidx --completions <shell>");
     }
 

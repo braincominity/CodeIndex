@@ -6,14 +6,14 @@ namespace CodeIndex.Cli;
 /// <summary>
 /// Single source of truth for cdidx CLI flags. Drives the unsupported-option allowlists
 /// (`TryWriteUnsupportedOptionError`, `ValidateFindArgs`) and the generated shell
-/// completion scripts (bash / zsh / fish). Adding a new flag means appending one row
-/// here instead of editing four places (help text + three completion templates);
+/// completion scripts (bash / zsh / fish / PowerShell). Adding a new flag means appending one row
+/// here instead of editing every completion template;
 /// `CliFlagSchemaTests` fails closed if the schema and the per-command allowlists drift
 /// apart (#1570).
 /// cdidx CLI フラグの単一情報源。未対応オプション拒否リスト
-/// (`TryWriteUnsupportedOptionError` / `ValidateFindArgs`) と bash / zsh / fish の
-/// 補完スクリプト生成を駆動する。新しいフラグを追加しても 4 箇所（help テキストと 3 種の
-/// 補完テンプレート）を同期する必要はなく、スキーマとコマンド別 allowlist がずれた場合は
+/// (`TryWriteUnsupportedOptionError` / `ValidateFindArgs`) と bash / zsh / fish / PowerShell の
+/// 補完スクリプト生成を駆動する。新しいフラグを追加しても各補完テンプレートを
+/// 個別に同期する必要はなく、スキーマとコマンド別 allowlist がずれた場合は
 /// `CliFlagSchemaTests` のカバレッジ検査が失敗する (#1570)。
 /// </summary>
 internal sealed record CliFlag

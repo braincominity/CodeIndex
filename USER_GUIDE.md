@@ -138,6 +138,22 @@ with `cdidx . --verbose` to see `[OK  ]`, `[SKIP]`, `[DEL ]`, and `[ERR ]`
 file statuses. Use incremental refreshes after the first run; see
 [Options](#options) for `--files` and `--commits`.
 
+## Shell completion
+
+Generate completion scripts with `cdidx --completions <bash|zsh|fish|powershell>`.
+The generated scripts complete subcommands, flags, and common flag values.
+`--lang` suggests supported languages, `--kind` suggests symbol/reference kinds,
+and path-like options such as `--db`, `--path`, and `--output` use shell file
+completion.
+
+For PowerShell, add the generated `Register-ArgumentCompleter` script to your
+profile after installing `cdidx`:
+
+```powershell
+cdidx --completions powershell >> $PROFILE
+. $PROFILE
+```
+
 ## Keeping the index fresh
 
 Install the optional git pre-commit hook when you want commits to refresh the
@@ -1959,6 +1975,21 @@ cdidx search "handleRequest"
 場合は `cdidx . --verbose` で再実行すると、`[OK  ]`、`[SKIP]`、`[DEL ]`、`[ERR ]`
 のファイル別ステータスを確認できます。初回以降は差分更新を使ってください。
 `--files` と `--commits` は [オプション一覧](#オプション一覧) を参照してください。
+
+## シェル補完
+
+`cdidx --completions <bash|zsh|fish|powershell>` で補完スクリプトを生成できます。
+生成されたスクリプトは subcommand、flag、よく使う flag 値を補完します。
+`--lang` は対応言語、`--kind` は symbol / reference kind を提示し、`--db`、
+`--path`、`--output` など path 系 option は shell の file completion を使います。
+
+PowerShell では、`cdidx` のインストール後に生成された `Register-ArgumentCompleter`
+script を profile に追加してください:
+
+```powershell
+cdidx --completions powershell >> $PROFILE
+. $PROFILE
+```
 
 ## インデックスを最新に保つ
 

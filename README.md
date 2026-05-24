@@ -79,7 +79,7 @@ scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 
 ### Shell Completion
 
-Generate completion scripts with `cdidx --completions <bash|zsh|fish>`.
+Generate completion scripts with `cdidx --completions <bash|zsh|fish|powershell>`.
 The generated scripts complete subcommands, flags, and common flag values:
 `--lang` suggests supported languages, `--kind` suggests symbol/reference
 kinds, and path-like options such as `--db`, `--path`, and `--output` use shell
@@ -285,7 +285,7 @@ script / CI では `--yes`（または `--force`）が必要です。
 
 ### シェル補完
 
-`cdidx --completions <bash|zsh|fish>` で補完スクリプトを生成できます。
+`cdidx --completions <bash|zsh|fish|powershell>` で補完スクリプトを生成できます。
 生成されたスクリプトは subcommand、flag、よく使う flag 値を補完します。
 `--lang` は対応言語、`--kind` は symbol / reference kind を提示し、`--db`、
 `--path`、`--output` など path 系 option は shell の file completion を使います。
