@@ -3463,6 +3463,20 @@ public static partial class SymbolExtractor
                     }
 
                     if (lang == "css"
+                        && pattern.Kind == "namespace"
+                        && pattern.BodyStyle == BodyStyle.Brace
+                        && cssScannerLines != null)
+                    {
+                        TryAddCssMediaFeatureSymbols(
+                            fileId,
+                            line,
+                            cssScannerLines[i],
+                            i,
+                            symbols,
+                            cssSeenSymbols);
+                    }
+
+                    if (lang == "css"
                         && pattern.Kind == "class"
                         && pattern.BodyStyle == BodyStyle.Brace
                         && cssScannerLines != null)
