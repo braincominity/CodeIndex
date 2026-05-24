@@ -117,9 +117,11 @@ The documented `status --json` trust contract covers these fields:
 <tr><td><code>unknown_extension_file_count</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td><td><code>data_dir_source</code></td></tr>
 <tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_pragma_settings</code></td><td><code>hooks</code></td></tr>
 <tr><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td><td><code>degraded_reason</code></td><td><code>recommended_action</code></td></tr>
-<tr><td><code>alternative_action</code></td><td></td><td></td><td></td></tr>
+<tr><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td></td><td></td></tr>
 </tbody>
 </table>
+
+For MCP `status`, `mcp_session` is session-scoped diagnostic data rather than persisted index state. It includes `log_level`, `roots`, and optional `client_capabilities`.
 
 `hotspot_family_degraded_reason` uses these values:
 
@@ -299,9 +301,11 @@ cdidx mcp
 <tr><td><code>unknown_extension_file_count</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td><td><code>data_dir_source</code></td></tr>
 <tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_pragma_settings</code></td><td><code>hooks</code></td></tr>
 <tr><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td><td><code>degraded_reason</code></td><td><code>recommended_action</code></td></tr>
-<tr><td><code>alternative_action</code></td><td></td><td></td><td></td></tr>
+<tr><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td></td><td></td></tr>
 </tbody>
 </table>
+
+MCP `status` の `mcp_session` は永続化された index 状態ではなく、セッション単位の診断情報です。`log_level`、`roots`、任意の `client_capabilities` を含みます。
 
 `hotspot_family_degraded_reason` は次の値を使います。
 
