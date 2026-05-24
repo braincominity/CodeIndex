@@ -892,9 +892,41 @@ public class ReferenceExtractorTests
                     return f
                 return wrap
 
+            def target_func():
+                pass
+
+            def memoize(fn):
+                return fn
+
+            def cache_with(timeout):
+                def wrap(f):
+                    return f
+                return wrap
+
+            def make_factory():
+                return target_func
+
+            DEFAULT_TIMEOUT = 30
+
             @bare_decorator
             @parametrized("value")
             def wrapped():
+                pass
+
+            @functools.wraps(target_func)
+            def wrapped_target():
+                pass
+
+            @cache_with(timeout=30)(memoize(target_func))
+            def composed_target():
+                pass
+
+            @cache_with(timeout=DEFAULT_TIMEOUT)
+            def configured_target():
+                pass
+
+            @cache_with(factory=make_factory())
+            def keyword_factory_target():
                 pass
 
             @staticmethod
@@ -913,7 +945,7 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "python", content);
         var references = ReferenceExtractor.Extract(1, "python", content, symbols);
 
-        Assert.Equal(5, references.Count(reference => reference.ReferenceKind == "decorator"));
+        Assert.Equal(9, references.Count(reference => reference.ReferenceKind == "decorator"));
         Assert.Contains(references, reference =>
             reference.SymbolName == "bare_decorator"
             && reference.ReferenceKind == "decorator");
@@ -931,6 +963,25 @@ public class ReferenceExtractorTests
             && reference.ReferenceKind == "decorator");
         Assert.Contains(references, reference =>
             reference.SymbolName == "parametrized"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "target_func"
+            && reference.ReferenceKind == "reference"
+            && reference.Context == "@functools.wraps(target_func)");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "memoize"
+            && reference.ReferenceKind == "call"
+            && reference.Context == "@cache_with(timeout=30)(memoize(target_func))");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "target_func"
+            && reference.ReferenceKind == "reference"
+            && reference.Context == "@cache_with(timeout=30)(memoize(target_func))");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "make_factory"
+            && reference.ReferenceKind == "call"
+            && reference.Context == "@cache_with(factory=make_factory())");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "DEFAULT_TIMEOUT"
             && reference.ReferenceKind == "call");
     }
 

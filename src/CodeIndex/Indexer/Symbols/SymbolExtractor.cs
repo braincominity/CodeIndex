@@ -219,10 +219,13 @@ public static partial class SymbolExtractor
         @"^\s*(?:type\s+)?\w+(?:\[[^\]]+\])?\s+interface\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex GoInterfaceMethodRegex = new(
-        @"^\s*(?<name>[A-Za-z_]\w*)\s*\(",
+        @"^\s*(?<name>[A-Za-z_]\w*)\s*(?:\[[^\]\r\n]+\])?\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex GoInterfaceEmbeddedTypeRegex = new(
         @"^\s*(?:~\s*)?(?<name>[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)(?:\[[^\]\r\n]+\])?\s*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GoStructEmbeddedTypeRegex = new(
+        @"^\s*\*?\s*(?<name>[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)(?:\[[^\]\r\n]+\])?\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly HashSet<string> GoInterfaceEmbeddedTypeBlacklist = new(StringComparer.Ordinal)
     {

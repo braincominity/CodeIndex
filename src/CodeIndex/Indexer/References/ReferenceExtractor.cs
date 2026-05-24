@@ -11,6 +11,7 @@ namespace CodeIndex.Indexer;
 /// </summary>
 public static partial class ReferenceExtractor
 {
+    private static readonly TimeSpan ExtractionRegexTimeout = TimeSpan.FromSeconds(2);
     // THREAD-SAFETY: Reference extraction is stateless per call. Shared Regex instances and
     // lookup tables are initialized once and then read concurrently; language-specific state
     // must be created per extraction call (for example via CreateState helpers) rather than
@@ -572,7 +573,8 @@ public static partial class ReferenceExtractor
     // `is` / `is not` / `as` の型位置 (`o is Base`, `o is not Base`, `o as Base`)。
     private static readonly Regex CSharpIsAsTypeTestRegex = new(
         $@"(?<![\w$])(?:is\s+(?:not\s+)?|as\s+)(?<type>{CSharpTypeExpressionPattern})",
-        RegexOptions.Compiled);
+        RegexOptions.Compiled,
+        ExtractionRegexTimeout);
     internal static readonly Regex CSharpTrailingIsAsTypePatternIntroRegex = new(
         @"(?<![\w$])(?:is(?:\s+not)?|as)\s*$",
         RegexOptions.Compiled);
@@ -597,7 +599,8 @@ public static partial class ReferenceExtractor
         RegexOptions.Compiled);
     private static readonly Regex CSharpTypeExpressionAtCursorRegex = new(
         $@"\G(?<type>{CSharpTypeExpressionPattern})",
-        RegexOptions.Compiled);
+        RegexOptions.Compiled,
+        ExtractionRegexTimeout);
     // C# XML-doc cross-reference (`<see cref="Base.Do"/>`, `<seealso cref="ILogger.Log"/>`).
     // C# XML doc の `<see cref="Base.Do"/>` / `<seealso cref="ILogger.Log"/>`。
     private static readonly Regex CSharpDocCrefRegex = new(
