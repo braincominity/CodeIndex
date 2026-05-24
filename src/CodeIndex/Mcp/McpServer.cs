@@ -1528,54 +1528,66 @@ public partial class McpServer : IDisposable
         JsonNode response;
         try
         {
+            if (ValidateCommonListArguments(args) is JsonObject listArgumentError)
+            {
+                metricsError = "invalid_list_argument";
+                response = CreateToolErrorResponse(id, listArgumentError["message"]!.GetValue<string>(),
+                    category: McpErrorEnvelope.CategoryInvalidArgument,
+                    suggestion: "Send only non-empty string entries within the documented MCP array bounds.",
+                    retrySafe: false,
+                    extraData: listArgumentError);
+            }
             // Per-(tool, caller) rate limiter check (#1560). Disabled by default; when an
             // operator opts in via CDIDX_MCP_RATE_LIMIT_RPS we still keep the assignment-then-
             // emit pattern so the rate-limit refusal lands in the audit log (#1562) instead of
             // disappearing into a direct return.
             // (tool, caller) ごとのレート制限 (#1560)。既定は無効。opt-in 時もアサインしてから
             // 監査出力する構造を保ち、refusal が audit log (#1562) から消えないようにする。
-            var decision = RateLimiter.TryAcquire(toolName, _caller);
-            if (!decision.Allowed)
-            {
-                metricsError = "rate_limited";
-                Console.Error.WriteLine(BuildRateLimitedLog(toolName, _caller, decision.RetryAfterMs));
-                response = CreateRateLimitedErrorResponse(id, toolName, _caller, decision.RetryAfterMs);
-            }
             else
             {
-                response = toolName switch
+                var decision = RateLimiter.TryAcquire(toolName, _caller);
+                if (!decision.Allowed)
+                {
+                    metricsError = "rate_limited";
+                    Console.Error.WriteLine(BuildRateLimitedLog(toolName, _caller, decision.RetryAfterMs));
+                    response = CreateRateLimitedErrorResponse(id, toolName, _caller, decision.RetryAfterMs);
+                }
+                else
+                {
+                    response = toolName switch
 
-            {
-                "search" => ExecuteSearch(id, args),
-                "definition" => ExecuteDefinition(id, args),
-                "references" => ExecuteReferences(id, args),
-                "callers" => ExecuteCallers(id, args),
-                "callees" => ExecuteCallees(id, args),
-                "symbols" => ExecuteSymbols(id, args),
-                "files" => ExecuteFiles(id, args),
-                "find_in_file" => ExecuteFindInFile(id, args),
-                "excerpt" => ExecuteExcerpt(id, args),
-                "map" => ExecuteMap(id, args),
-                "analyze_symbol" => ExecuteAnalyzeSymbol(id, args),
-                "status" => ExecuteStatus(id),
-                "outline" => ExecuteOutline(id, args),
-                "batch_query" => ExecuteBatchQuery(id, args),
-                "deps" => ExecuteDeps(id, args),
-                "impact_analysis" => ExecuteImpactAnalysis(id, args),
-                "languages" => ExecuteLanguages(id),
-                "validate" => ExecuteValidate(id, args),
-                "unused_symbols" => ExecuteUnusedSymbols(id, args),
-                "symbol_hotspots" => ExecuteSymbolHotspots(id, args),
-                "ping" => ExecutePing(id),
-                "index" => ExecuteIndex(id, args, progressToken),
-                "backfill_fold" => ExecuteBackfillFold(id, progressToken),
-                "suggest_improvement" => ExecuteSuggestImprovement(id, args),
-                _ => CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown tool: {toolName}",
-                    category: McpErrorEnvelope.CategoryToolUnknown,
-                    suggestion: "Call tools/list to enumerate the available tool names for this server. Tool name match is case-sensitive.",
-                    retrySafe: false,
-                    extraData: new JsonObject { ["tool"] = toolName }),
-            };
+                    {
+                        "search" => ExecuteSearch(id, args),
+                        "definition" => ExecuteDefinition(id, args),
+                        "references" => ExecuteReferences(id, args),
+                        "callers" => ExecuteCallers(id, args),
+                        "callees" => ExecuteCallees(id, args),
+                        "symbols" => ExecuteSymbols(id, args),
+                        "files" => ExecuteFiles(id, args),
+                        "find_in_file" => ExecuteFindInFile(id, args),
+                        "excerpt" => ExecuteExcerpt(id, args),
+                        "map" => ExecuteMap(id, args),
+                        "analyze_symbol" => ExecuteAnalyzeSymbol(id, args),
+                        "status" => ExecuteStatus(id),
+                        "outline" => ExecuteOutline(id, args),
+                        "batch_query" => ExecuteBatchQuery(id, args),
+                        "deps" => ExecuteDeps(id, args),
+                        "impact_analysis" => ExecuteImpactAnalysis(id, args),
+                        "languages" => ExecuteLanguages(id),
+                        "validate" => ExecuteValidate(id, args),
+                        "unused_symbols" => ExecuteUnusedSymbols(id, args),
+                        "symbol_hotspots" => ExecuteSymbolHotspots(id, args),
+                        "ping" => ExecutePing(id),
+                        "index" => ExecuteIndex(id, args, progressToken),
+                        "backfill_fold" => ExecuteBackfillFold(id, progressToken),
+                        "suggest_improvement" => ExecuteSuggestImprovement(id, args),
+                        _ => CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown tool: {toolName}",
+                            category: McpErrorEnvelope.CategoryToolUnknown,
+                            suggestion: "Call tools/list to enumerate the available tool names for this server. Tool name match is case-sensitive.",
+                            retrySafe: false,
+                            extraData: new JsonObject { ["tool"] = toolName }),
+                    };
+                }
             }
         }
         catch (OperationCanceledException) when (_currentRequestToken.Value.IsCancellationRequested)

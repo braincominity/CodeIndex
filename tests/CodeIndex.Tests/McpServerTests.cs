@@ -5381,11 +5381,19 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
 
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
-        Assert.Contains("Executed 2 queries", text);
+        Assert.Contains("Executed 2 of 2 queries", text);
         var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
         Assert.Equal(2, results.Count);
+        Assert.Equal(0, results[0]!["request_index"]!.GetValue<int>());
+        Assert.True(results[0]!["ok"]!.GetValue<bool>());
         Assert.Equal("status", results[0]!["tool"]!.GetValue<string>());
+        Assert.Equal(1, results[1]!["request_index"]!.GetValue<int>());
+        Assert.True(results[1]!["ok"]!.GetValue<bool>());
         Assert.Equal("files", results[1]!["tool"]!.GetValue<string>());
+        var metadata = response["result"]!["structuredContent"]!["metadata"]!;
+        Assert.Equal(2, metadata["submitted"]!.GetValue<int>());
+        Assert.Equal(2, metadata["executed"]!.GetValue<int>());
+        Assert.Equal(0, metadata["errors"]!.GetValue<int>());
     }
 
     [Fact]
@@ -5460,17 +5468,86 @@ public class McpServerTests : IDisposable
         var metadata = structured["metadata"]!;
         Assert.Equal(1, metadata["success_count"]!.GetValue<int>());
         Assert.Equal(2, metadata["failure_count"]!.GetValue<int>());
+        Assert.Equal(3, metadata["submitted"]!.GetValue<int>());
+        Assert.Equal(3, metadata["executed"]!.GetValue<int>());
+        Assert.Equal(2, metadata["errors"]!.GetValue<int>());
 
         var results = structured["results"]!.AsArray();
         Assert.Equal(3, results.Count);
         Assert.NotNull(results[0]!["elapsed_ms"]);
+        Assert.True(results[0]!["ok"]!.GetValue<bool>());
         Assert.NotNull(results[1]!["elapsed_ms"]);
+        Assert.False(results[1]!["ok"]!.GetValue<bool>());
         Assert.NotNull(results[2]!["elapsed_ms"]);
+        Assert.False(results[2]!["ok"]!.GetValue<bool>());
+        Assert.Equal(1, results[1]!["request_index"]!.GetValue<int>());
+        Assert.Equal(2, results[2]!["request_index"]!.GetValue<int>());
         Assert.Contains("not allowed", results[1]!["error"]!.GetValue<string>());
         Assert.Contains("Unknown tool", results[2]!["error"]!.GetValue<string>());
 
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("Executed 3 of 3 queries", text);
         Assert.Contains("1 succeeded, 2 failed", text);
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_ReportsMalformedSlotsAndActualExecutionCounts_Issue1838_1992_1994()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[123,{"tool":"search","arguments":{"query":"App","path":["",null,42,"src"]}},{"tool":"ping"}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        var metadata = structured["metadata"]!;
+        Assert.Equal(3, metadata["submitted"]!.GetValue<int>());
+        Assert.Equal(3, metadata["executed"]!.GetValue<int>());
+        Assert.Equal(2, metadata["errors"]!.GetValue<int>());
+
+        var results = structured["results"]!.AsArray();
+        Assert.Equal(3, results.Count);
+        Assert.Equal(0, results[0]!["request_index"]!.GetValue<int>());
+        Assert.False(results[0]!["ok"]!.GetValue<bool>());
+        Assert.Contains("must be an object", results[0]!["error"]!.GetValue<string>());
+        Assert.Equal(1, results[1]!["request_index"]!.GetValue<int>());
+        Assert.False(results[1]!["ok"]!.GetValue<bool>());
+        Assert.Contains("path contains 3 invalid entries", results[1]!["error"]!.GetValue<string>());
+        Assert.Equal(2, results[2]!["request_index"]!.GetValue<int>());
+        Assert.True(results[2]!["ok"]!.GetValue<bool>());
+
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("Executed 3 of 3 queries", text);
+        Assert.Contains("1 succeeded, 2 failed", text);
+    }
+
+    [Fact]
+    public void ToolsCall_RejectsOversizedPathArrays_Issue2028()
+    {
+        var paths = new JsonArray();
+        for (var i = 0; i < McpServer.MaxMcpArrayFilterCount + 1; i++)
+            paths.Add($"src/{i}.cs");
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "search",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "App",
+                    ["path"] = paths,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("path must contain at most", text);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, structured["category"]!.GetValue<string>());
+        Assert.Equal(1, structured["invalid_count"]!.GetValue<int>());
     }
 
     [Fact]
