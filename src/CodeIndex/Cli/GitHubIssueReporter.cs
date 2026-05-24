@@ -48,6 +48,7 @@ internal static class GitHubIssueReporter
     internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan DefaultRateLimitRetryDelay = TimeSpan.FromMinutes(1);
     private const string TimeoutEnvironmentVariable = "CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS";
+    internal const int MaxGitHubIssueTitleLength = 255;
 
     // Static HttpClient singleton — .NET best practice for reuse.
     // 静的 HttpClient シングルトン — .NET の再利用ベストプラクティス。
@@ -321,11 +322,7 @@ internal static class GitHubIssueReporter
 
         // Build the issue title — scrub and truncate for readability.
         // Issue タイトルを構築 — 除去・切り詰めて可読性を確保。
-        var scrubbedForTitle = ScrubInlineCode(record.Description);
-        var shortDesc = scrubbedForTitle.Length > 60
-            ? scrubbedForTitle[..60] + "..."
-            : scrubbedForTitle;
-        var title = $"[AI Suggestion] {record.Category}: {shortDesc}";
+        var title = BuildIssueTitle(record.Category, record.Description);
 
         // Scrub inline code from description and context before external submission.
         // SourceCodeDetector intentionally allows short inline code examples for local
@@ -442,6 +439,30 @@ internal static class GitHubIssueReporter
             scrubbed,
             @"(?<!`)`[^`\r\n]+`(?!`)",
             "[code example removed]");
+    }
+
+    internal static string BuildIssueTitle(string category, string description)
+    {
+        var prefix = $"[AI Suggestion] {category}: ";
+        if (prefix.Length >= MaxGitHubIssueTitleLength)
+            return prefix[..MaxGitHubIssueTitleLength];
+
+        var scrubbedForTitle = ScrubInlineCode(description).Replace("\r", " ").Replace("\n", " ").Trim();
+        var maxDescriptionLength = MaxGitHubIssueTitleLength - prefix.Length;
+        var shortDesc = TruncateWithEllipsis(scrubbedForTitle, Math.Min(63, maxDescriptionLength));
+        var title = prefix + shortDesc;
+        return title.Length <= MaxGitHubIssueTitleLength
+            ? title
+            : title[..MaxGitHubIssueTitleLength];
+    }
+
+    private static string TruncateWithEllipsis(string value, int maxLength)
+    {
+        if (value.Length <= maxLength)
+            return value;
+        if (maxLength <= 3)
+            return value[..maxLength];
+        return value[..(maxLength - 3)] + "...";
     }
 
     internal static string BuildSubmissionFailureMessage(string detail) =>
