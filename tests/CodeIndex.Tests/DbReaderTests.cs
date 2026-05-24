@@ -2440,6 +2440,45 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetStatus_WithFoldRowVerification_DegradesWhenReadyBitRowsAreIncomplete()
+    {
+        using var env = EnvironmentVariableScope.Capture(DbReader.VerifyFoldReadyRowsEnvironmentVariable);
+        env.Set(DbReader.VerifyFoldReadyRowsEnvironmentVariable, "1");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_fold_status_verify_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            var fileId = writer.UpsertFile(new FileRecord
+            {
+                Path = "src/a.py", Lang = "python", Size = 1, Lines = 1,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            writer.InsertSymbols([
+                new SymbolRecord { FileId = fileId, Kind = "function", Name = "authenticate", Line = 1, StartLine = 1, EndLine = 1 },
+            ]);
+            Assert.True(writer.MarkFoldReady());
+
+            using (var cmd = db.Connection.CreateCommand())
+            {
+                cmd.CommandText = "UPDATE symbols SET name_folded = NULL WHERE name = 'authenticate'";
+                cmd.ExecuteNonQuery();
+            }
+
+            var status = new DbReader(db.Connection).GetStatus();
+
+            Assert.False(status.FoldReady);
+            Assert.Equal(DegradationReasonCodes.FoldReadyBitSetButRowsIncomplete, status.FoldReadyReason);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void GetExactGraphSupportedDefinitionLanguage_DegradesOnLegacyDbMissingContainerKind()
     {
         // Regression for #493: the exact graph-support probe hardcoded `s.container_kind`

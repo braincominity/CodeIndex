@@ -30,6 +30,8 @@ internal readonly record struct IndexedFileSnapshot(string Path, string? Checksu
 /// </summary>
 public partial class DbReader
 {
+    public const string VerifyFoldReadyRowsEnvironmentVariable = "CDIDX_VERIFY_FOLD_READY_ROWS";
+
     private static readonly Regex ImpactSignatureIdentifierRegex = new(@"[\p{L}_][\p{L}\p{Nd}_]*", RegexOptions.Compiled);
     private static readonly Regex CSharpUsingStaticImportRegex = new(@"^\s*(?:global\s+)?using\s+static\s+(?<target>[^;]+)", RegexOptions.Compiled);
     private static readonly Regex CSharpUsingAliasImportRegex = new(@"^\s*(?:global\s+)?using\s+(?!static\b)(?<alias>[^\s=;]+)\s*=\s*(?<target>[^;]+)", RegexOptions.Compiled);
@@ -647,7 +649,12 @@ public partial class DbReader
     private string? ResolveFoldReadyReason()
     {
         if (_foldReady)
+        {
+            if (ShouldVerifyFoldReadyRows() && HasIncompleteFoldRows())
+                return DegradationReasonCodes.FoldReadyBitSetButRowsIncomplete;
+
             return null;
+        }
 
         var storedVersion = ParseFoldVersion(_conn);
         var storedFingerprint = ParseFoldFingerprint(_conn);
@@ -658,6 +665,24 @@ public partial class DbReader
         if (!string.Equals(storedFingerprint, NameFold.Fingerprint(), StringComparison.Ordinal))
             return DegradationReasonCodes.StaleFoldKeyFingerprint;
         return DegradationReasonCodes.FoldRowsNotRestamped;
+    }
+
+    private static bool ShouldVerifyFoldReadyRows()
+    {
+        var value = Environment.GetEnvironmentVariable(VerifyFoldReadyRowsEnvironmentVariable);
+        return value is "1" || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool HasIncompleteFoldRows()
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT
+                EXISTS(SELECT 1 FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL)
+              OR EXISTS(SELECT 1 FROM symbol_references WHERE symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
+              OR EXISTS(SELECT 1 FROM symbol_references WHERE container_name IS NOT NULL AND container_name_folded IS NULL)";
+        var raw = cmd.ExecuteScalar();
+        return raw is long l ? l != 0 : raw is int i && i != 0;
     }
 
     private HashSet<string> LoadIndexedHotspotFamilyLanguages()
