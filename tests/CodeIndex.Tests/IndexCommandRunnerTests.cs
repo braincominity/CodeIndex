@@ -3601,13 +3601,14 @@ public class IndexCommandRunnerTests
 
             Assert.True(hookInvoked);
             Assert.Equal(CommandExitCodes.Interrupted, interruptedExitCode);
-            var recoveryWarning = ConsoleCapture.CaptureError(() =>
+            var reopenWarning = ConsoleCapture.CaptureError(() =>
             {
                 using var db = new DbContext(dbPath);
-                Assert.Equal(0, db.GetUserVersion());
+                Assert.Equal(initialReadiness, db.GetUserVersion());
             });
-            Assert.Contains("Last batch did not complete", recoveryWarning);
+            Assert.DoesNotContain("Last batch did not complete", reopenWarning);
             Assert.DoesNotContain("later.cs", ReadIndexedPaths(dbPath));
+            Assert.Contains("app.cs", ReadIndexedPaths(dbPath));
         }
         finally
         {

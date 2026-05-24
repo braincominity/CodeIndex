@@ -3191,13 +3191,14 @@ public static class IndexCommandRunner
         }
 
         // Full-scan commits to mutating the DB from here on. Keep the whole write phase in
-        // one outer transaction so Ctrl-C/SIGTERM can roll back the readiness demotion,
-        // stale-file purge, and per-file writes instead of leaving a half-cleared index.
-        // full-scan の書き込み全体を outer transaction に入れ、中断時に readiness clear /
-        // purge / per-file write をまとめて rollback する。
+        // one outer transaction so Ctrl-C/SIGTERM can roll back the batch marker,
+        // readiness demotion, stale-file purge, and per-file writes instead of leaving a
+        // half-cleared index.
+        // full-scan の書き込み全体を outer transaction に入れ、中断時に batch marker /
+        // readiness clear / purge / per-file write をまとめて rollback する。
         ThrowIfFullScanCancelled(0, files.Count);
-        writer.MarkBatchInProgress();
         using var fullScanTxn = writer.BeginTransaction();
+        writer.MarkBatchInProgress();
         writer.ClearReadyFlags();
         writer.ClearHotspotFamilyReady();
         writer.ClearMetadataTargetReady();
