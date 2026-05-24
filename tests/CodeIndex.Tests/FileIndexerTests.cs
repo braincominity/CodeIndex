@@ -63,6 +63,31 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_SkipsBuiltInDirectoriesWithCaseInsensitiveNames()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-skipdir-case-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, "Node_Modules"));
+            File.WriteAllText(Path.Combine(tempDir, "Node_Modules", "ignored.js"), "export const ignored = true;");
+            File.WriteAllText(Path.Combine(tempDir, "app.js"), "export const app = true;");
+
+            var indexer = new FileIndexer(tempDir, ignoreCase: true);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["app.js"], files);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFilesDetailed_HardlinkedFiles_SkipsDuplicatePathWithWarning()
     {
         if (OperatingSystem.IsWindows())
