@@ -57,6 +57,7 @@ public class DbSchemaConstraintTests
             }
             Assert.Equal(0L, CountFtsMatches(conn, "orphan"));
             Assert.Equal(1L, CountFtsMatches(conn, "ok"));
+            Assert.Contains("reference_lines", ForeignKeyTargets(conn, "symbol_references"));
         }
         finally
         {
@@ -171,5 +172,16 @@ public class DbSchemaConstraintTests
         cmd.CommandText = "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH @query";
         cmd.Parameters.AddWithValue("@query", query);
         return (long)cmd.ExecuteScalar()!;
+    }
+
+    private static string[] ForeignKeyTargets(SqliteConnection conn, string tableName)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"PRAGMA foreign_key_list({tableName})";
+        using var reader = cmd.ExecuteReader();
+        var targets = new List<string>();
+        while (reader.Read())
+            targets.Add(reader.GetString(2));
+        return targets.ToArray();
     }
 }
