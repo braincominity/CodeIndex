@@ -55,7 +55,7 @@ internal static class PythonReferenceExtractor
         @"^\s*class\s+\w+\s*\(\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)\s*\)\s*:",
         RegexOptions.Compiled);
     private static readonly Regex MultipleClassBaseTypesRegex = new(
-        @"^\s*class\s+\w+\s*\((?<types>[^=)]*,[^=)]*)\)\s*:",
+        @"^\s*class\s+\w+\s*\((?<types>[^)]*,[^)]*)\)\s*:",
         RegexOptions.Compiled);
     private static readonly Regex ClassMetaclassTypeRegex = new(
         @"^\s*class\s+\w+\s*\([^)]*\bmetaclass\s*=\s*(?<name>(?:[_\p{L}]\w*\.)*[_\p{Lu}]\w*)",
@@ -514,6 +514,8 @@ internal static class PythonReferenceExtractor
                 var name = typeMatch.Groups["name"].Value;
                 if (isIgnoredName(name))
                     continue;
+                if (IsPythonClassHeaderKeywordArgument(typesGroup.Value, typeMatch.Groups["name"].Index))
+                    continue;
 
                 var nameIndex = typesGroup.Index + typeMatch.Groups["name"].Index;
                 ReferenceExtractor.AddTypeReferenceSegments(
@@ -546,6 +548,31 @@ internal static class PythonReferenceExtractor
                 resolveContainerForReference(match.Groups["name"].Index) ?? container,
                 "python");
         }
+    }
+
+    private static bool IsPythonClassHeaderKeywordArgument(string headerArguments, int nameIndex)
+    {
+        for (var i = nameIndex - 1; i >= 0; i--)
+        {
+            var ch = headerArguments[i];
+            if (char.IsWhiteSpace(ch))
+                continue;
+            if (ch == '=')
+                return true;
+            break;
+        }
+
+        for (var i = nameIndex; i < headerArguments.Length; i++)
+        {
+            var ch = headerArguments[i];
+            if (char.IsLetterOrDigit(ch) || ch == '_' || ch == '.')
+                continue;
+            if (char.IsWhiteSpace(ch))
+                continue;
+            return ch == '=';
+        }
+
+        return false;
     }
 
     public static void EmitFunctionReturnReferences(

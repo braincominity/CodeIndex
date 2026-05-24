@@ -1091,6 +1091,61 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonMixedBasesAndMetaclass_EmitsBaseAndMetaclassReferences()
+    {
+        const string content = """
+            class Derived(Base, Mixin, metaclass=Meta):
+                pass
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Base"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Mixin"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Meta"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "metaclass"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PythonSuperInitSubclass_EmitsHookCallReference()
+    {
+        const string content = """
+            class Base:
+                def __init_subclass__(cls) -> None:
+                    pass
+
+            class Child(Base):
+                def __init_subclass__(cls) -> None:
+                    super().__init_subclass__()
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        var hookCall = Assert.Single(references, reference =>
+            reference.SymbolName == "__init_subclass__"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "__init_subclass__"
+            && reference.Line == 7);
+        Assert.Equal(17, hookCall.Column);
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "super"
+            && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_PythonStringifiedAnnotations_CapturesNestedForwardReferences()
     {
         const string content = """
