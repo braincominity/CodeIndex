@@ -2026,7 +2026,7 @@ public static class IndexCommandRunner
                     continue;
                 }
 
-                var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(absPath);
+                var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(absPath, cancellationToken);
 
                 if (warning != null && !options.Json && !options.Quiet)
                 {
