@@ -666,7 +666,7 @@ public partial class McpServer : IDisposable
         // メモリ枯渇を防ぐため巨大メッセージを拒否
         if (line.Length > MaxLineLength)
         {
-            Console.Error.WriteLine(BuildOversizedMessageLog(line.Length));
+            DeferFrameLog(BuildOversizedMessageLog(line.Length));
             var errorResponse = CreateErrorResponse(null, -32700, "Message too large",
                 category: McpErrorEnvelope.CategoryMessageTooLarge,
                 suggestion: $"JSON-RPC frame exceeds the {MaxLineLength} byte cap. Split the request into smaller calls or use `batch_query` with smaller slots.",

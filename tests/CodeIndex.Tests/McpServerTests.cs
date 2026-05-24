@@ -1052,6 +1052,27 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessLineAsync_OversizedFrame_WritesResponseBeforeErrorLog()
+    {
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+        var previousError = Console.Error;
+        Console.SetError(error);
+        try
+        {
+            await server.ProcessLineAsync(new string('x', 1_000_001), new AssertingTextWriter(writer, () => Assert.Equal(string.Empty, error.ToString())));
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+
+        Assert.Contains("Message too large", writer.ToString());
+        Assert.Contains("Message too large", error.ToString());
+    }
+
+    [Fact]
     public async Task RunAsync_ParseErrorWriteFailure_LogsWriteFailureAndParseError()
     {
         var transport = new ShutdownProbeTransport("stdio", _ => throw new IOException("pipe closed"), "not json");
