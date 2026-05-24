@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
+
+### [1.24.4] - 2026-05-25
+
+#### Fixed
+
 - **Release notes now show install and update commands** — GitHub release notes now include Homebrew and NuGet install/update snippets so first-time users and existing users can choose the right command without leaving the release page.
 - **README Quick Start now lists NuGet alongside Homebrew** — the English and Japanese Quick Start snippets now show `dotnet tool install -g cdidx` next to the Homebrew and GitHub-release install paths.
 - **README Quick Start and Highlights are easier to scan** — the English and Japanese README sections now use tables and compact field lists for follow-up commands, output controls, feature areas, and the `status --json` trust contract.
@@ -2764,6 +2769,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
+
+### [1.24.4] - 2026-05-25
+
+#### 修正
+
 - **リリースノートに install / update コマンドを表示するようになりました** — GitHub release notes に Homebrew と NuGet の install/update snippet を載せ、初回ユーザーと既存ユーザーが release page だけで適切なコマンドを選べるようにしました。
 - **README Quick Start が Homebrew と並べて NuGet も案内するようになりました** — 英語版と日本語版の Quick Start snippet に、Homebrew と GitHub release からの install 経路に加えて `dotnet tool install -g cdidx` を掲載しました。
 - **README の Quick Start と特長が読みやすくなりました** — 英語版と日本語版の README で、追加コマンド、出力制御、feature area、`status --json` trust contract を表と compact な field list に整理しました。
@@ -5508,7 +5518,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.24.3...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.24.4...HEAD
+[1.24.4]: https://github.com/Widthdom/CodeIndex/compare/v1.24.3...v1.24.4
 [1.24.3]: https://github.com/Widthdom/CodeIndex/compare/v1.24.2...v1.24.3
 [1.24.2]: https://github.com/Widthdom/CodeIndex/compare/v1.24.1...v1.24.2
 [1.24.1]: https://github.com/Widthdom/CodeIndex/compare/v1.24.0...v1.24.1
