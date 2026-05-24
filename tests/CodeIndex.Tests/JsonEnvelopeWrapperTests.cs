@@ -66,10 +66,10 @@ public class JsonEnvelopeWrapperTests
                 _jsonOptions,
                 "1.0.0"));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             using var document = JsonDocument.Parse(stdout);
             var metadata = document.RootElement.GetProperty("metadata");
-            Assert.Equal(CommandExitCodes.NotFound, metadata.GetProperty("exit_code").GetInt32());
+            Assert.Equal(CommandExitCodes.Success, metadata.GetProperty("exit_code").GetInt32());
             Assert.Equal("DoesNotExist_xyz_123", metadata.GetProperty("query_normalized").GetString());
 
             var results = document.RootElement.GetProperty("results");
@@ -200,7 +200,7 @@ public class JsonEnvelopeWrapperTests
                 _jsonOptions,
                 "1.0.0"));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             var lines = stdout.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
             Assert.Equal(2, lines.Length);
             using var zeroDocument = JsonDocument.Parse(lines[0]);

@@ -313,7 +313,7 @@ public partial class McpServer
 
         return new JsonObject
         {
-            ["message"] = $"{propertyName} must be a string or array of strings.",
+            ["message"] = $"{propertyName} must be a string or an array of strings.",
             ["invalid_count"] = 1,
         };
     }
@@ -1560,25 +1560,27 @@ public partial class McpServer
         int failureCount = 0;
         var truncated = false;
         var responseByteLimit = GetBatchQueryResponseByteLimit();
-        var estimatedResponseBytes = EstimateBatchResponseBytes(id, "Executed 0 queries.", successCount, failureCount,
+        var estimatedResponseBytes = EstimateBatchResponseBytes(id, "Executed 0 queries.", queries.Count, successCount, failureCount,
             responseByteLimit, resultsArray, truncated: false, truncatedQueries);
 
-        bool TryAppendResult(JsonObject entry, string? toolName, JsonNode? toolArgs, bool successfulSlot = false, bool failedSlot = false)
+        bool TryAppendResult(JsonObject entry, string? toolName, JsonNode? toolArgs, int requestIndex, bool successfulSlot = false, bool failedSlot = false)
         {
             var candidateResults = CloneJsonArray(resultsArray);
             candidateResults.Add(entry.DeepClone());
             var candidateSuccessCount = successCount + (successfulSlot ? 1 : 0);
             var candidateFailureCount = failureCount + (failedSlot ? 1 : 0);
+            var candidateExecutedCount = candidateSuccessCount + candidateFailureCount;
             var candidateSummary = candidateFailureCount == 0
-                ? $"Executed {candidateResults.Count} queries in 0 ms (all succeeded)."
-                : $"Executed {candidateResults.Count} queries in 0 ms ({candidateSuccessCount} succeeded, {candidateFailureCount} failed).";
-            var candidateBytes = EstimateBatchResponseBytes(id, candidateSummary, candidateSuccessCount, candidateFailureCount,
+                ? $"Executed {candidateExecutedCount} of {queries.Count} queries in 0 ms (all succeeded)."
+                : $"Executed {candidateExecutedCount} of {queries.Count} queries in 0 ms ({candidateSuccessCount} succeeded, {candidateFailureCount} failed).";
+            var candidateBytes = EstimateBatchResponseBytes(id, candidateSummary, queries.Count, candidateSuccessCount, candidateFailureCount,
                 responseByteLimit, candidateResults, truncated: false, truncatedQueries);
             if (candidateBytes > responseByteLimit)
             {
                 truncated = true;
                 truncatedQueries.Add(new JsonObject
                 {
+                    ["request_index"] = requestIndex,
                     ["tool"] = toolName,
                     ["args_summary"] = BuildArgsSummary(toolArgs),
                     ["reason"] = "response_byte_limit_exceeded",
@@ -1591,13 +1593,15 @@ public partial class McpServer
             return true;
         }
 
-        void AppendSlotError(string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, string errorMessage,
+        void AppendSlotError(int requestIndex, string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, string errorMessage,
             int? code = null, string? category = null, string? suggestion = null, bool? retrySafe = null)
         {
             slotStopwatch.Stop();
             var entry = new JsonObject
             {
+                ["request_index"] = requestIndex,
                 ["tool"] = toolName,
+                ["ok"] = false,
                 ["args_summary"] = BuildArgsSummary(toolArgs),
                 ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                 ["error"] = errorMessage,
@@ -1615,8 +1619,8 @@ public partial class McpServer
                 entry["suggestion"] = suggestion;
             if (retrySafe.HasValue)
                 entry["retry_safe"] = retrySafe.Value;
-            if (TryAppendResult(entry, toolName, toolArgs, failedSlot: true))
-                failureCount++;
+            TryAppendResult(entry, toolName, toolArgs, requestIndex, failedSlot: true);
+            failureCount++;
         }
 
         // Rate-limited slot error variant. Mirrors the shape of `AppendSlotError` so existing
@@ -1630,7 +1634,7 @@ public partial class McpServer
         // 検出・バックオフを可能にする。外側の batch_query 自体もトークンを消費するため、
         // N 個の内側呼び出しを含むスパムは batch_query バケットとツール別バケットの両方で
         // 上限が掛かる（#1560）。
-        void AppendRateLimitedSlot(string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, long retryAfterMs)
+        void AppendRateLimitedSlot(int requestIndex, string? toolName, JsonNode? toolArgs, Stopwatch slotStopwatch, long retryAfterMs)
         {
             slotStopwatch.Stop();
             // #1581: emit the canonical envelope (`category`, `suggestion`, `retry_safe`)
@@ -1641,7 +1645,9 @@ public partial class McpServer
             // とスロット単位のレート制限エラーで判定形状を揃える。
             var entry = new JsonObject
             {
+                ["request_index"] = requestIndex,
                 ["tool"] = toolName,
+                ["ok"] = false,
                 ["args_summary"] = BuildArgsSummary(toolArgs),
                 ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                 ["error"] = $"Rate limit exceeded for tool '{toolName}' (retry after {retryAfterMs} ms).",
@@ -1651,14 +1657,18 @@ public partial class McpServer
                 ["suggestion"] = $"Back off for at least {retryAfterMs} ms before retrying this tool.",
                 ["retry_safe"] = true,
             };
-            if (TryAppendResult(entry, toolName, toolArgs, failedSlot: true))
-                failureCount++;
+            TryAppendResult(entry, toolName, toolArgs, requestIndex, failedSlot: true);
+            failureCount++;
         }
 
-        foreach (var q in queries)
+        for (var requestIndex = 0; requestIndex < queries.Count; requestIndex++)
         {
-            var toolName = q?["tool"]?.GetValue<string>();
-            var toolArgs = q?["arguments"];
+            var q = queries[requestIndex];
+            var queryObject = q as JsonObject;
+            var toolName = queryObject?["tool"] is JsonValue toolValue && toolValue.TryGetValue<string>(out var parsedToolName)
+                ? parsedToolName
+                : null;
+            var toolArgs = queryObject?["arguments"];
             var slotStopwatch = Stopwatch.StartNew();
 
             if (truncated)
@@ -1666,6 +1676,7 @@ public partial class McpServer
                 slotStopwatch.Stop();
                 truncatedQueries.Add(new JsonObject
                 {
+                    ["request_index"] = requestIndex,
                     ["tool"] = toolName,
                     ["args_summary"] = BuildArgsSummary(toolArgs),
                     ["reason"] = "response_byte_limit_already_exceeded",
@@ -1675,9 +1686,19 @@ public partial class McpServer
 
             if (string.IsNullOrEmpty(toolName))
             {
-                AppendSlotError(toolName, toolArgs, slotStopwatch, "Missing tool name",
+                var message = queryObject is null ? "Each query must be an object with a string tool name." : "Missing tool name";
+                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, message,
                     category: McpErrorEnvelope.CategoryMissingParameter,
                     suggestion: "Each batch_query slot must include a string `tool` field.",
+                    retrySafe: false);
+                continue;
+            }
+
+            if (ValidateCommonListArguments(toolArgs) is JsonObject listArgumentError)
+            {
+                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, listArgumentError["message"]!.GetValue<string>(),
+                    category: McpErrorEnvelope.CategoryInvalidArgument,
+                    suggestion: "Send only non-empty string entries within the documented MCP array bounds.",
                     retrySafe: false);
                 continue;
             }
@@ -1699,7 +1720,7 @@ public partial class McpServer
             // 前にこのゲートを置く。
             if (McpToolFilter.IsKnownTool(toolName) && !_toolFilter.IsEnabled(toolName))
             {
-                AppendSlotError(toolName, toolArgs, slotStopwatch, $"Tool not enabled: {toolName}", code: -32601,
+                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, $"Tool not enabled: {toolName}", code: -32601,
                     category: McpErrorEnvelope.CategoryToolDisabled,
                     suggestion: "This tool is disabled on the server. Ask the operator to enable it or remove the slot.",
                     retrySafe: false);
@@ -1709,7 +1730,7 @@ public partial class McpServer
             // Block write operations in batch / バッチ内では書き込み操作をブロック
             if (toolName == "index" || toolName == "backfill_fold" || toolName == "suggest_improvement")
             {
-                AppendSlotError(toolName, toolArgs, slotStopwatch, $"{toolName} is not allowed in batch_query (write operation)",
+                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, $"{toolName} is not allowed in batch_query (write operation)",
                     category: McpErrorEnvelope.CategoryInvalidArgument,
                     suggestion: "Call write tools (index / backfill_fold / suggest_improvement) directly via tools/call, not inside batch_query.",
                     retrySafe: false);
@@ -1724,7 +1745,7 @@ public partial class McpServer
             // ネスト禁止の明示文に揃える（#1560）。
             if (toolName == "batch_query")
             {
-                AppendSlotError(toolName, toolArgs, slotStopwatch, "batch_query cannot be nested inside batch_query.",
+                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, "batch_query cannot be nested inside batch_query.",
                     category: McpErrorEnvelope.CategoryInvalidArgument,
                     suggestion: "Flatten the nested batch_query into top-level slots.",
                     retrySafe: false);
@@ -1752,7 +1773,7 @@ public partial class McpServer
             var slotDecision = RateLimiter.TryAcquire(toolName, _caller);
             if (!slotDecision.Allowed)
             {
-                AppendRateLimitedSlot(toolName, toolArgs, slotStopwatch, slotDecision.RetryAfterMs);
+                AppendRateLimitedSlot(requestIndex, toolName, toolArgs, slotStopwatch, slotDecision.RetryAfterMs);
                 continue;
             }
 
@@ -1786,7 +1807,7 @@ public partial class McpServer
 
                 if (response == null)
                 {
-                    AppendSlotError(toolName, toolArgs, slotStopwatch, $"Unknown tool: {toolName}",
+                    AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, $"Unknown tool: {toolName}",
                         category: McpErrorEnvelope.CategoryToolUnknown,
                         suggestion: "Call tools/list to see the tool catalog. Slot tool names are case-sensitive.",
                         retrySafe: false);
@@ -1812,7 +1833,7 @@ public partial class McpServer
                     bool? innerRetrySafe = null;
                     if (innerStructured?["retry_safe"] is JsonValue rv && rv.TryGetValue<bool>(out var rb))
                         innerRetrySafe = rb;
-                    AppendSlotError(toolName, toolArgs, slotStopwatch, errorText,
+                    AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, errorText,
                         category: innerCategory,
                         suggestion: innerSuggestion,
                         retrySafe: innerRetrySafe);
@@ -1823,13 +1844,15 @@ public partial class McpServer
                 var structured = response["result"]?["structuredContent"];
                 var entry = new JsonObject
                 {
+                    ["request_index"] = requestIndex,
                     ["tool"] = toolName,
+                    ["ok"] = true,
                     ["args_summary"] = BuildArgsSummary(toolArgs),
                     ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                     ["result"] = structured?.DeepClone(),
                 };
-                if (TryAppendResult(entry, toolName, toolArgs, successfulSlot: true))
-                    successCount++;
+                TryAppendResult(entry, toolName, toolArgs, requestIndex, successfulSlot: true);
+                successCount++;
             }
             catch (Exception ex)
             {
@@ -1842,7 +1865,7 @@ public partial class McpServer
                 // envelope を batch_query スロットでも提供する。`ex.Message` の取り扱いは
                 // #1530 サニタイザを通っていない既存挙動を維持し、追加メタデータのみを載せる。
                 var classification = McpErrorEnvelope.ClassifyException(ex);
-                AppendSlotError(toolName, toolArgs, slotStopwatch, ex.Message,
+                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, ex.Message,
                     category: classification.Category,
                     suggestion: classification.Suggestion,
                     retrySafe: classification.RetrySafe);
@@ -1856,6 +1879,9 @@ public partial class McpServer
             ["count"] = resultsArray.Count,
             ["metadata"] = new JsonObject
             {
+                ["submitted"] = queries.Count,
+                ["executed"] = successCount + failureCount,
+                ["errors"] = failureCount,
                 ["total_elapsed_ms"] = totalElapsedMs,
                 ["success_count"] = successCount,
                 ["failure_count"] = failureCount,
@@ -1868,8 +1894,8 @@ public partial class McpServer
         string BuildSummary()
         {
             var baseSummary = failureCount == 0
-                ? $"Executed {resultsArray.Count} queries in {totalElapsedMs} ms (all succeeded)."
-                : $"Executed {resultsArray.Count} queries in {totalElapsedMs} ms ({successCount} succeeded, {failureCount} failed).";
+                ? $"Executed {successCount + failureCount} of {queries.Count} queries in {totalElapsedMs} ms (all succeeded)."
+                : $"Executed {successCount + failureCount} of {queries.Count} queries in {totalElapsedMs} ms ({successCount} succeeded, {failureCount} failed).";
             return truncated
                 ? baseSummary + $" Response truncated at {responseByteLimit} bytes; split the batch or lower per-slot limits."
                 : baseSummary;
@@ -1893,12 +1919,9 @@ public partial class McpServer
             if (resultsArray.Count > 0)
             {
                 var removed = resultsArray[resultsArray.Count - 1];
-                if (removed?["error"] != null)
-                    failureCount = Math.Max(0, failureCount - 1);
-                else
-                    successCount = Math.Max(0, successCount - 1);
                 truncatedQueries.Insert(0, new JsonObject
                 {
+                    ["request_index"] = removed?["request_index"]?.DeepClone(),
                     ["tool"] = removed?["tool"]?.DeepClone(),
                     ["args_summary"] = removed?["args_summary"]?.DeepClone(),
                     ["reason"] = "final_response_byte_limit_exceeded",
@@ -1929,7 +1952,7 @@ public partial class McpServer
     private int EstimateJsonUtf8Bytes(JsonNode node) =>
         Encoding.UTF8.GetByteCount(node.ToJsonString(_jsonOptions));
 
-    private int EstimateBatchResponseBytes(JsonNode? id, string summary, int successCount, int failureCount,
+    private int EstimateBatchResponseBytes(JsonNode? id, string summary, int submittedCount, int successCount, int failureCount,
         int responseByteLimit, JsonArray resultsArray, bool truncated, JsonArray truncatedQueries)
     {
         var payload = new JsonObject
@@ -1937,6 +1960,9 @@ public partial class McpServer
             ["count"] = resultsArray.Count,
             ["metadata"] = new JsonObject
             {
+                ["submitted"] = submittedCount,
+                ["executed"] = successCount + failureCount,
+                ["errors"] = failureCount,
                 ["total_elapsed_ms"] = 0,
                 ["success_count"] = successCount,
                 ["failure_count"] = failureCount,
