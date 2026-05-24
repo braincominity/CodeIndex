@@ -148,6 +148,7 @@ public class ProgramCliTests
     [InlineData("map", "cdidx map")]
     [InlineData("status", "cdidx status")]
     [InlineData("completions", "cdidx completions <shell>")]
+    [InlineData("license", "cdidx license")]
     public void SubcommandHelp_PrintsCommandSpecificUsage(string command, string expectedUsage)
     {
         var (exitCode, stdout, stderr) = RunCliInSubprocess([command, "--help"]);
@@ -160,6 +161,20 @@ public class ProgramCliTests
         Assert.DoesNotContain("Commands:", stdout);
         Assert.DoesNotContain("Index and update options:", stdout);
         Assert.DoesNotContain("██████╗", stdout);
+    }
+
+    [Theory]
+    [InlineData("completions")]
+    [InlineData("completions", "--json")]
+    [InlineData("completions", "bash", "extra")]
+    public void CompletionsCommand_ErrorsUseCommandUsage(params string[] args)
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(args);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("Usage: cdidx completions <shell>", stderr);
+        Assert.DoesNotContain("Usage: cdidx --completions <shell>", stderr);
     }
 
     [Fact]
