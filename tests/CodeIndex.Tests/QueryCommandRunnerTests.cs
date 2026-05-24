@@ -385,12 +385,39 @@ public class QueryCommandRunnerTests
                 ["Missing", "--db", dbPath, "--json=array"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             using var document = JsonDocument.Parse(stdout);
             Assert.Equal(JsonValueKind.Array, document.RootElement.ValueKind);
             Assert.Empty(document.RootElement.EnumerateArray());
             Assert.DoesNotContain("\"done\"", stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_StrictNotFoundReturnsNotFoundForZeroResults_Issue1425()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_strict_not_found");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/auth.cs",
+                "csharp",
+                "public class AuthFixture { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Missing", "--db", dbPath, "--strict-not-found"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("No results found", stderr);
         }
         finally
         {
@@ -1960,7 +1987,7 @@ jobs:
             }
 
             var (outlineExitCode, outlineStdOut, outlineStdErr) = RunPublishedCli(publishedDll, publishDir, "outline", "src/missing.cs", "--db", dbPath, "--json");
-            Assert.Equal(CommandExitCodes.NotFound, outlineExitCode);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
             Assert.Equal(string.Empty, outlineStdErr);
             using (var outlineJson = JsonDocument.Parse(outlineStdOut))
             {
@@ -2071,7 +2098,7 @@ jobs:
                 ["missing-token", "--db", dbPath, "--path", "src/**", "--lang", "csharp", "--limit", "7"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Contains("No results found. (query: \"missing-token\", path: src/**, lang: csharp, limit: 7)", stderr);
         }
@@ -2098,7 +2125,7 @@ jobs:
                 ["missing-token", "--db", dbPath, "--path", "src/**", "--lang", "csharp", "--limit", "7", "--json"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             using var document = ParseJsonOutput(stdout);
             var root = document.RootElement;
@@ -4011,7 +4038,7 @@ jobs:
                 ["nothing_matches_xyzzy", "--db", dbPath, "--lang", "csarp"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Contains("No results found.", stderr);
             Assert.Contains("Did you mean: --lang csharp?", stderr);
@@ -4047,7 +4074,7 @@ jobs:
                 ["nothing_matches_xyzzy", "--db", dbPath, "--lang", "java"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Contains("No results found.", stderr);
             Assert.Contains("'java' not found in index", stderr);
@@ -4239,7 +4266,7 @@ jobs:
                 ["MissingSymbol", "--db", dbPath, "--json"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
         }
@@ -4280,7 +4307,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             AssertZeroResultPayload(json, "references");
             Assert.True(json.GetProperty("graph_table_available").GetBoolean());
@@ -5605,7 +5632,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.False(json.GetProperty("graph_table_available").GetBoolean());
@@ -5756,7 +5783,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("references").GetArrayLength());
@@ -5974,7 +6001,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.False(json.GetProperty("graph_table_available").GetBoolean());
@@ -6422,7 +6449,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.False(json.GetProperty("graph_table_available").GetBoolean());
@@ -7714,7 +7741,7 @@ jobs:
             Assert.Equal("%button-base", placeholderRows[0].RootElement.GetProperty("name").GetString());
             Assert.Equal("class", placeholderRows[0].RootElement.GetProperty("kind").GetString());
 
-            Assert.Equal(CommandExitCodes.NotFound, fontFaceExitCode);
+            Assert.Equal(CommandExitCodes.Success, fontFaceExitCode);
             Assert.Equal(string.Empty, fontFaceStderr);
             Assert.Equal(string.Empty, fontFaceStdout);
         }
@@ -8267,10 +8294,10 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, valueExitCode);
+            Assert.Equal(CommandExitCodes.Success, valueExitCode);
             Assert.Equal(string.Empty, valueStdout);
             Assert.Equal(string.Empty, valueStderr);
-            Assert.Equal(CommandExitCodes.NotFound, otherExitCode);
+            Assert.Equal(CommandExitCodes.Success, otherExitCode);
             Assert.Equal(string.Empty, otherStdout);
             Assert.Equal(string.Empty, otherStderr);
         }
@@ -8988,7 +9015,7 @@ jobs:
                 ["--db", dbPath, "--lang", "csharp", "--kind", "function", "--name", "explicit operator Money", "--exact-name"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("No symbols found.", stderr);
             Assert.Contains("WARN: --exact symbol query may return false negatives", stderr);
             Assert.Contains("csharp_symbol_name_ready=false", stderr);
@@ -11207,7 +11234,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             AssertZeroResultPayload(json, resultsKey);
         }
@@ -11232,7 +11259,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             AssertZeroResultPayload(json, command);
             Assert.True(json.GetProperty("graph_table_available").GetBoolean());
@@ -11257,7 +11284,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             AssertZeroResultPayload(json, resultsKey);
             Assert.True(json.GetProperty("graph_table_available").GetBoolean());
@@ -11282,7 +11309,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
@@ -11328,7 +11355,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
             Assert.True(json.GetProperty("degraded").GetBoolean());
@@ -12087,7 +12114,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
@@ -12115,7 +12142,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
@@ -12202,7 +12229,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.False(json.TryGetProperty("sql_graph_contract_ready", out _));
@@ -12425,7 +12452,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
@@ -12458,7 +12485,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
@@ -12482,7 +12509,7 @@ jobs:
                 ["--db", dbPath, "--lang", "csharp", "--kind", "function"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("cross-file hotspot family grouping", stderr);
             Assert.Contains("authoritative cross-file hotspot families", stderr);
         }
@@ -12506,7 +12533,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             AssertZeroResultPayload(json, "callers");
             Assert.Equal("DefinitelyMissingSymbol", json.GetProperty("query").GetString());
@@ -12567,7 +12594,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("files").GetArrayLength());
@@ -12597,7 +12624,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("files").GetArrayLength());
@@ -12632,7 +12659,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal("MissingTarget", json.GetProperty("query").GetString());
@@ -12661,7 +12688,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal("MissingTarget", json.GetProperty("query").GetString());
@@ -12808,7 +12835,7 @@ jobs:
                 ["MissingSymbol", "--db", dbPath, "--lang", "markdown"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("No references found.", stderr);
             Assert.Contains("call-graph queries are not indexed for 'markdown'", stderr);
         }
@@ -12835,7 +12862,7 @@ jobs:
                 [query, "--db", dbPath, "--kind", "class"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("symbol kind", stderr);
             Assert.Contains("filters by reference kind", stderr);
             Assert.Contains("call", stderr);
@@ -13958,7 +13985,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("references").GetArrayLength());
@@ -14140,7 +14167,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("callers").GetArrayLength());
@@ -14184,7 +14211,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("callees").GetArrayLength());
@@ -14222,7 +14249,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("callees").GetArrayLength());
@@ -14756,7 +14783,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("references").GetArrayLength());
@@ -16000,7 +16027,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Empty(json.GetProperty("references").EnumerateArray());
@@ -16118,7 +16145,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Empty(json.GetProperty("references").EnumerateArray());
@@ -16236,7 +16263,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Empty(json.GetProperty("references").EnumerateArray());
@@ -16360,7 +16387,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Empty(json.GetProperty("references").EnumerateArray());
@@ -16653,7 +16680,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Empty(json.GetProperty("references").EnumerateArray());
@@ -16709,7 +16736,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Empty(json.GetProperty("references").EnumerateArray());
@@ -16765,7 +16792,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Empty(json.GetProperty("references").EnumerateArray());
@@ -16821,7 +16848,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Empty(json.GetProperty("references").EnumerateArray());
@@ -16878,7 +16905,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Empty(json.GetProperty("references").EnumerateArray());
@@ -16935,7 +16962,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Empty(json.GetProperty("references").EnumerateArray());
@@ -17054,7 +17081,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Empty(json.GetProperty("references").EnumerateArray());
@@ -17110,7 +17137,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Empty(json.GetProperty("references").EnumerateArray());
@@ -17168,7 +17195,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Empty(json.GetProperty("references").EnumerateArray());
@@ -17435,15 +17462,15 @@ jobs:
             Assert.Equal("fn_users", fnRow.RootElement.GetProperty("symbol_name").GetString());
             Assert.Equal("call", fnRow.RootElement.GetProperty("reference_kind").GetString());
 
-            Assert.Equal(CommandExitCodes.NotFound, topExitCode);
+            Assert.Equal(CommandExitCodes.Success, topExitCode);
             Assert.Equal(string.Empty, topStderr);
             Assert.Equal(0, topDocument.RootElement.GetProperty("count").GetInt32());
 
-            Assert.Equal(CommandExitCodes.NotFound, onlyExitCode);
+            Assert.Equal(CommandExitCodes.Success, onlyExitCode);
             Assert.Equal(string.Empty, onlyStderr);
             Assert.Equal(0, onlyDocument.RootElement.GetProperty("count").GetInt32());
 
-            Assert.Equal(CommandExitCodes.NotFound, lateralExitCode);
+            Assert.Equal(CommandExitCodes.Success, lateralExitCode);
             Assert.Equal(string.Empty, lateralStderr);
             Assert.Equal(0, lateralDocument.RootElement.GetProperty("count").GetInt32());
         }
@@ -17508,7 +17535,7 @@ jobs:
             Assert.Equal(string.Empty, accountsStderr);
             Assert.Single(accountsRows);
 
-            Assert.Equal(CommandExitCodes.NotFound, onlyExitCode);
+            Assert.Equal(CommandExitCodes.Success, onlyExitCode);
             Assert.Equal(string.Empty, onlyStderr);
             Assert.Equal(0, onlyDocument.RootElement.GetProperty("count").GetInt32());
 
@@ -17517,15 +17544,15 @@ jobs:
             Assert.Equal(1, qualifiedDocument.RootElement.GetProperty("line").GetInt32());
             Assert.Equal("users", qualifiedDocument.RootElement.GetProperty("symbol_name").GetString());
 
-            Assert.Equal(CommandExitCodes.NotFound, mangledBracketExitCode);
+            Assert.Equal(CommandExitCodes.Success, mangledBracketExitCode);
             Assert.Equal(string.Empty, mangledBracketStderr);
             Assert.Equal(0, mangledBracketDocument.RootElement.GetProperty("count").GetInt32());
 
-            Assert.Equal(CommandExitCodes.NotFound, mangledBacktickExitCode);
+            Assert.Equal(CommandExitCodes.Success, mangledBacktickExitCode);
             Assert.Equal(string.Empty, mangledBacktickStderr);
             Assert.Equal(0, mangledBacktickDocument.RootElement.GetProperty("count").GetInt32());
 
-            Assert.Equal(CommandExitCodes.NotFound, mangledDoubleQuoteExitCode);
+            Assert.Equal(CommandExitCodes.Success, mangledDoubleQuoteExitCode);
             Assert.Equal(string.Empty, mangledDoubleQuoteStderr);
             Assert.Equal(0, mangledDoubleQuoteDocument.RootElement.GetProperty("count").GetInt32());
         }
@@ -17599,11 +17626,11 @@ jobs:
             Assert.Equal(3, qualifiedSourceDocument.RootElement.GetProperty("line").GetInt32());
             Assert.Equal("stage_log", qualifiedSourceDocument.RootElement.GetProperty("symbol_name").GetString());
 
-            Assert.Equal(CommandExitCodes.NotFound, mangledBracketExitCode);
+            Assert.Equal(CommandExitCodes.Success, mangledBracketExitCode);
             Assert.Equal(string.Empty, mangledBracketStderr);
             Assert.Equal(0, mangledBracketDocument.RootElement.GetProperty("count").GetInt32());
 
-            Assert.Equal(CommandExitCodes.NotFound, mangledDoubleQuoteExitCode);
+            Assert.Equal(CommandExitCodes.Success, mangledDoubleQuoteExitCode);
             Assert.Equal(string.Empty, mangledDoubleQuoteStderr);
             Assert.Equal(0, mangledDoubleQuoteDocument.RootElement.GetProperty("count").GetInt32());
         }
@@ -17671,7 +17698,7 @@ jobs:
             Assert.Equal("staging_archive", archiveSourceRow.RootElement.GetProperty("symbol_name").GetString());
             Assert.Equal("reference", archiveSourceRow.RootElement.GetProperty("reference_kind").GetString());
 
-            Assert.Equal(CommandExitCodes.NotFound, btreeExitCode);
+            Assert.Equal(CommandExitCodes.Success, btreeExitCode);
             Assert.Equal(string.Empty, btreeStderr);
             Assert.Equal(0, btreeDocument.RootElement.GetProperty("count").GetInt32());
 
@@ -18113,7 +18140,7 @@ jobs:
             Assert.Equal(5, dollarRows.Count);
             Assert.All(dollarRows, row => Assert.Equal("my$table", row.RootElement.GetProperty("symbol_name").GetString()));
 
-            Assert.Equal(CommandExitCodes.NotFound, prefixExitCode);
+            Assert.Equal(CommandExitCodes.Success, prefixExitCode);
             Assert.Equal(string.Empty, prefixStderr);
             Assert.Equal(0, prefixDocument.RootElement.GetProperty("count").GetInt32());
         }
@@ -18192,7 +18219,7 @@ jobs:
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
 
-            Assert.Equal(CommandExitCodes.NotFound, futureExitCode);
+            Assert.Equal(CommandExitCodes.Success, futureExitCode);
             Assert.Equal(string.Empty, futureStderr);
             Assert.Equal(0, futureDocument.RootElement.GetProperty("count").GetInt32());
 
@@ -18312,7 +18339,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Empty(json.GetProperty("references").EnumerateArray());
@@ -18422,7 +18449,7 @@ jobs:
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
 
-            Assert.Equal(CommandExitCodes.NotFound, phantomExitCode);
+            Assert.Equal(CommandExitCodes.Success, phantomExitCode);
             Assert.Equal(string.Empty, phantomStderr);
             Assert.Equal(0, phantomDocument.RootElement.GetProperty("count").GetInt32());
 
@@ -18473,7 +18500,7 @@ jobs:
             Assert.Equal("users", usersRow.RootElement.GetProperty("symbol_name").GetString());
             Assert.Equal(6, usersRow.RootElement.GetProperty("line").GetInt32());
 
-            Assert.Equal(CommandExitCodes.NotFound, tempExitCode);
+            Assert.Equal(CommandExitCodes.Success, tempExitCode);
             Assert.Equal(string.Empty, tempStderr);
             Assert.Equal(0, tempDocument.RootElement.GetProperty("count").GetInt32());
         }
@@ -18520,7 +18547,7 @@ jobs:
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
 
-            Assert.Equal(CommandExitCodes.NotFound, phantomExitCode);
+            Assert.Equal(CommandExitCodes.Success, phantomExitCode);
             Assert.Equal(string.Empty, phantomStderr);
             Assert.Equal(0, phantomDocument.RootElement.GetProperty("count").GetInt32());
 
@@ -18584,7 +18611,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Empty(json.GetProperty("references").EnumerateArray());
@@ -18868,7 +18895,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Empty(json.GetProperty("references").EnumerateArray());
@@ -20742,7 +20769,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("references").GetArrayLength());
@@ -20984,7 +21011,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("references").GetArrayLength());
@@ -21095,7 +21122,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("references").GetArrayLength());
@@ -21208,7 +21235,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("references").GetArrayLength());
@@ -21387,7 +21414,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("references").GetArrayLength());
@@ -22106,7 +22133,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
         }
@@ -22665,7 +22692,7 @@ jobs:
             Assert.Equal(2, nonExactRows.Count);
             Assert.Equal([13, 15], nonExactRows.Select(row => row.GetProperty("line").GetInt32()).OrderBy(line => line).ToArray());
 
-            Assert.Equal(CommandExitCodes.NotFound, exactExitCode);
+            Assert.Equal(CommandExitCodes.Success, exactExitCode);
             Assert.Equal(string.Empty, exactStderr);
             Assert.Equal(0, exactDocument.RootElement.GetProperty("count").GetInt32());
 
@@ -22744,7 +22771,7 @@ jobs:
             Assert.Equal(2, nonExactRows.Count);
             Assert.Equal([13, 15], nonExactRows.Select(row => row.GetProperty("line").GetInt32()).OrderBy(line => line).ToArray());
 
-            Assert.Equal(CommandExitCodes.NotFound, exactExitCode);
+            Assert.Equal(CommandExitCodes.Success, exactExitCode);
             Assert.Equal(string.Empty, exactStderr);
             Assert.Equal(0, exactDocument.RootElement.GetProperty("count").GetInt32());
 
@@ -22825,7 +22852,7 @@ jobs:
                 ["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"]);
             using var countDocument = ParseJsonOutput(countStdout);
 
-            Assert.Equal(CommandExitCodes.NotFound, exactExitCode);
+            Assert.Equal(CommandExitCodes.Success, exactExitCode);
             Assert.Equal(string.Empty, exactStderr);
             Assert.Equal(0, exactDocument.RootElement.GetProperty("count").GetInt32());
 
@@ -22883,7 +22910,7 @@ jobs:
 
                 using var document = ParseJsonOutput(stdout);
 
-                Assert.Equal(CommandExitCodes.NotFound, exitCode);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
                 Assert.Equal(string.Empty, stderr);
                 Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
             }
@@ -22944,7 +22971,7 @@ jobs:
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
 
-            Assert.Equal(CommandExitCodes.NotFound, referencesExitCode);
+            Assert.Equal(CommandExitCodes.Success, referencesExitCode);
             Assert.Equal(string.Empty, referencesStderr);
             Assert.Equal(0, referencesDocument.RootElement.GetProperty("count").GetInt32());
 
@@ -22952,7 +22979,7 @@ jobs:
             Assert.Equal(string.Empty, countStderr);
             Assert.Equal(0, countDocument.RootElement.GetProperty("count").GetInt32());
 
-            Assert.Equal(CommandExitCodes.NotFound, callersExitCode);
+            Assert.Equal(CommandExitCodes.Success, callersExitCode);
             Assert.Equal(string.Empty, callersStderr);
             Assert.Equal(0, callersDocument.RootElement.GetProperty("count").GetInt32());
         }
@@ -23399,11 +23426,11 @@ jobs:
                 _jsonOptions));
             using var redCountDocument = ParseJsonOutput(redCountStdout);
 
-            Assert.Equal(CommandExitCodes.NotFound, redExitCode);
+            Assert.Equal(CommandExitCodes.Success, redExitCode);
             Assert.Equal(string.Empty, redStderr);
             Assert.Equal(0, redDocument.RootElement.GetProperty("count").GetInt32());
 
-            Assert.Equal(CommandExitCodes.NotFound, blueExitCode);
+            Assert.Equal(CommandExitCodes.Success, blueExitCode);
             Assert.Equal(string.Empty, blueStderr);
             Assert.Equal(0, blueDocument.RootElement.GetProperty("count").GetInt32());
 
@@ -23459,7 +23486,7 @@ jobs:
                 _jsonOptions));
             using var redCountDocument = ParseJsonOutput(redCountStdout);
 
-            Assert.Equal(CommandExitCodes.NotFound, redExitCode);
+            Assert.Equal(CommandExitCodes.Success, redExitCode);
             Assert.Equal(string.Empty, redStderr);
             Assert.Equal(0, redDocument.RootElement.GetProperty("count").GetInt32());
 
@@ -23760,7 +23787,7 @@ jobs:
                 _jsonOptions));
             using var document = ParseJsonOutput(stdout);
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
         }
@@ -23857,7 +23884,7 @@ jobs:
                 _jsonOptions));
             using var document = ParseJsonOutput(stdout);
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
         }
@@ -23959,7 +23986,7 @@ jobs:
                 _jsonOptions));
             using var document = ParseJsonOutput(stdout);
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
         }
@@ -24158,7 +24185,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
         }
@@ -24408,7 +24435,7 @@ jobs:
 
             using var document = ParseJsonOutput(stdout);
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
         }
@@ -24512,7 +24539,7 @@ jobs:
 
             using var document = ParseJsonOutput(stdout);
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
         }
@@ -24567,7 +24594,7 @@ jobs:
 
             using var document = ParseJsonOutput(stdout);
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
         }
@@ -25071,7 +25098,7 @@ jobs:
 
                 using var document = ParseJsonOutput(stdout);
 
-                Assert.Equal(CommandExitCodes.NotFound, exitCode);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
                 Assert.Equal(string.Empty, stderr);
                 Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
             }
@@ -25184,7 +25211,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
         }
@@ -25290,7 +25317,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
         }
@@ -25813,7 +25840,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("none", json.GetProperty("impact_mode").GetString());
             Assert.True(json.GetProperty("has_multiple_definitions").GetBoolean());
@@ -25857,7 +25884,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("none", json.GetProperty("impact_mode").GetString());
             Assert.Equal(0, json.GetProperty("count").GetInt32());
@@ -25913,7 +25940,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("none", json.GetProperty("impact_mode").GetString());
             Assert.False(json.GetProperty("heuristic").GetBoolean());
@@ -25968,7 +25995,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("none", json.GetProperty("impact_mode").GetString());
             Assert.Equal(0, json.GetProperty("count").GetInt32());
@@ -26022,7 +26049,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("none", json.GetProperty("impact_mode").GetString());
             Assert.Equal(0, json.GetProperty("hint_count").GetInt32());
@@ -26071,7 +26098,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("none", json.GetProperty("impact_mode").GetString());
             Assert.Equal(0, json.GetProperty("count").GetInt32());
@@ -26104,7 +26131,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("none", json.GetProperty("impact_mode").GetString());
             Assert.Equal(1, json.GetProperty("definition_count").GetInt32());
@@ -26381,7 +26408,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("none", json.GetProperty("impact_mode").GetString());
             Assert.Equal(0, json.GetProperty("hint_count").GetInt32());
@@ -26427,7 +26454,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("none", json.GetProperty("impact_mode").GetString());
             Assert.Equal(2, json.GetProperty("definition_count").GetInt32());
@@ -26473,7 +26500,7 @@ jobs:
                 ["FooService", "--db", dbPath],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.DoesNotContain("file_dependency_hints", stdout);
             Assert.Contains("2 definitions across 1 file", stderr);
         }
@@ -26621,7 +26648,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("none", json.GetProperty("impact_mode").GetString());
             Assert.Equal(0, json.GetProperty("hint_count").GetInt32());
@@ -26656,7 +26683,7 @@ jobs:
             using var jsonDocument = ParseJsonOutput(jsonStdout);
             var json = jsonDocument.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, jsonExitCode);
+            Assert.Equal(CommandExitCodes.Success, jsonExitCode);
             Assert.Equal(string.Empty, jsonStderr);
             Assert.Equal("@missing", json.GetProperty("query").GetString());
             Assert.Equal("@missing", json.GetProperty("resolved_name").GetString());
@@ -26666,7 +26693,7 @@ jobs:
                 ["@missing", "--db", dbPath, "--lang", "csharp"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, humanExitCode);
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
             Assert.Equal(string.Empty, humanStdout);
             Assert.Contains("No impact found for '@missing'.", humanStderr);
         }
@@ -26839,7 +26866,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("statement", json.GetProperty("grouped_by").GetString());
         }
@@ -26998,7 +27025,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("definition_site_total").GetInt32());
@@ -27243,7 +27270,7 @@ jobs:
                 ["Handle", "--db", dbPath, "--json", "--exact"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
         }
@@ -28063,7 +28090,7 @@ jobs:
                 ["Handle", "--db", dbPath, "--exact"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("No references found.", stderr);
             Assert.Contains("--exact found 0 matches, but substring matching would return 1", stderr);
             Assert.Contains("`HandleRequest`", stderr);
@@ -28087,7 +28114,7 @@ jobs:
                 ["Run", "--db", dbPath, "--exact"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.DoesNotContain("Results are correct but may be slow", stderr);
             Assert.Contains("symbol_references table missing", stderr);
         }
@@ -28443,7 +28470,7 @@ jobs:
                 _jsonOptions));
             var normalizedStderr = stderr.ToLowerInvariant();
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("No matches found.", stderr);
             Assert.Contains("--path matched 1 file, but the query did not match their contents", stderr);
             Assert.Contains("try a broader query or check the query syntax", normalizedStderr);
@@ -28474,7 +28501,7 @@ jobs:
                 _jsonOptions));
             var normalizedStderr = stderr.ToLowerInvariant();
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("broadening --path or adding another --path value", normalizedStderr);
             Assert.DoesNotContain("query did not match", normalizedStderr);
         }
@@ -29331,7 +29358,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
         }
@@ -29384,7 +29411,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("references").GetArrayLength());
@@ -29427,7 +29454,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
         }
@@ -29494,7 +29521,7 @@ jobs:
                 ["--db", dbPath, "--path", "nonexistent/"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("No files found", stderr);
         }
         finally
@@ -29519,7 +29546,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("files").GetArrayLength());
@@ -29547,7 +29574,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("files").GetArrayLength());
@@ -29628,7 +29655,7 @@ jobs:
                 ["--db", dbPath, "--path", "nonexistent/", "--json"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             using var document = ParseJsonOutput(stdout);
             Assert.Equal(0, document.RootElement.GetProperty("file_count").GetInt32());
         }
@@ -30120,7 +30147,7 @@ jobs:
                 ["MissingSymbol", "--db", dbPath],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Contains("threshold: 1m", stderr);
         }
@@ -31157,7 +31184,7 @@ jobs:
                 ["--db", dbPath, "--lang", "nonexistent"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("'nonexistent' not found in index. Available: python", stderr);
         }
         finally
@@ -31179,7 +31206,7 @@ jobs:
                 ["hello", "--db", dbPath, "--lang", "nonexistent"],
                 _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("'nonexistent' not found in index. Available: python", stderr);
         }
         finally
@@ -32908,7 +32935,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             AssertZeroResultPayload(json, "callers");
             Assert.Equal("none", json.GetProperty("impact_mode").GetString());
@@ -32941,7 +32968,7 @@ jobs:
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             AssertZeroResultPayload(json, "callers");
             Assert.Equal("none", json.GetProperty("impact_mode").GetString());
@@ -33003,10 +33030,10 @@ jobs:
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
 
-            // Phantom symbols must not exist — both queries should return NotFound.
-            // phantom シンボルは存在してはならない — どちらのクエリも NotFound になること。
-            Assert.Equal(CommandExitCodes.NotFound, phantomFnExit);
-            Assert.Equal(CommandExitCodes.NotFound, phantomClsExit);
+            // Phantom symbols must not exist; zero-result queries now exit successfully by default.
+            // phantom シンボルは存在してはならない。0 件クエリは既定で成功終了する。
+            Assert.Equal(CommandExitCodes.Success, phantomFnExit);
+            Assert.Equal(CommandExitCodes.Success, phantomClsExit);
 
             // The real call inside the `${...}` interpolation hole must still be visible.
             // ${...} 補間ホール内の本物の呼び出しは参照として残っていること。
@@ -33072,7 +33099,7 @@ jobs:
 
                 using var document = ParseJsonOutput(stdout);
 
-                Assert.Equal(CommandExitCodes.NotFound, exitCode);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
                 Assert.Equal(string.Empty, stderr);
                 Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
             }
@@ -33122,7 +33149,7 @@ jobs:
 
                 using var document = ParseJsonOutput(stdout);
 
-                Assert.Equal(CommandExitCodes.NotFound, exitCode);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
                 Assert.Equal(string.Empty, stderr);
                 Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
             }

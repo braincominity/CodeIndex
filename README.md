@@ -139,6 +139,8 @@ file completion.
   one structured JSON trace line with sanitized parameters, elapsed time,
   result count when available, exit code, and error status. `file` writes daily
   `query-trace-YYYYMMDD.jsonl` files next to the persistent lifecycle log.
+- Query commands exit `0` for valid zero-result queries by default. Pass
+  `--strict-not-found` when scripts should treat zero rows as exit code `2`.
 - `cdidx diff <db1> <db2>` compares two index databases for CI or drift
   debugging, reporting schema, file, symbol, and reference deltas with stable
   exit codes: `0` identical, `1` drift, `2` schema mismatch, `3` unreadable DB.

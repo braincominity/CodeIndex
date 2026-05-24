@@ -97,6 +97,11 @@ internal static class CliFlagSchema
         "search", "definition", "references", "callers", "callees", "symbols",
         "files", "find", "impact", "unused", "hotspots",
     ];
+    private static readonly string[] StrictNotFoundCommands =
+    [
+        "search", "definition", "references", "callers", "callees", "symbols",
+        "files", "find", "excerpt", "map", "inspect", "deps", "impact", "unused", "hotspots",
+    ];
 
     private static readonly string[] KindCommands =
     [
@@ -203,6 +208,7 @@ internal static class CliFlagSchema
             new() { Name = "--rank-by", ValuePlaceholder = "<weighted|count|kind>", Description = "Rank callers/callees by weighted structural score, raw count, or kind bucket", Commands = Set(RankByCommands) },
             new() { Name = "--raw-kinds", Description = "Show raw reference kinds instead of logical graph kinds", Commands = Set(RawKindsCommands) },
             new() { Name = "--count", Description = "Count only", Commands = Set(CountCommands) },
+            new() { Name = "--strict-not-found", Description = "Return exit code 2 when a valid query has zero rows", Commands = Set(StrictNotFoundCommands) },
             new() { Name = "--since", ValuePlaceholder = "<datetime>", Description = "Filter by modified-since timestamp", Commands = Set(SinceCommands) },
             new() { Name = "--bytes", Description = "Show raw byte counts in human output", Commands = Set(ByteFormatCommands) },
             new() { Name = "--query", ValuePlaceholder = "<query>", Description = "Literal query", Commands = Set(QueryCommands) },
