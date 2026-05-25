@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 using CodeIndex.Database;
 using CodeIndex.Cli;
@@ -77,6 +78,31 @@ public class FileIndexerTests
         finally
         {
             Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_SkipsBuiltInDirectoriesWithCaseInsensitiveNames()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-skipdir-case-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, "Node_Modules"));
+            File.WriteAllText(Path.Combine(tempDir, "Node_Modules", "ignored.js"), "export const ignored = true;");
+            File.WriteAllText(Path.Combine(tempDir, "app.js"), "export const app = true;");
+
+            var indexer = new FileIndexer(tempDir, ignoreCase: true);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["app.js"], files);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
         }
     }
 
@@ -1277,6 +1303,28 @@ public class FileIndexerTests
     }
 
     [Theory]
+    [InlineData(@"\\.\COM1")]
+    [InlineData(@"\\.\NUL")]
+    [InlineData(@"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1")]
+    [InlineData(@"C:\repo\AUX.cs")]
+    [InlineData(@"C:\repo\con.txt")]
+    [InlineData(@"C:\repo\COM9")]
+    [InlineData(@"C:\repo\LPT1.log")]
+    public void IsWindowsDevicePath_RejectsReservedDeviceNames(string path)
+    {
+        Assert.True(FileIndexer.IsWindowsDevicePath(path));
+    }
+
+    [Theory]
+    [InlineData(@"C:\repo\COM10.cs")]
+    [InlineData(@"C:\repo\company.cs")]
+    [InlineData(@"C:\repo\template1.cs")]
+    public void IsWindowsDevicePath_AllowsOrdinaryNames(string path)
+    {
+        Assert.False(FileIndexer.IsWindowsDevicePath(path));
+    }
+
+    [Theory]
     [InlineData(FileAttributes.ReparsePoint, false, true)]
     [InlineData(FileAttributes.ReparsePoint, true, true)]
     [InlineData(FileAttributes.Hidden, false, false)]
@@ -1454,6 +1502,108 @@ public class FileIndexerTests
         finally
         {
             Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_RespectsWorkspaceConfigCdidxignore()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, ".codeindex"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "generated"));
+            File.WriteAllText(Path.Combine(tempDir, ".codeindex", ".cdidxignore"), "generated/\n*.cache.js\n");
+            File.WriteAllText(Path.Combine(tempDir, "generated", "Ignored.cs"), "class Ignored { }");
+            File.WriteAllText(Path.Combine(tempDir, "app.cache.js"), "export const ignored = true;");
+            File.WriteAllText(Path.Combine(tempDir, "app.js"), "export const app = true;");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["app.js"], files);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_SkipsNestedGitRepositoryBoundary()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, "nested", ".git"));
+            File.WriteAllText(Path.Combine(tempDir, "Root.cs"), "class Root { }");
+            File.WriteAllText(Path.Combine(tempDir, "nested", "Nested.cs"), "class Nested { }");
+
+            var indexer = new FileIndexer(tempDir);
+            var result = indexer.ScanFilesDetailed();
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["Root.cs"], files);
+            Assert.Equal(["nested"], result.NestedRepositories);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void EvaluatePathFilter_SkipsNestedGitRepositoryBoundary()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, "nested", ".git"));
+            var nestedFile = Path.Combine(tempDir, "nested", "Nested.cs");
+            File.WriteAllText(nestedFile, "class Nested { }");
+
+            var indexer = new FileIndexer(tempDir);
+            var filter = indexer.EvaluatePathFilter(nestedFile);
+
+            Assert.Equal(FileIndexer.PathFilterKind.ExcludedByDefaultDirectory, filter.FilterKind);
+            Assert.True(filter.ShouldDeleteExisting);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecord_NormalizesRelativePathToNfc()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var nfdName = "Cafe\u0301.cs";
+            var filePath = Path.Combine(tempDir, nfdName);
+            File.WriteAllText(filePath, "class Cafe { }");
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, _, _) = indexer.BuildRecord(filePath);
+
+            Assert.Equal("Caf\u00e9.cs", record.Path);
+            Assert.True(record.Path.IsNormalized(NormalizationForm.FormC));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
         }
     }
 
@@ -2904,6 +3054,7 @@ public class FileIndexerTests
 
             var submoduleDir = Path.Combine(vendorDir, "foo");
             Directory.CreateDirectory(submoduleDir);
+            File.WriteAllText(Path.Combine(submoduleDir, ".git"), "gitdir: ../../.git/modules/foo\n");
             File.WriteAllText(Path.Combine(submoduleDir, "lib.py"), "def f(): pass");
             Directory.CreateDirectory(Path.Combine(submoduleDir, "src"));
             File.WriteAllText(Path.Combine(submoduleDir, "src", "nested.py"), "def g(): pass");
@@ -2920,6 +3071,99 @@ public class FileIndexerTests
         finally
         {
             Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void PurgeFilesOutsideRetainedSet_UsesNfcRetainedPaths()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var dbPath = TestProjectHelper.CreateProjectDb(tempDir);
+            var nfcPath = "Caf\u00e9.cs";
+            var nfdPath = "Cafe\u0301.cs";
+            TestProjectHelper.InsertIndexedFile(dbPath, nfcPath, "csharp", "class CafeFixture { }\n");
+
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            var retainedPaths = new[]
+                {
+                    Path.Combine(tempDir, nfdPath),
+                }
+                .Select(path => FileIndexer.NormalizeIndexPath(Path.GetRelativePath(tempDir, path)))
+                .ToHashSet(StringComparer.Ordinal);
+
+            var purged = writer.PurgeFilesOutsideRetainedSet(retainedPaths);
+
+            Assert.Equal(0, purged);
+            Assert.Equal(1, CountFiles(db.Connection));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void PurgeFilesOutsideRetainedSetWithinListedDirectories_UsesNfcPrunedDirectories()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var dbPath = TestProjectHelper.CreateProjectDb(tempDir);
+            TestProjectHelper.InsertIndexedFile(dbPath, "Caf\u00e9/src/File.cs", "csharp", "class NestedCafe { }\n");
+
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            var prunedDirectories = new[] { "Cafe\u0301" }
+                .Select(FileIndexer.NormalizeIndexPath)
+                .ToHashSet(StringComparer.Ordinal);
+
+            var purged = writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(
+                new HashSet<string>(StringComparer.Ordinal),
+                new HashSet<string>(StringComparer.Ordinal),
+                prunedDirectories);
+
+            Assert.Equal(1, purged);
+            Assert.Equal(0, CountFiles(db.Connection));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void IndexFilesUpdate_UsesOriginalUnicodePathForIoAndNfcPathForDb()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var nfdPath = "Cafe\u0301.cs";
+            File.WriteAllText(Path.Combine(tempDir, nfdPath), "class FirstCafe { }\n");
+
+            var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([tempDir, "--json", "--quiet"], jsonOptions));
+
+            File.WriteAllText(Path.Combine(tempDir, nfdPath), "class UpdatedCafe { }\n");
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([tempDir, "--files", nfdPath, "--json", "--quiet"], jsonOptions));
+
+            var dbPath = Path.Combine(tempDir, ".cdidx", "codeindex.db");
+            Assert.Equal("class UpdatedCafe { }", ReadSingleChunkContent(dbPath, "Caf\u00e9.cs"));
+
+            File.WriteAllBytes(Path.Combine(tempDir, nfdPath), [0, 1, 2, 3]);
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([tempDir, "--files", nfdPath, "--json", "--quiet"], jsonOptions));
+            Assert.False(HasIndexedFile(dbPath, "Caf\u00e9.cs"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
         }
     }
 
@@ -3362,6 +3606,64 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void BuildRecord_Utf16LeWithoutBomFile_DecodedAsUtf16()
+    {
+        // Legacy Windows tools can save source files as UTF-16 LE without a BOM. The
+        // regular every-other-byte NUL pattern should be treated as an encoding signal,
+        // not as binary content. Closes #1829.
+        // 古い Windows ツールは BOM なし UTF-16 LE でソースを保存することがある。
+        // 1 バイトおきの NUL パターンはバイナリ混入ではなくエンコーディングのシグナルとして扱う。
+        // Closes #1829.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "utf16le-nobom.cs");
+            var payload = "using System;\nnamespace Utf16LeNoBom;\n";
+            File.WriteAllBytes(filePath, System.Text.Encoding.Unicode.GetBytes(payload));
+
+            var indexer = new FileIndexer(tempDir);
+            var (_, content, _, warning) = indexer.BuildRecordWithRawBytes(filePath);
+
+            Assert.Null(warning);
+            Assert.Contains("namespace Utf16LeNoBom;", content);
+            Assert.False(FileIndexer.ContainsIndexBlockingNullByte(System.Text.Encoding.Unicode.GetBytes(payload)));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecord_Utf16BeWithoutBomFile_DecodedAsUtf16()
+    {
+        // The heuristic must also handle BOM-less UTF-16 BE text so the fix is not tied
+        // to little-endian Windows output only. Closes #1829.
+        // BOM なし UTF-16 BE テキストも扱い、little-endian Windows 出力だけに限定しない。
+        // Closes #1829.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "utf16be-nobom.cs");
+            var payload = "using System;\nnamespace Utf16BeNoBom;\n";
+            File.WriteAllBytes(filePath, System.Text.Encoding.BigEndianUnicode.GetBytes(payload));
+
+            var indexer = new FileIndexer(tempDir);
+            var (_, content, _, warning) = indexer.BuildRecordWithRawBytes(filePath);
+
+            Assert.Null(warning);
+            Assert.Contains("namespace Utf16BeNoBom;", content);
+            Assert.False(FileIndexer.ContainsIndexBlockingNullByte(System.Text.Encoding.BigEndianUnicode.GetBytes(payload)));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ValidateContent_Utf16LeBomFile_EmitsUtf16BomNotRawByteIssues()
     {
         // When a file decodes via UTF-16 LE, the raw bytes are full of NULs (every ASCII
@@ -3386,6 +3688,19 @@ public class FileIndexerTests
         Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings");
         Assert.DoesNotContain(issues, i => i.Kind == "replacement_char");
         Assert.DoesNotContain(issues, i => i.Kind == "non_utf8_likely");
+    }
+
+    [Fact]
+    public void ValidateContent_Utf16WithoutBom_DoesNotEmitNullByteIssue()
+    {
+        var payload = "using System;\nclass C { }\n";
+        var rawBytes = System.Text.Encoding.Unicode.GetBytes(payload);
+
+        var issues = FileIndexer.ValidateContent("utf16le-nobom.cs", rawBytes, payload);
+
+        Assert.DoesNotContain(issues, i => i.Kind == "utf16_bom");
+        Assert.DoesNotContain(issues, i => i.Kind == "null_byte");
+        Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings");
     }
 
     [Fact]
@@ -4092,5 +4407,36 @@ public class FileIndexerTests
     {
         Assert.False(FileIndexer.IsGeneratedCodeFile("src/Foo.cs", "class Foo { }\n"));
         Assert.False(FileIndexer.IsGeneratedCodeFile("src/Foo.cs", "// This file is not auto-generated.\nclass Foo { }\n"));
+    }
+
+    private static int CountFiles(SqliteConnection connection)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM files";
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    private static string ReadSingleChunkContent(string dbPath, string filePath)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT c.content
+            FROM chunks c
+            JOIN files f ON f.id = c.file_id
+            WHERE f.path = @path
+            ORDER BY c.chunk_index
+            """;
+        cmd.Parameters.AddWithValue("@path", filePath);
+        return Assert.IsType<string>(cmd.ExecuteScalar());
+    }
+
+    private static bool HasIndexedFile(string dbPath, string filePath)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM files WHERE path = @path";
+        cmd.Parameters.AddWithValue("@path", filePath);
+        return cmd.ExecuteScalar() != null;
     }
 }

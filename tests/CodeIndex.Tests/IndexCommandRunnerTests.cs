@@ -3754,17 +3754,110 @@ public class IndexCommandRunnerTests
 
             Assert.True(hookInvoked);
             Assert.Equal(CommandExitCodes.Interrupted, interruptedExitCode);
-            var recoveryWarning = ConsoleCapture.CaptureError(() =>
+            var reopenWarning = ConsoleCapture.CaptureError(() =>
             {
                 using var db = new DbContext(dbPath);
-                Assert.Equal(0, db.GetUserVersion());
+                Assert.Equal(initialReadiness, db.GetUserVersion());
             });
-            Assert.Contains("Last batch did not complete", recoveryWarning);
+            Assert.DoesNotContain("Last batch did not complete", reopenWarning);
             Assert.DoesNotContain("later.cs", ReadIndexedPaths(dbPath));
+            Assert.Contains("app.cs", ReadIndexedPaths(dbPath));
         }
         finally
         {
             IndexCommandRunner.FullScanWritePhaseStartedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_Rebuild_CancelledAfterReadinessDemotion_PreservesExistingIndex()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            int initialReadiness;
+            using (var db = new DbContext(dbPath))
+                initialReadiness = db.GetUserVersion();
+            Assert.Equal(DbContext.CurrentSchemaVersion, initialReadiness);
+            Assert.Contains("app.cs", ReadIndexedPaths(dbPath));
+
+            File.WriteAllText(Path.Combine(projectRoot, "later.cs"), "public class Later { }\n");
+            using var cancellation = new CancellationTokenSource();
+            var hookInvoked = false;
+            IndexCommandRunner.FullScanWritePhaseStartedForTesting = () =>
+            {
+                hookInvoked = true;
+                cancellation.Cancel();
+            };
+
+            int interruptedExitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new StringWriter();
+                try
+                {
+                    Console.SetOut(stdout);
+                    interruptedExitCode = IndexCommandRunner.Run([projectRoot, "--rebuild", "--yes", "--json"], _jsonOptions, cancellation);
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                    IndexCommandRunner.FullScanWritePhaseStartedForTesting = null;
+                }
+            }
+
+            Assert.True(hookInvoked);
+            Assert.Equal(CommandExitCodes.Interrupted, interruptedExitCode);
+            var reopenWarning = ConsoleCapture.CaptureError(() =>
+            {
+                using var db = new DbContext(dbPath);
+                Assert.Equal(initialReadiness, db.GetUserVersion());
+            });
+            Assert.DoesNotContain("Last batch did not complete", reopenWarning);
+            Assert.DoesNotContain("later.cs", ReadIndexedPaths(dbPath));
+            Assert.Contains("app.cs", ReadIndexedPaths(dbPath));
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanWritePhaseStartedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_Rebuild_WhenIndexedFileBecomesBinary_RemovesStaleRow()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.py");
+            File.WriteAllText(sourcePath, "def run():\n    return 1\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Contains("app.py", ReadIndexedPaths(dbPath));
+
+            File.WriteAllBytes(sourcePath, [0, 1, 2, 3]);
+
+            var rebuildExitCode = IndexCommandRunner.Run([projectRoot, "--rebuild", "--yes", "--json"], _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, rebuildExitCode);
+            Assert.DoesNotContain("app.py", ReadIndexedPaths(dbPath));
+        }
+        finally
+        {
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }

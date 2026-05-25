@@ -16,7 +16,7 @@ namespace CodeIndex.Mcp;
 /// </summary>
 public partial class McpServer
 {
-    private const int DefaultBatchQueryResponseByteLimit = MaxLineLength;
+    private const int DefaultBatchQueryResponseByteLimit = MaxLineByteLength;
     private const string BatchQueryResponseByteLimitEnvVar = "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES";
     internal const int MaxMcpArrayFilterCount = 100;
     internal const int MaxMcpArrayFilterStringLength = 4096;
@@ -1337,6 +1337,12 @@ public partial class McpServer
                     .ToList();
             }
             status.Version = _version;
+            if (!status.FoldReady)
+            {
+                status.DegradedReason = DegradationReasonCodes.BuildFoldNotReadyExplanation(status.FoldReadyReason);
+                status.RecommendedAction = BuildFoldBackfillCommand(_dbPath, _dbPathExplicit);
+                status.AlternativeAction = BuildFoldRebuildRepairCommand(status.ProjectRoot, _dbPath, _dbPathExplicit);
+            }
             var structured = JsonSerializer.SerializeToNode(status, _jsonOptions)!.AsObject();
             structured["hotspotFamilyReady"] = status.HotspotFamilyReady;
             if (status.HotspotFamilyDegradedReason != null)
@@ -1344,8 +1350,57 @@ public partial class McpServer
             structured["sqlGraphContractReady"] = status.SqlGraphContractReady;
             if (status.SqlGraphContractDegradedReason != null)
                 structured["sqlGraphContractDegradedReason"] = status.SqlGraphContractDegradedReason;
+            structured["mcp"] = new JsonObject
+            {
+                ["limits"] = new JsonObject
+                {
+                    ["max_request_characters"] = MaxLineCharacterCount,
+                    ["max_request_bytes"] = MaxLineByteLength,
+                    ["max_json_depth"] = MaxJsonDepth,
+                    ["max_batch_requests"] = MaxBatchRequestCount,
+                }
+            };
             return CreateToolResult(id, "Database stats returned.", structured);
         });
+    }
+
+    private static string BuildFoldBackfillCommand(string dbPath, bool dbPathExplicit)
+    {
+        if (!dbPathExplicit)
+            return "cdidx backfill-fold";
+
+        return $"cdidx backfill-fold --db {QuoteCommandArgument(ResolveWritableDbPathOrPlaceholder(dbPath))}";
+    }
+
+    private static string BuildFoldRebuildRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit)
+    {
+        if (!dbPathExplicit)
+            return "cdidx index . --rebuild";
+
+        var resolvedDbPath = ResolveWritableDbPathOrPlaceholder(dbPath);
+        var targetProject = string.IsNullOrWhiteSpace(projectRoot)
+            ? "<projectPath>"
+            : QuoteCommandArgument(projectRoot);
+        return $"cdidx index {targetProject} --db {QuoteCommandArgument(resolvedDbPath)} --rebuild";
+    }
+
+    private static string ResolveWritableDbPathOrPlaceholder(string dbPath)
+        => DbPathResolver.TryResolveWritableMutationDbPath(dbPath, out var writableDbPath)
+            ? writableDbPath
+            : "<writable-db-path>";
+
+    private static string QuoteCommandArgument(string value)
+    {
+        if (value.Length >= 2 && value[0] == '<' && value[^1] == '>')
+            return value;
+
+        var fullPath = DbPathResolver.NormalizeDbPath(value);
+        if (!fullPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            fullPath = Path.GetFullPath(fullPath);
+
+        return fullPath.IndexOfAny([' ', '\t', '"']) >= 0
+            ? $"\"{fullPath.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
+            : fullPath;
     }
 
     private JsonNode ExecuteOutline(JsonNode? id, JsonNode? args)
@@ -2906,6 +2961,9 @@ public partial class McpServer
     /// description と context にソースコードが含まれていないことを検証する。
     /// </summary>
     private JsonNode ExecuteSuggestImprovement(JsonNode? id, JsonNode? args)
+        => ExecuteSuggestImprovementAsync(id, args).GetAwaiter().GetResult();
+
+    private async Task<JsonNode> ExecuteSuggestImprovementAsync(JsonNode? id, JsonNode? args)
     {
         // 1. Validate required parameters / 必須パラメータのバリデーション
         if (!TryReadRequiredStringParameter(args, "category", out var category, out var requiredError))
@@ -2984,14 +3042,15 @@ public partial class McpServer
 
         // Build GitHub submission callback (null if no token configured).
         // GitHub 送信コールバックを構築（トークン未設定なら null）。
-        Func<SuggestionRecord, SuggestionStore.SubmitAttemptResult>? githubCallback = null;
+        Func<SuggestionRecord, Task<SuggestionStore.SubmitAttemptResult>>? githubCallback = null;
         if (GitHubIssueReporter.ResolveToken() != null)
         {
             var version = _version;
-            githubCallback = r => GitHubIssueReporter.TryCreateIssueDetailedAsync(r, version).GetAwaiter().GetResult();
+            var cancellationToken = _currentRequestToken.Value;
+            githubCallback = r => GitHubIssueReporter.TryCreateIssueDetailedAsync(r, version, cancellationToken);
         }
 
-        var result = store.TryAddAndSubmit(record, githubCallback);
+        var result = await store.TryAddAndSubmitAsync(record, githubCallback).ConfigureAwait(false);
 
         if (!result.IsNew)
         {

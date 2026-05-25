@@ -2440,6 +2440,152 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetStatus_WithFoldRowVerification_DegradesWhenReadyBitRowsAreIncomplete()
+    {
+        using var env = EnvironmentVariableScope.Capture(DbReader.VerifyFoldReadyRowsEnvironmentVariable);
+        env.Set(DbReader.VerifyFoldReadyRowsEnvironmentVariable, "1");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_fold_status_verify_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            var fileId = writer.UpsertFile(new FileRecord
+            {
+                Path = "src/a.py", Lang = "python", Size = 1, Lines = 1,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            writer.InsertSymbols([
+                new SymbolRecord { FileId = fileId, Kind = "function", Name = "authenticate", Line = 1, StartLine = 1, EndLine = 1 },
+            ]);
+            Assert.True(writer.MarkFoldReady());
+
+            using (var cmd = db.Connection.CreateCommand())
+            {
+                cmd.CommandText = "UPDATE symbols SET name_folded = NULL WHERE name = 'authenticate'";
+                cmd.ExecuteNonQuery();
+            }
+
+            var status = new DbReader(db.Connection).GetStatus();
+
+            Assert.False(status.FoldReady);
+            Assert.Equal(DegradationReasonCodes.FoldReadyBitSetButRowsIncomplete, status.FoldReadyReason);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void GetStatus_WithFoldRowVerification_IgnoresMissingReferenceTable()
+    {
+        using var env = EnvironmentVariableScope.Capture(DbReader.VerifyFoldReadyRowsEnvironmentVariable);
+        env.Set(DbReader.VerifyFoldReadyRowsEnvironmentVariable, "1");
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_fold_status_legacy_refs_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            var fileId = writer.UpsertFile(new FileRecord
+            {
+                Path = "src/a.py", Lang = "python", Size = 1, Lines = 1,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            writer.InsertSymbols([
+                new SymbolRecord { FileId = fileId, Kind = "function", Name = "authenticate", Line = 1, StartLine = 1, EndLine = 1 },
+            ]);
+            Assert.True(writer.MarkFoldReady());
+
+            using (var cmd = db.Connection.CreateCommand())
+            {
+                cmd.CommandText = "DROP TABLE symbol_references";
+                cmd.ExecuteNonQuery();
+            }
+            db.RefreshSchemaCache();
+
+            var status = new DbReader(db.Connection).GetStatus();
+
+            Assert.True(status.FoldReady);
+            Assert.Null(status.FoldReadyReason);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+        }
+    }
+
+    [Theory]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void AllFoldedColumnsBackfilled_DetectsEveryPartialFoldColumnState(
+        bool nullSymbolName,
+        bool nullReferenceSymbolName,
+        bool nullReferenceContainerName)
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_fold_partial_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            var fileId = writer.UpsertFile(new FileRecord
+            {
+                Path = "src/a.py", Lang = "python", Size = 1, Lines = 1,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            writer.InsertSymbols([
+                new SymbolRecord { FileId = fileId, Kind = "function", Name = "authenticate", Line = 1, StartLine = 1, EndLine = 1 },
+            ]);
+            writer.InsertReferences([
+                new ReferenceRecord
+                {
+                    FileId = fileId,
+                    SymbolName = "authenticate",
+                    ReferenceKind = "call",
+                    Line = 1,
+                    Column = 1,
+                    ContainerName = "login",
+                },
+            ]);
+
+            Assert.True(writer.AllFoldedColumnsBackfilled());
+
+            using (var cmd = db.Connection.CreateCommand())
+            {
+                cmd.CommandText = $"""
+                    UPDATE symbols
+                    SET name_folded = CASE WHEN @nullSymbolName THEN NULL ELSE name_folded END;
+                    UPDATE symbol_references
+                    SET
+                        symbol_name_folded = CASE WHEN @nullReferenceSymbolName THEN NULL ELSE symbol_name_folded END,
+                        container_name_folded = CASE WHEN @nullReferenceContainerName THEN NULL ELSE container_name_folded END;
+                    """;
+                cmd.Parameters.AddWithValue("@nullSymbolName", nullSymbolName);
+                cmd.Parameters.AddWithValue("@nullReferenceSymbolName", nullReferenceSymbolName);
+                cmd.Parameters.AddWithValue("@nullReferenceContainerName", nullReferenceContainerName);
+                cmd.ExecuteNonQuery();
+            }
+
+            for (var i = 0; i < 5; i++)
+                Assert.False(writer.AllFoldedColumnsBackfilled());
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void GetExactGraphSupportedDefinitionLanguage_DegradesOnLegacyDbMissingContainerKind()
     {
         // Regression for #493: the exact graph-support probe hardcoded `s.container_kind`

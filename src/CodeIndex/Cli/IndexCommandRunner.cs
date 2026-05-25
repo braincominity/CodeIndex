@@ -524,15 +524,6 @@ public static class IndexCommandRunner
         // まだ clear しない。update モードの preflight が失敗しただけで healthy な DB を
         // 縮退状態に落とさないよう、clear は実際に書き込み直前で行う。
 
-        if (options.Rebuild)
-        {
-            db.ClearReadyFlags();
-            var rebuildWriter = new DbWriter(db);
-            rebuildWriter.ClearHotspotFamilyReady();
-            rebuildWriter.ClearMetadataTargetReady();
-            db.DropAll();
-        }
-
         db.InitializeSchema();
         AddToGitExclude(options.ProjectPath, dbPath);
 
@@ -1801,12 +1792,13 @@ public static class IndexCommandRunner
                 StartUpdateSpinnerIfNeeded();
                 currentUpdatePath = relPath;
                 var absPath = Path.Combine(projectRoot, relPath.Replace('/', Path.DirectorySeparatorChar));
+                var dbPath = FileIndexer.NormalizeIndexPath(relPath);
                 var fileBatchMarked = false;
                 try
                 {
                     if (!File.Exists(LongPath.EnsureWindowsPrefix(absPath)))
                     {
-                        if (!writer.HasFileAtPath(relPath))
+                        if (!writer.HasFileAtPath(dbPath))
                         {
                             skipped++;
                             WriteUpdateVerboseStatus($"  [SKIP] {relPath} (not in DB)");
@@ -1815,7 +1807,7 @@ public static class IndexCommandRunner
 
                         DemoteReadinessOnce();
                         using var deleteTxn = writer.BeginTransaction();
-                        if (writer.DeleteFileByPath(relPath))
+                        if (writer.DeleteFileByPath(dbPath))
                         {
                             WriteProjectRootOnce();
                             deleteTxn.Commit();
@@ -1847,7 +1839,7 @@ public static class IndexCommandRunner
                         continue;
                     }
 
-                    if (!writer.HasFileAtPath(relPath))
+                    if (!writer.HasFileAtPath(dbPath))
                     {
                         skipped++;
                         if (options.Verbose && !options.Json && !options.Quiet)
@@ -1861,7 +1853,7 @@ public static class IndexCommandRunner
 
                     DemoteReadinessOnce();
                     using var deleteTxn = writer.BeginTransaction();
-                    if (writer.DeleteFileByPath(relPath))
+                    if (writer.DeleteFileByPath(dbPath))
                     {
                         WriteProjectRootOnce();
                         deleteTxn.Commit();
@@ -1901,11 +1893,11 @@ public static class IndexCommandRunner
                         ResumeUpdateSpinnerAfterConsoleWrite();
                     }
 
-                    if (writer.HasFileAtPath(relPath))
+                    if (writer.HasFileAtPath(dbPath))
                     {
                         DemoteReadinessOnce();
                         using var deleteTxn = writer.BeginTransaction();
-                        if (writer.DeleteFileByPath(relPath))
+                        if (writer.DeleteFileByPath(dbPath))
                         {
                             WriteProjectRootOnce();
                             deleteTxn.Commit();
@@ -1940,11 +1932,11 @@ public static class IndexCommandRunner
 
                 if (indexability != FileIndexer.FileProbeStatus.Supported || detection.Status != FileIndexer.FileProbeStatus.Supported)
                 {
-                    if (!writer.HasFileAtPath(relPath))
+                    if (!writer.HasFileAtPath(dbPath))
                     {
                         using var purgeTxn = writer.BeginTransaction();
                         var purged = projectRootWritten
-                            ? writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, relPath)
+                            ? writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, dbPath)
                             : 0;
                         if (purged > 0)
                         {
@@ -1975,7 +1967,7 @@ public static class IndexCommandRunner
 
                     DemoteReadinessOnce();
                     using var deleteTxn = writer.BeginTransaction();
-                    if (writer.DeleteFileByPath(relPath))
+                    if (writer.DeleteFileByPath(dbPath))
                     {
                         WriteProjectRootOnce();
                         deleteTxn.Commit();
@@ -2013,7 +2005,7 @@ public static class IndexCommandRunner
                         ResumeUpdateSpinnerAfterConsoleWrite();
                     }
 
-                    if (!writer.HasFileAtPath(relPath))
+                    if (!writer.HasFileAtPath(dbPath))
                     {
                         skipped++;
                         continue;
@@ -2021,7 +2013,7 @@ public static class IndexCommandRunner
 
                     DemoteReadinessOnce();
                     using var deleteTxn = writer.BeginTransaction();
-                    if (writer.DeleteFileByPath(relPath))
+                    if (writer.DeleteFileByPath(dbPath))
                     {
                         WriteProjectRootOnce();
                         deleteTxn.Commit();
@@ -2164,11 +2156,11 @@ public static class IndexCommandRunner
                         ResumeUpdateSpinnerAfterConsoleWrite();
                     }
 
-                    if (writer.HasFileAtPath(relPath))
+                    if (writer.HasFileAtPath(dbPath))
                     {
                         DemoteReadinessOnce();
                         using var deleteTxn = writer.BeginTransaction();
-                        if (writer.DeleteFileByPath(relPath))
+                        if (writer.DeleteFileByPath(dbPath))
                         {
                             WriteProjectRootOnce();
                             deleteTxn.Commit();
@@ -2233,11 +2225,11 @@ public static class IndexCommandRunner
                         ResumeUpdateSpinnerAfterConsoleWrite();
                     }
 
-                    if (writer.HasFileAtPath(relPath))
+                    if (writer.HasFileAtPath(dbPath))
                     {
                         DemoteReadinessOnce();
                         using var deleteTxn = writer.BeginTransaction();
-                        if (writer.DeleteFileByPath(relPath))
+                        if (writer.DeleteFileByPath(dbPath))
                         {
                             WriteProjectRootOnce();
                             deleteTxn.Commit();
@@ -3255,13 +3247,14 @@ public static class IndexCommandRunner
         }
 
         // Full-scan commits to mutating the DB from here on. Keep the whole write phase in
-        // one outer transaction so Ctrl-C/SIGTERM can roll back the readiness demotion,
-        // stale-file purge, and per-file writes instead of leaving a half-cleared index.
-        // full-scan の書き込み全体を outer transaction に入れ、中断時に readiness clear /
-        // purge / per-file write をまとめて rollback する。
+        // one outer transaction so Ctrl-C/SIGTERM can roll back the batch marker,
+        // readiness demotion, stale-file purge, and per-file writes instead of leaving a
+        // half-cleared index.
+        // full-scan の書き込み全体を outer transaction に入れ、中断時に batch marker /
+        // readiness clear / purge / per-file write をまとめて rollback する。
         ThrowIfFullScanCancelled(0, files.Count);
-        writer.MarkBatchInProgress();
         using var fullScanTxn = writer.BeginTransaction();
+        writer.MarkBatchInProgress();
         writer.ClearReadyFlags();
         writer.ClearHotspotFamilyReady();
         writer.ClearMetadataTargetReady();
@@ -3273,26 +3266,30 @@ public static class IndexCommandRunner
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
         var purged = 0;
         var retainedPaths = files
-            .Select(path => FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, path)))
+            .Select(path => FileIndexer.NormalizeIndexPath(Path.GetRelativePath(projectRoot, path)))
             .ToHashSet(StringComparer.Ordinal);
         if (scanResult.HadErrors)
         {
             SaveScanCheckpoint(scanCheckpointPath, currentHeadForCheckpoint, scanResult.CheckpointedDirectories);
-            retainedPaths.UnionWith(scanResult.ProbeFailedFilePaths);
+            retainedPaths.UnionWith(scanResult.ProbeFailedFilePaths.Select(FileIndexer.NormalizeIndexPath));
 
             foreach (var relPath in scanResult.NonIndexablePaths)
             {
-                if (!writer.HasFileAtPath(relPath))
+                var dbPath = FileIndexer.NormalizeIndexPath(relPath);
+                if (!writer.HasFileAtPath(dbPath))
                     continue;
 
-                if (writer.DeleteFileByPath(relPath))
+                if (writer.DeleteFileByPath(dbPath))
                     purged++;
             }
 
             var authoritativeDirectories = scanResult.ListedDirectories
+                .Select(FileIndexer.NormalizeIndexPath)
                 .ToHashSet(StringComparer.Ordinal);
             var attributePrunedDirectories = scanResult.AttributePrunedDirectories
+                .Select(FileIndexer.NormalizeIndexPath)
                 .ToHashSet(StringComparer.Ordinal);
+            attributePrunedDirectories.UnionWith(scanResult.NestedRepositories.Select(FileIndexer.NormalizeIndexPath));
             purged += writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, attributePrunedDirectories);
         }
         else
@@ -3300,9 +3297,12 @@ public static class IndexCommandRunner
             if (checkpointedDirectories.Count > 0)
             {
                 var authoritativeDirectories = scanResult.ListedDirectories
+                    .Select(FileIndexer.NormalizeIndexPath)
                     .ToHashSet(StringComparer.Ordinal);
                 var attributePrunedDirectories = scanResult.AttributePrunedDirectories
+                    .Select(FileIndexer.NormalizeIndexPath)
                     .ToHashSet(StringComparer.Ordinal);
+                attributePrunedDirectories.UnionWith(scanResult.NestedRepositories.Select(FileIndexer.NormalizeIndexPath));
                 purged = writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retainedPaths, authoritativeDirectories, attributePrunedDirectories);
             }
             else
@@ -3647,7 +3647,7 @@ public static class IndexCommandRunner
                             ResumeIndexSpinnerAfterConsoleWrite();
                         }
 
-                        if (!options.Rebuild && writer.HasFileAtPath(currentJsonIndexFile))
+                        if (writer.HasFileAtPath(currentJsonIndexFile))
                         {
                             using var deleteTxn = writer.BeginTransaction();
                             if (writer.DeleteFileByPath(currentJsonIndexFile))

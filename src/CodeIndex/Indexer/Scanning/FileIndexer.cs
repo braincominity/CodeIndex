@@ -48,7 +48,8 @@ public class FileIndexer
         IReadOnlyList<string> FullyScannedDirectories,
         IReadOnlySet<string> CheckpointedDirectories,
         IReadOnlyList<string> AncestorIgnoreDirectories,
-        IReadOnlyList<string> AttributePrunedDirectories)
+        IReadOnlyList<string> AttributePrunedDirectories,
+        IReadOnlyList<string> NestedRepositories)
     {
         public bool HadErrors => Errors.Any(error => error.IsFatal);
     }
@@ -1202,6 +1203,49 @@ public class FileIndexer
     internal static bool CanIndexFile(string filePath)
         => GetFileIndexability(filePath) == FileProbeStatus.Supported;
 
+    internal static bool IsWindowsDevicePath(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+            return false;
+
+        var normalized = filePath.Replace('\\', '/');
+        if (normalized.StartsWith("//./", StringComparison.Ordinal)
+            || normalized.StartsWith("//?/GLOBALROOT/Device/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        foreach (var segment in normalized.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var name = segment;
+            var extensionIndex = name.IndexOf('.');
+            if (extensionIndex >= 0)
+                name = name[..extensionIndex];
+
+            if (IsWindowsReservedDeviceName(name))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsWindowsReservedDeviceName(string name)
+    {
+        if (name.Equals("CON", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("PRN", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("AUX", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("NUL", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return name.Length == 4
+            && (name.StartsWith("COM", StringComparison.OrdinalIgnoreCase)
+                || name.StartsWith("LPT", StringComparison.OrdinalIgnoreCase))
+            && name[3] >= '1'
+            && name[3] <= '9';
+    }
+
     internal static bool HasSkippedAttributes(FileAttributes attributes, bool isWindows)
     {
         if ((attributes & FileAttributes.ReparsePoint) != 0)
@@ -1246,6 +1290,9 @@ public class FileIndexer
 
     internal static FileProbeStatus GetFileIndexability(string filePath)
     {
+        if (OperatingSystem.IsWindows() && IsWindowsDevicePath(filePath))
+            return FileProbeStatus.Unsupported;
+
         // Reject symlinks/reparse points here so every caller (full scan, --files / --commits update mode,
         // dry-run) gets the same skip behavior. On Windows, Hidden/System paths are also rejected to avoid
         // indexing OS-owned caches such as System Volume Information and $Recycle.Bin during broad scans.
@@ -1586,6 +1633,9 @@ public class FileIndexer
             var isSubmodule = _submodulePaths.Contains(cumulativeRelPath);
             var isSubmoduleAncestor = _submoduleAncestorPaths.Contains(cumulativeRelPath);
 
+            if (IsNestedGitRepository(childDirectory) && !isSubmodule && !isSubmoduleAncestor)
+                return new PathFilterResult(PathFilterKind.ExcludedByDefaultDirectory, errors);
+
             if (SkipDirs.Contains(directoryName))
             {
                 if (!isSubmodule && !isSubmoduleAncestor)
@@ -1648,12 +1698,13 @@ public class FileIndexer
             ? new HashSet<string>(checkpointedDirectories, StringComparer.Ordinal)
             : new HashSet<string>(StringComparer.Ordinal);
         var attributePrunedDirectories = new HashSet<string>(StringComparer.Ordinal);
+        var nestedRepositories = new HashSet<string>(StringComparer.Ordinal);
         var visitedFileIdentities = new HashSet<FileIdentity>();
         var fullyScanned = true;
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         if (preloadResult.IgnoreRulesAvailable)
         {
-            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeCheckpointedDirectories, attributePrunedDirectories, visitedFileIdentities, preloadResult.Rules, isProjectRoot: true, continueOnError, cancellationToken);
+            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeCheckpointedDirectories, attributePrunedDirectories, nestedRepositories, visitedFileIdentities, preloadResult.Rules, isProjectRoot: true, continueOnError, cancellationToken);
         }
         return new ScanFilesResult(
             files,
@@ -1665,7 +1716,8 @@ public class FileIndexer
             fullyScannedDirectories.ToList(),
             activeCheckpointedDirectories.Concat(fullyScannedDirectories).ToHashSet(StringComparer.Ordinal),
             _ancestorIgnoreDirectories.ToList(),
-            attributePrunedDirectories.ToList());
+            attributePrunedDirectories.ToList(),
+            nestedRepositories.OrderBy(path => path, StringComparer.Ordinal).ToList());
     }
 
     private bool ScanDirectory(
@@ -1679,6 +1731,7 @@ public class FileIndexer
         HashSet<string> fullyScannedDirectories,
         HashSet<string> checkpointedDirectories,
         HashSet<string> attributePrunedDirectories,
+        HashSet<string> nestedRepositories,
         HashSet<FileIdentity> visitedFileIdentities,
         IgnoreRuleSet activeIgnoreRules,
         bool isProjectRoot = false,
@@ -1699,7 +1752,16 @@ public class FileIndexer
             return true;
         }
 
-        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, visitedFileIdentities, activeIgnoreRules, continueOnError, cancellationToken);
+        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, visitedFileIdentities, activeIgnoreRules, continueOnError, cancellationToken);
+    }
+
+    private bool IsNestedGitRepository(string dir)
+    {
+        if (PathsEqual(dir, _projectRoot))
+            return false;
+
+        return Directory.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(dir, ".git"))) ||
+            File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(dir, ".git")));
     }
 
     private bool EnumerateDirectory(
@@ -1713,6 +1775,7 @@ public class FileIndexer
         HashSet<string> fullyScannedDirectories,
         HashSet<string> checkpointedDirectories,
         HashSet<string> attributePrunedDirectories,
+        HashSet<string> nestedRepositories,
         HashSet<FileIdentity> visitedFileIdentities,
         IgnoreRuleSet inheritedIgnoreRules,
         bool continueOnError,
@@ -1870,6 +1933,15 @@ public class FileIndexer
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
+                if (IsNestedGitRepository(subDir) && !IsSubmoduleOrAncestor(subDir))
+                {
+                    var subRelative = ToRelativePath(subDir);
+                    listedDirectories.Add(subRelative);
+                    fullyScannedDirectories.Add(subRelative);
+                    nestedRepositories.Add(subRelative);
+                    continue;
+                }
+
                 // In passthrough mode, only descend into subdirectories that are themselves
                 // submodules or submodule ancestors. Treat siblings the same way SkipDirs
                 // would have treated them at this point.
@@ -1903,7 +1975,7 @@ public class FileIndexer
                     continue;
                 }
 
-                var childFullyScanned = ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, visitedFileIdentities, activeIgnoreRules, continueOnError: continueOnError, cancellationToken: cancellationToken);
+                var childFullyScanned = ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, visitedFileIdentities, activeIgnoreRules, continueOnError: continueOnError, cancellationToken: cancellationToken);
                 fullyScanned &= childFullyScanned;
                 if (!continueOnError && !childFullyScanned)
                     break;
@@ -2192,6 +2264,24 @@ public class FileIndexer
             : new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: false);
     }
 
+    private IgnoreRuleLoadResult LoadWorkspaceConfigIgnoreRules(
+        IgnoreRuleSet inheritedIgnoreRules,
+        List<ScanError> errors,
+        ref bool fullyScanned)
+    {
+        var configIgnorePath = Path.Combine(_projectRoot, ".codeindex", ".cdidxignore");
+        if (!File.Exists(LongPath.EnsureWindowsPrefix(configIgnorePath)))
+            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: true);
+
+        return LoadIgnoreRulesFile(
+            sourceDirectory: _projectRoot,
+            ignorePath: configIgnorePath,
+            ignoreFileName: ".codeindex/.cdidxignore",
+            inheritedIgnoreRules,
+            errors,
+            ref fullyScanned);
+    }
+
     private IgnoreRuleLoadResult LoadAncestorIgnoreRules(List<ScanError> errors, ref bool fullyScanned)
     {
         var activeIgnoreRules = IgnoreRuleSet.Empty;
@@ -2210,7 +2300,46 @@ public class FileIndexer
                 return new IgnoreRuleLoadResult(activeIgnoreRules, IgnoreRulesAvailable: false);
         }
 
-        return new IgnoreRuleLoadResult(activeIgnoreRules, IgnoreRulesAvailable: true);
+        return LoadWorkspaceConfigIgnoreRules(activeIgnoreRules, errors, ref fullyScanned);
+    }
+
+    private IgnoreRuleLoadResult LoadIgnoreRulesFile(
+        string sourceDirectory,
+        string ignorePath,
+        string ignoreFileName,
+        IgnoreRuleSet inheritedIgnoreRules,
+        List<ScanError> errors,
+        ref bool fullyScanned)
+    {
+        var rules = new List<IgnoreRule>();
+        var prefixedIgnorePath = LongPath.EnsureWindowsPrefix(ignorePath);
+
+        try
+        {
+            var lineNumber = 0;
+            foreach (var line in File.ReadLines(prefixedIgnorePath, Encoding.UTF8))
+            {
+                lineNumber++;
+                if (IgnoreRule.TryParse(sourceDirectory, line, _ignoreCase, out var rule, out var errorMessage) && rule != null)
+                    rules.Add(rule);
+                else if (errorMessage != null)
+                    errors.Add(new ScanError($"{ToRelativePath(ignorePath)}:{lineNumber}", errorMessage, ScanIssueSeverity.Warning));
+            }
+        }
+        catch (UnauthorizedAccessException)
+        {
+            errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName}."));
+            fullyScanned = false;
+            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: false);
+        }
+        catch (IOException)
+        {
+            errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName}."));
+            fullyScanned = false;
+            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: false);
+        }
+
+        return new IgnoreRuleLoadResult(IgnoreRuleSet.CreateChild(inheritedIgnoreRules, rules), IgnoreRulesAvailable: true);
     }
 
     private string NormalizeIgnoreRuleRoot(string? ignoreRuleRoot)
@@ -2409,6 +2538,13 @@ public class FileIndexer
         => Path.DirectorySeparatorChar == '\\' ? path.Replace('\\', '/') : path;
 
     /// <summary>
+    /// Normalize index paths to the DB invariant: platform separators plus Unicode NFC.
+    /// DB 保存・lookup 用 path は区切り文字正規化に加えて Unicode NFC に正規化する。
+    /// </summary>
+    public static string NormalizeIndexPath(string path)
+        => NormalizePathSeparators(path).Normalize(NormalizationForm.FormC);
+
+    /// <summary>
     /// Build a FileRecord and return file content (avoids reading the file twice).
     /// FileRecordを構築しファイル内容も返す（二重読み込み防止）。
     /// </summary>
@@ -2435,6 +2571,7 @@ public class FileIndexer
             throw new InvalidOperationException("Only regular files can be indexed");
 
         var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
+        var normalizedRelativePath = NormalizeIndexPath(relativePath);
 
         // Read raw bytes through a single FileStream and cap the accumulated payload at
         // the configured max-file limit so a file that grew between the size probe and the read can no
@@ -2468,7 +2605,7 @@ public class FileIndexer
             var initialLength = stream.Length;
             if (initialLength > _maxFileSizeBytes)
                 throw new FileTooLargeSkippedException(
-                    NormalizePathSeparators(relativePath),
+                    normalizedRelativePath,
                     initialLength,
                     _maxFileSizeBytes,
                     BuildFileTooLargeMessage(initialLength, grewDuringRead: false));
@@ -2488,7 +2625,7 @@ public class FileIndexer
                 total += read;
                 if (total > _maxFileSizeBytes)
                     throw new FileTooLargeSkippedException(
-                        NormalizePathSeparators(relativePath),
+                        normalizedRelativePath,
                         total,
                         _maxFileSizeBytes,
                         BuildFileTooLargeMessage(total, grewDuringRead: true));
@@ -2516,7 +2653,9 @@ public class FileIndexer
         // Closes #1544.
         var checksum = ComputeChecksum(bytes);
 
-        if (ContainsIndexBlockingNullByte(bytes))
+        var isUtf16Encoded = TryDetectUtf16Encoding(bytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
+
+        if (!isUtf16Encoded && ContainsIndexBlockingNullByte(bytes))
             throw new BinaryFileSkippedException($"{relativePath}: binary file skipped because it contains NULL bytes");
 
         string content;
@@ -2530,15 +2669,9 @@ public class FileIndexer
         // デコーダで毎バイト U+FFFD / NUL に変換され、ファイル内のシンボルが丸ごと
         // 消える。UTF-32 LE は UTF-16 LE と先頭 2 バイトを共有する (FF FE [00 00])
         // ため、UTF-16 LE 経路から除外し UTF-8 fallback に流す。Closes #1540.
-        if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
+        if (isUtf16Encoded)
         {
-            content = new UnicodeEncoding(bigEndian: true, byteOrderMark: false, throwOnInvalidBytes: false)
-                .GetString(bytes);
-        }
-        else if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE
-                 && !(bytes.Length >= 4 && bytes[2] == 0x00 && bytes[3] == 0x00))
-        {
-            content = new UnicodeEncoding(bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: false)
+            content = new UnicodeEncoding(utf16BigEndian, byteOrderMark: hasUtf16Bom, throwOnInvalidBytes: false)
                 .GetString(bytes);
         }
         else
@@ -2586,13 +2719,13 @@ public class FileIndexer
         content = StripLineLeadingInvisibles(content);
         var record = new FileRecord
         {
-            Path = NormalizePathSeparators(relativePath),
+            Path = normalizedRelativePath,
             Lang = TryDetectLanguage(absolutePath, content).Language,
             Size = sizeBytes,
             Lines = lineCount,
             Checksum = checksum,
             Modified = modifiedUtc,
-            Generated = IsGeneratedCodeFile(NormalizePathSeparators(relativePath), content),
+            Generated = IsGeneratedCodeFile(normalizedRelativePath, content),
         };
 
         return (record, content, bytes, warning);
@@ -2604,7 +2737,7 @@ public class FileIndexer
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
 
         var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
-        var normalizedRelativePath = NormalizePathSeparators(relativePath);
+        var normalizedRelativePath = NormalizeIndexPath(relativePath);
         var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
         var info = new FileInfo(ioPath);
         return new FileRecord
@@ -2897,19 +3030,16 @@ public class FileIndexer
         // (UTF-16 LE では ASCII 部の片バイトが NUL、CRLF は 0D 00 0A 00)。代わりに
         // `utf16_bom` 1 件を出して `validate` が「UTF-16 として解釈した」ことを示し、
         // 不正サロゲートペアに備え content 側 U+FFFD 走査は継続する。Closes #1540.
-        var hasUtf16BeBom = rawBytes.Length >= 2 && rawBytes[0] == 0xFE && rawBytes[1] == 0xFF;
-        var hasUtf16LeBom = rawBytes.Length >= 2 && rawBytes[0] == 0xFF && rawBytes[1] == 0xFE
-            && !(rawBytes.Length >= 4 && rawBytes[2] == 0x00 && rawBytes[3] == 0x00);
-        var isUtf16 = hasUtf16BeBom || hasUtf16LeBom;
+        var isUtf16 = TryDetectUtf16Encoding(rawBytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
 
-        if (isUtf16)
+        if (isUtf16 && hasUtf16Bom)
         {
             issues.Add(new FileIssue
             {
                 Path = relativePath,
                 Kind = "utf16_bom",
                 Line = 1,
-                Message = hasUtf16BeBom
+                Message = utf16BigEndian
                     ? "UTF-16 BE BOM detected (decoded as UTF-16)"
                     : "UTF-16 LE BOM detected (decoded as UTF-16)",
             });
@@ -3112,11 +3242,86 @@ public class FileIndexer
 
     internal static bool ContainsIndexBlockingNullByte(byte[] rawBytes)
     {
-        var hasUtf16BeBom = rawBytes.Length >= 2 && rawBytes[0] == 0xFE && rawBytes[1] == 0xFF;
-        var hasUtf16LeBom = rawBytes.Length >= 2 && rawBytes[0] == 0xFF && rawBytes[1] == 0xFE
-            && !(rawBytes.Length >= 4 && rawBytes[2] == 0x00 && rawBytes[3] == 0x00);
-        return !hasUtf16BeBom && !hasUtf16LeBom && rawBytes.Any(b => b == 0);
+        return !TryDetectUtf16Encoding(rawBytes, allowHeuristic: true, out _, out _) && rawBytes.Any(b => b == 0);
     }
+
+    internal static bool TryDetectUtf16Encoding(
+        byte[] rawBytes,
+        bool allowHeuristic,
+        out bool bigEndian,
+        out bool hasBom)
+    {
+        bigEndian = false;
+        hasBom = false;
+
+        if (rawBytes.Length >= 2 && rawBytes[0] == 0xFE && rawBytes[1] == 0xFF)
+        {
+            bigEndian = true;
+            hasBom = true;
+            return true;
+        }
+
+        if (rawBytes.Length >= 2 && rawBytes[0] == 0xFF && rawBytes[1] == 0xFE
+            && !(rawBytes.Length >= 4 && rawBytes[2] == 0x00 && rawBytes[3] == 0x00))
+        {
+            hasBom = true;
+            return true;
+        }
+
+        if (!allowHeuristic || rawBytes.Length < 4)
+            return false;
+
+        var sampleLength = Math.Min(rawBytes.Length, 4096);
+        sampleLength -= sampleLength % 2;
+        var pairs = sampleLength / 2;
+        if (pairs == 0)
+            return false;
+
+        var evenNulls = 0;
+        var oddNulls = 0;
+        var oddTextBytes = 0;
+        var evenTextBytes = 0;
+        for (var i = 0; i < sampleLength; i += 2)
+        {
+            if (rawBytes[i] == 0)
+                evenNulls++;
+            if (rawBytes[i + 1] == 0)
+                oddNulls++;
+            if (IsLikelyTextByte(rawBytes[i + 1]))
+                oddTextBytes++;
+            if (IsLikelyTextByte(rawBytes[i]))
+                evenTextBytes++;
+        }
+
+        const double NullParityThreshold = 0.30;
+        const double OppositeNullThreshold = 0.01;
+        const double TextByteThreshold = 0.80;
+        var beScore = (double)evenNulls / pairs;
+        var leScore = (double)oddNulls / pairs;
+        var beOppositeScore = (double)oddNulls / pairs;
+        var leOppositeScore = (double)evenNulls / pairs;
+
+        if (beScore >= NullParityThreshold
+            && beOppositeScore <= OppositeNullThreshold
+            && (double)oddTextBytes / pairs >= TextByteThreshold)
+        {
+            bigEndian = true;
+            return true;
+        }
+
+        if (leScore >= NullParityThreshold
+            && leOppositeScore <= OppositeNullThreshold
+            && (double)evenTextBytes / pairs >= TextByteThreshold)
+        {
+            bigEndian = false;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsLikelyTextByte(byte value)
+        => value is 0x09 or 0x0A or 0x0D || value >= 0x20;
 
     internal sealed class BinaryFileSkippedException(string message) : InvalidOperationException(message);
 
