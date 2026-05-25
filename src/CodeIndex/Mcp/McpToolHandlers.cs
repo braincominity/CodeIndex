@@ -1026,6 +1026,7 @@ public partial class McpServer
                 ["results"] = ToJsonArray(results)
             };
             AddResultEnvelope(payload, results.Count, total, truncated);
+            payload["aggregate_truncated"] = results.Any(result => result.AggregateTruncated);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
@@ -1112,6 +1113,7 @@ public partial class McpServer
                 ["results"] = ToJsonArray(results)
             };
             AddResultEnvelope(payload, results.Count, total, truncated);
+            payload["aggregate_truncated"] = results.Any(result => result.AggregateTruncated);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);

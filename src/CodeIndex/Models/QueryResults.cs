@@ -234,6 +234,8 @@ public class CallerResult
     public IReadOnlyList<string> ReferenceKinds { get; set; } = Array.Empty<string>();
     public bool HasMixedReferenceKinds { get; set; }
     public IReadOnlyDictionary<string, int> ReferenceKindCounts { get; set; } = new Dictionary<string, int>();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool AggregateTruncated { get; set; }
     public double ReferenceWeightScore { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
@@ -262,6 +264,8 @@ public class CalleeResult
     public IReadOnlyList<string> ReferenceKinds { get; set; } = Array.Empty<string>();
     public bool HasMixedReferenceKinds { get; set; }
     public IReadOnlyDictionary<string, int> ReferenceKindCounts { get; set; } = new Dictionary<string, int>();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool AggregateTruncated { get; set; }
     public double ReferenceWeightScore { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
