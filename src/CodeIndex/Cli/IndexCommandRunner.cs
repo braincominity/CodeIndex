@@ -3866,7 +3866,14 @@ public static class IndexCommandRunner
                     writer.InsertChunks(chunks);
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "symbols");
                     var symbols = item.Symbols == null
-                        ? SymbolExtractor.Extract(fileId, record.Lang, item.Content!, item.FilePath, Path.GetFullPath(options.ProjectPath!), cancellationToken)
+                        ? ExtractSymbolsWithStallTimeout(
+                            fileId,
+                            record.Lang,
+                            item.Content!,
+                            item.FilePath,
+                            Path.GetFullPath(options.ProjectPath!),
+                            currentJsonIndexFile,
+                            cancellationToken)
                         : ReassignSymbolFileIds(item.Symbols, fileId);
                     if (item.Symbols == null)
                         SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(item.FilePath, record.Lang));
