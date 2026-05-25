@@ -172,7 +172,7 @@ public partial class McpServer
     private static int ReadOffset(JsonNode? args)
         => Math.Max(0, args?["offset"]?.GetValue<int>() ?? 0);
 
-    private static bool AddLimitMetadata<T>(JsonObject payload, List<T> results, int limit, int offset)
+    private static bool AddLimitMetadata<T>(JsonObject payload, List<T> results, int limit, int offset, bool includeNextOffset = false)
     {
         var truncated = results.Count > limit;
         if (truncated)
@@ -182,7 +182,7 @@ public partial class McpServer
         payload["count"] = results.Count;
         payload["truncated"] = truncated;
         payload["more_available"] = truncated;
-        if (truncated)
+        if (truncated && includeNextOffset)
             payload["next_offset"] = offset + results.Count;
         return truncated;
     }
@@ -876,7 +876,7 @@ public partial class McpServer
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
                 ["results"] = ToJsonArray(results)
             };
-            AddLimitMetadata(payload, results, limit, offset);
+            AddLimitMetadata(payload, results, limit, offset, includeNextOffset: true);
             payload["results"] = ToJsonArray(results);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
@@ -944,7 +944,7 @@ public partial class McpServer
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
                 ["results"] = ToJsonArray(results)
             };
-            AddLimitMetadata(payload, results, limit, offset);
+            AddLimitMetadata(payload, results, limit, offset, includeNextOffset: true);
             payload["results"] = ToJsonArray(results);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
@@ -1012,7 +1012,7 @@ public partial class McpServer
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
                 ["results"] = ToJsonArray(results)
             };
-            AddLimitMetadata(payload, results, limit, offset);
+            AddLimitMetadata(payload, results, limit, offset, includeNextOffset: true);
             payload["results"] = ToJsonArray(results);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
