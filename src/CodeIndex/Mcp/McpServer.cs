@@ -621,8 +621,16 @@ public partial class McpServer : IDisposable
         {
             try
             {
-                await WriteJsonLineAsync(writer, response).ConfigureAwait(false);
-                FlushDeferredFrameLogs();
+                await _textWriterGate.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    await WriteJsonLineAsync(writer, response).ConfigureAwait(false);
+                    FlushDeferredFrameLogs();
+                }
+                finally
+                {
+                    _textWriterGate.Release();
+                }
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
             {
