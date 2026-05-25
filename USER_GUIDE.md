@@ -480,10 +480,12 @@ RUN export CDIDX_INSTALL_DIR=/usr/local/bin \
 
 ### Option B: NuGet Global Tool
 
-Requires the [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
-CodeIndex targets `net8.0`; .NET 8.x is the supported SDK/runtime line for the
+Requires the [.NET 8.x SDK or runtime](https://dotnet.microsoft.com/download/dotnet/8.0).
+CodeIndex targets `net8.0`; .NET 8.x is the supported runtime line for the
 published tool, while the CI test suite also covers the test project on
-`net9.0`.
+`net9.0`. The NuGet package is framework-dependent rather than RID-specific or
+self-contained. On Apple Silicon, Linux ARM64, and Windows ARM64, prefer
+`install.sh` when the host does not already manage a .NET 8 runtime.
 
 ```bash
 dotnet tool install -g cdidx

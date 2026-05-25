@@ -84,6 +84,7 @@ Install choice and network notes:
 |---|---|
 | Self-contained binary with no .NET runtime | `install.sh` |
 | .NET global tool workflow | `dotnet tool install -g cdidx` with .NET 8 installed |
+| ARM64 host without a preinstalled .NET 8 runtime | `install.sh` |
 
 See [DISTRIBUTION.md](DISTRIBUTION.md) for the full channel matrix.
 
