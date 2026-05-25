@@ -115,6 +115,7 @@ When editing changelog content, verify that both English and Japanese entries ar
 ## Commit Rules
 
 Before each commit, follow `.codex/workflows/precommit.md`.
+When an AI agent creates a commit, use `git commit --no-gpg-sign` so local signing-key passphrases do not block agent-driven commits.
 Commit messages must be in English and include relevant issue numbers.
 Prefer PR body `Fixes #123` lines as the primary auto-close mechanism.
 
