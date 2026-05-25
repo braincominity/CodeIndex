@@ -190,6 +190,44 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void BeginTransaction_WhenBeginFails_RestoresTransactionDepth()
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = _dbPath }.ConnectionString);
+        var writer = new DbWriter(connection);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => writer.BeginTransaction());
+
+        Assert.Contains("connection", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, GetTransactionDepth(writer));
+    }
+
+    [Fact]
+    public void TransactionScope_SavepointWithoutConnection_ThrowsExplicitInvalidOperation()
+    {
+        var scopeType = typeof(DbWriter).GetNestedType("TransactionScope")
+            ?? throw new InvalidOperationException("TransactionScope type was not found.");
+        var scope = Activator.CreateInstance(
+            scopeType,
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
+            binder: null,
+            args: ["sp_missing_conn", null!, _writer],
+            culture: null)
+            ?? throw new InvalidOperationException("TransactionScope instance was not created.");
+
+        using var disposable = (IDisposable)scope;
+        var commit = scopeType.GetMethod("Commit")
+            ?? throw new InvalidOperationException("Commit method was not found.");
+
+        var ex = Assert.ThrowsAny<Exception>(() => commit.Invoke(scope, null));
+        var actual = ex is System.Reflection.TargetInvocationException { InnerException: { } inner }
+            ? inner
+            : ex;
+
+        var invalidOperation = Assert.IsType<InvalidOperationException>(actual);
+        Assert.Contains("SQLite connection", invalidOperation.Message);
+    }
+
+    [Fact]
     public void Constructor_NewDatabaseEnablesIncrementalAutoVacuum()
     {
         using var cmd = _db.Connection.CreateCommand();
@@ -237,6 +275,13 @@ public class DatabaseTests : IDisposable
         {
             DeleteDbFiles(dbPath);
         }
+    }
+
+    private static int GetTransactionDepth(DbWriter writer)
+    {
+        var field = typeof(DbWriter).GetField("_transactionDepth", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("_transactionDepth field was not found.");
+        return (int)field.GetValue(writer)!;
     }
 
     [Fact]
