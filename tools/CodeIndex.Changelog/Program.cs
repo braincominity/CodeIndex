@@ -31,16 +31,22 @@ public static class Program
                 }
                 case "prepare":
                 {
-                    var options = ParseOptions(args[1..]);
+                    var options = ParseOptions(args[1..], requireDate: true);
                     var result = tool.Prepare(options.Version, options.ReleaseDate, writeChanges: true);
                     Console.Out.WriteLine(result.Summary);
                     return 0;
                 }
                 case "render":
                 {
-                    var options = ParseOptions(args[1..]);
+                    var options = ParseOptions(args[1..], requireDate: true);
                     var result = tool.Prepare(options.Version, options.ReleaseDate, writeChanges: false);
                     Console.Out.Write(result.RenderedChangelog ?? string.Empty);
+                    return 0;
+                }
+                case "release-notes":
+                {
+                    var options = ParseOptions(args[1..], requireDate: false);
+                    Console.Out.Write(tool.RenderReleaseNotes(options.Version));
                     return 0;
                 }
                 default:
@@ -62,9 +68,10 @@ public static class Program
         Console.Out.WriteLine("  dotnet run --project tools/CodeIndex.Changelog -- check");
         Console.Out.WriteLine("  dotnet run --project tools/CodeIndex.Changelog -- prepare --version X.Y.Z --date YYYY-MM-DD");
         Console.Out.WriteLine("  dotnet run --project tools/CodeIndex.Changelog -- render --version X.Y.Z --date YYYY-MM-DD");
+        Console.Out.WriteLine("  dotnet run --project tools/CodeIndex.Changelog -- release-notes --version X.Y.Z");
     }
 
-    private static ParsedOptions ParseOptions(string[] args)
+    private static ParsedOptions ParseOptions(string[] args, bool requireDate)
     {
         Version? version = null;
         DateOnly? releaseDate = null;
@@ -96,10 +103,10 @@ public static class Program
         if (version is null)
             throw new ChangelogException("Missing required option --version.");
 
-        if (releaseDate is null)
+        if (requireDate && releaseDate is null)
             throw new ChangelogException("Missing required option --date.");
 
-        return new ParsedOptions(version, releaseDate.Value);
+        return new ParsedOptions(version, releaseDate ?? default);
     }
 
     private static string FindRepositoryRoot()
@@ -256,6 +263,37 @@ public sealed class ChangelogTool
         summary.AppendLine($"Footer updated: [Unreleased] -> v{targetVersion}...HEAD; [{targetVersion}] -> v{releaseBase}...v{targetVersion}.");
 
         return new PrepareResult(summary.ToString().TrimEnd(), writeChanges ? null : updatedChangelog);
+    }
+
+    public string RenderReleaseNotes(Version targetVersion)
+    {
+        var changelogPath = Path.Combine(_repositoryRoot, "CHANGELOG.md");
+        var changelogText = File.ReadAllText(changelogPath).Replace("\r\n", "\n", StringComparison.Ordinal);
+        var changelog = ParsedChangelog.Parse(changelogText);
+        var versionPrefix = $"### [{targetVersion}]";
+
+        var englishBlock = changelog.EnglishBlocks.FirstOrDefault(block => block.HeadingLine.StartsWith(versionPrefix, StringComparison.Ordinal));
+        var japaneseBlock = changelog.JapaneseBlocks.FirstOrDefault(block => block.HeadingLine.StartsWith(versionPrefix, StringComparison.Ordinal));
+        if (englishBlock is null || japaneseBlock is null)
+            throw new ChangelogException($"CHANGELOG.md is missing release notes for v{targetVersion}.");
+
+        if (englishBlock.BodyLines.Count == 0 && japaneseBlock.BodyLines.Count == 0)
+            throw new ChangelogException($"CHANGELOG.md release notes for v{targetVersion} are empty.");
+
+        var output = new List<string>
+        {
+            $"## CodeIndex v{targetVersion}",
+            string.Empty,
+            "### English",
+            string.Empty,
+        };
+        output.AddRange(englishBlock.BodyLines);
+        output.Add(string.Empty);
+        output.Add("### 日本語");
+        output.Add(string.Empty);
+        output.AddRange(japaneseBlock.BodyLines);
+
+        return string.Join('\n', output).TrimEnd() + Environment.NewLine;
     }
 
     private List<Fragment> LoadFragments(bool validate)
