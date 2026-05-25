@@ -54,6 +54,12 @@ public static class SearchSnippetFormatter
         };
     }
 
+    public static IEnumerable<CompactSearchResult> ToCompactResults(IEnumerable<SearchResult> results, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality)
+    {
+        foreach (var result in results)
+            yield return ToCompactResult(result, query, maxLines, caseSensitive, maxLineWidth, lang ?? result.Lang, focusMode);
+    }
+
     public static SearchSnippetExcerpt BuildExcerpt(string content, string query, int absoluteStartLine, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, string? lang = null, SearchSnippetFocusMode focusMode = SearchSnippetFocusMode.Quality)
     {
         maxLines = ClampSnippetLines(maxLines);
