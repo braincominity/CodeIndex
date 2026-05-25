@@ -23,6 +23,7 @@ namespace CodeIndex.Cli;
 internal static class CdidxConfigFile
 {
     internal const string FileName = ".cdidxrc.json";
+    internal static readonly string ProjectConfigRelativePath = Path.Combine(".cdidx", "config.json");
     internal const string DisableEnvVar = "CDIDX_DISABLE_CONFIG_FILE";
 
     private static readonly IReadOnlyList<string> KnownTopLevelKeys = new[]
@@ -34,11 +35,19 @@ internal static class CdidxConfigFile
         "global_tool_log_dir",
         "stale_after",
         "indexing",
+        "search",
+        "output",
+        "graph",
+        "folding",
         "suggestion_dedup_threshold",
         "mcp",
     };
 
     private static readonly IReadOnlyList<string> KnownIndexingKeys = new[] { "includeKinds", "excludeKinds" };
+    private static readonly IReadOnlyList<string> KnownSearchKeys = new[] { "limit", "snippet_lines", "max_line_width" };
+    private static readonly IReadOnlyList<string> KnownOutputKeys = new[] { "format", "locale" };
+    private static readonly IReadOnlyList<string> KnownGraphKeys = new[] { "max_hops" };
+    private static readonly IReadOnlyList<string> KnownFoldingKeys = new[] { "fold_key_version" };
     private static readonly IReadOnlyList<string> KnownMcpKeys = new[] { "tools", "rate_limit" };
     private static readonly IReadOnlyList<string> KnownMcpToolsKeys = new[] { "allow", "deny" };
     private static readonly IReadOnlyList<string> KnownMcpRateLimitKeys = new[] { "rps", "burst" };
@@ -179,6 +188,37 @@ internal static class CdidxConfigFile
                 }
             }
 
+            if (root.TryGetProperty("search", out var search))
+            {
+                if (search.ValueKind != JsonValueKind.Object)
+                    return new LoadResult(Path: path, Error: $"[cdidx] {path}: `search` must be a JSON object.");
+                if (TryFindUnknownKey(search, KnownSearchKeys, out var unknownSearchKey))
+                    return new LoadResult(Path: path, Error: $"[cdidx] {path}: unknown key `search.{unknownSearchKey}`. Supported keys: {string.Join(", ", KnownSearchKeys)}.");
+                if (search.TryGetProperty("limit", out var limit))
+                {
+                    if (!TryReadNumberAsString(limit, "search.limit", path, out var value, out var err))
+                        return new LoadResult(Path: path, Error: err);
+                    pending.Add((QueryCommandRunner.DefaultLimitEnvironmentVariable, value!));
+                }
+                if (search.TryGetProperty("snippet_lines", out var snippetLines))
+                {
+                    if (!TryReadNumberAsString(snippetLines, "search.snippet_lines", path, out var value, out var err))
+                        return new LoadResult(Path: path, Error: err);
+                    pending.Add((QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, value!));
+                }
+                if (search.TryGetProperty("max_line_width", out var maxLineWidth))
+                {
+                    if (!TryReadNumberAsString(maxLineWidth, "search.max_line_width", path, out var value, out var err))
+                        return new LoadResult(Path: path, Error: err);
+                    pending.Add((QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, value!));
+                }
+            }
+
+            if (!ValidateOptionalObject(root, "output", KnownOutputKeys, path, out var optionalObjectError)
+                || !ValidateOptionalObject(root, "graph", KnownGraphKeys, path, out optionalObjectError)
+                || !ValidateOptionalObject(root, "folding", KnownFoldingKeys, path, out optionalObjectError))
+                return new LoadResult(Path: path, Error: optionalObjectError);
+
             if (root.TryGetProperty("mcp", out var mcp))
             {
                 if (mcp.ValueKind != JsonValueKind.Object)
@@ -265,12 +305,57 @@ internal static class CdidxConfigFile
 
         while (current is not null)
         {
+            var projectCandidate = Path.Combine(current.FullName, ProjectConfigRelativePath);
+            if (File.Exists(LongPath.EnsureWindowsPrefix(projectCandidate)))
+                return projectCandidate;
             var candidate = Path.Combine(current.FullName, FileName);
             if (File.Exists(LongPath.EnsureWindowsPrefix(candidate)))
                 return candidate;
             current = current.Parent;
         }
         return null;
+    }
+
+    internal static int RunValidate(string[] args, JsonSerializerOptions jsonOptions)
+    {
+        if (args.Length > 0)
+        {
+            CommandErrorWriter.Write("validate-config does not accept positional arguments.", "run `cdidx validate-config` from the workspace whose config should be validated.");
+            return CommandExitCodes.UsageError;
+        }
+
+        var result = LoadAndApply(Environment.CurrentDirectory, name => name == DisableEnvVar ? null : Environment.GetEnvironmentVariable(name), (_, _) => { });
+        if (result.Failed)
+        {
+            Console.Error.WriteLine(result.Error);
+            return CommandExitCodes.UsageError;
+        }
+
+        var payload = new Dictionary<string, object?>
+        {
+            ["valid"] = true,
+            ["path"] = result.Path,
+        };
+        Console.WriteLine(JsonSerializer.Serialize(payload, jsonOptions));
+        return CommandExitCodes.Success;
+    }
+
+    private static bool ValidateOptionalObject(JsonElement root, string key, IReadOnlyList<string> knownKeys, string path, out string? error)
+    {
+        error = null;
+        if (!root.TryGetProperty(key, out var value))
+            return true;
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            error = $"[cdidx] {path}: `{key}` must be a JSON object.";
+            return false;
+        }
+        if (TryFindUnknownKey(value, knownKeys, out var unknownKey))
+        {
+            error = $"[cdidx] {path}: unknown key `{key}.{unknownKey}`. Supported keys: {string.Join(", ", knownKeys)}.";
+            return false;
+        }
+        return true;
     }
 
     private static bool TryFindUnknownKey(JsonElement obj, IReadOnlyList<string> knownKeys, out string? unknown)

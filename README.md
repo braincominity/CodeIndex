@@ -72,6 +72,7 @@ Output controls:
 | Need | Option |
 |---|---|
 | Owner-only persistent stderr logs on POSIX | Global tool stderr logs are forced to `0600` permissions on every open, including existing date-stamped log files. |
+| Checked-in configuration | Use `.cdidx/config.json` for repository defaults such as `search.limit`, `search.snippet_lines`, and `search.max_line_width`; run `cdidx validate-config` to validate the discovered file. |
 | ASCII-only terminal output | Use `--ascii`, `CDIDX_ASCII=1`, `NO_UNICODE`, `TERM=dumb`, accessibility env hints, or a non-UTF-8 locale. Spinners use pipe, slash, dash, and backslash frames; progress bars use `#` / `-`; very narrow terminals fall back to percentage-only progress. |
 | Script-friendly query pipelines | Use `--quiet`, `-q`, `--silent`, or `CDIDX_QUIET=1` to suppress informational stderr text while preserving errors. `--quiet` takes precedence over `--verbose`. |
 
@@ -98,7 +99,7 @@ file completion.
 | Storage | Local-first `.cdidx/codeindex.db` storage. Query commands run from nested directories prefer the outermost ancestor `.cdidx/codeindex.db` before falling back to the current directory. `--data-dir <dir>`, `CDIDX_DATA_DIR`, or `XDG_DATA_HOME` can move default SQLite storage outside the workspace; explicit `--db <path>` still wins. |
 | DB maintenance | New indexes use SQLite incremental auto-vacuum. `cdidx vacuum` reclaims free pages from existing DBs, including a one-time full `VACUUM` conversion for legacy no-autovacuum DBs, and `status --json` reports metrics under `db_pragma_settings`. |
 | Security defaults | On POSIX systems, `.cdidx` is created with `0700` permissions and `status --json` reports the effective `data_dir_mode` when available. |
-| Diagnostics | `status --explain <field>` describes readiness fields and remediation. Read commands support `--profile`, `--slow-query-ms <n>`, and <code>--trace=stderr&#124;file&#124;none</code>; file traces write daily `query-trace-YYYYMMDD.jsonl` files next to the lifecycle log. |
+| Diagnostics | `status --config` prints effective configuration with source attribution, and `status --explain <field>` describes readiness fields and remediation. Read commands support `--profile`, `--slow-query-ms <n>`, and <code>--trace=stderr&#124;file&#124;none</code>; file traces write daily `query-trace-YYYYMMDD.jsonl` files next to the lifecycle log. |
 | Query exit codes | Valid zero-result query commands exit `0` by default. Pass `--strict-not-found` when scripts should treat zero rows as exit code `2`. |
 | Drift checks | `cdidx diff <db1> <db2>` compares schema, file, symbol, and reference deltas with stable exit codes: `0` identical, `1` drift, `2` schema mismatch, `3` unreadable DB. |
 | Extensibility and feedback | Post-extraction hooks from `~/.config/cdidx/hooks/*.dll` or `CDIDX_HOOKS_DIR` can enrich symbols and references. `cdidx suggestions` lists, inspects, and exports local suggestion history, with fuzzy MCP suggestion deduplication controlled by CLI, env, or `.cdidxrc.json`. |
@@ -256,6 +257,7 @@ cdidx mcp
 | 目的 | option / 動作 |
 |---|---|
 | POSIX の persistent stderr log を owner-only にする | global tool stderr log は開くたびに `0600` 権限へ補正され、既存の日付付き log file も同じ扱いになります。 |
+| checked-in configuration | repository 既定値には `.cdidx/config.json` を使えます。例: `search.limit`、`search.snippet_lines`、`search.max_line_width`。検出された file は `cdidx validate-config` で検証できます。 |
 | ASCII-only 端末で崩れない表示にする | `--ascii`、`CDIDX_ASCII=1`、`NO_UNICODE`、`TERM=dumb`、accessibility 系の環境変数、非 UTF-8 locale を使います。スピナーは pipe、slash、dash、backslash の frame、進捗バーは `#` / `-` になり、幅が非常に狭い端末では percentage-only になります。 |
 | script 向け query pipeline の stderr を静かにする | `--quiet`、`-q`、`--silent`、`CDIDX_QUIET=1` で informational stderr を抑制し、error 行だけを残します。`--quiet` は `--verbose` より優先されます。 |
 
@@ -281,7 +283,7 @@ cdidx mcp
 | storage | `.cdidx/codeindex.db` に保存する local-first 設計。ネストしたディレクトリからの query コマンドは、current directory にフォールバックする前に最上位祖先の `.cdidx/codeindex.db` を優先します。既定の SQLite 保存先は `--data-dir <dir>`、`CDIDX_DATA_DIR`、`XDG_DATA_HOME` で workspace 外へ移せます。明示的な `--db <path>` は引き続き最優先です。 |
 | DB maintenance | 新規 index DB は SQLite incremental auto-vacuum を使います。既存 DB は `cdidx vacuum` で free page を回収でき、legacy no-autovacuum DB は初回だけ full `VACUUM` で変換します。`status --json` は `db_pragma_settings` 配下に metrics を出力します。 |
 | security defaults | POSIX では `.cdidx` を `0700` 権限で作成します。`status --json` は利用可能な場合に実効 POSIX mode を `data_dir_mode` として報告します。 |
-| diagnostics | `status --explain <field>` は readiness field の意味と対処を説明します。read 系コマンドは `--profile`、`--slow-query-ms <n>`、<code>--trace=stderr&#124;file&#124;none</code> に対応し、file trace は lifecycle log と同じ場所に日次 `query-trace-YYYYMMDD.jsonl` を書きます。 |
+| diagnostics | `status --config` は source attribution 付きの effective configuration を出力し、`status --explain <field>` は readiness field の意味と対処を説明します。read 系コマンドは `--profile`、`--slow-query-ms <n>`、<code>--trace=stderr&#124;file&#124;none</code> に対応し、file trace は lifecycle log と同じ場所に日次 `query-trace-YYYYMMDD.jsonl` を書きます。 |
 | drift checks | `cdidx diff <db1> <db2>` は schema、file、symbol、reference の差分を比較します。exit code は `0` identical、`1` drift、`2` schema mismatch、`3` unreadable DB です。 |
 | extensibility / feedback | `~/.config/cdidx/hooks/*.dll` または `CDIDX_HOOKS_DIR` の post-extraction hook で永続化前のシンボルと参照を拡張できます。`cdidx suggestions` はローカル提案履歴の一覧表示、詳細表示、エクスポートに対応し、MCP 提案の近似重複排除しきい値は CLI、env、`.cdidxrc.json` で調整できます。 |
 | language coverage | 78 言語を検出し、対応言語ではシンボルとグラフも利用可能です。 |
