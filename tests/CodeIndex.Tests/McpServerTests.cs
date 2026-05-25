@@ -8467,6 +8467,30 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessFrameAsync_BatchRequestTimeout_ReturnsStructuredTimeoutError()
+    {
+        using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: false)
+        {
+            RequestTimeout = TimeSpan.FromMilliseconds(20),
+        };
+        server.RequestDelayForTests = _ =>
+        {
+            Thread.Sleep(TimeSpan.FromMilliseconds(200));
+            return Task.CompletedTask;
+        };
+
+        var responseText = await server.ProcessFrameAsync(
+            """[{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"status"}}]""");
+
+        var response = JsonNode.Parse(responseText!)!.AsArray().Single()!;
+        var error = response["error"]!;
+        Assert.Equal(-32603, error["code"]!.GetValue<int>());
+        Assert.Equal("Request timed out", error["message"]!.GetValue<string>());
+        Assert.Equal("timeout", error["data"]!["reason"]!.GetValue<string>());
+        Assert.Equal(123, response["id"]!.GetValue<int>());
+    }
+
+    [Fact]
     public async Task RunAsync_StdioEofDrainsInFlightRequestBeforeReturning()
     {
         using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: false);

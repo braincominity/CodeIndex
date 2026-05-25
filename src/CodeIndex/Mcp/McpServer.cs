@@ -886,7 +886,7 @@ public partial class McpServer : IDisposable
     private async Task<JsonNode?> HandleMessageAsync(JsonNode request, bool isolateRequestDb)
     {
         if (request is JsonArray batch)
-            return HandleBatchMessage(batch);
+            return await HandleBatchMessageAsync(batch, isolateRequestDb).ConfigureAwait(false);
 
         if (request is not JsonObject obj)
             return CreateErrorResponse(hasId: false, id: null, code: -32600, message: "Invalid request: expected JSON object",
@@ -999,7 +999,7 @@ public partial class McpServer : IDisposable
         }).ConfigureAwait(false);
     }
 
-    private JsonNode? HandleBatchMessage(JsonArray batch)
+    private async Task<JsonNode?> HandleBatchMessageAsync(JsonArray batch, bool isolateRequestDb)
     {
         if (batch.Count == 0)
             return CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: empty batch",
@@ -1040,7 +1040,7 @@ public partial class McpServer : IDisposable
             }
             else
             {
-                response = HandleMessage(item);
+                response = await HandleMessageAsync(item, isolateRequestDb).ConfigureAwait(false);
             }
 
             if (response != null)
