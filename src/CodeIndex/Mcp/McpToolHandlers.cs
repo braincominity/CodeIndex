@@ -389,6 +389,59 @@ public partial class McpServer
         return array;
     }
 
+    private static int FetchLimitForEnvelope(int limit) => limit >= int.MaxValue ? int.MaxValue : limit + 1;
+
+    private static bool TrimToRequestedLimit<T>(List<T> results, int limit)
+    {
+        if (results.Count <= limit)
+            return false;
+
+        results.RemoveRange(limit, results.Count - limit);
+        return true;
+    }
+
+    private static void AddResultEnvelope(JsonObject payload, int returnedCount, int? total, bool truncated)
+    {
+        payload["count"] = returnedCount;
+        payload["truncated"] = truncated;
+        payload["total"] = total.HasValue ? JsonValue.Create(total.Value) : null;
+    }
+
+    private static bool ReadCountOnly(JsonNode? args) => args?["countOnly"]?.GetValue<bool>() ?? args?["count_only"]?.GetValue<bool>() ?? false;
+
+    private JsonArray BuildTopFileHistogram<T>(IEnumerable<T> results, Func<T, string?> pathSelector)
+    {
+        var histogram = new JsonArray();
+        foreach (var group in results
+            .Select(pathSelector)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .GroupBy(path => path!, StringComparer.Ordinal)
+            .OrderByDescending(group => group.Count())
+            .ThenBy(group => group.Key, StringComparer.Ordinal)
+            .Take(5))
+        {
+            histogram.Add(new JsonObject
+            {
+                ["path"] = group.Key,
+                ["count"] = group.Count(),
+            });
+        }
+
+        return histogram;
+    }
+
+    private JsonObject BuildCountOnlyPayload<T>(int count, int? total, bool truncated, IEnumerable<T> histogramSource, Func<T, string?> pathSelector)
+    {
+        var payload = new JsonObject
+        {
+            ["count_only"] = true,
+            ["top_files"] = BuildTopFileHistogram(histogramSource, pathSelector),
+            ["results"] = new JsonArray(),
+        };
+        AddResultEnvelope(payload, count, total, truncated);
+        return payload;
+    }
+
     private JsonObject ToAnalyzeSymbolJsonObject(SymbolAnalysisResult analysis)
     {
         var payload = new JsonObject
@@ -591,6 +644,7 @@ public partial class McpServer
                 return CreateToolErrorResponse(id, $"Invalid 'since' timestamp: '{sinceStr}'. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
         }
         var deduplicate = !(args?["noDedup"]?.GetValue<bool>() ?? false);
+        var countOnly = ReadCountOnly(args);
         if (!TryResolveSearchExactArgument(args, out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
         var prefix = args?["prefix"]?.GetValue<bool>() ?? false;
@@ -599,7 +653,20 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.Search(query, limit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix);
+            if (countOnly)
+            {
+                var countResults = reader.Search(query, MaxLimit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix);
+                var truncatedCount = countResults.Count >= MaxLimit;
+                var payload = BuildCountOnlyPayload(countResults.Count, truncatedCount ? null : countResults.Count, truncatedCount, countResults, result => result.Path);
+                payload["query"] = query;
+                payload["rawQuery"] = rawQuery;
+                payload["path"] = PathEcho(pathPatterns);
+                payload["excludeTests"] = excludeTests;
+                return CreateToolResult(id, $"Counted {countResults.Count} search result(s).", payload);
+            }
+
+            var results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix);
+            var truncated = TrimToRequestedLimit(results, limit);
             if (results.Count == 0)
             {
                 var payload = new JsonObject
@@ -610,9 +677,9 @@ public partial class McpServer
                     ["maxLineWidth"] = maxLineWidth,
                     ["path"] = PathEcho(pathPatterns),
                     ["excludeTests"] = excludeTests,
-                    ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
+                AddResultEnvelope(payload, 0, 0, truncated: false);
                 AddFreshnessHint(payload, reader);
                 return CreateToolResult(id, "No results found.", payload);
             }
@@ -625,9 +692,9 @@ public partial class McpServer
                 ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
-                ["count"] = results.Count,
-                ["results"] = ToJsonArray(results, result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines, exact, maxLineWidth))
+                ["results"] = ToJsonArray(SearchSnippetFormatter.ToCompactResults(results, query, snippetLines, exact, maxLineWidth))
             };
+            AddResultEnvelope(structured, results.Count, truncated ? null : results.Count, truncated);
             // Include top file paths in summary for quick AI orientation
             // AIが素早く位置把握できるよう、サマリにトップファイルパスを含める
             var topPaths = results.Select(r => r.Path).Distinct().Take(3);
@@ -771,7 +838,8 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.GetDefinitions(query, limit, kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact);
+            var results = reader.GetDefinitions(query, FetchLimitForEnvelope(limit), kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact);
+            var truncated = TrimToRequestedLimit(results, limit);
             var exactSignal = reader.GetDefinitionExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, since);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact,
@@ -787,9 +855,9 @@ public partial class McpServer
                 ["includeBody"] = includeBody,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
-                ["count"] = results.Count,
                 ["results"] = ToJsonArray(results)
             };
+            AddResultEnvelope(payload, results.Count, truncated ? null : results.Count, truncated);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             if (results.Count == 0)
@@ -820,12 +888,32 @@ public partial class McpServer
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var countOnly = ReadCountOnly(args);
         if (!TryResolveNameExactArgument(args, "references", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.SearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
+            if (countOnly)
+            {
+                var countOnlyTotal = reader.CountSearchReferences(query, int.MaxValue, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
+                var histogramResults = countOnlyTotal > 0
+                    ? reader.SearchReferences(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth)
+                    : [];
+                var countOnlyPayload = BuildCountOnlyPayload(countOnlyTotal, countOnlyTotal, truncated: false, histogramResults, result => result.Path);
+                countOnlyPayload["query"] = query;
+                countOnlyPayload["kind"] = kind;
+                countOnlyPayload["lang"] = lang;
+                countOnlyPayload["path"] = PathEcho(pathPatterns);
+                countOnlyPayload["excludeTests"] = excludeTests;
+                return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "reference")}.", countOnlyPayload);
+            }
+
+            var results = reader.SearchReferences(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
+            var truncated = TrimToRequestedLimit(results, limit);
+            var total = truncated
+                ? reader.CountSearchReferences(query, int.MaxValue, lang, kind, pathPatterns, excludePaths, excludeTests, exact)
+                : results.Count;
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
@@ -850,9 +938,9 @@ public partial class McpServer
                 ["graphLanguage"] = graphSupport.GraphLanguage,
                 ["graphSupported"] = graphSupport.GraphSupported,
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
-                ["count"] = results.Count,
                 ["results"] = ToJsonArray(results)
             };
+            AddResultEnvelope(payload, results.Count, total, truncated);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
@@ -888,10 +976,30 @@ public partial class McpServer
             return CreateToolErrorResponse(id, exactError!);
         if (!TryReadReferenceRankMode(args, out var rankMode, out var rankModeError))
             return CreateToolErrorResponse(id, rankModeError!);
+        var countOnly = ReadCountOnly(args);
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
+            if (countOnly)
+            {
+                var countOnlyTotal = reader.CountCallers(query, int.MaxValue, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
+                var histogramResults = countOnlyTotal > 0
+                    ? reader.GetCallers(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode)
+                    : [];
+                var countOnlyPayload = BuildCountOnlyPayload(countOnlyTotal, countOnlyTotal, truncated: false, histogramResults, result => result.Path);
+                countOnlyPayload["query"] = query;
+                countOnlyPayload["kind"] = kind;
+                countOnlyPayload["lang"] = lang;
+                countOnlyPayload["path"] = PathEcho(pathPatterns);
+                countOnlyPayload["excludeTests"] = excludeTests;
+                return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "caller")}.", countOnlyPayload);
+            }
+
+            var results = reader.GetCallers(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
+            var truncated = TrimToRequestedLimit(results, limit);
+            var total = truncated
+                ? reader.CountCallers(query, int.MaxValue, lang, kind, pathPatterns, excludePaths, excludeTests, exact)
+                : results.Count;
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
@@ -916,9 +1024,10 @@ public partial class McpServer
                 ["graphLanguage"] = graphSupport.GraphLanguage,
                 ["graphSupported"] = graphSupport.GraphSupported,
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
-                ["count"] = results.Count,
                 ["results"] = ToJsonArray(results)
             };
+            AddResultEnvelope(payload, results.Count, total, truncated);
+            payload["aggregate_truncated"] = results.Any(result => result.AggregateTruncated);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
@@ -954,10 +1063,30 @@ public partial class McpServer
             return CreateToolErrorResponse(id, exactError!);
         if (!TryReadReferenceRankMode(args, out var rankMode, out var rankModeError))
             return CreateToolErrorResponse(id, rankModeError!);
+        var countOnly = ReadCountOnly(args);
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
+            if (countOnly)
+            {
+                var countOnlyTotal = reader.CountCallees(query, int.MaxValue, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
+                var histogramResults = countOnlyTotal > 0
+                    ? reader.GetCallees(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode)
+                    : [];
+                var countOnlyPayload = BuildCountOnlyPayload(countOnlyTotal, countOnlyTotal, truncated: false, histogramResults, result => result.Path);
+                countOnlyPayload["query"] = query;
+                countOnlyPayload["kind"] = kind;
+                countOnlyPayload["lang"] = lang;
+                countOnlyPayload["path"] = PathEcho(pathPatterns);
+                countOnlyPayload["excludeTests"] = excludeTests;
+                return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "callee")}.", countOnlyPayload);
+            }
+
+            var results = reader.GetCallees(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
+            var truncated = TrimToRequestedLimit(results, limit);
+            var total = truncated
+                ? reader.CountCallees(query, int.MaxValue, lang, kind, pathPatterns, excludePaths, excludeTests, exact)
+                : results.Count;
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
@@ -982,9 +1111,10 @@ public partial class McpServer
                 ["graphLanguage"] = graphSupport.GraphLanguage,
                 ["graphSupported"] = graphSupport.GraphSupported,
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
-                ["count"] = results.Count,
                 ["results"] = ToJsonArray(results)
             };
+            AddResultEnvelope(payload, results.Count, total, truncated);
+            payload["aggregate_truncated"] = results.Any(result => result.AggregateTruncated);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
@@ -1358,6 +1488,7 @@ public partial class McpServer
                 {
                     ["max_request_characters"] = MaxLineCharacterCount,
                     ["max_request_bytes"] = MaxLineByteLength,
+                    ["max_response_bytes"] = GetMaxResponseBytes(),
                     ["max_json_depth"] = MaxJsonDepth,
                     ["max_batch_requests"] = MaxBatchRequestCount,
                 }
@@ -2125,6 +2256,7 @@ public partial class McpServer
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var withPaths = args?["withPaths"]?.GetValue<bool>() ?? false;
+        var countOnly = ReadCountOnly(args);
 
         return WithDbReader(id, args, reader =>
         {
@@ -2143,6 +2275,36 @@ public partial class McpServer
             var count = hasHeuristicHints ? hintCount : confirmedCount;
             var fileCount = hasHeuristicHints ? hintFileCount : confirmedFileCount;
             var maxActualDepth = analysis.Callers.Count > 0 ? analysis.Callers.Max(r => r.Depth) : 0;
+            if (countOnly)
+            {
+                var topFiles = hasHeuristicHints
+                    ? BuildTopFileHistogram(analysis.FileImpacts, impact => impact.SourcePath)
+                    : BuildTopFileHistogram(analysis.Callers, caller => caller.Path);
+                var countOnlyPayload = new JsonObject
+                {
+                    ["query"] = query,
+                    ["resolved_name"] = analysis.ResolvedName,
+                    ["count_only"] = true,
+                    ["count"] = count,
+                    ["file_count"] = fileCount,
+                    ["confirmed_count"] = confirmedCount,
+                    ["confirmed_file_count"] = confirmedFileCount,
+                    ["hint_count"] = hintCount,
+                    ["hint_file_count"] = hintFileCount,
+                    ["max_hops"] = maxDepth,
+                    ["actual_depth"] = maxActualDepth,
+                    ["truncated"] = analysis.Truncated,
+                    ["total"] = analysis.Truncated ? null : JsonValue.Create(count),
+                    ["termination_reason"] = analysis.TerminationReason,
+                    ["impact_mode"] = analysis.ImpactMode,
+                    ["heuristic"] = analysis.Heuristic,
+                    ["top_files"] = topFiles,
+                    ["results"] = new JsonArray(),
+                };
+                AddSqlGraphContractSignal(countOnlyPayload, sqlGraphSignal);
+                return CreateToolResult(id, $"Counted {ConsoleUi.Counted(count, "impact result")}.", countOnlyPayload);
+            }
+
             var payload = new JsonObject
             {
                 ["query"] = query,

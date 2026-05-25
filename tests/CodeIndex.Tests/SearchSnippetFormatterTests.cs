@@ -59,6 +59,41 @@ public class SearchSnippetFormatterTests
     }
 
     [Fact]
+    public void ToCompactResults_IsLazy()
+    {
+        var produced = 0;
+        IEnumerable<SearchResult> Results()
+        {
+            produced++;
+            yield return new SearchResult
+            {
+                Path = "src/a.cs",
+                Lang = "csharp",
+                StartLine = 1,
+                EndLine = 1,
+                Content = "Target();",
+            };
+            produced++;
+            yield return new SearchResult
+            {
+                Path = "src/b.cs",
+                Lang = "csharp",
+                StartLine = 1,
+                EndLine = 1,
+                Content = "Target();",
+            };
+        }
+
+        var compact = SearchSnippetFormatter.ToCompactResults(Results(), "Target");
+
+        Assert.Equal(0, produced);
+        using var enumerator = compact.GetEnumerator();
+        Assert.True(enumerator.MoveNext());
+        Assert.Equal(1, produced);
+        Assert.Equal("src/a.cs", enumerator.Current.Path);
+    }
+
+    [Fact]
     public void Format_AddsTruncationMarkers_WhenExcerptIsTruncated()
     {
         // 10 lines, match on line 5 — with maxLines=3, both ends should be truncated
