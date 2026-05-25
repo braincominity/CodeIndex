@@ -132,6 +132,35 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void TryAddAndSubmit_FuzzyDuplicate_IgnoresClosedDiagnosticStderr()
+    {
+        var originalError = Console.Error;
+        var closedError = new StringWriter();
+        closedError.Dispose();
+
+        lock (TestConsoleLock.Gate)
+        {
+            Console.SetError(closedError);
+            try
+            {
+                var record1 = MakeRecord("language_support", "javascript", "missing arrow function support");
+                var record2 = MakeRecord("language_support", "javascript", "arrow functions not supported");
+
+                var first = _store.TryAddAndSubmit(record1, null);
+                var second = _store.TryAddAndSubmit(record2, null);
+
+                Assert.True(first.IsNew);
+                Assert.False(second.IsNew);
+                Assert.Equal(record1.Hash, second.DuplicateOfHash);
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
     public void TryAdd_DifferentSuggestions_BothSucceed()
     {
         var record1 = MakeRecord("symbol_extraction", "csharp", "Missing record support");

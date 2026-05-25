@@ -447,12 +447,29 @@ public class SuggestionStore
 
         if (best != null && bestScore >= threshold)
         {
-            Console.Error.WriteLine(
-                $"cdidx: fuzzy suggestion duplicate matched hash {best.Hash} with score {bestScore:0.###} (threshold {threshold:0.###})");
+            WriteFuzzyDuplicateWarning(best.Hash, bestScore, threshold);
             return (best, bestScore);
         }
 
         return (null, null);
+    }
+
+    private static void WriteFuzzyDuplicateWarning(string hash, double score, double threshold)
+    {
+        try
+        {
+            Console.Error.WriteLine(
+                $"cdidx: fuzzy suggestion duplicate matched hash {hash} with score {score:0.###} (threshold {threshold:0.###})");
+        }
+        catch (ObjectDisposedException)
+        {
+            // Best-effort diagnostic only; suggestion deduplication must not fail
+            // because another thread or test fixture temporarily replaced stderr.
+        }
+        catch (IOException)
+        {
+            // Same rationale as ObjectDisposedException.
+        }
     }
 
     private static bool SameDedupScope(SuggestionRecord left, SuggestionRecord right)
