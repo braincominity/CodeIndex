@@ -15,6 +15,16 @@ namespace CodeIndex.Tests;
 public class SymbolExtractorTests
 {
     [Fact]
+    public void Extract_CancelledToken_ThrowsBeforeWork()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() =>
+            SymbolExtractor.Extract(1, "csharp", "public class App { }", cancellationToken: cancellation.Token));
+    }
+
+    [Fact]
     public void Extract_CustomSymbolPlugin_HandlesUnsupportedLanguage()
     {
         lock (TestConsoleLock.Gate)

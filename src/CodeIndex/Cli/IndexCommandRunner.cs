@@ -278,6 +278,14 @@ public static class IndexCommandRunner
                 }
             }
 
+            int WriteDryRunInterrupted() => WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "Interrupted before dry-run scan completed.",
+                CommandExitCodes.Interrupted,
+                "Rerun `cdidx index --dry-run` when you are ready to inspect the candidate files again.",
+                CommandErrorCodes.Interrupted);
+
             if (options.UpdateFiles.Count > 0)
             {
                 // --files: only the specified files / --files: 指定ファイルのみ
@@ -285,7 +293,15 @@ public static class IndexCommandRunner
                 var updatePaths = NormalizeUpdateFileTargets(options.ProjectPath, options.UpdateFiles, options.Json);
                 if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(updatePaths))
                 {
-                    var scanResult = dryIndexer.ScanFilesDetailed();
+                    FileIndexer.ScanFilesResult scanResult;
+                    try
+                    {
+                        scanResult = dryIndexer.ScanFilesDetailed(cancellationToken: indexCancellation.Token);
+                    }
+                    catch (OperationCanceledException) when (indexCancellation.IsCancellationRequested)
+                    {
+                        return WriteDryRunInterrupted();
+                    }
                     dryCandidates = scanResult.Files;
                     RecordDryRunScanErrors(scanResult.Errors);
                 }
@@ -340,7 +356,15 @@ public static class IndexCommandRunner
 
                 if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(changedFiles))
                 {
-                    var scanResult = dryIndexer.ScanFilesDetailed();
+                    FileIndexer.ScanFilesResult scanResult;
+                    try
+                    {
+                        scanResult = dryIndexer.ScanFilesDetailed(cancellationToken: indexCancellation.Token);
+                    }
+                    catch (OperationCanceledException) when (indexCancellation.IsCancellationRequested)
+                    {
+                        return WriteDryRunInterrupted();
+                    }
                     dryCandidates = scanResult.Files;
                     RecordDryRunScanErrors(scanResult.Errors);
                 }
@@ -354,7 +378,15 @@ public static class IndexCommandRunner
             }
             else
             {
-                var scanResult = dryIndexer.ScanFilesDetailed();
+                FileIndexer.ScanFilesResult scanResult;
+                try
+                {
+                    scanResult = dryIndexer.ScanFilesDetailed(cancellationToken: indexCancellation.Token);
+                }
+                catch (OperationCanceledException) when (indexCancellation.IsCancellationRequested)
+                {
+                    return WriteDryRunInterrupted();
+                }
                 dryCandidates = scanResult.Files;
                 RecordDryRunScanErrors(scanResult.Errors);
             }
@@ -1706,7 +1738,7 @@ public static class IndexCommandRunner
             var expandHeartbeat = StartJsonPhaseHeartbeat("expanding C# update set for static interface contracts");
             try
             {
-                foreach (var filePath in indexer.ScanFilesDetailed().Files)
+                foreach (var filePath in indexer.ScanFilesDetailed(cancellationToken: cancellationToken).Files)
                 {
                     var detection = FileIndexer.TryDetectLanguage(filePath);
                     if (detection.Status == FileIndexer.FileProbeStatus.Supported
@@ -2018,7 +2050,7 @@ public static class IndexCommandRunner
                     continue;
                 }
 
-                var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(absPath);
+                var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(absPath, cancellationToken);
 
                 if (warning != null && !options.Json && !options.Quiet)
                 {
@@ -2080,7 +2112,7 @@ public static class IndexCommandRunner
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
                 currentUpdatePath = FormatIndexPhasePath(relPath, "symbols");
-                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, absPath, Path.GetFullPath(options.ProjectPath!));
+                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, absPath, Path.GetFullPath(options.ProjectPath!), cancellationToken);
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
                 var fileContext = new FileContext(projectRoot, record.Path, absPath, record.Lang);
                 postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
@@ -2094,7 +2126,8 @@ public static class IndexCommandRunner
                     content,
                     symbols,
                     record.Path,
-                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null);
+                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                    cancellationToken);
                 postExtractionHooks.OnReferencesExtracted(fileContext, references);
                 writer.InsertReferences(references);
                 // Validate content for encoding issues / エンコーディング問題を検証
@@ -3179,8 +3212,12 @@ public static class IndexCommandRunner
         try
         {
             ThrowIfFullScanCancelled(0, null);
-            scanResult = indexer.ScanFilesDetailed(checkpointedDirectories, continueOnError: true);
+            scanResult = indexer.ScanFilesDetailed(checkpointedDirectories, continueOnError: true, cancellationToken: cancellationToken);
             ThrowIfFullScanCancelled(0, null);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new IndexInterruptedException(0, null);
         }
         finally
         {
@@ -3508,7 +3545,7 @@ public static class IndexCommandRunner
                         {
                             var relativeFilePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, filePath));
                             activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(relativeFilePath, "reading");
-                            var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(filePath);
+                            var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(filePath, cancellationToken);
                             IReadOnlyList<ChunkRecord>? chunks = null;
                             IReadOnlyList<SymbolRecord>? symbols = null;
                             IReadOnlyList<ReferenceRecord>? references = null;
@@ -3518,7 +3555,7 @@ public static class IndexCommandRunner
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "chunking");
                                 chunks = ChunkSplitter.Split(0, content);
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "symbols");
-                                symbols = SymbolExtractor.Extract(0, record.Lang, content, filePath, Path.GetFullPath(options.ProjectPath!));
+                                symbols = SymbolExtractor.Extract(0, record.Lang, content, filePath, Path.GetFullPath(options.ProjectPath!), cancellationToken);
                                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "references");
                                 references = ReferenceExtractor.Extract(
@@ -3527,7 +3564,8 @@ public static class IndexCommandRunner
                                     content,
                                     symbols,
                                     record.Path,
-                                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null);
+                                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                                    cancellationToken);
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
                                 issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
                             }
@@ -3698,7 +3736,7 @@ public static class IndexCommandRunner
                     writer.InsertChunks(chunks);
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "symbols");
                     var symbols = item.Symbols == null
-                        ? SymbolExtractor.Extract(fileId, record.Lang, item.Content!, item.FilePath, Path.GetFullPath(options.ProjectPath!))
+                        ? SymbolExtractor.Extract(fileId, record.Lang, item.Content!, item.FilePath, Path.GetFullPath(options.ProjectPath!), cancellationToken)
                         : ReassignSymbolFileIds(item.Symbols, fileId);
                     if (item.Symbols == null)
                         SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(item.FilePath, record.Lang));
@@ -3717,7 +3755,8 @@ public static class IndexCommandRunner
                             item.Content!,
                             symbols,
                             record.Path,
-                            record.Lang == "csharp" ? csharpWorkspace.Symbols : null)
+                            record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                            cancellationToken)
                         : ReassignReferenceFileIds(item.References, fileId);
                     postExtractionHooks.OnReferencesExtracted(fileContext, AsMutableList(references));
                     writer.InsertReferences(references);
@@ -4289,14 +4328,14 @@ public static class IndexCommandRunner
             try
             {
                 reportCurrentFile?.Invoke(relativePath);
-                var (record, content, _, _) = indexer.BuildRecordWithRawBytes(absolutePath);
+                var (record, content, _, _) = indexer.BuildRecordWithRawBytes(absolutePath, cancellationToken);
                 if (record.Lang != "csharp")
                     continue;
 
                 if (!MayContainCSharpStaticInterfaceContract(content))
                     continue;
 
-                pendingSymbols.AddRange(SymbolExtractor.Extract(0, record.Lang, content, record.Path));
+                pendingSymbols.AddRange(SymbolExtractor.Extract(0, record.Lang, content, record.Path, cancellationToken: cancellationToken));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
