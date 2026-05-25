@@ -98,6 +98,18 @@ public class FileExcerptResult
     public int EndLine { get; set; }
     public string Content { get; set; } = string.Empty;
     public bool ContentTruncated { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ExcerptSemanticToken>? SemanticTokens { get; set; }
+}
+
+public class ExcerptSemanticToken
+{
+    public int StartLine { get; set; }
+    public int StartColumn { get; set; }
+    public int EndLine { get; set; }
+    public int EndColumn { get; set; }
+    public string Type { get; set; } = string.Empty;
+    public List<string> Modifiers { get; set; } = [];
 }
 
 public class FileFindResult

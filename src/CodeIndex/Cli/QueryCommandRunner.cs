@@ -1474,6 +1474,8 @@ public static class QueryCommandRunner
                     Console.Error.WriteLine("No excerpt found.");
                 return ZeroResultExitCode(options);
             }
+            if (options.Json)
+                excerpt.SemanticTokens = BuildExcerptSemanticTokens(excerpt);
 
             if (options.Json)
             {
@@ -1486,6 +1488,57 @@ public static class QueryCommandRunner
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static List<ExcerptSemanticToken> BuildExcerptSemanticTokens(FileExcerptResult excerpt)
+    {
+        var tokens = new List<ExcerptSemanticToken>();
+        var lines = excerpt.Content.Replace("\r\n", "\n").Split('\n');
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var column = 0;
+            while (column < line.Length)
+            {
+                if (!IsSemanticTokenStart(line[column]))
+                {
+                    column++;
+                    continue;
+                }
+
+                var start = column;
+                column++;
+                while (column < line.Length && IsSemanticTokenPart(line[column]))
+                    column++;
+
+                var tokenText = line[start..column];
+                tokens.Add(new ExcerptSemanticToken
+                {
+                    StartLine = excerpt.StartLine + lineIndex,
+                    StartColumn = start + 1,
+                    EndLine = excerpt.StartLine + lineIndex,
+                    EndColumn = column + 1,
+                    Type = ClassifySemanticToken(tokenText),
+                });
+            }
+        }
+
+        return tokens;
+    }
+
+    private static bool IsSemanticTokenStart(char value) =>
+        char.IsLetter(value) || value == '_' || char.IsDigit(value);
+
+    private static bool IsSemanticTokenPart(char value) =>
+        char.IsLetterOrDigit(value) || value == '_';
+
+    private static string ClassifySemanticToken(string token)
+    {
+        if (token.All(char.IsDigit))
+            return "number";
+        if (char.IsUpper(token[0]))
+            return "type";
+        return "variable";
     }
 
     public static int RunFind(string[] cmdArgs, JsonSerializerOptions jsonOptions)
