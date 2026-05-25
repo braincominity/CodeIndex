@@ -3537,6 +3537,20 @@ jobs:
         Assert.DoesNotContain("database not found", stderr);
     }
 
+    [Fact]
+    public void RunImpact_OutOfRangeDepthUpperBound_ReturnsUsageError_Issue1700()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+            ["Target", "--depth", "999999999"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--depth must be less than or equal to 64", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("impact")}", stderr);
+        Assert.DoesNotContain("database not found", stderr);
+    }
+
     // Regression lock for #161: valid integers that fail the positive / non-negative
     // range check used to be swallowed silently, leaving the command to run with the
     // default value and write real results to stdout with exit 0. Every case below
