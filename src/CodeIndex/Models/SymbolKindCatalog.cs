@@ -12,6 +12,7 @@ public static class SymbolKindCatalog
         "class",
         "code",
         "constant",
+        "delegate",
         "enum",
         "event",
         "field",

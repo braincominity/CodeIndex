@@ -191,7 +191,7 @@ public partial class DbReader
                 FROM symbols s
                 JOIN files f ON s.file_id = f.id
                 WHERE f.lang = 'csharp'
-                  AND s.kind IN ('function', 'property')
+                  AND s.kind IN ('function', 'operator', 'property')
                   AND s.container_qualified_name IS NOT NULL
                   AND s.container_qualified_name != ''
                   AND s.name = @memberName COLLATE NOCASE

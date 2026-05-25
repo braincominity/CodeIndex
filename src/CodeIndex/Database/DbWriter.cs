@@ -930,7 +930,7 @@ public class DbWriter
                     s.kind = 'interface'
                     OR (
                         s.container_kind = 'interface'
-                        AND s.kind IN ('function', 'property')
+                        AND s.kind IN ('function', 'operator', 'property')
                         AND s.signature LIKE '%static%'
                         AND (s.signature LIKE '%abstract%' OR s.signature LIKE '%virtual%')
                     )

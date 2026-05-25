@@ -139,6 +139,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `class` | Class declarations across object-oriented languages | Definition target and container |
 | `code` | Markdown fenced or structured code blocks | Search/outline symbol |
 | `constant` | Constant declarations where the language distinguishes them | Search/filter symbol |
+| `delegate` | C# / F# delegate declarations | Callable type definition and container-like target |
 | `enum` | Enum declarations | Definition target and container |
 | `event` | Event declarations | Search/filter symbol |
 | `field` | Field declarations where distinct from properties | Search/filter symbol |

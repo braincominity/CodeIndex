@@ -153,6 +153,35 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InsertSymbols_ExistingDelegateKind_IsAccepted()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/delegate.cs",
+            Lang = "csharp",
+            Size = 32,
+            Lines = 1,
+            Modified = new DateTime(2026, 5, 25, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = "delegate",
+        });
+
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "delegate",
+                Name = "Handler",
+                Line = 1,
+            },
+        ]);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE kind = 'delegate'";
+        Assert.Equal(1L, (long)cmd.ExecuteScalar()!);
+    }
+
+    [Fact]
     public void InitializeSchema_ConstrainsKindColumns()
     {
         using var cmd = _db.Connection.CreateCommand();
