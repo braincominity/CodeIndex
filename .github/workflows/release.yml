@@ -318,11 +318,21 @@ jobs:
           (Get-Item publish\MANIFEST.sha256).LastWriteTimeUtc = $fixedTimestamp
           $files = Get-ChildItem publish -File -Recurse | Sort-Object FullName
           $relativeFiles = $files | ForEach-Object { [System.IO.Path]::GetRelativePath((Resolve-Path publish), $_.FullName) } | Sort-Object
-          Push-Location publish
+          $zipPath = Resolve-Path artifacts
+          $zipPath = Join-Path $zipPath "CodeIndex-${{ matrix.rid }}.zip"
+          $zip = [System.IO.Compression.ZipFile]::Open($zipPath, [System.IO.Compression.ZipArchiveMode]::Create)
           try {
-            Compress-Archive -Path $relativeFiles -DestinationPath "..\artifacts\CodeIndex-${{ matrix.rid }}.zip"
+            foreach ($relativeFile in $relativeFiles) {
+              $sourcePath = Join-Path (Resolve-Path publish) $relativeFile
+              $entryName = $relativeFile.Replace('\', '/')
+              [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                $zip,
+                $sourcePath,
+                $entryName,
+                [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+            }
           } finally {
-            Pop-Location
+            $zip.Dispose()
           }
           $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path "artifacts\CodeIndex-${{ matrix.rid }}.zip"))
           try {

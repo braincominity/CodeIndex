@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+#### Fixed
+
+- **Windows release ZIP archives now preserve nested license paths** — The release workflow now writes Windows ZIP entries with explicit relative paths, so `LICENSES/*.txt` files stay under `LICENSES/` and archive member validation no longer fails after packaging.
+
 ### [1.26.0] - 2026-05-26
 
 #### Added
@@ -2939,6 +2943,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
+
+#### 修正
+
+- **Windows リリース ZIP が入れ子のライセンスパスを保持するようになりました** — リリース workflow は Windows ZIP entry を明示的な相対パスで書き込むようになり、`LICENSES/*.txt` が `LICENSES/` 配下に残るため、packaging 後の archive member 検証が失敗しなくなりました。
 
 ### [1.26.0] - 2026-05-26
 
