@@ -50,4 +50,7 @@ internal static class CommandErrorCodes
 
     /// <summary>The user interrupted the command with Ctrl-C / SIGINT.</summary>
     public const string Interrupted = "E012_INTERRUPTED";
+
+    /// <summary>Index extraction made no forward progress within the bounded stall timeout.</summary>
+    public const string IndexExtractionStalled = "E013_INDEX_EXTRACTION_STALLED";
 }
