@@ -2435,11 +2435,18 @@ public static class QueryCommandRunner
     {
         if (HasOption(args, primaryFlag) || (aliasFlag != null && HasOption(args, aliasFlag)))
             return "flag";
-        return Environment.GetEnvironmentVariable(envName) is null ? "default" : $"env:{envName}";
+        if (Environment.GetEnvironmentVariable(envName) is null)
+            return "default";
+        var configSource = Environment.GetEnvironmentVariable(CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + envName);
+        if (!string.IsNullOrWhiteSpace(configSource))
+            return $"config:{configSource}";
+        return $"env:{envName}";
     }
 
-    private static string ResolveEnvSource(string envName) =>
-        Environment.GetEnvironmentVariable(envName) is null ? "default" : $"env:{envName}";
+    private static string ResolveEnvSource(string envName)
+    {
+        return Environment.GetEnvironmentVariable(envName) is null ? "default" : $"env:{envName}";
+    }
 
     private static bool HasOption(string[] args, string optionName)
     {

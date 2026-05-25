@@ -206,7 +206,9 @@ public class QueryCommandRunnerTests
     [Fact]
     public void RunStatusConfig_PrintsEffectiveConfigWithoutOpeningDb()
     {
-        using var env = EnvironmentVariableScope.Capture(QueryCommandRunner.DefaultLimitEnvironmentVariable);
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.DefaultLimitEnvironmentVariable);
         Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "33");
         var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_missing_{Guid.NewGuid():N}.db");
         var parsed = QueryCommandRunner.ParseArgs(["--config", "--db", missingDb, "--json"], jsonDefault: false, allowStatusCheck: true);
@@ -224,6 +226,38 @@ public class QueryCommandRunnerTests
         Assert.Equal("flag", effective.GetProperty("db_path").GetProperty("source").GetString());
         Assert.Equal(33, effective.GetProperty("limit").GetProperty("value").GetInt32());
         Assert.Equal($"env:{QueryCommandRunner.DefaultLimitEnvironmentVariable}", effective.GetProperty("limit").GetProperty("source").GetString());
+    }
+
+    [Fact]
+    public void RunStatusConfig_ReportsConfigFileSourceForSearchDefaults()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_config_source");
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.DefaultLimitEnvironmentVariable);
+        try
+        {
+            var configDir = Path.Combine(projectRoot, ".cdidx");
+            Directory.CreateDirectory(configDir);
+            var configPath = Path.Combine(configDir, "config.json");
+            File.WriteAllText(configPath, """{ "search": { "limit": 44 } }""");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["status", "--config", "--json"],
+                appVersion: "test-version",
+                configStartDirectory: projectRoot));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var limit = document.RootElement.GetProperty("effective_config").GetProperty("limit");
+            Assert.Equal(44, limit.GetProperty("value").GetInt32());
+            Assert.Equal($"config:{configPath}", limit.GetProperty("source").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
