@@ -292,117 +292,17 @@ public static class IndexCommandRunner
             }
         }
 
-        int WriteDryRunInterrupted() => WriteCommandError(
-            options.Json,
+        if (!TryResolveDryRunCandidates(
+            options,
+            dryIndexer,
+            projectPath,
             jsonOptions,
-            "Interrupted before dry-run scan completed.",
-            CommandExitCodes.Interrupted,
-            "Rerun `cdidx index --dry-run` when you are ready to inspect the candidate files again.",
-            CommandErrorCodes.Interrupted);
-
-        if (options.UpdateFiles.Count > 0)
+            cancellationToken,
+            RecordDryRunScanErrors,
+            out dryCandidates,
+            out var exitCode))
         {
-            // --files: only the specified files / --files: 指定ファイルのみ
-            var relevantIgnoreFileChanged = ContainsRelevantIgnoreFileUpdate(projectPath, options.UpdateFiles);
-            var updatePaths = NormalizeUpdateFileTargets(projectPath, options.UpdateFiles, options.Json);
-            if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(updatePaths))
-            {
-                FileIndexer.ScanFilesResult scanResult;
-                try
-                {
-                    scanResult = dryIndexer.ScanFilesDetailed(cancellationToken: cancellationToken);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    return WriteDryRunInterrupted();
-                }
-                dryCandidates = scanResult.Files;
-                RecordDryRunScanErrors(scanResult.Errors);
-            }
-            else
-            {
-                dryCandidates = updatePaths
-                    .Select(path => Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar)))
-                    .Where(p => File.Exists(LongPath.EnsureWindowsPrefix(p)))
-                    .ToList();
-            }
-        }
-        else if (options.Commits.Count > 0 || options.ChangedBetweenSpecified)
-        {
-            // Git update modes: files changed in commits or between refs.
-            // Git更新モード: コミットまたはref間の変更ファイル。
-            var changedFiles = new HashSet<string>(StringComparer.Ordinal);
-            var relevantIgnoreFileChanged = false;
-            var repoRoot = GitHelper.TryGetRepositoryRoot(projectPath) ?? Path.GetFullPath(projectPath);
-            try
-            {
-                foreach (var commit in options.Commits)
-                {
-                    var changed = GitHelper.GetChangedFilesFromCommit(projectPath, commit);
-                    var normalized = NormalizeCommitFileTargets(projectPath, repoRoot, changed, out var commitTouchedRelevantIgnoreFile);
-                    relevantIgnoreFileChanged |= commitTouchedRelevantIgnoreFile;
-                    foreach (var path in normalized)
-                        changedFiles.Add(path);
-                }
-            }
-            catch (Exception ex)
-            {
-                return WriteCommandError(
-                    options.Json,
-                    jsonOptions,
-                    $"failed to resolve changed files from git commits: {ex.Message}",
-                    CommandExitCodes.UsageError,
-                    "Check the commit IDs and rerun `cdidx index <projectPath> --commits <id> [id ...]`.",
-                    CommandErrorCodes.UsageError);
-            }
-            if (options.ChangedBetweenRefs.Count == 2)
-            {
-                try
-                {
-                    var changed = GitHelper.GetChangedFilesBetweenRefs(projectPath, options.ChangedBetweenRefs[0], options.ChangedBetweenRefs[1]);
-                    var normalized = NormalizeCommitFileTargets(projectPath, repoRoot, changed, out var rangeTouchedRelevantIgnoreFile);
-                    relevantIgnoreFileChanged |= rangeTouchedRelevantIgnoreFile;
-                    foreach (var path in normalized)
-                        changedFiles.Add(path);
-                }
-                catch { /* ignore git errors in dry-run */ }
-            }
-
-            if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(changedFiles))
-            {
-                FileIndexer.ScanFilesResult scanResult;
-                try
-                {
-                    scanResult = dryIndexer.ScanFilesDetailed(cancellationToken: cancellationToken);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    return WriteDryRunInterrupted();
-                }
-                dryCandidates = scanResult.Files;
-                RecordDryRunScanErrors(scanResult.Errors);
-            }
-            else
-            {
-                dryCandidates = changedFiles
-                    .Select(path => Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar)))
-                    .Where(p => File.Exists(LongPath.EnsureWindowsPrefix(p)))
-                    .ToList();
-            }
-        }
-        else
-        {
-            FileIndexer.ScanFilesResult scanResult;
-            try
-            {
-                scanResult = dryIndexer.ScanFilesDetailed(cancellationToken: cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                return WriteDryRunInterrupted();
-            }
-            dryCandidates = scanResult.Files;
-            RecordDryRunScanErrors(scanResult.Errors);
+            return exitCode;
         }
 
         var dryFiles = new List<string>();
@@ -447,6 +347,139 @@ public static class IndexCommandRunner
         }
         return CommandExitCodes.Success;
     }
+
+    private static bool TryResolveDryRunCandidates(
+        IndexCommandOptions options,
+        FileIndexer dryIndexer,
+        string projectPath,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken cancellationToken,
+        Action<IEnumerable<FileIndexer.ScanError>> recordDryRunScanErrors,
+        out IReadOnlyList<string> dryCandidates,
+        out int exitCode)
+    {
+        dryCandidates = [];
+        exitCode = CommandExitCodes.Success;
+
+        if (options.UpdateFiles.Count > 0)
+        {
+            // --files: only the specified files / --files: 指定ファイルのみ
+            var relevantIgnoreFileChanged = ContainsRelevantIgnoreFileUpdate(projectPath, options.UpdateFiles);
+            var updatePaths = NormalizeUpdateFileTargets(projectPath, options.UpdateFiles, options.Json);
+            if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(updatePaths))
+            {
+                FileIndexer.ScanFilesResult scanResult;
+                try
+                {
+                    scanResult = dryIndexer.ScanFilesDetailed(cancellationToken: cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    exitCode = WriteDryRunInterrupted(options, jsonOptions);
+                    return false;
+                }
+                dryCandidates = scanResult.Files;
+                recordDryRunScanErrors(scanResult.Errors);
+            }
+            else
+            {
+                dryCandidates = updatePaths
+                    .Select(path => Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar)))
+                    .Where(p => File.Exists(LongPath.EnsureWindowsPrefix(p)))
+                    .ToList();
+            }
+        }
+        else if (options.Commits.Count > 0 || options.ChangedBetweenSpecified)
+        {
+            // Git update modes: files changed in commits or between refs.
+            // Git更新モード: コミットまたはref間の変更ファイル。
+            var changedFiles = new HashSet<string>(StringComparer.Ordinal);
+            var relevantIgnoreFileChanged = false;
+            var repoRoot = GitHelper.TryGetRepositoryRoot(projectPath) ?? Path.GetFullPath(projectPath);
+            try
+            {
+                foreach (var commit in options.Commits)
+                {
+                    var changed = GitHelper.GetChangedFilesFromCommit(projectPath, commit);
+                    var normalized = NormalizeCommitFileTargets(projectPath, repoRoot, changed, out var commitTouchedRelevantIgnoreFile);
+                    relevantIgnoreFileChanged |= commitTouchedRelevantIgnoreFile;
+                    foreach (var path in normalized)
+                        changedFiles.Add(path);
+                }
+            }
+            catch (Exception ex)
+            {
+                exitCode = WriteCommandError(
+                    options.Json,
+                    jsonOptions,
+                    $"failed to resolve changed files from git commits: {ex.Message}",
+                    CommandExitCodes.UsageError,
+                    "Check the commit IDs and rerun `cdidx index <projectPath> --commits <id> [id ...]`.",
+                    CommandErrorCodes.UsageError);
+                return false;
+            }
+            if (options.ChangedBetweenRefs.Count == 2)
+            {
+                try
+                {
+                    var changed = GitHelper.GetChangedFilesBetweenRefs(projectPath, options.ChangedBetweenRefs[0], options.ChangedBetweenRefs[1]);
+                    var normalized = NormalizeCommitFileTargets(projectPath, repoRoot, changed, out var rangeTouchedRelevantIgnoreFile);
+                    relevantIgnoreFileChanged |= rangeTouchedRelevantIgnoreFile;
+                    foreach (var path in normalized)
+                        changedFiles.Add(path);
+                }
+                catch { /* ignore git errors in dry-run */ }
+            }
+
+            if (relevantIgnoreFileChanged || ContainsIgnoreFilePath(changedFiles))
+            {
+                FileIndexer.ScanFilesResult scanResult;
+                try
+                {
+                    scanResult = dryIndexer.ScanFilesDetailed(cancellationToken: cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    exitCode = WriteDryRunInterrupted(options, jsonOptions);
+                    return false;
+                }
+                dryCandidates = scanResult.Files;
+                recordDryRunScanErrors(scanResult.Errors);
+            }
+            else
+            {
+                dryCandidates = changedFiles
+                    .Select(path => Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar)))
+                    .Where(p => File.Exists(LongPath.EnsureWindowsPrefix(p)))
+                    .ToList();
+            }
+        }
+        else
+        {
+            FileIndexer.ScanFilesResult scanResult;
+            try
+            {
+                scanResult = dryIndexer.ScanFilesDetailed(cancellationToken: cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                exitCode = WriteDryRunInterrupted(options, jsonOptions);
+                return false;
+            }
+            dryCandidates = scanResult.Files;
+            recordDryRunScanErrors(scanResult.Errors);
+        }
+
+        return true;
+    }
+
+    private static int WriteDryRunInterrupted(IndexCommandOptions options, JsonSerializerOptions jsonOptions) => WriteCommandError(
+        options.Json,
+        jsonOptions,
+        "Interrupted before dry-run scan completed.",
+        CommandExitCodes.Interrupted,
+        "Rerun `cdidx index --dry-run` when you are ready to inspect the candidate files again.",
+        CommandErrorCodes.Interrupted);
 
     private static int? ValidateIndexRunOptions(
         IndexCommandOptions options,
