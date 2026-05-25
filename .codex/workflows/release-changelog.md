@@ -49,6 +49,21 @@ dotnet run --project tools/CodeIndex.Changelog -- check
 Run this before committing release-preparation changes if you edited or
 received new fragments after the last `prepare` run.
 
+## GitHub release notes
+
+The release workflow publishes the curated `CHANGELOG.md` section for the tag,
+not GitHub's generated commit summary. Before creating the release it runs:
+
+```bash
+dotnet run --project tools/CodeIndex.Changelog -- release-notes --version 1.17.0
+```
+
+The command extracts the matching English and 日本語 `### [1.17.0]` blocks from
+`CHANGELOG.md` and fails if either section is missing or both are empty. This
+means the release-preparation PR must land before the `v*` tag is pushed. The
+workflow keeps GitHub-generated notes only as an explicit
+`workflow_dispatch` fallback via `allow_generated_notes`.
+
 ## Compare-link footer
 
 For a release from `1.16.0` to `1.17.0`, the footer must change from:

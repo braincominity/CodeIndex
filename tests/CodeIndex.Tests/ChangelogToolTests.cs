@@ -127,6 +127,33 @@ public sealed class ChangelogToolTests
     }
 
     [Fact]
+    public void RenderReleaseNotesExtractsMatchingEnglishAndJapaneseSections()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("changelog.d/unreleased/195.fixed.md", SampleFragment);
+
+        var tool = new ChangelogTool(scope.Root);
+        tool.Prepare(new Version(1, 17, 0), new DateOnly(2026, 5, 1), writeChanges: true);
+
+        var notes = tool.RenderReleaseNotes(new Version(1, 17, 0));
+
+        Assert.StartsWith("## CodeIndex v1.17.0", notes, StringComparison.Ordinal);
+        Assert.Contains("### English", notes);
+        Assert.Contains("English release note", notes);
+        Assert.Contains("Existing English unreleased note", notes);
+        Assert.Contains("### 日本語", notes);
+        Assert.Contains("Japanese release note", notes);
+        Assert.Contains("Existing Japanese unreleased note", notes);
+        Assert.DoesNotContain("[Unreleased]:", notes);
+    }
+
+    [Fact]
     public void CheckFragmentsRejectsCategoryMismatch()
     {
         using var scope = new TestRepositoryScope();
