@@ -30,6 +30,37 @@ public class SearchSnippetFormatterTests
 
         Assert.Equal([1, 3], excerpt.MatchLines);
         Assert.Equal(2, excerpt.Highlights.Count);
+        Assert.Equal(0, excerpt.DroppedMatchLineCount);
+    }
+
+    [Fact]
+    public void BuildExcerpt_ReportsDroppedMatchLines_WhenTailMatchesExceedWindow()
+    {
+        const string content = "Target 1\nTarget 2\nTarget 3\nTarget 4\nTarget 5";
+
+        var excerpt = SearchSnippetFormatter.BuildExcerpt(content, "Target", absoluteStartLine: 20, maxLines: 3);
+
+        Assert.Equal([20, 21, 22], excerpt.MatchLines);
+        Assert.Equal(2, excerpt.DroppedMatchLineCount);
+    }
+
+    [Fact]
+    public void BuildExcerpt_ReportsEveryTermOccurrenceWithPositions()
+    {
+        const string content = "Foo Foo Foo";
+
+        var excerpt = SearchSnippetFormatter.BuildExcerpt(content, "Foo", absoluteStartLine: 7, maxLines: 1);
+
+        var highlight = Assert.Single(excerpt.Highlights);
+        Assert.Equal(["Foo"], highlight.Terms);
+        Assert.Equal(3, highlight.TermOccurrences.Count);
+        Assert.Equal([1, 5, 9], highlight.TermOccurrences.Select(occurrence => occurrence.Column).ToArray());
+        Assert.All(highlight.TermOccurrences, occurrence =>
+        {
+            Assert.Equal("Foo", occurrence.Term);
+            Assert.Equal(7, occurrence.Line);
+            Assert.Equal(3, occurrence.Length);
+        });
     }
 
     [Fact]
@@ -56,6 +87,41 @@ public class SearchSnippetFormatterTests
         Assert.Equal([22], compact.MatchLines);
         Assert.Single(compact.Highlights);
         Assert.Equal(-1.5, compact.Score);
+    }
+
+    [Fact]
+    public void ToCompactResults_IsLazy()
+    {
+        var produced = 0;
+        IEnumerable<SearchResult> Results()
+        {
+            produced++;
+            yield return new SearchResult
+            {
+                Path = "src/a.cs",
+                Lang = "csharp",
+                StartLine = 1,
+                EndLine = 1,
+                Content = "Target();",
+            };
+            produced++;
+            yield return new SearchResult
+            {
+                Path = "src/b.cs",
+                Lang = "csharp",
+                StartLine = 1,
+                EndLine = 1,
+                Content = "Target();",
+            };
+        }
+
+        var compact = SearchSnippetFormatter.ToCompactResults(Results(), "Target");
+
+        Assert.Equal(0, produced);
+        using var enumerator = compact.GetEnumerator();
+        Assert.True(enumerator.MoveNext());
+        Assert.Equal(1, produced);
+        Assert.Equal("src/a.cs", enumerator.Current.Path);
     }
 
     [Fact]
@@ -95,6 +161,11 @@ public class SearchSnippetFormatterTests
         Assert.Equal([2], excerpt.MatchLines);
         Assert.Single(excerpt.Highlights);
         Assert.Contains("Foo.Bar", excerpt.Highlights[0].Terms);
+        var occurrence = Assert.Single(excerpt.Highlights[0].TermOccurrences);
+        Assert.Equal("Foo.@Bar", occurrence.Term);
+        Assert.Equal(2, occurrence.Line);
+        Assert.Equal(8, occurrence.Column);
+        Assert.Equal(8, occurrence.Length);
         Assert.Contains("using @Foo.@Bar;", excerpt.Lines);
     }
 

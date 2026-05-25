@@ -174,6 +174,7 @@ public static class QueryCommandRunner
         "--with-paths",
         "--bytes",
         "--profile",
+        "--check-updates",
     ];
     private static readonly HashSet<string> InlineValueOptions =
         new(ValueTakingOptions.Concat(["--json"]), StringComparer.Ordinal);
@@ -1496,6 +1497,8 @@ public static class QueryCommandRunner
                     Console.Error.WriteLine("No excerpt found.");
                 return ZeroResultExitCode(options);
             }
+            if (options.Json)
+                excerpt.SemanticTokens = BuildExcerptSemanticTokens(excerpt);
 
             if (options.Json)
             {
@@ -1508,6 +1511,57 @@ public static class QueryCommandRunner
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static List<ExcerptSemanticToken> BuildExcerptSemanticTokens(FileExcerptResult excerpt)
+    {
+        var tokens = new List<ExcerptSemanticToken>();
+        var lines = excerpt.Content.Replace("\r\n", "\n").Split('\n');
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        {
+            var line = lines[lineIndex];
+            var column = 0;
+            while (column < line.Length)
+            {
+                if (!IsSemanticTokenStart(line[column]))
+                {
+                    column++;
+                    continue;
+                }
+
+                var start = column;
+                column++;
+                while (column < line.Length && IsSemanticTokenPart(line[column]))
+                    column++;
+
+                var tokenText = line[start..column];
+                tokens.Add(new ExcerptSemanticToken
+                {
+                    StartLine = excerpt.StartLine + lineIndex,
+                    StartColumn = start + 1,
+                    EndLine = excerpt.StartLine + lineIndex,
+                    EndColumn = column + 1,
+                    Type = ClassifySemanticToken(tokenText),
+                });
+            }
+        }
+
+        return tokens;
+    }
+
+    private static bool IsSemanticTokenStart(char value) =>
+        char.IsLetter(value) || value == '_' || char.IsDigit(value);
+
+    private static bool IsSemanticTokenPart(char value) =>
+        char.IsLetterOrDigit(value) || value == '_';
+
+    private static string ClassifySemanticToken(string token)
+    {
+        if (token.All(char.IsDigit))
+            return "number";
+        if (char.IsUpper(token[0]))
+            return "type";
+        return "variable";
     }
 
     public static int RunFind(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -2166,6 +2220,9 @@ public static class QueryCommandRunner
 
     public static int RunStatus(string[] cmdArgs, JsonSerializerOptions jsonOptions, string? appVersion = null)
     {
+        var checkUpdates = cmdArgs.Contains("--check-updates", StringComparer.Ordinal);
+        if (checkUpdates)
+            cmdArgs = cmdArgs.Where(arg => !string.Equals(arg, "--check-updates", StringComparison.Ordinal)).ToArray();
         var previewOptionError = ValidatePreviewOptions("status", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
@@ -2268,6 +2325,10 @@ public static class QueryCommandRunner
             }
             if (appVersion != null)
                 status.Version = appVersion;
+            var updateResult = checkUpdates && appVersion != null
+                ? UpdateChecker.Check(appVersion)
+                : null;
+            status.UpdateCheck = updateResult;
 
             // Build one-line summary for AI orientation / AI向けの1行サマリーを構築
             var topLangs = status.Languages.OrderByDescending(kv => kv.Value).Take(3).Select(kv => kv.Key);
@@ -2319,6 +2380,8 @@ public static class QueryCommandRunner
                 Console.WriteLine();
                 if (status.Version != null)
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("Version", $"cdidx v{status.Version}"));
+                if (updateResult?.UpdateAvailable == true && updateResult.LatestVersion != null)
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Update", $"cdidx v{updateResult.LatestVersion} is available."));
                 Console.WriteLine(ConsoleUi.FormatSummaryLine("Files", $"{status.Files:N0}"));
                 Console.WriteLine(ConsoleUi.FormatSummaryLine("Chunks", $"{status.Chunks:N0}"));
                 Console.WriteLine(ConsoleUi.FormatSummaryLine("Symbols", $"{status.Symbols:N0}"));
@@ -4566,8 +4629,7 @@ public static class QueryCommandRunner
                 default:
                     if (args[i].StartsWith('-'))
                     {
-                        if (allowNamedQuery && query == null)
-                            query = args[i];
+                        AddParseError($"Error: unsupported option: {args[i]}. Use `--` before a query literal that starts with `-`.");
                         break;
                     }
                     else if (query == null)
