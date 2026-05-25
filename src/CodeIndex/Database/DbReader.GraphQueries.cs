@@ -157,8 +157,10 @@ public partial class DbReader
         while (reader.TrackedRead())
         {
             var primaryKind = reader.GetString(5);
-            var kinds = ParseDistinctReferenceKinds(GetNullableString(reader, 8), primaryKind);
-            var counts = ParseReferenceKindCounts(GetNullableString(reader, 9), primaryKind, reader.GetInt32(7));
+            var kindAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 8), out var kindsTruncated);
+            var countAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 9), out var countsTruncated);
+            var kinds = ParseDistinctReferenceKinds(kindAggregate, primaryKind);
+            var counts = ParseReferenceKindCounts(countAggregate, primaryKind, reader.GetInt32(7));
             results.Add(new CallerResult
             {
                 Path = reader.GetString(0),
@@ -170,6 +172,7 @@ public partial class DbReader
                 ReferenceKinds = kinds,
                 HasMixedReferenceKinds = kinds.Count > 1,
                 ReferenceKindCounts = counts,
+                AggregateTruncated = kindsTruncated || countsTruncated,
                 ReferenceWeightScore = reader.GetDouble(10),
                 FirstLine = reader.GetInt32(6),
                 ReferenceCount = reader.GetInt32(7),
@@ -486,8 +489,10 @@ public partial class DbReader
         while (reader.TrackedRead())
         {
             var primaryKind = reader.GetString(5);
-            var kinds = ParseDistinctReferenceKinds(GetNullableString(reader, 8), primaryKind);
-            var counts = ParseReferenceKindCounts(GetNullableString(reader, 9), primaryKind, reader.GetInt32(7));
+            var kindAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 8), out var kindsTruncated);
+            var countAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 9), out var countsTruncated);
+            var kinds = ParseDistinctReferenceKinds(kindAggregate, primaryKind);
+            var counts = ParseReferenceKindCounts(countAggregate, primaryKind, reader.GetInt32(7));
             results.Add(new CalleeResult
             {
                 Path = reader.GetString(0),
@@ -499,6 +504,7 @@ public partial class DbReader
                 ReferenceKinds = kinds,
                 HasMixedReferenceKinds = kinds.Count > 1,
                 ReferenceKindCounts = counts,
+                AggregateTruncated = kindsTruncated || countsTruncated,
                 ReferenceWeightScore = reader.GetDouble(10),
                 FirstLine = reader.GetInt32(6),
                 ReferenceCount = reader.GetInt32(7),

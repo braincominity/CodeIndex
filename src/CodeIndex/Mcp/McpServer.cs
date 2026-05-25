@@ -141,6 +141,8 @@ public partial class McpServer : IDisposable
     private const int MaxContextLines = 1000;
     internal const int MaxLineCharacterCount = 1_000_000;
     internal const int MaxLineByteLength = 1_048_576;
+    internal const int DefaultMaxResponseBytes = 10 * 1024 * 1024;
+    private const string MaxResponseBytesEnvVar = "CDIDX_MCP_RESPONSE_MAX_BYTES";
     internal const int MaxJsonDepth = 32;
     internal const int MaxBatchRequestCount = 100;
     // Stdio buffer for the JSON-RPC loop. Sized to fit typical large MCP payloads (e.g. batch_query)
@@ -739,7 +741,13 @@ public partial class McpServer : IDisposable
     {
         try
         {
-            return _serializeResponse(response);
+            var serialized = _serializeResponse(response);
+            var responseBytes = Encoding.UTF8.GetByteCount(serialized);
+            var responseLimit = GetMaxResponseBytes();
+            if (responseBytes <= responseLimit)
+                return serialized;
+
+            return CreateResponseTooLargeError(hasId, id, responseBytes, responseLimit).ToJsonString(_jsonOptions);
         }
         catch (Exception ex)
         {
@@ -2478,7 +2486,39 @@ public partial class McpServer : IDisposable
         };
         if (structuredContent != null)
             result["structuredContent"] = structuredContent;
-        return CreateSuccessResponse(true, id, result);
+        var response = CreateSuccessResponse(true, id, result);
+        var responseBytes = Encoding.UTF8.GetByteCount(response.ToJsonString());
+        var responseLimit = GetMaxResponseBytes();
+        if (responseBytes <= responseLimit)
+            return response;
+
+        return CreateResponseTooLargeError(true, id, responseBytes, responseLimit);
+    }
+
+    private static JsonObject CreateResponseTooLargeError(bool hasId, JsonNode? id, int responseBytes, int responseLimit)
+    {
+        return CreateErrorResponse(
+            hasId: hasId,
+            id: id,
+            code: -32603,
+            message: $"MCP response exceeded the server byte limit ({responseBytes} > {responseLimit}). Narrow the query or lower the result limit.",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Narrow the query, add path/language filters, lower limit, or use countOnly for a summary-first probe.",
+            retrySafe: false,
+            extraData: new JsonObject
+            {
+                ["reason"] = "response_too_large",
+                ["limit_bytes"] = responseLimit,
+                ["actual_bytes"] = responseBytes,
+            });
+    }
+
+    private static int GetMaxResponseBytes()
+    {
+        var configured = Environment.GetEnvironmentVariable(MaxResponseBytesEnvVar);
+        if (int.TryParse(configured, out var limit) && limit > 0)
+            return limit;
+        return DefaultMaxResponseBytes;
     }
 
     /// <summary>

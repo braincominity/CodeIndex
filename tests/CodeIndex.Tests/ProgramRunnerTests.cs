@@ -4,6 +4,7 @@ using System.Text.Json.Serialization.Metadata;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Mcp;
+using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
@@ -171,6 +172,75 @@ public class ProgramRunnerTests
         Assert.DoesNotContain("OperationCanceledException", trimmed);
         Assert.DoesNotContain("timeout budget elapsed", trimmed);
         Assert.StartsWith("Error: command cancelled before it could complete.", trimmed);
+    }
+
+    [Fact]
+    public void Run_WorkspaceVersionPinMismatch_WarnsByDefault()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("version-pin-warn");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, ".cdidx-version"), "9.9.9\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["--version", "--json"],
+                appVersion: "1.10.0",
+                configStartDirectory: projectRoot));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("\"version\":\"1.10.0\"", stdout);
+            Assert.Contains("workspace requires cdidx v9.9.9", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_WorkspaceVersionPinMismatch_StrictFailsBeforeCommand()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("version-pin-strict");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, ".cdidx-version"), "9.9.9\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["--strict-version", "--version"],
+                appVersion: "1.10.0",
+                configStartDirectory: projectRoot));
+
+            Assert.Equal(CommandExitCodes.ExUsage, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("workspace requires cdidx v9.9.9", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void UpdateChecker_Check_ReportsNewerRelease()
+    {
+        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        try
+        {
+            var result = UpdateChecker.Check(
+                "1.10.0",
+                cachePath,
+                DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                _ => Task.FromResult<string?>("v1.11.0"));
+
+            Assert.True(result.UpdateAvailable);
+            Assert.Equal("v1.11.0", result.LatestVersion);
+            Assert.False(result.FromCache);
+        }
+        finally
+        {
+            if (File.Exists(cachePath))
+                File.Delete(cachePath);
+        }
     }
 
     [Theory]

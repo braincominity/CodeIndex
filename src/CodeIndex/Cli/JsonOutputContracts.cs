@@ -347,6 +347,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(SymbolHotspotJsonResult))]
 [JsonSerializable(typeof(SymbolResult))]
 [JsonSerializable(typeof(UnusedSymbolResult))]
+[JsonSerializable(typeof(CodeIndex.Models.UpdateCheckResult))]
 [JsonSerializable(typeof(VacuumResult))]
 [JsonSerializable(typeof(VersionInfoJsonResult))]
 internal partial class CliJsonSerializerContext : JsonSerializerContext;

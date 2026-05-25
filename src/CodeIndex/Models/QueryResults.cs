@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using CodeIndex.Models;
 
 namespace CodeIndex.Database;
 
@@ -234,6 +235,8 @@ public class CallerResult
     public IReadOnlyList<string> ReferenceKinds { get; set; } = Array.Empty<string>();
     public bool HasMixedReferenceKinds { get; set; }
     public IReadOnlyDictionary<string, int> ReferenceKindCounts { get; set; } = new Dictionary<string, int>();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool AggregateTruncated { get; set; }
     public double ReferenceWeightScore { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
@@ -262,6 +265,8 @@ public class CalleeResult
     public IReadOnlyList<string> ReferenceKinds { get; set; } = Array.Empty<string>();
     public bool HasMixedReferenceKinds { get; set; }
     public IReadOnlyDictionary<string, int> ReferenceKindCounts { get; set; } = new Dictionary<string, int>();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool AggregateTruncated { get; set; }
     public double ReferenceWeightScore { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
@@ -508,6 +513,9 @@ public class StatusResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<PostExtractionHookStatus>? Hooks { get; set; }
     public string? Version { get; set; }
+    [JsonPropertyName("update_check")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public UpdateCheckResult? UpdateCheck { get; set; }
     /// <summary>
     /// One-line human-readable summary for quick orientation.
     /// クイックオリエンテーション用の1行サマリー。

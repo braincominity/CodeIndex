@@ -118,7 +118,20 @@ file completion.
 | Drift checks | `cdidx diff <db1> <db2>` compares schema, file, symbol, and reference deltas with stable exit codes: `0` identical, `1` drift, `2` schema mismatch, `3` unreadable DB. |
 | Extensibility and feedback | Post-extraction hooks from `~/.config/cdidx/hooks/*.dll` or `CDIDX_HOOKS_DIR` can enrich symbols and references. `cdidx suggestions` lists, inspects, and exports local suggestion history, with fuzzy MCP suggestion deduplication controlled by CLI, env, or `.cdidxrc.json`. |
 | Language coverage | 78 detected languages, with symbol and graph support where available. |
-| Updates | `cdidx --version` checks GitHub releases at most once per day and appends a newer-release hint when one is available. Set `CDIDX_DISABLE_UPDATE_CHECK=1` to suppress the check. |
+| Updates | `cdidx --version` checks GitHub releases at most once per day and appends a newer-release hint when one is available. Use `cdidx --check-updates` or `cdidx status --check-updates` for an explicit freshness check, and `cdidx upgrade` to reinstall the latest GitHub release via `install.sh`. Set `CDIDX_DISABLE_UPDATE_CHECK=1` to suppress checks. |
+
+### Upgrade and uninstall
+
+`cdidx upgrade --check-only` reports whether a newer GitHub release is available. `cdidx upgrade` downloads the current `install.sh`, refuses unwritable install directories, and reruns the installer with `CDIDX_INSTALL_DIR` pointed at the current binary directory.
+
+Direct `install.sh` installs can be removed with:
+
+```bash
+bash ./install.sh --uninstall
+bash ./install.sh --uninstall --purge-cache
+```
+
+The uninstaller removes files placed next to the `cdidx` binary and can optionally remove `~/.cache/cdidx`. It does not remove project `.cdidx/` directories, shell profile PATH edits, shell completion scripts, Homebrew installs, or .NET global-tool installs.
 
 The documented `status --json` trust contract covers these fields:
 
