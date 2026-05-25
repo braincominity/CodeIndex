@@ -3900,6 +3900,9 @@ public static partial class SymbolExtractor
 
                 if (restartPatternScanOffset >= 0)
                 {
+                    if (restartPatternScanOffset <= patternStartOffset)
+                        break;
+
                     patternStartOffset = restartPatternScanOffset;
                     continue;
                 }
