@@ -64,6 +64,36 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpOperatorOverloads_UseOperatorKind()
+    {
+        const string content = """
+            public readonly struct Point
+            {
+                public static Point operator +(Point left, Point right) => left;
+                public static bool operator ==(Point left, Point right) => true;
+                public static bool operator !=(Point left, Point right) => false;
+                public static explicit operator int(Point point) => 0;
+                public static Point operator checked +(Point left, Point right) => left;
+            }
+
+            public interface IAddable<TSelf>
+            {
+                static abstract TSelf operator +(TSelf left, TSelf right);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "operator" && symbol.Name == "operator +");
+        Assert.Contains(symbols, symbol => symbol.Kind == "operator" && symbol.Name == "operator ==");
+        Assert.Contains(symbols, symbol => symbol.Kind == "operator" && symbol.Name == "operator !=");
+        Assert.Contains(symbols, symbol => symbol.Kind == "operator" && symbol.Name == "explicit operator int");
+        Assert.Contains(symbols, symbol => symbol.Kind == "operator" && symbol.Name == "operator checked +");
+        Assert.Contains(symbols, symbol => symbol.Kind == "operator" && symbol.ContainerKind == "interface");
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "function" && symbol.Name.StartsWith("operator", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_PythonDataclassField_IndexesFieldAndMetadataKeys()
     {
         const string content = """
@@ -7272,9 +7302,9 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "implicit operator class");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator Outer.class.Target");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator List<class>");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "implicit operator class");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "explicit operator Outer.class.Target");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "explicit operator List<class>");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name.Contains("@", StringComparison.Ordinal));
     }
 
@@ -11237,20 +11267,17 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Money");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator +");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator -");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator ==");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator checked +");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "implicit operator decimal");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator Money");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator checked byte");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator Dictionary<string, int>");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator (int whole, int cents)");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator (Dictionary<string, int> map, int count)?");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator (int[] items, int count)");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator ((int a, int b) pair, int count)");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator int*");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator delegate* unmanaged[Cdecl]<int, void>");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "operator +");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "operator -");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "operator ==");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "operator checked +");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "implicit operator decimal");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "explicit operator Money");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "explicit operator checked byte");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "explicit operator Dictionary<string,int>");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "explicit operator (int whole,int cents)");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "explicit operator (int[] items, int count)");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "explicit operator int*");
     }
 
     [Fact]
@@ -11281,12 +11308,12 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator +");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator checked +");
-        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "operator -"));
-        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "operator checked -"));
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator int");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator checked int");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "operator +");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "operator checked +");
+        Assert.Equal(2, symbols.Count(s => s.Kind == "operator" && s.Name == "operator -"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "operator" && s.Name == "operator checked -"));
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "explicit operator int");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "explicit operator checked int");
     }
 
     [Fact]
@@ -11328,11 +11355,11 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IMath");
-        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "operator +"));
-        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "operator -"));
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator *");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "implicit operator T");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator int");
+        Assert.Equal(2, symbols.Count(s => s.Kind == "operator" && s.Name == "operator +"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "operator" && s.Name == "operator -"));
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "operator *");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "implicit operator T");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "explicit operator int");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Zero");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Compare");
         // Widening the modifier slot also incidentally covers C# 11 user-defined checked
@@ -11345,8 +11372,8 @@ public class SymbolExtractorTests
         // operator 名キャプチャが `checked` を含む形を受け入れているため、
         // ここでは二項 `operator checked +` と変換 `explicit operator checked int` の
         // 両方を固定し、将来 modifier スロットが狭められても無言で落ちないようにする。
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator checked +");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator checked int");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "operator checked +");
+        Assert.Contains(symbols, s => s.Kind == "operator" && s.Name == "explicit operator checked int");
     }
 
     [Fact]

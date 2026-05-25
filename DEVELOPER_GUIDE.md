@@ -129,6 +129,97 @@ Query commands that accept path filters (`search`, `definition`, `references`, `
 
 Do not add mutable static caches, shared `StringBuilder` instances, reused `MatchCollection` enumerators, or singleton scanner state to extractor code. If a future extractor needs cross-call memoization, use an explicit thread-safe collection and add a targeted parallel regression test that proves deterministic output under concurrent calls.
 
+### Symbol Kind Taxonomy
+
+`symbols.kind`, `symbols.container_kind`, and `symbol_references.container_kind` use the public symbol kind taxonomy below. New extractors must register new kind values in `SymbolKindCatalog` before writing them so schema checks, writer validation, CLI filters, and downstream JSON consumers stay aligned.
+
+| Kind | Current producers / meaning | Graph behavior |
+|---|---|---|
+| `accessor` | Accessor declarations when extracted separately from their owning property | Search/filter symbol |
+| `annotation` | Annotation declarations or annotation-like language constructs | Metadata/search symbol |
+| `async_function` | JavaScript/TypeScript async function declarations | Callable definition; participates in callers/callees through reference rows |
+| `async_generator` | JavaScript/TypeScript async generator declarations | Callable definition; participates in callers/callees through reference rows |
+| `attribute` | Razor attributes and metadata-like declarations | Context/search symbol; not a call edge by itself |
+| `associatedtype` | Swift associated type declarations | Type-like definition target |
+| `class` | Class declarations across object-oriented languages | Definition target and container |
+| `class_hook` | Python class hook methods such as dunder hooks reclassified from functions | Callable/search symbol |
+| `code` | Markdown fenced or structured code blocks | Search/outline symbol |
+| `constant` | Constant declarations where the language distinguishes them | Search/filter symbol |
+| `delegate` | C# / F# delegate declarations | Callable type definition and container-like target |
+| `enum` | Enum declarations | Definition target and container |
+| `event` | Event declarations | Search/filter symbol |
+| `field` | Field declarations where distinct from properties | Search/filter symbol |
+| `file_module` | File-scoped module/package declarations | Namespace-like context symbol |
+| `function` | Functions, methods, constructors, delegates, tasks, and callable bindings that do not have a narrower kind | Primary callable definition; participates in callers/callees through reference rows |
+| `generator` | JavaScript/TypeScript generator declarations | Callable definition; participates in callers/callees through reference rows |
+| `heading` | Markdown headings | Outline symbol |
+| `hook` | JavaScript/TypeScript React custom hook bindings | Callable-like search/filter symbol |
+| `implements` | Razor `@implements` directives | Context/search symbol |
+| `import` | Imports, using directives, aliases, and package includes | Search/filter symbol |
+| `interface` | Interface declarations | Definition target and container |
+| `lambda` | Named lambda/arrow bindings | Callable definition; participates in callers/callees through reference rows |
+| `layout` | Razor layout directives | Context/search symbol |
+| `method` | Languages or hooks that explicitly distinguish methods from functions | Callable definition; participates in callers/callees through reference rows |
+| `module` | Module declarations | Definition target and container |
+| `namespace` | Namespace declarations | Definition target and container |
+| `operator` | C# operator overload and conversion operator declarations | Callable definition; participates in callers/callees through reference rows |
+| `object` | Object-literal/object container context used by nested extracted symbols | Container context |
+| `package` | Package declarations | Namespace-like context symbol |
+| `property` | Properties and property-like fields | Definition target; not treated as a call edge by itself |
+| `procedure` | Procedure declarations in languages such as Fortran | Callable definition |
+| `program` | Program block declarations in languages such as Fortran | Definition target and container |
+| `protocol` | Protocol declarations in languages that distinguish protocols from interfaces | Definition target and container |
+| `reference` | Secondary extracted symbolic references, such as HTML classes or metadata keys | Search/filter symbol |
+| `rule` | CSS/SCSS rule container context used by nested references | Container context |
+| `route` | Razor route directives | Context/search symbol |
+| `service` | Service declarations in IDL/protobuf-like languages | Definition target and container |
+| `specialization` | C++ template specialization declarations | Definition target for specialized type/function forms |
+| `struct` | Struct declarations | Definition target and container |
+| `submodule` | Fortran submodule declarations | Namespace/module-like definition target |
+| `subroutine` | Fortran subroutine declarations | Callable definition |
+| `test.method` | Test methods detected by test-aware extraction | Callable definition; participates in callers/callees through reference rows |
+| `trait` | Trait declarations in languages that distinguish traits from interfaces | Definition target and container |
+| `type` | Type declarations where a narrower class/interface/struct/enum kind is not available | Definition target |
+| `typealias` | Type alias declarations | Definition target for alias names |
+| `union` | Union declarations | Definition target and container |
+| `block data` | Fortran block data declarations | Definition target |
+| `variable` | Variable bindings | Search/filter symbol |
+
+`symbol_references.reference_kind` uses this separate reference taxonomy:
+
+| Reference kind | Meaning |
+|---|---|
+| `annotation` | Annotation usage in languages that distinguish annotations from attributes |
+| `attribute` | Metadata/attribute usage |
+| `augmentation` | TypeScript declaration/interface merge edge |
+| `call` | Function, method, operator, macro, or command call |
+| `capture` | Captured callback/delegate relationship used by impact analysis |
+| `column_reference` | SQL column reference in a statement-specific context |
+| `consumes_hook` | React hook consumption relationship |
+| `const_assertion` | TypeScript `as const` assertion edge |
+| `const_generic_reference` | Rust const generic argument reference |
+| `copy_from` | Dockerfile `COPY --from=<stage>` stage dependency |
+| `cte_body_reference` | SQL common table expression body reference |
+| `decorator` | Python decorator usage |
+| `extends` | Inheritance or type-extension relationship |
+| `from` | Dockerfile `FROM <stage>` dependency |
+| `friend` | C++ friend declaration relationship |
+| `generic_type_argument` | Generic type argument attached to an explicit invocation |
+| `implement` | Interface implementation relationship |
+| `implicit_implementation` | C# implicit interface implementation relationship |
+| `import` | Import/include/reference through a module system |
+| `instantiate` | Constructor or object creation |
+| `join_condition_reference` | SQL join/merge condition column reference |
+| `lifetime_reference` | Rust/C#-style lifetime or lifetime-like type reference |
+| `metadata` | Metadata-only reference |
+| `reference` | Generic persisted reference row used by fixtures or extractors without a narrower edge kind |
+| `razor_event_binding` | Razor event binding relationship |
+| `stage` | Build-stage relationship |
+| `subscribe` | Event subscription relationship |
+| `type_reference` | Type annotation, generic constraint, or other type-position reference |
+| `unsubscribe` | Event unsubscription relationship |
+| `use` | Generic usage relationship when no narrower reference kind applies |
+
 ### Status freshness age threshold
 
 `status --check` keeps the DB/worktree checksum comparison in `IndexFreshnessChecker`, but the user-facing age hint threshold is resolved in `QueryCommandRunner`: CLI `--stale-after <duration>` wins over `CDIDX_STALE_AFTER`, which wins over `.cdidxrc.json`'s `stale_after`, then the 24-hour default. Supported duration suffixes are `m`, `h`, and `d`. JSON output includes `stale_after_seconds` and `index_age_seconds` only for `--check`, so clients can confirm which threshold was applied without inferring it from text.
@@ -1033,17 +1124,29 @@ lifecycle breadcrumbs to a per-user daily log. The log path follows
 `XDG_CACHE_HOME/cdidx/logs/`, `XDG_RUNTIME_DIR/cdidx/logs/`, then the
 platform default: `%LOCALAPPDATA%\cdidx\logs\` on Windows,
 `~/Library/Logs/cdidx/` on macOS, or `~/.local/state/cdidx/logs/` on Linux.
-The file name is `stderr-YYYYMMDD.log`, and the logger keeps only the newest
-30 daily files. Repository-local development runs from `src/CodeIndex/bin/...`
-and `tests/.../bin/...` are excluded by default so ordinary build/test cycles
-do not accumulate persistent logs. Set `CDIDX_DISABLE_PERSISTENT_LOG=1` to opt
-out entirely; the toggle accepts `1`, `true`, `yes`, or `on`
-case-insensitively. Use `CDIDX_GLOBAL_TOOL_LOG_DIR` to redirect the log
-directory during testing or packaging.
+Each candidate is probed with a create/write/delete round trip before the
+logger commits to it, so read-only state/cache/runtime mounts fall through to
+the next candidate instead of losing the first log write. The file name is
+`stderr-YYYYMMDD.log`, timestamps inside the file are ISO-8601 UTC
+(`yyyy-MM-ddTHH:mm:ss.fffZ`) using invariant culture, and the logger keeps
+only the newest 30 daily files. Repository-local development runs from
+`src/CodeIndex/bin/...` and `tests/.../bin/...` are excluded by default so
+ordinary build/test cycles do not accumulate persistent logs. Set
+`CDIDX_DISABLE_PERSISTENT_LOG=1` to opt out entirely; the toggle accepts `1`,
+`true`, `yes`, or `on` case-insensitively. Use
+`CDIDX_GLOBAL_TOOL_LOG_DIR` to redirect the log directory during testing or
+packaging.
 Set `CDIDX_FORCE_GLOBAL_TOOL_LOG=1` to force lifecycle logging for local
 package smoke tests or launcher diagnostics even when the executable path looks
 like a development build; `CDIDX_DISABLE_PERSISTENT_LOG` still wins when both
 are set.
+Unhandled exceptions keep stderr concise but write the full exception chain and
+stack trace to the lifecycle log for post-mortem diagnostics. Logged command
+arguments are minimally redacted by default: secret-looking `--flag=value`
+pairs, values following secret-looking flags, URI passwords, and long token-like
+hex/base64 strings are replaced with `<redacted>`. `CDIDX_LOG_REDACT=none`
+preserves raw arguments for controlled local debugging, while
+`CDIDX_LOG_REDACT=full` also replaces path-like arguments with a stable hash.
 
 ### The moving parts
 

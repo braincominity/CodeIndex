@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Runtime.Versioning;
@@ -70,10 +71,10 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FilesMode_WhenSymbolExtractionTimesOut_CompletesWithWarning()
+    public void Run_FilesMode_WhenSymbolExtractionStalls_ReportsStallInsteadOfInterrupt()
     {
-        using var environment = EnvironmentVariableScope.Capture("CDIDX_INDEX_EXTRACTION_TIMEOUT_MS");
-        environment.Set("CDIDX_INDEX_EXTRACTION_TIMEOUT_MS", "1");
+        var priorTimeout = IndexCommandRunner.IndexExtractionStallTimeoutForTesting;
+        IndexCommandRunner.IndexExtractionStallTimeoutForTesting = () => TimeSpan.FromMilliseconds(1);
         var projectRoot = CreateTempProject();
         try
         {
@@ -89,14 +90,14 @@ public class IndexCommandRunnerTests
             var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_symbol_timeout_{Guid.NewGuid():N}.db");
             var (exitCode, json, stderr) = RunAndCaptureJsonWithStderr([projectRoot, "--files", "slow.cs", "--db", dbPath, "--json", "--force"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
-            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.Contains("symbol extraction exceeded", json.GetProperty("warnings")[0].GetProperty("message").GetString());
+            Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+            Assert.Equal(CommandErrorCodes.IndexExtractionStalled, json.GetProperty("error_code").GetString());
+            Assert.Contains("Index extraction made no progress", json.GetProperty("message").GetString());
             Assert.DoesNotContain(CommandErrorCodes.Interrupted, stderr);
         }
         finally
         {
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting = priorTimeout;
             SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
@@ -449,6 +450,42 @@ public class IndexCommandRunnerTests
         Assert.NotNull(options.ProjectPath);
         Assert.True(Path.IsPathRooted(options.ProjectPath));
         Assert.Equal(Path.GetFullPath("."), options.ProjectPath);
+    }
+
+    [Fact]
+    public void TryGetFullScanExtractionStallPath_ReportsActivePhaseAfterTimeout()
+    {
+        var staleTimestamp = Stopwatch.GetTimestamp() - Stopwatch.Frequency;
+
+        var stalled = IndexCommandRunner.TryGetFullScanExtractionStallPath(
+            filesProcessed: 23,
+            filesTotal: 376,
+            timeout: TimeSpan.FromMilliseconds(1),
+            lastProgressTimestamp: staleTimestamp,
+            currentFile: null,
+            activeExtractionPhases: ["src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs (symbols)"],
+            out var activePath);
+
+        Assert.True(stalled);
+        Assert.Equal("src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs (symbols)", activePath);
+    }
+
+    [Fact]
+    public void TryGetFullScanExtractionStallPath_DoesNotReportWhenComplete()
+    {
+        var staleTimestamp = Stopwatch.GetTimestamp() - Stopwatch.Frequency;
+
+        var stalled = IndexCommandRunner.TryGetFullScanExtractionStallPath(
+            filesProcessed: 376,
+            filesTotal: 376,
+            timeout: TimeSpan.FromMilliseconds(1),
+            lastProgressTimestamp: staleTimestamp,
+            currentFile: "src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs",
+            activeExtractionPhases: ["src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs (symbols)"],
+            out var activePath);
+
+        Assert.False(stalled);
+        Assert.Null(activePath);
     }
 
     [Fact]

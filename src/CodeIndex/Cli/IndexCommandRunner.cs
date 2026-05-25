@@ -22,6 +22,7 @@ public static class IndexCommandRunner
     private const string SymbolKindFilterMetaKey = "index_symbol_kind_filter";
     private const int ScanCheckpointVersion = 1;
     private const string ScanCheckpointFileName = "scan-checkpoint.json";
+    private static readonly TimeSpan IndexExtractionStallTimeout = TimeSpan.FromMinutes(5);
 
     private sealed record ScanCheckpoint(
         int Version,
@@ -30,6 +31,7 @@ public static class IndexCommandRunner
 
     internal static Action? FullScanWritePhaseStartedForTesting { get; set; }
     internal static Action<bool, string?>? FullScanExtractionSchedulingForTesting { get; set; }
+    internal static Func<TimeSpan>? IndexExtractionStallTimeoutForTesting { get; set; }
     internal static Action? HotspotFamilyUpdateRestampReadyForCommitForTesting { get; set; }
     internal static Func<bool> IsInputRedirectedForTesting { get; set; } = () => Console.IsInputRedirected;
     internal static Func<string?> ReadLineForTesting { get; set; } = Console.ReadLine;
@@ -542,6 +544,10 @@ public static class IndexCommandRunner
         catch (IndexInterruptedException ex)
         {
             return WriteInterruptedResult(options.Json, jsonOptions, ex.FilesProcessed, ex.FilesTotal);
+        }
+        catch (IndexExtractionStalledException ex)
+        {
+            return WriteExtractionStalledResult(options.Json, jsonOptions, ex);
         }
         catch (Exception ex) when (IsDatabaseFilesystemError(ex))
         {
@@ -1661,8 +1667,6 @@ public static class IndexCommandRunner
             }
         }
 
-        var extractionTimeout = ResolveIndexExtractionTimeout();
-
         void StartUpdateSpinnerIfNeeded()
         {
             if (!interactiveUpdateSpinner || updateCts != null)
@@ -2114,17 +2118,14 @@ public static class IndexCommandRunner
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
                 currentUpdatePath = FormatIndexPhasePath(relPath, "symbols");
-                var symbolsCompleted = TryExtractSymbolsWithinTimeout(
+                var symbols = ExtractSymbolsWithStallTimeout(
                     fileId,
-                    record,
+                    record.Lang,
                     content,
                     absPath,
-                    options.ProjectPath!,
-                    cancellationToken,
-                    extractionTimeout,
-                    options.DurationFormat,
-                    out var symbols,
-                    out var symbolTimeoutWarning);
+                    Path.GetFullPath(options.ProjectPath!),
+                    currentUpdatePath,
+                    cancellationToken);
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
                 var fileContext = new FileContext(projectRoot, record.Path, absPath, record.Lang);
                 postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
@@ -2132,29 +2133,16 @@ public static class IndexCommandRunner
                 FileIndexer.ValidateSymbolLineRanges(record, symbols);
                 writer.InsertSymbols(symbols);
                 currentUpdatePath = FormatIndexPhasePath(relPath, "references");
-                List<ReferenceRecord> references = symbolsCompleted
-                    ? ReferenceExtractor.Extract(
-                        fileId,
-                        record.Lang,
-                        content,
-                        symbols,
-                        record.Path,
-                        record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                        cancellationToken)
-                    : [];
+                var references = ReferenceExtractor.Extract(
+                    fileId,
+                    record.Lang,
+                    content,
+                    symbols,
+                    record.Path,
+                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                    cancellationToken);
                 postExtractionHooks.OnReferencesExtracted(fileContext, references);
                 writer.InsertReferences(references);
-                if (symbolTimeoutWarning != null)
-                {
-                    warnings++;
-                    warningList.Add(new CliJsonMessage(record.Path, symbolTimeoutWarning));
-                    if (!options.Json && !options.Quiet)
-                    {
-                        PauseUpdateSpinnerForConsoleWrite();
-                        ConsoleUi.PrintWarning(symbolTimeoutWarning);
-                        ResumeUpdateSpinnerAfterConsoleWrite();
-                    }
-                }
                 // Validate content for encoding issues / エンコーディング問題を検証
                 currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
@@ -2167,6 +2155,10 @@ public static class IndexCommandRunner
                 ftsMutated = true;
                 ThrowIfUpdateCancelled();
                 WriteUpdateVerboseStatus($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
+            }
+            catch (IndexExtractionStalledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -2866,9 +2858,18 @@ public static class IndexCommandRunner
         $"  [{label}] {CollapseLineBreaks(path)}: {CollapseLineBreaks(message)}";
 
     internal static string FormatIndexFileException(Exception ex) =>
-        ex is RegexMatchTimeoutException timeoutException
-            ? RuntimeSafety.FormatRegexTimeout(timeoutException)
-            : ex.Message;
+        ex switch
+        {
+            RegexMatchTimeoutException timeoutException => RuntimeSafety.FormatRegexTimeout(timeoutException),
+            IndexExtractionStalledException stalledException => FormatExtractionStalledMessage(stalledException),
+            _ => ex.Message,
+        };
+
+    private static string FormatExtractionStalledMessage(IndexExtractionStalledException ex)
+    {
+        var pathSuffix = string.IsNullOrWhiteSpace(ex.ActivePath) ? string.Empty : $" Last active phase: {ex.ActivePath}.";
+        return $"Index extraction made no progress for {ConsoleUi.FormatDuration(ex.Timeout)}.{pathSuffix}";
+    }
 
     internal static string FormatIndexPhasePath(string path, string phase) =>
         $"{path} ({phase})";
@@ -2879,6 +2880,98 @@ public static class IndexCommandRunner
             return currentFile;
 
         return activeExtractionPhases.FirstOrDefault(static phase => !string.IsNullOrEmpty(phase));
+    }
+
+    internal static bool TryGetFullScanExtractionStallPath(
+        int filesProcessed,
+        int filesTotal,
+        TimeSpan timeout,
+        long lastProgressTimestamp,
+        string? currentFile,
+        IEnumerable<string> activeExtractionPhases,
+        out string? activePath)
+    {
+        activePath = null;
+        if (filesTotal <= 0 || filesProcessed >= filesTotal || timeout <= TimeSpan.Zero)
+            return false;
+
+        if (Stopwatch.GetElapsedTime(lastProgressTimestamp) < timeout)
+            return false;
+
+        activePath = GetJsonIndexHeartbeatPath(currentFile, activeExtractionPhases);
+        return true;
+    }
+
+    private static void ThrowIfFullScanExtractionStalled(
+        int filesProcessed,
+        int filesTotal,
+        TimeSpan timeout,
+        long lastProgressTimestamp,
+        string? currentFile,
+        ConcurrentDictionary<int, string> activeExtractionPhases,
+        Action cancelStalledWork)
+    {
+        if (!TryGetFullScanExtractionStallPath(
+                filesProcessed,
+                filesTotal,
+                timeout,
+                lastProgressTimestamp,
+                currentFile,
+                activeExtractionPhases.OrderBy(static kvp => kvp.Key).Select(static kvp => kvp.Value),
+                out var activePath))
+        {
+            return;
+        }
+
+        cancelStalledWork();
+        throw new IndexExtractionStalledException(filesProcessed, filesTotal, timeout, activePath);
+    }
+
+    private static List<SymbolRecord> ExtractSymbolsWithStallTimeout(
+        long fileId,
+        string? lang,
+        string content,
+        string filePath,
+        string projectRoot,
+        string phasePath,
+        CancellationToken cancellationToken)
+    {
+        var timeout = IndexExtractionStallTimeoutForTesting?.Invoke() ?? IndexExtractionStallTimeout;
+        if (timeout <= TimeSpan.Zero)
+            return SymbolExtractor.Extract(fileId, lang, content, filePath, projectRoot, cancellationToken);
+
+        using var extractionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var extractionToken = extractionCts.Token;
+        var task = Task.Run(
+            () => SymbolExtractor.Extract(fileId, lang, content, filePath, projectRoot, extractionToken),
+            CancellationToken.None);
+        try
+        {
+            if (task.Wait(timeout, cancellationToken))
+                return task.GetAwaiter().GetResult();
+        }
+        catch (AggregateException ex) when (ex.InnerExceptions.Count == 1)
+        {
+            throw ex.InnerExceptions[0];
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+
+        extractionCts.Cancel();
+        try
+        {
+            task.Wait(TimeSpan.FromSeconds(1));
+        }
+        catch (AggregateException ex) when (ex.InnerExceptions.All(inner => inner is OperationCanceledException or TaskCanceledException))
+        {
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        throw new IndexExtractionStalledException(0, null, timeout, phasePath);
     }
 
     private static string CollapseLineBreaks(string value)
@@ -2925,6 +3018,19 @@ public static class IndexCommandRunner
             CommandExitCodes.Interrupted,
             "Rerun `cdidx index` to finish refreshing the index. Press Ctrl-C again during a future run to force-exit.",
             CommandErrorCodes.Interrupted);
+    }
+
+    private static int WriteExtractionStalledResult(bool json, JsonSerializerOptions jsonOptions, IndexExtractionStalledException ex)
+    {
+        var totalSuffix = ex.FilesTotal is > 0 ? $" of {ex.FilesTotal.Value:N0}" : string.Empty;
+        var pathSuffix = string.IsNullOrWhiteSpace(ex.ActivePath) ? string.Empty : $" Last active phase: {ex.ActivePath}.";
+        return WriteCommandError(
+            json,
+            jsonOptions,
+            $"Index extraction made no progress for {ConsoleUi.FormatDuration(ex.Timeout)} ({ex.FilesProcessed:N0}{totalSuffix} files processed).{pathSuffix}",
+            CommandExitCodes.CancelledBySignal,
+            "Rerun with `--verbose` to inspect progress, lower `--parallelism`, or file a bug with the reported active phase.",
+            CommandErrorCodes.IndexExtractionStalled);
     }
 
     internal static bool HandleIndexCancelKeyPress(CancellationTokenSource cancellation, ref bool firstCancelHandled)
@@ -3554,13 +3660,15 @@ public static class IndexCommandRunner
             }
 
             using var extractionResults = new BlockingCollection<FullScanFileWorkItem>(Math.Max(1, extractionParallelism * 4));
+            using var extractionStallCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var extractionCancellationToken = extractionStallCts.Token;
             var nextFileIndex = -1;
             var workers = Enumerable.Range(0, extractionParallelism)
                 .Select(workerIndex => Task.Factory.StartNew(() =>
                 {
                     while (true)
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
+                        extractionCancellationToken.ThrowIfCancellationRequested();
                         var fileIndex = Interlocked.Increment(ref nextFileIndex);
                         if (fileIndex >= files.Count)
                             break;
@@ -3570,7 +3678,7 @@ public static class IndexCommandRunner
                         {
                             var relativeFilePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, filePath));
                             activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(relativeFilePath, "reading");
-                            var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(filePath, cancellationToken);
+                            var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(filePath, extractionCancellationToken);
                             IReadOnlyList<ChunkRecord>? chunks = null;
                             IReadOnlyList<SymbolRecord>? symbols = null;
                             IReadOnlyList<ReferenceRecord>? references = null;
@@ -3580,46 +3688,38 @@ public static class IndexCommandRunner
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "chunking");
                                 chunks = ChunkSplitter.Split(0, content);
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "symbols");
-                                var symbolsCompleted = TryExtractSymbolsWithinTimeout(
+                                symbols = ExtractSymbolsWithStallTimeout(
                                     0,
-                                    record,
+                                    record.Lang,
                                     content,
                                     filePath,
-                                    options.ProjectPath!,
-                                    cancellationToken,
-                                    ResolveIndexExtractionTimeout(),
-                                    options.DurationFormat,
-                                    out var extractedSymbols,
-                                    out var symbolTimeoutWarning);
-                                symbols = extractedSymbols;
+                                    Path.GetFullPath(options.ProjectPath!),
+                                    activeJsonExtractionPhases[workerIndex],
+                                    extractionCancellationToken);
                                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "references");
-                                references = symbolsCompleted
-                                    ? ReferenceExtractor.Extract(
-                                        0,
-                                        record.Lang,
-                                        content,
-                                        symbols,
-                                        record.Path,
-                                        record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                                        cancellationToken)
-                                    : [];
+                                references = ReferenceExtractor.Extract(
+                                    0,
+                                    record.Lang,
+                                    content,
+                                    symbols,
+                                    record.Path,
+                                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                                    extractionCancellationToken);
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
                                 issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
-                                if (symbolTimeoutWarning != null)
-                                    warning = string.IsNullOrWhiteSpace(warning) ? symbolTimeoutWarning : $"{warning} {symbolTimeoutWarning}";
                             }
                             extractionResults.Add(
                                 FullScanFileWorkItem.Success(filePath, record, content, rawBytes, warning, chunks, symbols, references, issues),
-                                cancellationToken);
+                                extractionCancellationToken);
                         }
-                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                        catch (OperationCanceledException) when (extractionCancellationToken.IsCancellationRequested)
                         {
                             throw;
                         }
                         catch (FileIndexer.BinaryFileSkippedException ex)
                         {
-                            extractionResults.Add(FullScanFileWorkItem.Skipped(filePath, ex.Message), cancellationToken);
+                            extractionResults.Add(FullScanFileWorkItem.Skipped(filePath, ex.Message), extractionCancellationToken);
                         }
                         catch (FileIndexer.FileTooLargeSkippedException ex)
                         {
@@ -3633,18 +3733,18 @@ public static class IndexCommandRunner
                             };
                             extractionResults.Add(
                                 FullScanFileWorkItem.Success(filePath, record, string.Empty, [], ex.Message, [], [], [], [issue]),
-                                cancellationToken);
+                                extractionCancellationToken);
                         }
                         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
                         {
                             var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, filePath));
                             extractionResults.Add(
                                 FullScanFileWorkItem.Skipped(filePath, $"{relativePath}: skipped because it was deleted during indexing."),
-                                cancellationToken);
+                                extractionCancellationToken);
                         }
                         catch (Exception ex)
                         {
-                            extractionResults.Add(FullScanFileWorkItem.Failure(filePath, ex), cancellationToken);
+                            extractionResults.Add(FullScanFileWorkItem.Failure(filePath, ex), extractionCancellationToken);
                         }
                         finally
                         {
@@ -3663,14 +3763,30 @@ public static class IndexCommandRunner
                 TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
 
+            var extractionStallTimeout = IndexExtractionStallTimeoutForTesting?.Invoke() ?? IndexExtractionStallTimeout;
+            var lastExtractionProgressAt = Stopwatch.GetTimestamp();
             while (!extractionResults.IsCompleted)
             {
                 ThrowIfFullScanCancelled(processed, files.Count);
                 if (!extractionResults.TryTake(out var item, millisecondsTimeout: 100))
+                {
+                    ThrowIfFullScanExtractionStalled(
+                        processed,
+                        files.Count,
+                        extractionStallTimeout,
+                        lastExtractionProgressAt,
+                        currentJsonIndexFile,
+                        activeJsonExtractionPhases,
+                        extractionStallCts.Cancel);
                     continue;
+                }
 
+                lastExtractionProgressAt = Stopwatch.GetTimestamp();
                 currentJsonIndexFile = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, item.FilePath));
                 EnsureIndexingActivityVisible();
+                if (item.Exception is IndexExtractionStalledException stalledException)
+                    throw stalledException;
+
                 try
                 {
                     if (item.Exception != null)
@@ -3776,7 +3892,14 @@ public static class IndexCommandRunner
                     writer.InsertChunks(chunks);
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "symbols");
                     var symbols = item.Symbols == null
-                        ? SymbolExtractor.Extract(fileId, record.Lang, item.Content!, item.FilePath, Path.GetFullPath(options.ProjectPath!), cancellationToken)
+                        ? ExtractSymbolsWithStallTimeout(
+                            fileId,
+                            record.Lang,
+                            item.Content!,
+                            item.FilePath,
+                            Path.GetFullPath(options.ProjectPath!),
+                            currentJsonIndexFile,
+                            cancellationToken)
                         : ReassignSymbolFileIds(item.Symbols, fileId);
                     if (item.Symbols == null)
                         SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(item.FilePath, record.Lang));
@@ -3808,6 +3931,10 @@ public static class IndexCommandRunner
                     txn.Commit();
 
                     WriteIndexVerboseStatus($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
+                }
+                catch (IndexExtractionStalledException)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -4676,7 +4803,7 @@ public static class IndexCommandRunner
     }
 
     private static bool IsCSharpStaticInterfaceContractSymbol(SymbolRecord symbol)
-        => symbol.Kind is "function" or "property"
+        => symbol.Kind is "function" or "operator" or "property"
            && symbol.ContainerKind == "interface"
            && !string.IsNullOrWhiteSpace(symbol.Signature)
            && ContainsCSharpWord(symbol.Signature!, "static")
@@ -4752,54 +4879,6 @@ public static class IndexCommandRunner
         }
     }
 
-    private static bool TryExtractSymbolsWithinTimeout(
-        long fileId,
-        FileRecord record,
-        string content,
-        string absolutePath,
-        string projectPath,
-        CancellationToken cancellationToken,
-        TimeSpan extractionTimeout,
-        DurationOutputFormat durationFormat,
-        out List<SymbolRecord> symbols,
-        out string? timeoutWarning)
-    {
-        timeoutWarning = null;
-        var extractionTask = Task.Run(
-            () => SymbolExtractor.Extract(fileId, record.Lang, content, absolutePath, Path.GetFullPath(projectPath), cancellationToken),
-            CancellationToken.None);
-
-        try
-        {
-            if (extractionTask.Wait(extractionTimeout, cancellationToken))
-            {
-                symbols = extractionTask.GetAwaiter().GetResult();
-                return true;
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-
-        timeoutWarning = $"{record.Path}: symbol extraction exceeded {ConsoleUi.FormatDuration(extractionTimeout, durationFormat)}; indexed file without symbols or references.";
-        symbols = [];
-        return false;
-    }
-
-    private static TimeSpan ResolveIndexExtractionTimeout()
-    {
-        const int defaultTimeoutMilliseconds = 30000;
-        var raw = Environment.GetEnvironmentVariable("CDIDX_INDEX_EXTRACTION_TIMEOUT_MS");
-        if (string.IsNullOrWhiteSpace(raw))
-            return TimeSpan.FromMilliseconds(defaultTimeoutMilliseconds);
-
-        return int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var milliseconds)
-            && milliseconds > 0
-                ? TimeSpan.FromMilliseconds(milliseconds)
-                : TimeSpan.FromMilliseconds(defaultTimeoutMilliseconds);
-    }
-
     private sealed record CSharpStaticInterfaceWorkspaceSymbols(
         IReadOnlyList<SymbolRecord> Symbols,
         bool HasStaticInterfaceContracts);
@@ -4853,6 +4932,23 @@ public static class IndexCommandRunner
 
         public int FilesProcessed { get; }
         public int? FilesTotal { get; }
+    }
+
+    private sealed class IndexExtractionStalledException : Exception
+    {
+        public IndexExtractionStalledException(int filesProcessed, int? filesTotal, TimeSpan timeout, string? activePath)
+            : base("Index extraction stalled.")
+        {
+            FilesProcessed = filesProcessed;
+            FilesTotal = filesTotal;
+            Timeout = timeout;
+            ActivePath = activePath;
+        }
+
+        public int FilesProcessed { get; }
+        public int? FilesTotal { get; }
+        public TimeSpan Timeout { get; }
+        public string? ActivePath { get; }
     }
 
     private sealed class CancelKeyPressRegistration(ConsoleCancelEventHandler handler) : IDisposable
