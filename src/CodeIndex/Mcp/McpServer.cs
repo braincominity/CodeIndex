@@ -1030,9 +1030,10 @@ public partial class McpServer : IDisposable
         if (requestKey == null)
             return await action().ConfigureAwait(false);
 
-        using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(_currentRequestToken.Value, _shutdownCts.Token);
+        var requestCts = CancellationTokenSource.CreateLinkedTokenSource(_currentRequestToken.Value, _shutdownCts.Token);
         if (!_activeRequests.TryAdd(requestKey, requestCts))
         {
+            requestCts.Dispose();
             return CreateErrorResponse(hasId: true, id: id, code: -32600, message: "Duplicate in-flight request id",
                 category: McpErrorEnvelope.CategoryInvalidRequest,
                 suggestion: "JSON-RPC request ids must be unique while a previous request with the same id is still running.",
@@ -1042,19 +1043,30 @@ public partial class McpServer : IDisposable
 
         var previousToken = _currentRequestToken.Value;
         var stopwatch = Stopwatch.StartNew();
+        var cleanupNow = true;
         try
         {
             _currentRequestToken.Value = requestCts.Token;
             requestCts.CancelAfter(_requestTimeout);
             requestCts.Token.ThrowIfCancellationRequested();
-            if (RequestDelayForTests is { } delay)
-                await delay(requestCts.Token).ConfigureAwait(false);
-            var actionTask = action();
+            var actionTask = Task.Run(async () =>
+            {
+                if (RequestDelayForTests is { } delay)
+                    await delay(requestCts.Token).ConfigureAwait(false);
+                return await action().ConfigureAwait(false);
+            }, requestCts.Token);
             var completed = await Task.WhenAny(actionTask, Task.Delay(_requestTimeout)).ConfigureAwait(false);
             if (completed != actionTask)
             {
                 try { requestCts.Cancel(); }
                 catch (ObjectDisposedException) { /* completed while timeout cancellation was being delivered. */ }
+                cleanupNow = false;
+                _ = actionTask.ContinueWith(task =>
+                {
+                    _ = task.Exception;
+                    _activeRequests.TryRemove(requestKey, out _);
+                    requestCts.Dispose();
+                }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                 return CreateRequestTimeoutResponse(id, stopwatch.Elapsed);
             }
 
@@ -1069,7 +1081,11 @@ public partial class McpServer : IDisposable
         finally
         {
             _currentRequestToken.Value = previousToken;
-            _activeRequests.TryRemove(requestKey, out _);
+            if (cleanupNow)
+            {
+                _activeRequests.TryRemove(requestKey, out _);
+                requestCts.Dispose();
+            }
         }
     }
 
