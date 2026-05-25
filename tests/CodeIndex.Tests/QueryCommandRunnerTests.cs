@@ -922,10 +922,11 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void ParseArgs_AllowsDashPrefixedPositionalQueryLiteral()
+    public void ParseArgs_EndOfOptionsAllowsDashPrefixedPositionalQueryLiteralWithOptions()
     {
-        var options = QueryCommandRunner.ParseArgs(["--open-reports", "--db", "query.db"], jsonDefault: false, allowNamedQuery: true);
+        var options = QueryCommandRunner.ParseArgs(["--", "--open-reports", "--db", "query.db"], jsonDefault: false, allowNamedQuery: true);
 
+        Assert.Null(options.ParseError);
         Assert.Equal("--open-reports", options.Query);
         Assert.Equal("query.db", options.DbPath);
     }
@@ -3485,6 +3486,28 @@ jobs:
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("is not supported for search", stderr);
         Assert.Contains("Did you mean: --path?", stderr);
+    }
+
+    [Fact]
+    public void RunSearch_UnknownFlagAfterQuery_ReturnsUsageError()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["foo", "--dapth", "3"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--dapth is not supported for search", stderr);
+        Assert.Contains("Did you mean: --path?", stderr);
+    }
+
+    [Fact]
+    public void ParseArgs_EndOfOptionsAllowsDashPrefixedQueryLiteral()
+    {
+        var options = QueryCommandRunner.ParseArgs(["--", "--baar"], jsonDefault: false, allowNamedQuery: true);
+
+        Assert.Null(options.ParseError);
+        Assert.Equal("--baar", options.Query);
     }
 
     // `find` previously emitted only the raw `Error: unsupported option for find: --paht`
@@ -28659,7 +28682,7 @@ jobs:
     }
 
     [Fact]
-    public void RunSearch_PositionalQueryAcceptsOptionLookingLiteral_Issue799()
+    public void RunSearch_EndOfOptionsAcceptsOptionLookingLiteral()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue799_search_positional_literal");
         try
@@ -28672,7 +28695,7 @@ jobs:
                 "--open-reports appears here\n");
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["--open-reports", "--path", "README.md", "--db", dbPath, "--count"],
+                ["--", "--open-reports", "--path", "README.md", "--db", dbPath, "--count"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
