@@ -1097,11 +1097,11 @@ public static partial class SymbolExtractor
             // これにより C# 11 の `static abstract` / `abstract static` interface 変換演算子
             // （generic math: `System.Numerics.INumber<TSelf>` など）と、interface 上の
             // default implementation / member hiding 形態を黙って取りこぼさない。Closes #244.
-            new("function",  new Regex(
+            new("operator",  new Regex(
                 $@"^\s*"
               + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)*static\s+)"
               + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)+"
-              + $@"(?<conversionKind>implicit|explicit)\s+operator\b",
+              + @"(?<name>(?:implicit|explicit)\s+operator\s+.+?)\s*\(",
                 RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Operator overload (+ - * / == != < > etc.) — must come before method pattern.
             // Visibility may appear before or after `static`. Closes #355.
@@ -1115,7 +1115,7 @@ public static partial class SymbolExtractor
             // これにより C# 11 の `static abstract` / `abstract static` interface 演算子
             // （generic math: `IAdditionOperators<T>`、`IComparisonOperators<T>` など）を
             // 黙って取りこぼさない。Closes #244.
-            new("function",  new Regex(
+            new("operator",  new Regex(
                 $@"^\s*"
               + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)*static\s+)"
               + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)+"
