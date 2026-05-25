@@ -1485,7 +1485,7 @@ public partial class DbReader
 
     private static bool IsCallableOutlineSymbol(string kind)
     {
-        return kind is "function" or "method" or "constructor";
+        return kind is "function" or "operator" or "method" or "constructor";
     }
 
     private static string? TryBuildCompactCallableSignature(string name, string? signature, string? lang)

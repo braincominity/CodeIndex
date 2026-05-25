@@ -30,7 +30,7 @@ cdidx suggestions list           # Review local AI feedback history
 cdidx mcp                        # Start MCP server for AI tools
 ```
 
-78 languages supported. 24 MCP tools. Incremental updates. Zero config.
+78 languages supported. 24 registered MCP tools. Incremental updates. Zero config.
 
 | Topic | Link |
 |---|---|
@@ -1764,7 +1764,7 @@ OpenAI Codex CLI (`codex.json` or `~/.codex/config.json`):
 
 Once configured, the AI can directly call these tools:
 
-The MCP `tools/list` descriptions include compact English/Japanese usage examples for the primary search and navigation tools, so AI clients can discover valid argument shapes directly from the server response.
+The MCP `tools/list` response includes an `examples` array for every registered tool, so AI clients can discover valid `tools/call` argument shapes directly from the server response.
 
 | Tool | Description |
 |---|---|
@@ -1808,6 +1808,26 @@ This recomputes persisted `name_folded` / `*_folded` columns from existing DB ro
 Graph-oriented MCP tools such as `references`, `callers`, and `callees` also return `graph_language`, `graph_supported`, and `graph_support_reason` when a language filter is provided, so clients can distinguish unsupported languages from genuine zero-hit queries.
 
 All MCP tools include `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so AI clients can auto-approve safe read-only queries without prompting the user.
+
+#### MCP error responses
+
+MCP JSON-RPC failures use the standard `error` object. Clients should route on
+`error.code` and, when present, `error.data.category`; do not parse
+`error.message`, which is human-facing diagnostic text.
+
+| Code | Meaning | Client action |
+|---|---|---|
+| `-32700` | Parse error or frame too large | Fix the JSON/frame size before retrying |
+| `-32600` | Invalid JSON-RPC request | Fix request shape before retrying |
+| `-32601` | Method not found or disabled tool | Check server version and `tools/list` |
+| `-32602` | Invalid params, unknown tool, or bad protocol version | Fix arguments or negotiate a supported version |
+| `-32603` | Internal error | Surface the failure and inspect server stderr |
+| `-32000` | Rate limited | Retry after the reported delay |
+| `-32001` | Permission denied | Provide the configured auth token |
+| `-32010` | Index missing | Run `cdidx index <projectPath>` first |
+| `-32011` | Index stale/schema mismatch | Rebuild or refresh the index |
+| `-32012` | Index corrupted/unreadable | Rebuild the index from source |
+| `-32015` | Request cancelled | Retry if the client still needs the result |
 
 #### Optional HTTP transport
 

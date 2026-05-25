@@ -495,7 +495,7 @@ internal static class CSharpReferenceExtractor
     {
         foreach (var candidate in candidates)
         {
-            if (candidate.Kind != "function")
+            if (candidate.Kind is not ("function" or "operator"))
                 continue;
             if (candidate.StartLine <= lineNumber && candidate.BodyEndLine!.Value >= lineNumber)
                 return candidate;
