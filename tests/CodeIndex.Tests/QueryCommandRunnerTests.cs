@@ -87,6 +87,143 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_UsesNumericDefaultEnvironmentVariables()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable,
+            QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "42");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, "6");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, "120");
+
+        var options = QueryCommandRunner.ParseArgs(["RunSearch"], jsonDefault: false, allowNamedQuery: true);
+
+        Assert.Equal(42, options.Limit);
+        Assert.Equal(6, options.SnippetLines);
+        Assert.Equal(120, options.MaxLineWidth);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_CliNumericFlagsOverrideDefaultEnvironmentVariables()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable,
+            QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "42");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, "6");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, "120");
+
+        var options = QueryCommandRunner.ParseArgs(
+            ["RunSearch", "--limit", "7", "--snippet-lines", "3", "--max-line-width", "80"],
+            jsonDefault: false,
+            allowNamedQuery: true);
+
+        Assert.Equal(7, options.Limit);
+        Assert.Equal(3, options.SnippetLines);
+        Assert.Equal(80, options.MaxLineWidth);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_InvalidNumericDefaultEnvironmentVariableReportsParseError()
+    {
+        using var env = EnvironmentVariableScope.Capture(QueryCommandRunner.DefaultLimitEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "0");
+
+        var options = QueryCommandRunner.ParseArgs(["RunSearch"], jsonDefault: false, allowNamedQuery: true);
+
+        Assert.Contains(QueryCommandRunner.DefaultLimitEnvironmentVariable, options.ParseError);
+    }
+
+    [Theory]
+    [InlineData("limit")]
+    [InlineData("snippet-lines")]
+    [InlineData("max-line-width")]
+    public void ParseArgs_CliNumericFlagsOverrideInvalidDefaultEnvironmentVariables(string option)
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable,
+            QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "0");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, "0");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, "-1");
+
+        var args = option switch
+        {
+            "limit" => new[] { "RunSearch", "--limit", "7", "--snippet-lines", "3", "--max-line-width", "80" },
+            "snippet-lines" => new[] { "RunSearch", "--limit", "7", "--snippet-lines", "3", "--max-line-width", "80" },
+            _ => new[] { "RunSearch", "--limit", "7", "--snippet-lines", "3", "--max-line-width", "80" },
+        };
+
+        var options = QueryCommandRunner.ParseArgs(args, jsonDefault: false, allowNamedQuery: true);
+
+        Assert.Equal(7, options.Limit);
+        Assert.Equal(3, options.SnippetLines);
+        Assert.Equal(80, options.MaxLineWidth);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void RunLanguages_IgnoresInvalidNumericDefaultEnvironmentVariables()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable,
+            QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "0");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, "0");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, "-1");
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages([], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Contains("Language", stdout);
+        Assert.DoesNotContain(QueryCommandRunner.DefaultLimitEnvironmentVariable, stderr);
+    }
+
+    [Fact]
+    public void ParseArgs_ScopesNumericDefaultValidationByOption()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable,
+            QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "0");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, "0");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, "-1");
+
+        var limitOnly = QueryCommandRunner.ParseArgs(
+            [],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+        Assert.Contains(QueryCommandRunner.DefaultLimitEnvironmentVariable, limitOnly.ParseError);
+        Assert.DoesNotContain(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, limitOnly.ParseError);
+        Assert.DoesNotContain(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, limitOnly.ParseError);
+
+        var maxLineWidthOnly = QueryCommandRunner.ParseArgs(
+            [],
+            jsonDefault: false,
+            validateDefaultLimit: false,
+            validateDefaultSnippetLines: false);
+        Assert.Contains(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, maxLineWidthOnly.ParseError);
+        Assert.DoesNotContain(QueryCommandRunner.DefaultLimitEnvironmentVariable, maxLineWidthOnly.ParseError);
+        Assert.DoesNotContain(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, maxLineWidthOnly.ParseError);
+
+        var none = QueryCommandRunner.ParseArgs(
+            [],
+            jsonDefault: false,
+            validateDefaultLimit: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+        Assert.Null(none.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_ProjectFilterExpandsSolutionProjectToPathGlob_Issue1707()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_filter");
@@ -149,6 +286,80 @@ public class QueryCommandRunnerTests
 
         Assert.True(options.CheckWorkspace);
         Assert.Equal(TimeSpan.FromHours(2), options.StaleAfter);
+    }
+
+    [Fact]
+    public void RunStatusConfig_PrintsEffectiveConfigWithoutOpeningDb()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.DefaultLimitEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "33");
+        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_missing_{Guid.NewGuid():N}.db");
+        var parsed = QueryCommandRunner.ParseArgs(["--config", "--db", missingDb, "--json"], jsonDefault: false, allowStatusCheck: true);
+        Assert.True(parsed.StatusConfig);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--config", "--db", missingDb, "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var effective = document.RootElement.GetProperty("effective_config");
+        Assert.Equal(missingDb, effective.GetProperty("db_path").GetProperty("value").GetString());
+        Assert.Equal("flag", effective.GetProperty("db_path").GetProperty("source").GetString());
+        Assert.Equal(33, effective.GetProperty("limit").GetProperty("value").GetInt32());
+        Assert.Equal($"env:{QueryCommandRunner.DefaultLimitEnvironmentVariable}", effective.GetProperty("limit").GetProperty("source").GetString());
+    }
+
+    [Fact]
+    public void RunStatusConfig_ReportsConfigFileSourceForSearchDefaults()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_config_source");
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            QueryCommandRunner.StaleAfterEnvironmentVariable,
+            "CDIDX_GLOBAL_TOOL_LOG_DIR",
+            CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.StaleAfterEnvironmentVariable,
+            CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + "CDIDX_GLOBAL_TOOL_LOG_DIR");
+        try
+        {
+            var configDir = Path.Combine(projectRoot, ".cdidx");
+            Directory.CreateDirectory(configDir);
+            var configPath = Path.Combine(configDir, "config.json");
+            var logDir = Path.Combine(projectRoot, "logs");
+            File.WriteAllText(configPath, $$"""
+                {
+                  "search": { "limit": 44 },
+                  "stale_after": "2h",
+                  "global_tool_log_dir": {{JsonSerializer.Serialize(logDir)}}
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["status", "--config", "--json"],
+                appVersion: "test-version",
+                configStartDirectory: projectRoot));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var limit = document.RootElement.GetProperty("effective_config").GetProperty("limit");
+            Assert.Equal(44, limit.GetProperty("value").GetInt32());
+            Assert.Equal($"config:{configPath}", limit.GetProperty("source").GetString());
+            var staleAfter = document.RootElement.GetProperty("effective_config").GetProperty("stale_after");
+            Assert.Equal("2h", staleAfter.GetProperty("value").GetString());
+            Assert.Equal($"config:{configPath}", staleAfter.GetProperty("source").GetString());
+            var logPath = document.RootElement.GetProperty("effective_config").GetProperty("global_tool_log_dir");
+            Assert.Equal(logDir, logPath.GetProperty("value").GetString());
+            Assert.Equal($"config:{configPath}", logPath.GetProperty("source").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]

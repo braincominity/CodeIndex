@@ -17,6 +17,18 @@ target frameworks when validating the full CI-equivalent test matrix.
 
 For test suite structure, shared helpers, and test-writing conventions, see [TESTING_GUIDE.md](TESTING_GUIDE.md).
 
+## Release Distribution Checklist
+
+When preparing a release, verify every supported distribution channel documented
+in [DISTRIBUTION.md](DISTRIBUTION.md):
+
+- `install.sh` latest install, explicit-version install, `--doctor`, and local
+  mirror self-test.
+- NuGet global tool install/update on a clean .NET 8 tool environment.
+- Published release assets for every advertised RID.
+- Package metadata for license, repository URL, tags, and runtime prerequisites.
+- Documentation links from README, USER_GUIDE, and package metadata.
+
 ### NuGet lock files
 
 `Directory.Build.props` sets `RestorePackagesWithLockFile=true`, so every project under this solution writes a `packages.lock.json` next to its `.csproj`. The lock file pins exact resolved versions and `contentHash` for every direct **and transitive** package, including the native-bearing `SQLitePCLRaw.bundle_e_sqlite3` that ships under `Microsoft.Data.Sqlite`. This keeps builds reproducible across machines, CI lanes, and release artifacts, and turns a silent transitive bump (or downgrade attack) into a loud, build-breaking diff.
