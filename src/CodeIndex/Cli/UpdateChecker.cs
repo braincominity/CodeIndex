@@ -141,10 +141,13 @@ internal static class UpdateChecker
 
     private static string ResolveDefaultCachePath()
     {
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var root = string.IsNullOrWhiteSpace(localAppData)
-            ? Path.Combine(Path.GetTempPath(), "cdidx")
-            : Path.Combine(localAppData, "cdidx");
+        var xdgCacheHome = Environment.GetEnvironmentVariable("XDG_CACHE_HOME");
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var root = !string.IsNullOrWhiteSpace(xdgCacheHome)
+            ? Path.Combine(xdgCacheHome, "cdidx")
+            : !string.IsNullOrWhiteSpace(home)
+                ? Path.Combine(home, ".cache", "cdidx")
+                : Path.Combine(Path.GetTempPath(), "cdidx");
         return Path.Combine(root, "update-check.json");
     }
 

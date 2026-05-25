@@ -1642,7 +1642,7 @@ internal static class ProgramRunner
         var wantsJson = false;
         foreach (var arg in cmdArgs)
         {
-            if (arg == "--check-only")
+            if (arg is "--check-only" or "--check-updates")
             {
                 checkOnly = true;
                 continue;
