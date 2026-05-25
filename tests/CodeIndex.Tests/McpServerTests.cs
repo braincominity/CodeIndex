@@ -4316,6 +4316,45 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_References_CountOnly_OmitsRowsAndReturnsHistogram()
+    {
+        InsertIndexedFile(
+            "src/count-only.cs",
+            "csharp",
+            """
+            public class CountOnlyCaller { public void Run(App app) { app.Run(); app.Run(); } }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run","lang":"csharp","countOnly":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.True(structured["count_only"]!.GetValue<bool>());
+        Assert.True(structured["count"]!.GetValue<int>() >= 2);
+        Assert.Empty(structured["results"]!.AsArray());
+        Assert.NotEmpty(structured["top_files"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_CountOnly_OmitsCallerRows()
+    {
+        InsertIndexedFile(
+            "src/impact-count-only.cs",
+            "csharp",
+            """
+            public class ImpactCountOnlyCaller { public void Hit(App app) { app.Run(); } }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"Run","lang":"csharp","countOnly":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.True(structured["count_only"]!.GetValue<bool>());
+        Assert.Empty(structured["results"]!.AsArray());
+        Assert.NotNull(structured["top_files"]);
+    }
+
+    [Fact]
     public void ToolsCall_Search_AllowsFalseExactNameAlias()
     {
         InsertIndexedFile("src/search_false_alias.cs", "csharp", "void Run() { }\n");
