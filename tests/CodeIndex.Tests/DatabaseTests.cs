@@ -99,6 +99,36 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InsertSymbols_UnknownKind_ThrowsBeforePersisting()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = 1,
+                Kind = "metohd",
+                Name = "Run",
+                Line = 1,
+            },
+        ]));
+
+        Assert.Contains("Unknown symbol kind", ex.Message);
+    }
+
+    [Fact]
+    public void InitializeSchema_ConstrainsKindColumns()
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO symbols (file_id, kind, name, line)
+            VALUES (1, 'metohd', 'Run', 1)
+            """;
+
+        var ex = Assert.Throws<SqliteException>(() => cmd.ExecuteNonQuery());
+        Assert.Equal(19, ex.SqliteErrorCode);
+    }
+
+    [Fact]
     public void OptimizeFts_ResetsIncrementalWriteCounterAndStampsTime()
     {
         Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
