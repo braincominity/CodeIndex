@@ -929,6 +929,24 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_MinEntrypointConfidenceFlagParsed()
+    {
+        var options = QueryCommandRunner.ParseArgs(["--min-entrypoint-confidence", "0.65"], jsonDefault: false);
+
+        Assert.Equal(0.65, options.MinEntrypointConfidence);
+    }
+
+    [Fact]
+    public void ParseArgs_InvalidMinEntrypointConfidenceReportsParseError()
+    {
+        var options = QueryCommandRunner.ParseArgs(["--min-entrypoint-confidence", "1.5"], jsonDefault: false);
+
+        Assert.NotNull(options.ParseError);
+        Assert.Contains("--min-entrypoint-confidence", options.ParseError);
+        Assert.Contains("0.0 through 1.0", options.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_AllowsZeroMaxLineWidthForNoTruncation()
     {
         var options = QueryCommandRunner.ParseArgs(["myquery", "--max-line-width", "0"], jsonDefault: false);

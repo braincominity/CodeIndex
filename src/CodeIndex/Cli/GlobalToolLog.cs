@@ -33,7 +33,22 @@ internal static class GlobalToolLog
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     internal static IDisposable? TryStart(string[] args, string appVersion)
+        => TryStart(args, appVersion, createWriter: null, afterWriterCreated: null);
+
+    internal static IDisposable? TryStartForTesting(
+        string[] args,
+        string appVersion,
+        Func<string, StreamWriter>? createWriter = null,
+        Action? afterWriterCreated = null)
+        => TryStart(args, appVersion, createWriter, afterWriterCreated);
+
+    private static IDisposable? TryStart(
+        string[] args,
+        string appVersion,
+        Func<string, StreamWriter>? createWriter,
+        Action? afterWriterCreated)
     {
+        StreamWriter? writer = null;
         try
         {
             if (!ShouldEnable())
@@ -44,14 +59,13 @@ internal static class GlobalToolLog
             HardenLogFiles(logDirectory);
             var options = LogOptions.FromEnvironment();
             var logPath = ResolveLogPath(logDirectory, options);
-            var writer = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), new UTF8Encoding(false))
-            {
-                AutoFlush = true,
-            };
+            writer = createWriter?.Invoke(logPath) ?? CreateLogWriter(logPath);
+            afterWriterCreated?.Invoke();
             SetLogFilePermissions(logPath);
             PruneOldLogs(logDirectory, options.RetainCount);
 
             var session = new Session(writer, logPath, options.Format);
+            writer = null;
             CurrentSession.Value = session;
             session.AttachErrorMirror();
             session.Write("INFO", $"session_start pid={Environment.ProcessId} version={appVersion}");
@@ -63,10 +77,17 @@ internal static class GlobalToolLog
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            writer?.Dispose();
             CurrentSession.Value = null;
             return null;
         }
     }
+
+    private static StreamWriter CreateLogWriter(string logPath) =>
+        new(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), new UTF8Encoding(false))
+        {
+            AutoFlush = true,
+        };
 
     internal static void Info(string message) => CurrentSession.Value?.Write("INFO", message);
 
@@ -166,14 +187,60 @@ internal static class GlobalToolLog
         }
     }
 
+    internal static bool LooksLikeDevelopmentExecutionForTesting(string? path) => LooksLikeDevelopmentExecution(path);
+
     private static bool LooksLikeDevelopmentExecution(string? path)
     {
         if (string.IsNullOrWhiteSpace(path))
             return false;
 
-        var normalized = path.Replace('\\', '/');
-        return normalized.Contains("/src/CodeIndex/bin/", StringComparison.OrdinalIgnoreCase)
-            || normalized.Contains("/tests/CodeIndex.Tests/bin/", StringComparison.OrdinalIgnoreCase);
+        var normalized = NormalizePathForDevelopmentDetection(path);
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        return ContainsPathSegments(normalized, ["src", "CodeIndex", "bin"], comparison)
+            || ContainsPathSegments(normalized, ["tests", "CodeIndex.Tests", "bin"], comparison);
+    }
+
+    private static string NormalizePathForDevelopmentDetection(string path)
+    {
+        try
+        {
+            path = Path.GetFullPath(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+        }
+
+        return path
+            .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
+            .Replace('\\', Path.DirectorySeparatorChar)
+            .Replace('/', Path.DirectorySeparatorChar);
+    }
+
+    private static bool ContainsPathSegments(string path, string[] expectedSegments, StringComparison comparison)
+    {
+        var segments = path.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length < expectedSegments.Length)
+            return false;
+
+        for (var start = 0; start <= segments.Length - expectedSegments.Length; start++)
+        {
+            var matched = true;
+            for (var offset = 0; offset < expectedSegments.Length; offset++)
+            {
+                if (!string.Equals(segments[start + offset], expectedSegments[offset], comparison))
+                {
+                    matched = false;
+                    break;
+                }
+            }
+
+            if (matched)
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>

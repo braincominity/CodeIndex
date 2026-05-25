@@ -87,6 +87,7 @@ public static class QueryCommandRunner
         "--explain",
         "--rank-by",
         "--slow-query-ms",
+        "--min-entrypoint-confidence",
     ];
     private sealed record StatusReadinessField(
         string FieldName,
@@ -1849,7 +1850,7 @@ public static class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
-            var map = reader.GetRepoMap(options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var map = reader.GetRepoMap(options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.MinEntrypointConfidence);
             WorkspaceMetadataEnricher.Enrich(map, options.DbPath, options.DbPathExplicit);
 
             // Return not-found only when a narrowing filter is active and produces zero files.
@@ -1904,7 +1905,7 @@ public static class QueryCommandRunner
                 }));
                 WriteRepoMapSection("Symbol-rich files", map.SymbolRichFiles.Select(item => $"{item.Path}  [{item.SymbolCount} syms, {item.ReferenceCount} refs]"));
                 WriteRepoMapSection("Reference-rich files", map.ReferenceRichFiles.Select(item => $"{item.Path}  [{item.ReferenceCount} refs, {item.SymbolCount} syms]"));
-                WriteRepoMapSection("Entrypoints", map.Entrypoints.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.Line}  [score {item.Score}]"));
+                WriteRepoMapSection("Entrypoints", map.Entrypoints.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.Line}  [score {item.Score}, confidence {item.Confidence:0.###}, {item.MatchType}, hint #{item.HintRank}]"));
             }
 
             return CommandExitCodes.Success;
@@ -4078,6 +4079,7 @@ public static class QueryCommandRunner
         bool verbose = false;
         bool profile = false;
         int? slowQueryMs = null;
+        double minEntrypointConfidence = 0;
         string? statusExplainField = null;
         bool statusLogPath = false;
         bool statusConfig = false;
@@ -4381,6 +4383,17 @@ public static class QueryCommandRunner
                     }
                     else
                         AddParseError(slowQueryError!);
+                    break;
+                case "--min-entrypoint-confidence":
+                    if (!TryReadRawOptionValue(args, ref i, "--min-entrypoint-confidence", inlineValue, out var minEntrypointConfidenceValue, out var missingMinEntrypointConfidenceError))
+                        AddParseError(missingMinEntrypointConfidenceError!);
+                    else if (TryParseConfidence(minEntrypointConfidenceValue!, out var parsedMinEntrypointConfidence))
+                    {
+                        WarnIfDuplicateSingleValueOption("--min-entrypoint-confidence", minEntrypointConfidenceValue!);
+                        minEntrypointConfidence = parsedMinEntrypointConfidence;
+                    }
+                    else
+                        AddParseError($"Error: --min-entrypoint-confidence must be a number from 0.0 through 1.0; got '{minEntrypointConfidenceValue}'.");
                     break;
                 case "--check":
                     if (allowStatusCheck)
@@ -4723,6 +4736,7 @@ public static class QueryCommandRunner
             Verbose = verbose,
             Profile = profile,
             SlowQueryMs = slowQueryMs,
+            MinEntrypointConfidence = minEntrypointConfidence,
             StatusExplainField = statusExplainField,
             StatusLogPath = statusLogPath,
             StatusConfig = statusConfig,
@@ -4820,6 +4834,21 @@ public static class QueryCommandRunner
                 rankMode = ReferenceRankMode.Weighted;
                 return false;
         }
+    }
+
+    private static bool TryParseConfidence(string value, out double confidence)
+    {
+        if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out confidence) &&
+            !double.IsNaN(confidence) &&
+            !double.IsInfinity(confidence) &&
+            confidence >= 0 &&
+            confidence <= 1)
+        {
+            return true;
+        }
+
+        confidence = 0;
+        return false;
     }
 
     private static bool TryResolveHotspotsGroupBy(string? requestedGroupBy, string? lang, bool groupByName, out string groupBy, out string error)
@@ -6867,6 +6896,7 @@ public static class QueryCommandRunner
         ["--max-line-width"] = "pass a non-negative integer (`0` disables clamping), e.g. `--max-line-width 512` (default 512).",
         ["--stale-after"] = "pass a compact positive duration, e.g. `--stale-after 30m`, `--stale-after 2h`, or `--stale-after 7d`.",
         ["--slow-query-ms"] = "pass a non-negative millisecond threshold, e.g. `--slow-query-ms 500`; use 0 to log every profiled SQL statement.",
+        ["--min-entrypoint-confidence"] = "pass a decimal from 0.0 through 1.0, e.g. `--min-entrypoint-confidence 0.6`.",
     };
 
     // Build a missing-value error string with optional caller-supplied hint lines first, then the
@@ -7238,6 +7268,7 @@ public sealed class QueryCommandOptions
     public bool Verbose { get; init; }
     public bool Profile { get; init; }
     public int? SlowQueryMs { get; init; }
+    public double MinEntrypointConfidence { get; init; }
     public string? StatusExplainField { get; init; }
     public bool StatusLogPath { get; init; }
     public bool StatusConfig { get; init; }
