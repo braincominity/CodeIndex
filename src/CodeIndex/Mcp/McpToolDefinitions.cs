@@ -554,12 +554,13 @@ public partial class McpServer
             if (properties == null)
                 continue;
 
+            var toolName = tool["name"]?.GetValue<string>() ?? string.Empty;
             foreach (var (name, schema) in properties)
-                ApplyCommonSchemaConstraint(name, schema);
+                ApplyCommonSchemaConstraint(toolName, name, schema);
         }
     }
 
-    private static void ApplyCommonSchemaConstraint(string name, JsonNode? schema)
+    private static void ApplyCommonSchemaConstraint(string toolName, string name, JsonNode? schema)
     {
         if (schema is not JsonObject obj)
             return;
@@ -567,11 +568,11 @@ public partial class McpServer
         if (obj["oneOf"] is JsonArray oneOf)
         {
             foreach (var option in oneOf)
-                ApplyCommonSchemaConstraint(name, option);
+                ApplyCommonSchemaConstraint(toolName, name, option);
         }
 
         if (obj["type"]?.GetValue<string>() == "array" && obj["items"] is JsonObject items)
-            ApplyCommonSchemaConstraint(name, items);
+            ApplyCommonSchemaConstraint(toolName, name, items);
 
         switch (name)
         {
@@ -606,7 +607,10 @@ public partial class McpServer
                 obj.TryAdd("maximum", MaxContextLines);
                 break;
             case "kind":
-                obj.TryAdd("enum", new JsonArray { "function", "class", "interface", "struct", "enum", "property", "field", "method", "namespace", "import", "call", "instantiate", "subscribe", "unsubscribe", "friend", "attribute", "annotation", "type_reference" });
+                if (toolName is "references")
+                    obj.TryAdd("enum", new JsonArray { "call", "instantiate", "subscribe", "unsubscribe", "friend", "attribute", "annotation", "type_reference" });
+                else if (toolName is "callers" or "callees")
+                    obj.TryAdd("enum", new JsonArray { "call", "instantiate", "subscribe", "unsubscribe", "friend" });
                 break;
             case "lang":
             case "language":
