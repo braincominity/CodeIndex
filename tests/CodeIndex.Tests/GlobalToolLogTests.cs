@@ -1,0 +1,122 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
+using CodeIndex.Cli;
+
+namespace CodeIndex.Tests;
+
+public class GlobalToolLogTests
+{
+    [Fact]
+    public void FormatArgs_RedactsSensitiveArgumentsByDefault()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_LOG_REDACT");
+        env.Set("CDIDX_LOG_REDACT", null);
+
+        var formatted = GlobalToolLog.FormatArgs([
+            "--token=abc123",
+            "--password",
+            "hunter2",
+            "https://user:pass@example.test/repo.git",
+            "0123456789abcdef0123456789abcdef",
+        ]);
+
+        Assert.Contains("--token=<redacted>", formatted);
+        Assert.Contains("--password <redacted>", formatted);
+        Assert.Contains("https://user:<redacted>@example.test/repo.git", formatted);
+        Assert.DoesNotContain("hunter2", formatted);
+        Assert.DoesNotContain("0123456789abcdef0123456789abcdef", formatted);
+    }
+
+    [Fact]
+    public void FormatArgs_AllowsExplicitNoRedaction()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_LOG_REDACT");
+        env.Set("CDIDX_LOG_REDACT", "none");
+
+        var formatted = GlobalToolLog.FormatArgs(["--token=abc123"]);
+
+        Assert.Equal("--token=abc123", formatted);
+    }
+
+    [Fact]
+    public void ResolveLogDirectoryForStatus_SkipsUnwritableCandidate()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_log_probe_{Guid.NewGuid():N}");
+        var fileCandidate = Path.Combine(root, "not-a-directory");
+        var stateHome = Path.Combine(root, "state");
+        try
+        {
+            Directory.CreateDirectory(root);
+            File.WriteAllText(fileCandidate, "occupied");
+            using var env = EnvironmentVariableScope.Capture(
+                "CDIDX_GLOBAL_TOOL_LOG_DIR",
+                "XDG_STATE_HOME",
+                "XDG_CACHE_HOME",
+                "XDG_RUNTIME_DIR");
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", fileCandidate);
+            env.Set("XDG_STATE_HOME", stateHome);
+            env.Set("XDG_CACHE_HOME", null);
+            env.Set("XDG_RUNTIME_DIR", null);
+
+            var resolved = GlobalToolLog.ResolveLogDirectoryForStatus();
+
+            Assert.Equal(Path.Combine(stateHome, "cdidx", "logs"), resolved);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void TryNormalizeLogDirectoryCandidate_ReturnsFalseForInvalidPath()
+    {
+        var invalid = "bad" + '\0' + "path";
+
+        var ok = GlobalToolLog.TryNormalizeLogDirectoryCandidate(invalid, out var fullPath);
+
+        Assert.False(ok);
+        Assert.Equal(string.Empty, fullPath);
+    }
+
+    [Fact]
+    public void TryStart_WritesInvariantUtcTimestampAndStackTrace()
+    {
+        var logRoot = Path.Combine(Path.GetTempPath(), $"cdidx_global_log_{Guid.NewGuid():N}");
+        var previousCulture = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("de-DE");
+            using var env = EnvironmentVariableScope.Capture(
+                "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+                "CDIDX_DISABLE_PERSISTENT_LOG",
+                "CDIDX_GLOBAL_TOOL_LOG_DIR");
+            env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logRoot);
+
+            var (exitCode, _, stderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(
+                ["search", "Needle"],
+                appVersion: "test",
+                beforeDispatchForTesting: ThrowForGlobalToolLogTest));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains("Run `cdidx report`", stderr);
+            var logPath = Path.Combine(logRoot, $"stderr-{DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}.log");
+            var log = File.ReadAllText(logPath);
+            Assert.Matches(new Regex(@"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z \[INFO\] session_start", RegexOptions.Multiline), log);
+            Assert.Contains("unhandled_exception", log);
+            Assert.Contains(nameof(ThrowForGlobalToolLogTest), log);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previousCulture;
+            if (Directory.Exists(logRoot))
+                Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    private static void ThrowForGlobalToolLogTest() =>
+        throw new InvalidOperationException("global log stack trace test");
+}

@@ -9,6 +9,7 @@
 #   bash ./install.sh --self-test-local-mirror [--self-test-allow-overwrite] [vX.Y.Z]
 #   bash ./install.sh --reinstall-real vX.Y.Z
 #   bash ./install.sh --doctor [vX.Y.Z]
+#   bash ./install.sh --uninstall [--purge-cache]
 #   HTTPS_PROXY=http://proxy.example:8080 bash ./install.sh --doctor
 #   CDIDX_GITHUB_BASE_URL=https://github.example.internal \
 #     CDIDX_GITHUB_API_BASE_URL=https://github.example.internal/api/v3 \
@@ -98,6 +99,7 @@ SELF_TEST_ALLOW_OVERWRITE=0
 EXISTING_BIN=""
 EXISTING_VERSION=""
 EXPLICIT_VERSION_REQUESTED=0
+PURGE_CACHE_ON_UNINSTALL=0
 
 # --- Helpers / ヘルパー ---
 
@@ -180,6 +182,54 @@ need_cmd() {
     fi
 }
 
+temp_root() {
+    printf '%s' "${TMPDIR:-/tmp}"
+}
+
+probe_temp_root() {
+    local root
+    root="$(temp_root)"
+
+    if [ ! -d "$root" ]; then
+        error "TMPDIR not usable: ${root} is not a directory. Set TMPDIR to a writable directory with at least 100 MiB free."
+    fi
+
+    local probe
+    if ! probe="$(mktemp "${root%/}/.cdidx-install-probe.XXXXXX")"; then
+        error "TMPDIR not writable: ${root}. Set TMPDIR to a writable directory and rerun the installer."
+    fi
+    rm -f "$probe"
+
+    local free_kb=""
+    if command -v df > /dev/null 2>&1; then
+        free_kb="$(df -Pk "$root" 2>/dev/null | awk 'NR==2 {print $4}' || true)"
+    fi
+
+    if [ -n "$free_kb" ] && [ "$free_kb" -lt 102400 ] 2>/dev/null; then
+        error "Insufficient temp space in ${root}: ${free_kb} KiB available; need at least 102400 KiB. Set TMPDIR to a larger writable directory."
+    fi
+
+    if command -v mount > /dev/null 2>&1 && mount 2>/dev/null | awk -v root="$root" '
+        index($0, " on " root " ") && index($0, "noexec") { found = 1 }
+        END { exit found ? 0 : 1 }
+    '; then
+        warn "TMPDIR appears to be on a noexec filesystem: ${root}. The installer will avoid executing staged files from TMPDIR."
+    fi
+}
+
+verify_temp_path_space() {
+    local path="$1"
+    local free_kb=""
+
+    if command -v df > /dev/null 2>&1; then
+        free_kb="$(df -Pk "$path" 2>/dev/null | awk 'NR==2 {print $4}' || true)"
+    fi
+
+    if [ -n "$free_kb" ] && [ "$free_kb" -lt 102400 ] 2>/dev/null; then
+        error "Insufficient temp space for ${path}: ${free_kb} KiB available; need at least 102400 KiB."
+    fi
+}
+
 acquire_install_lock() {
     mkdir -p "$INSTALL_DIR"
 
@@ -226,6 +276,39 @@ semver_ge() {
             }
             exit 0
         }'
+}
+
+verify_cdidx_binary() {
+    local binary_path="$1"
+    local expected_version="${VERSION#v}"
+    local version_output=""
+    local actual_version=""
+
+    if [ ! -x "$binary_path" ]; then
+        report_error "Installed binary is not executable: ${binary_path}."
+        return 1
+    fi
+
+    if ! version_output="$("$binary_path" --version 2>&1)"; then
+        report_error "Installed binary failed to run: ${binary_path} --version."
+        report_error "Output: ${version_output}"
+        report_error "Likely causes include a wrong-architecture release asset or missing native runtime dependency next to the binary."
+        return 1
+    fi
+
+    actual_version="$(semver_core "$version_output")"
+    if [ -z "$actual_version" ]; then
+        report_error "Installed binary returned an unparsable version from ${binary_path}: ${version_output}"
+        return 1
+    fi
+
+    if [ -n "$expected_version" ] && [ "$actual_version" != "$expected_version" ]; then
+        report_error "Installed binary version mismatch at ${binary_path}: expected ${expected_version}, got ${actual_version}."
+        report_error "Check for a stale release archive, wrong architecture, or PATH shadowing by an older cdidx."
+        return 1
+    fi
+
+    return 0
 }
 
 extract_release_tag_name() {
@@ -403,10 +486,12 @@ curl_http_get() {
     local http_code
     local curl_stderr
 
+    probe_temp_root
     if ! curl_stderr="$(mktemp)"; then
         report_error "Failed to create temporary curl stderr capture while fetching ${source_label} at $url."
         return 1
     fi
+    verify_temp_path_space "$curl_stderr"
 
     if http_code="$(run_curl_with_optional_loopback_bypass "$url" -sSL -o "$output_path" -w '%{http_code}' "$url" 2>"$curl_stderr")"; then
         rm -f "$curl_stderr"
@@ -457,9 +542,11 @@ fetch_latest_release_version() {
     api_url="$(latest_release_api_url)"
     api_label="$(latest_release_api_diagnostic_label)"
     local response_file
+    probe_temp_root
     if ! response_file="$(mktemp)"; then
         error "Failed to create temporary file for latest-release lookup."
     fi
+    verify_temp_path_space "$response_file"
 
     local http_code
     if ! http_code="$(curl_http_get "$api_url" "$response_file" "$api_label")"; then
@@ -884,6 +971,7 @@ download_and_install() {
     need_cmd curl
     need_cmd tar
     need_cmd mktemp
+    need_cmd awk
 
     local archive_name="CodeIndex-${RID}.tar.gz"
     local base_url
@@ -892,9 +980,11 @@ download_and_install() {
     local checksums_url="${base_url}/sha256sums.txt"
 
     local tmpdir
+    probe_temp_root
     if ! tmpdir="$(mktemp -d)"; then
         error "Failed to create temporary working directory for install."
     fi
+    verify_temp_path_space "$tmpdir"
     TMPDIR_CLEANUP="$tmpdir"
 
     info "Downloading ${archive_name}..."
@@ -1016,6 +1106,9 @@ download_and_install() {
     done
     write_integrity_version_json "${stage_dir}/version.json"
     chmod +x "${stage_dir}/${BINARY_NAME}"
+    if ! verify_cdidx_binary "${stage_dir}/${BINARY_NAME}"; then
+        return 1
+    fi
 
     local backup_dir
     if ! backup_dir="$(mktemp -d "${INSTALL_DIR}/.cdidx-backup.XXXXXX")"; then
@@ -1029,6 +1122,10 @@ download_and_install() {
     if ! promote_staged_install "$stage_dir" "$backup_dir" "$INSTALL_DIR" "$required_files" "$staged_assets"; then
         return 1
     fi
+    chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
+    if ! verify_cdidx_binary "${INSTALL_DIR}/${BINARY_NAME}"; then
+        return 1
+    fi
 
     rm -rf "$stage_dir"
     STAGE_DIR_CLEANUP=""
@@ -1040,10 +1137,73 @@ download_and_install() {
 
 # --- PATH guidance / PATHガイダンス ---
 
+active_cdidx_path() {
+    command -v "$BINARY_NAME" 2>/dev/null || true
+}
+
+list_path_cdidx_binaries() {
+    local old_ifs="$IFS"
+    local dir
+    IFS=:
+    for dir in ${PATH:-}; do
+        [ -n "$dir" ] || dir="."
+        if [ -x "${dir}/${BINARY_NAME}" ]; then
+            printf '%s\n' "${dir}/${BINARY_NAME}"
+        fi
+    done
+    IFS="$old_ifs"
+}
+
+print_path_cdidx_versions() {
+    local binary
+    list_path_cdidx_binaries | while IFS= read -r binary; do
+        [ -n "$binary" ] || continue
+        printf '    %s -> %s\n' "$binary" "$("$binary" --version 2>/dev/null || printf '%s' "unavailable")"
+    done
+}
+
+candidate_shell_profile() {
+    local shell_name
+    shell_name="$(basename "${SHELL:-/bin/bash}")"
+    case "$shell_name" in
+        zsh)  printf '%s' "${HOME}/.zshrc" ;;
+        bash)
+            if [ -f "${HOME}/.bash_profile" ]; then
+                printf '%s' "${HOME}/.bash_profile"
+            else
+                printf '%s' "${HOME}/.bashrc"
+            fi
+            ;;
+        *)    printf '%s' "${HOME}/.profile" ;;
+    esac
+}
+
+append_path_to_shell_profile() {
+    local profile_path
+    profile_path="$(candidate_shell_profile)"
+    mkdir -p "$(dirname "$profile_path")"
+
+    if [ -f "$profile_path" ] && grep -F "export PATH=\"${INSTALL_DIR}:\$PATH\"" "$profile_path" >/dev/null 2>&1; then
+        info "PATH export already present in ${profile_path}"
+        return 0
+    fi
+
+    {
+        printf '\n# Added by cdidx installer\n'
+        printf 'export PATH="%s:$PATH"\n' "$INSTALL_DIR"
+    } >> "$profile_path"
+
+    info "Added ${INSTALL_DIR} to PATH in ${profile_path}"
+}
+
 check_path() {
     if [ "${SELF_TEST_LOCAL_MIRROR:-0}" = "1" ]; then
         return 0
     fi
+
+    local installed_bin="${INSTALL_DIR}/${BINARY_NAME}"
+    local active_bin
+    active_bin="$(active_cdidx_path)"
 
     case ":${PATH}:" in
         *":${INSTALL_DIR}:"*) ;;
@@ -1073,6 +1233,84 @@ check_path() {
             echo ""
             ;;
     esac
+
+    if [ "${CDIDX_INSTALL_UPDATE_PATH:-0}" = "1" ]; then
+        append_path_to_shell_profile
+        case ":${PATH}:" in
+            *":${INSTALL_DIR}:"*) ;;
+            *) PATH="${INSTALL_DIR}:${PATH}"; export PATH ;;
+        esac
+    else
+        echo "  To let the installer update your shell profile, rerun with CDIDX_INSTALL_UPDATE_PATH=1."
+        echo ""
+    fi
+
+    active_bin="$(active_cdidx_path)"
+    if [ -n "$active_bin" ] && [ "$active_bin" != "$installed_bin" ]; then
+        warn "The active cdidx on PATH is ${active_bin}, not the newly installed ${installed_bin}."
+        warn "An earlier PATH entry is shadowing the new install."
+        echo ""
+        echo "  cdidx binaries found on PATH:"
+        print_path_cdidx_versions
+        echo ""
+        echo "  Put ${INSTALL_DIR} before the earlier directory in PATH, or rerun with CDIDX_INSTALL_UPDATE_PATH=1."
+        echo ""
+        return 0
+    fi
+
+    if [ -n "$active_bin" ]; then
+        if ! "$active_bin" --version >/dev/null 2>&1; then
+            warn "The active cdidx at ${active_bin} failed to run --version. Check architecture and native runtime assets."
+        fi
+    fi
+}
+
+uninstall_cdidx() {
+    info "cdidx uninstaller"
+    acquire_install_lock
+
+    local removed=0
+    local path
+    for path in \
+        "${INSTALL_DIR}/${BINARY_NAME}" \
+        "${INSTALL_DIR}/version.json" \
+        "${INSTALL_DIR}/libe_sqlite3.so" \
+        "${INSTALL_DIR}/libe_sqlite3.dylib" \
+        "${INSTALL_DIR}/LICENSE" \
+        "${INSTALL_DIR}/COMMERCIAL_LICENSE.md" \
+        "${INSTALL_DIR}/INTEGRATION_POLICY.md" \
+        "${INSTALL_DIR}/TRADEMARKS.md" \
+        "${INSTALL_DIR}/MANIFEST.sha256"; do
+        if [ -e "$path" ]; then
+            rm -f "$path"
+            info "Removed ${path}"
+            removed=1
+        fi
+    done
+
+    if [ -d "${INSTALL_DIR}/LICENSES" ]; then
+        rm -rf "${INSTALL_DIR}/LICENSES"
+        info "Removed ${INSTALL_DIR}/LICENSES"
+        removed=1
+    fi
+
+    if [ "$PURGE_CACHE_ON_UNINSTALL" = "1" ]; then
+        local cache_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/cdidx"
+        if [ -d "$cache_dir" ]; then
+            rm -rf "$cache_dir"
+            info "Removed ${cache_dir}"
+            removed=1
+        fi
+    fi
+
+    if [ "$removed" = "0" ]; then
+        warn "No cdidx install files were found under ${INSTALL_DIR}."
+    fi
+
+    echo ""
+    info "Uninstall complete."
+    echo "Not removed: project-local .cdidx/ directories, shell profile PATH edits, shell completion scripts, or global-tool installs managed by dotnet/Homebrew."
+    echo "To remove cached update metadata too, rerun with --uninstall --purge-cache."
 }
 
 report_local_mirror_start_failure() {
@@ -1814,6 +2052,24 @@ if [ "${CDIDX_INSTALL_SH_LIB_ONLY:-0}" != "1" ]; then
         --doctor)
             shift
             run_doctor "${1:-}"
+            ;;
+        --uninstall)
+            shift
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --purge-cache)
+                        PURGE_CACHE_ON_UNINSTALL=1
+                        shift
+                        ;;
+                    --*)
+                        error "Unknown uninstall option: $1"
+                        ;;
+                    *)
+                        error "--uninstall does not accept a version argument."
+                        ;;
+                esac
+            done
+            uninstall_cdidx
             ;;
         *)
             main "$@"

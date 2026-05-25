@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Runtime.Versioning;
@@ -47,6 +48,26 @@ public class IndexCommandRunnerTests
 
         Assert.True(options.ShowHelp);
         Assert.Null(options.ProjectPath);
+    }
+
+    [Fact]
+    public void Run_UnknownIndexOption_ReturnsUsageError()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var (exitCode, stdout, stderr) = RunAndCaptureStreams([projectRoot, "--verbos"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("unknown option '--verbos'", stderr);
+            Assert.Contains("Did you mean: --verbose?", stderr);
+            Assert.DoesNotContain("Warning: unknown option", stderr);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
@@ -369,43 +390,19 @@ public class IndexCommandRunnerTests
     [Fact]
     public void ParseArgs_UnknownIndexOption_SuggestsClosestFlag()
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalErr = Console.Error;
-            using var stderr = new StringWriter();
-            try
-            {
-                Console.SetError(stderr);
-                IndexCommandRunner.ParseArgs([".", "--rebild"]);
-                Assert.Contains("Warning: unknown option '--rebild'", stderr.ToString());
-                Assert.Contains("Did you mean: --rebuild?", stderr.ToString());
-            }
-            finally
-            {
-                Console.SetError(originalErr);
-            }
-        }
+        var options = IndexCommandRunner.ParseArgs([".", "--rebild"]);
+
+        Assert.Contains("unknown option '--rebild'", options.ParseError);
+        Assert.Contains("Did you mean: --rebuild?", options.ParseError);
     }
 
     [Fact]
     public void ParseArgs_UnknownIndexOption_NoSuggestionWhenFarFromAnyFlag()
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalErr = Console.Error;
-            using var stderr = new StringWriter();
-            try
-            {
-                Console.SetError(stderr);
-                IndexCommandRunner.ParseArgs([".", "--zzzzzzzz"]);
-                Assert.Contains("Warning: unknown option '--zzzzzzzz'", stderr.ToString());
-                Assert.DoesNotContain("Did you mean:", stderr.ToString());
-            }
-            finally
-            {
-                Console.SetError(originalErr);
-            }
-        }
+        var options = IndexCommandRunner.ParseArgs([".", "--zzzzzzzz"]);
+
+        Assert.Contains("unknown option '--zzzzzzzz'", options.ParseError);
+        Assert.DoesNotContain("Did you mean:", options.ParseError);
     }
 
     [Fact]
@@ -416,6 +413,42 @@ public class IndexCommandRunnerTests
         Assert.NotNull(options.ProjectPath);
         Assert.True(Path.IsPathRooted(options.ProjectPath));
         Assert.Equal(Path.GetFullPath("."), options.ProjectPath);
+    }
+
+    [Fact]
+    public void TryGetFullScanExtractionStallPath_ReportsActivePhaseAfterTimeout()
+    {
+        var staleTimestamp = Stopwatch.GetTimestamp() - Stopwatch.Frequency;
+
+        var stalled = IndexCommandRunner.TryGetFullScanExtractionStallPath(
+            filesProcessed: 23,
+            filesTotal: 376,
+            timeout: TimeSpan.FromMilliseconds(1),
+            lastProgressTimestamp: staleTimestamp,
+            currentFile: null,
+            activeExtractionPhases: ["src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs (symbols)"],
+            out var activePath);
+
+        Assert.True(stalled);
+        Assert.Equal("src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs (symbols)", activePath);
+    }
+
+    [Fact]
+    public void TryGetFullScanExtractionStallPath_DoesNotReportWhenComplete()
+    {
+        var staleTimestamp = Stopwatch.GetTimestamp() - Stopwatch.Frequency;
+
+        var stalled = IndexCommandRunner.TryGetFullScanExtractionStallPath(
+            filesProcessed: 376,
+            filesTotal: 376,
+            timeout: TimeSpan.FromMilliseconds(1),
+            lastProgressTimestamp: staleTimestamp,
+            currentFile: "src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs",
+            activeExtractionPhases: ["src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs (symbols)"],
+            out var activePath);
+
+        Assert.False(stalled);
+        Assert.Null(activePath);
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
 
@@ -1316,12 +1317,15 @@ public class DbContext : IDisposable
                 UNIQUE(file_id, line, context)
             )");
 
+        var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
+        var referenceKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.ReferenceKinds);
+
         // Symbols table / シンボルテーブル
         Execute(@"
             CREATE TABLE IF NOT EXISTS symbols (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                kind            TEXT,
+                kind            TEXT CHECK (kind IN (" + symbolKindCheck + @")),
                 sub_kind        TEXT,
                 name            TEXT,
                 line            INTEGER,
@@ -1331,7 +1335,7 @@ public class DbContext : IDisposable
                 body_start_line INTEGER,
                 body_end_line   INTEGER,
                 signature       TEXT,
-                container_kind  TEXT,
+                container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN (" + symbolKindCheck + @")),
                 container_name  TEXT,
                 container_qualified_name TEXT,
                 family_key      TEXT,
@@ -1346,12 +1350,12 @@ public class DbContext : IDisposable
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
                 symbol_name     TEXT,
-                reference_kind  TEXT,
+                reference_kind  TEXT CHECK (reference_kind IN (" + referenceKindCheck + @")),
                 line            INTEGER,
                 column_number   INTEGER,
                 context         TEXT,
                 reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
-                container_kind  TEXT,
+                container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN (" + symbolKindCheck + @")),
                 container_name  TEXT
             )");
 
@@ -1510,6 +1514,7 @@ public class DbContext : IDisposable
 
     private void EnforceRequiredFileIdConstraints()
     {
+        var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
         Execute("PRAGMA foreign_keys=OFF");
         var legacyAlterTable = ExecuteScalar("PRAGMA legacy_alter_table");
         Execute("PRAGMA legacy_alter_table=ON");
@@ -1531,11 +1536,11 @@ public class DbContext : IDisposable
                 "id, file_id, chunk_index, start_line, end_line, content");
             RebuildTableWithRequiredFileId(
                 "symbols",
-                """
+                $"""
                 CREATE TABLE symbols (
                     id              INTEGER PRIMARY KEY AUTOINCREMENT,
                     file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                    kind            TEXT,
+                    kind            TEXT CHECK (kind IN ({symbolKindCheck})),
                     sub_kind        TEXT,
                     name            TEXT,
                     line            INTEGER,
@@ -1545,7 +1550,7 @@ public class DbContext : IDisposable
                     body_start_line INTEGER,
                     body_end_line   INTEGER,
                     signature       TEXT,
-                    container_kind  TEXT,
+                    container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ({symbolKindCheck})),
                     container_name  TEXT,
                     container_qualified_name TEXT,
                     family_key      TEXT,
@@ -1585,6 +1590,8 @@ public class DbContext : IDisposable
             return;
         }
 
+        var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
+        var referenceKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.ReferenceKinds);
         const string referenceLinesCreateSql =
             """
             CREATE TABLE reference_lines (
@@ -1596,18 +1603,18 @@ public class DbContext : IDisposable
             )
             """;
         const string referenceLinesColumns = "id, file_id, line, context";
-        const string symbolReferencesCreateSql =
-            """
+        var symbolReferencesCreateSql =
+            $"""
             CREATE TABLE symbol_references (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
                 symbol_name     TEXT,
-                reference_kind  TEXT,
+                reference_kind  TEXT CHECK (reference_kind IN ({referenceKindCheck})),
                 line            INTEGER,
                 column_number   INTEGER,
                 context         TEXT,
                 reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
-                container_kind  TEXT,
+                container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ({symbolKindCheck})),
                 container_name  TEXT,
                 symbol_name_folded TEXT,
                 container_name_folded TEXT,
@@ -1638,18 +1645,20 @@ public class DbContext : IDisposable
         if (SymbolReferencesReferenceLineDeletesSetNull())
             return;
 
-        const string symbolReferencesCreateSql =
-            """
+        var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
+        var referenceKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.ReferenceKinds);
+        var symbolReferencesCreateSql =
+            $"""
             CREATE TABLE symbol_references (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
                 symbol_name     TEXT,
-                reference_kind  TEXT,
+                reference_kind  TEXT CHECK (reference_kind IN ({referenceKindCheck})),
                 line            INTEGER,
                 column_number   INTEGER,
                 context         TEXT,
                 reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
-                container_kind  TEXT,
+                container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ({symbolKindCheck})),
                 container_name  TEXT,
                 symbol_name_folded TEXT,
                 container_name_folded TEXT,
@@ -1704,6 +1713,8 @@ public class DbContext : IDisposable
         if (ReferenceLinesHasContextUniqueKey())
             return;
 
+        var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
+        var referenceKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.ReferenceKinds);
         const string referenceLinesCreateSql =
             """
             CREATE TABLE reference_lines (
@@ -1715,18 +1726,18 @@ public class DbContext : IDisposable
             )
             """;
         const string referenceLinesColumns = "id, file_id, line, context";
-        const string symbolReferencesCreateSql =
-            """
+        var symbolReferencesCreateSql =
+            $"""
             CREATE TABLE symbol_references (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
                 symbol_name     TEXT,
-                reference_kind  TEXT,
+                reference_kind  TEXT CHECK (reference_kind IN ({referenceKindCheck})),
                 line            INTEGER,
                 column_number   INTEGER,
                 context         TEXT,
                 reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
-                container_kind  TEXT,
+                container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ({symbolKindCheck})),
                 container_name  TEXT,
                 symbol_name_folded TEXT,
                 container_name_folded TEXT,
@@ -2032,14 +2043,14 @@ public class DbContext : IDisposable
                 line            INTEGER,
                 column_number   INTEGER,
                 context         TEXT,
-                reference_line_id INTEGER REFERENCES reference_lines(id),
+                reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
                 container_kind  TEXT,
                 container_name  TEXT,
                 is_self_reference INTEGER NOT NULL DEFAULT 0,
                 is_mutual_recursion INTEGER NOT NULL DEFAULT 0
             )"));
         yield return ("EnsureColumn symbol_references.reference_line_id",
-            () => EnsureColumn("symbol_references", "reference_line_id", "INTEGER REFERENCES reference_lines(id)"));
+            () => EnsureColumn("symbol_references", "reference_line_id", "INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL"));
         yield return ("EnsureColumn symbol_references.is_self_reference",
             () => EnsureColumn("symbol_references", "is_self_reference", "INTEGER NOT NULL DEFAULT 0"));
         yield return ("EnsureColumn symbol_references.is_mutual_recursion",
