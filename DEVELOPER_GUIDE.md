@@ -1510,7 +1510,9 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   URIs and `resources/read` reconstructs file text from indexed chunks.
   `prompts/list` exposes the built-in `summarize_file`, `find_unused`, and
   `impact_of_changing` prompts; `prompts/get` returns a user-message template
-  that directs clients toward the matching cdidx tools.
+  that directs clients toward the matching cdidx tools. `logging` advertises
+  MCP `notifications/message`; `logging/setLevel` accepts `debug`, `info`,
+  `notice`, `warning`, `error`, `critical`, `alert`, and `emergency`.
 - `protocolVersion` is **negotiated**, not hardcoded (#1554). The server
   maintains `McpServer.SupportedProtocolVersions` (newest first:
   `2025-03-26`, `2024-11-05`), reads the client's requested
@@ -2838,7 +2840,8 @@ sequenceDiagram
 
 - `McpServer` が stdin/stdout を持ち、JSON-RPC 2.0 フレームを解析する。
 - レスポンス構築は `JsonSerializer.Serialize<T>(...)` ではなく、`System.Text.Json.Nodes.JsonObject` / `JsonArray` を**手組み**する。これが、トリミング済みバイナリでリフレクションベースのシリアライズが無効でも MCP パスが動き続ける理由。
-- `initialize` レスポンスは `protocolVersion`、`capabilities`、`serverInfo.name`、`serverInfo.version`（`ConsoleUi.LoadVersion()` — `version.json` が源）、および AI クライアントにツール選択を案内する長い `instructions` 文字列を返す。
+- `initialize` レスポンスは `protocolVersion`、`capabilities`、`serverInfo.name`、`serverInfo.version`（`ConsoleUi.LoadVersion()` — `version.json` が源）、および AI クライアントにツール選択を案内する長い `instructions` 文字列を返す。レスポンスを書き終えた後、サーバーはセッションごとに 1 回だけ `notifications/initialized` を送るため、サーバー側の ready signal を待つクライアントも optimistic polling なしで進める。
+- advertised capability には `tools`、`resources`、`prompts`、`logging` が含まれる。`logging` は MCP `notifications/message` を示し、`logging/setLevel` は `debug`、`info`、`notice`、`warning`、`error`、`critical`、`alert`、`emergency` を受け付ける。
 - `protocolVersion` は**ハードコードではなく交渉**で決まる（#1554）。サーバーは `McpServer.SupportedProtocolVersions`（新しい順: `2025-03-26`, `2024-11-05`）を保持し、`initialize` パラメータからクライアント要求バージョンを読み取って、対応集合にあればそれを返し（合意）、未指定／非文字列なら既定の最新バージョンに fallback し、対応外なら `error.data` に `requestedVersion` と `supportedVersions` を入れた JSON-RPC `-32602` で拒否する。これにより将来 MCP 仕様が改訂されても、wire format が黙ってずれるのではなく actionable な handshake 失敗として表面化する。配列を新バージョンで更新する際は `ProtocolVersion` を先頭エントリと揃えて意図的に bump する。
 - **認証ミドルウェア**（#1559）。`McpServer` はパース済み JSON-RPC リクエストごとに、メソッド抽出 *後*・dispatch *前* で `IMcpAuthenticator` を呼ぶ。既定の `LocalStdioAuthenticator` は permissive で（従来の stdio 動作を維持し、呼び出し元を `stdio` / `local` でタグ付けする）、`CDIDX_MCP_AUTH_TOKEN` を設定すると `TokenMcpAuthenticator` に切り替わる。`TokenMcpAuthenticator` は応答が必要な全リクエストに対し、`params.auth.token` が一致することを要求し、比較は `CryptographicOperations.FixedTimeEquals` による定数時間比較で行う。失敗は統一された JSON-RPC `-32001 "Unauthorized"` を返し（#1530 の sanitization 方針に従い、ワイヤでは未提示と不一致を区別しない）、`BuildAuthFailureLog` が詳細を stderr に書き出す。通知（`notifications/initialized`、`notifications/cancelled`）は応答もエラーコードも持たないため、ゲート *より前* で short-circuit する。このミドルウェアが将来 transport の差し替え seam になる — ネットワーク listener は別の `IMcpAuthenticator` を提供しつつ、`McpCallerIdentity`（`Source` + `Subject`）の形を保ち、監査ログ（#1562）から再利用できる。
 
