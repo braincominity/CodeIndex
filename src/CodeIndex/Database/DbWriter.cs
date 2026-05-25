@@ -28,6 +28,7 @@ public class DbWriter
     private readonly SemaphoreSlim _transactionGate = new(1, 1);
     private readonly AsyncLocal<Guid?> _currentTransactionGateToken = new();
     private const int BatchSize = 500;
+    private const int DeleteFilesBatchSize = 500;
     private const int MaxSqlVariables = 999;
     private const int SqliteConstraintErrorCode = 19;
     private int _rowSkipSavepointCounter;
@@ -617,22 +618,7 @@ public class DbWriter
             ReleaseCommand(cmd);
         }
 
-        if (staleIds.Count == 0)
-            return 0;
-
-        using var txn = !IsInTransaction() ? BeginTransaction() : null;
-        using var deleteCmd = _conn.CreateCommand();
-        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
-        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
-        deleteCmd.Prepare();
-        foreach (var id in staleIds)
-        {
-            pId.Value = id;
-            deleteCmd.ExecuteNonQuery();
-        }
-        txn?.Commit();
-
-        return staleIds.Count;
+        return DeleteStaleFileIds(staleIds);
     }
 
     /// <summary>
@@ -677,18 +663,76 @@ public class DbWriter
             return 0;
 
         using var txn = !IsInTransaction() ? BeginTransaction() : null;
-        using var deleteCmd = _conn.CreateCommand();
-        deleteCmd.CommandText = "DELETE FROM files WHERE id = @id";
-        var pId = deleteCmd.Parameters.Add("@id", SqliteType.Integer);
-        deleteCmd.Prepare();
-        foreach (var id in staleIds)
-        {
-            pId.Value = id;
-            deleteCmd.ExecuteNonQuery();
-        }
+        DeleteFilesByIdBatched(staleIds);
         txn?.Commit();
 
         return staleIds.Count;
+    }
+
+    private void DeleteFilesByIdBatched(IEnumerable<long> fileIds, int batchSize = DeleteFilesBatchSize)
+    {
+        var batch = new List<long>(batchSize);
+        foreach (var id in fileIds)
+        {
+            batch.Add(id);
+            if (batch.Count == batchSize)
+            {
+                DeleteFileIdBatch(batch);
+                batch.Clear();
+            }
+        }
+
+        if (batch.Count > 0)
+            DeleteFileIdBatch(batch);
+    }
+
+    private void DeleteFileIdBatch(IReadOnlyList<long> fileIds)
+    {
+        DeleteCrossFileReferencesToSymbolsDefinedOnlyByFiles(fileIds);
+
+        using var deleteCmd = _conn.CreateCommand();
+        var parameters = new List<string>(fileIds.Count);
+        for (var i = 0; i < fileIds.Count; i++)
+        {
+            var parameterName = $"@id{i}";
+            parameters.Add(parameterName);
+            deleteCmd.Parameters.Add(parameterName, SqliteType.Integer).Value = fileIds[i];
+        }
+
+        deleteCmd.CommandText = $"DELETE FROM files WHERE id IN ({string.Join(", ", parameters)})";
+        deleteCmd.ExecuteNonQuery();
+    }
+
+    private void DeleteCrossFileReferencesToSymbolsDefinedOnlyByFiles(IReadOnlyList<long> fileIds)
+    {
+        using var deleteCmd = _conn.CreateCommand();
+        var parameters = new List<string>(fileIds.Count);
+        for (var i = 0; i < fileIds.Count; i++)
+        {
+            var parameterName = $"@id{i}";
+            parameters.Add(parameterName);
+            deleteCmd.Parameters.Add(parameterName, SqliteType.Integer).Value = fileIds[i];
+        }
+
+        var idList = string.Join(", ", parameters);
+        deleteCmd.CommandText = $@"
+            DELETE FROM symbol_references
+            WHERE file_id NOT IN ({idList})
+              AND symbol_name IS NOT NULL
+              AND symbol_name <> ''
+              AND EXISTS (
+                  SELECT 1
+                  FROM symbols deleted_symbols
+                  WHERE deleted_symbols.file_id IN ({idList})
+                    AND deleted_symbols.name = symbol_references.symbol_name
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM symbols retained_symbols
+                  WHERE retained_symbols.file_id NOT IN ({idList})
+                    AND retained_symbols.name = symbol_references.symbol_name
+              )";
+        deleteCmd.ExecuteNonQuery();
     }
 
     private static string GetRelativeDirectory(string relativePath)
