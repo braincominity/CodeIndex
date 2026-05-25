@@ -25,6 +25,7 @@ internal static class CdidxConfigFile
     internal const string FileName = ".cdidxrc.json";
     internal static readonly string ProjectConfigRelativePath = Path.Combine(".cdidx", "config.json");
     internal const string DisableEnvVar = "CDIDX_DISABLE_CONFIG_FILE";
+    internal const string ConfigSourceEnvironmentVariablePrefix = "CDIDX_CONFIG_SOURCE__";
 
     private static readonly IReadOnlyList<string> KnownTopLevelKeys = new[]
     {
@@ -196,19 +197,19 @@ internal static class CdidxConfigFile
                     return new LoadResult(Path: path, Error: $"[cdidx] {path}: unknown key `search.{unknownSearchKey}`. Supported keys: {string.Join(", ", KnownSearchKeys)}.");
                 if (search.TryGetProperty("limit", out var limit))
                 {
-                    if (!TryReadNumberAsString(limit, "search.limit", path, out var value, out var err))
+                    if (!TryReadSearchInteger(limit, "search.limit", "--limit", allowZero: false, path, out var value, out var err))
                         return new LoadResult(Path: path, Error: err);
                     pending.Add((QueryCommandRunner.DefaultLimitEnvironmentVariable, value!));
                 }
                 if (search.TryGetProperty("snippet_lines", out var snippetLines))
                 {
-                    if (!TryReadNumberAsString(snippetLines, "search.snippet_lines", path, out var value, out var err))
+                    if (!TryReadSearchInteger(snippetLines, "search.snippet_lines", "--snippet-lines", allowZero: false, path, out var value, out var err))
                         return new LoadResult(Path: path, Error: err);
                     pending.Add((QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, value!));
                 }
                 if (search.TryGetProperty("max_line_width", out var maxLineWidth))
                 {
-                    if (!TryReadNumberAsString(maxLineWidth, "search.max_line_width", path, out var value, out var err))
+                    if (!TryReadSearchInteger(maxLineWidth, "search.max_line_width", "--max-line-width", allowZero: true, path, out var value, out var err))
                         return new LoadResult(Path: path, Error: err);
                     pending.Add((QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, value!));
                 }
@@ -281,7 +282,10 @@ internal static class CdidxConfigFile
             foreach (var (name, value) in pending)
             {
                 if (envReader(name) is null)
+                {
                     envWriter(name, value);
+                    envWriter(ConfigSourceEnvironmentVariablePrefix + name, path);
+                }
             }
 
             return new LoadResult(Path: path, Error: null);
@@ -436,6 +440,34 @@ internal static class CdidxConfigFile
             return false;
         }
         value = element.GetRawText();
+        return true;
+    }
+
+    private static bool TryReadSearchInteger(JsonElement element, string key, string optionName, bool allowZero, string path, out string? value, out string? error)
+    {
+        value = null;
+        error = null;
+        if (element.ValueKind != JsonValueKind.Number)
+        {
+            error = $"[cdidx] {path}: `{key}` must be a number.";
+            return false;
+        }
+
+        if (!element.TryGetInt32(out var parsed) || parsed < 0 || (!allowZero && parsed == 0))
+        {
+            error = allowZero
+                ? $"[cdidx] {path}: `{key}` must be a non-negative integer."
+                : $"[cdidx] {path}: `{key}` must be a positive integer.";
+            return false;
+        }
+
+        if (QueryCommandRunner.NumericFlagUpperBounds.TryGetValue(optionName, out var maxAllowed) && parsed > maxAllowed)
+        {
+            error = $"[cdidx] {path}: `{key}` must be <= {maxAllowed}.";
+            return false;
+        }
+
+        value = parsed.ToString(System.Globalization.CultureInfo.InvariantCulture);
         return true;
     }
 }

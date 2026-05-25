@@ -97,6 +97,31 @@ public class CdidxConfigFileTests
             Assert.Equal("41", env.Writes[QueryCommandRunner.DefaultLimitEnvironmentVariable]);
             Assert.Equal("5", env.Writes[QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable]);
             Assert.Equal("120", env.Writes[QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable]);
+            Assert.EndsWith(Path.Combine(".cdidx", "config.json"), env.Writes[CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.DefaultLimitEnvironmentVariable]);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Theory]
+    [InlineData("""{ "search": { "limit": 0 } }""", "positive integer")]
+    [InlineData("""{ "search": { "snippet_lines": -1 } }""", "positive integer")]
+    [InlineData("""{ "search": { "max_line_width": -1 } }""", "non-negative integer")]
+    [InlineData("""{ "search": { "limit": 1.5 } }""", "positive integer")]
+    [InlineData("""{ "search": { "limit": 10001 } }""", "<= 10000")]
+    public void LoadAndApply_ProjectConfigJsonRejectsInvalidSearchDefaults(string json, string expectedError)
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir, ".cdidx"));
+            File.WriteAllText(Path.Combine(dir, ".cdidx", "config.json"), json);
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+
+            Assert.True(result.Failed);
+            Assert.Contains(expectedError, result.Error);
+            Assert.Empty(env.Writes);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
