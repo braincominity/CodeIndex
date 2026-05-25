@@ -1,5 +1,6 @@
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
 
@@ -1316,12 +1317,15 @@ public class DbContext : IDisposable
                 UNIQUE(file_id, line, context)
             )");
 
+        var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
+        var referenceKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.ReferenceKinds);
+
         // Symbols table / シンボルテーブル
         Execute(@"
             CREATE TABLE IF NOT EXISTS symbols (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                kind            TEXT,
+                kind            TEXT CHECK (kind IN (" + symbolKindCheck + @")),
                 sub_kind        TEXT,
                 name            TEXT,
                 line            INTEGER,
@@ -1331,7 +1335,7 @@ public class DbContext : IDisposable
                 body_start_line INTEGER,
                 body_end_line   INTEGER,
                 signature       TEXT,
-                container_kind  TEXT,
+                container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN (" + symbolKindCheck + @")),
                 container_name  TEXT,
                 container_qualified_name TEXT,
                 family_key      TEXT,
@@ -1346,12 +1350,12 @@ public class DbContext : IDisposable
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
                 symbol_name     TEXT,
-                reference_kind  TEXT,
+                reference_kind  TEXT CHECK (reference_kind IN (" + referenceKindCheck + @")),
                 line            INTEGER,
                 column_number   INTEGER,
                 context         TEXT,
                 reference_line_id INTEGER REFERENCES reference_lines(id),
-                container_kind  TEXT,
+                container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN (" + symbolKindCheck + @")),
                 container_name  TEXT
             )");
 

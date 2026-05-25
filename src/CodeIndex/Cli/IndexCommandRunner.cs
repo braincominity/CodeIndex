@@ -4636,7 +4636,7 @@ public static class IndexCommandRunner
     }
 
     private static bool IsCSharpStaticInterfaceContractSymbol(SymbolRecord symbol)
-        => symbol.Kind is "function" or "property"
+        => symbol.Kind is "function" or "operator" or "property"
            && symbol.ContainerKind == "interface"
            && !string.IsNullOrWhiteSpace(symbol.Signature)
            && ContainsCSharpWord(symbol.Signature!, "static")
