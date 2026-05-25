@@ -1033,17 +1033,29 @@ lifecycle breadcrumbs to a per-user daily log. The log path follows
 `XDG_CACHE_HOME/cdidx/logs/`, `XDG_RUNTIME_DIR/cdidx/logs/`, then the
 platform default: `%LOCALAPPDATA%\cdidx\logs\` on Windows,
 `~/Library/Logs/cdidx/` on macOS, or `~/.local/state/cdidx/logs/` on Linux.
-The file name is `stderr-YYYYMMDD.log`, and the logger keeps only the newest
-30 daily files. Repository-local development runs from `src/CodeIndex/bin/...`
-and `tests/.../bin/...` are excluded by default so ordinary build/test cycles
-do not accumulate persistent logs. Set `CDIDX_DISABLE_PERSISTENT_LOG=1` to opt
-out entirely; the toggle accepts `1`, `true`, `yes`, or `on`
-case-insensitively. Use `CDIDX_GLOBAL_TOOL_LOG_DIR` to redirect the log
-directory during testing or packaging.
+Each candidate is probed with a create/write/delete round trip before the
+logger commits to it, so read-only state/cache/runtime mounts fall through to
+the next candidate instead of losing the first log write. The file name is
+`stderr-YYYYMMDD.log`, timestamps inside the file are ISO-8601 UTC
+(`yyyy-MM-ddTHH:mm:ss.fffZ`) using invariant culture, and the logger keeps
+only the newest 30 daily files. Repository-local development runs from
+`src/CodeIndex/bin/...` and `tests/.../bin/...` are excluded by default so
+ordinary build/test cycles do not accumulate persistent logs. Set
+`CDIDX_DISABLE_PERSISTENT_LOG=1` to opt out entirely; the toggle accepts `1`,
+`true`, `yes`, or `on` case-insensitively. Use
+`CDIDX_GLOBAL_TOOL_LOG_DIR` to redirect the log directory during testing or
+packaging.
 Set `CDIDX_FORCE_GLOBAL_TOOL_LOG=1` to force lifecycle logging for local
 package smoke tests or launcher diagnostics even when the executable path looks
 like a development build; `CDIDX_DISABLE_PERSISTENT_LOG` still wins when both
 are set.
+Unhandled exceptions keep stderr concise but write the full exception chain and
+stack trace to the lifecycle log for post-mortem diagnostics. Logged command
+arguments are minimally redacted by default: secret-looking `--flag=value`
+pairs, values following secret-looking flags, URI passwords, and long token-like
+hex/base64 strings are replaced with `<redacted>`. `CDIDX_LOG_REDACT=none`
+preserves raw arguments for controlled local debugging, while
+`CDIDX_LOG_REDACT=full` also replaces path-like arguments with a stable hash.
 
 ### The moving parts
 
