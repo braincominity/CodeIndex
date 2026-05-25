@@ -135,11 +135,14 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 
 | Kind | Current producers / meaning | Graph behavior |
 |---|---|---|
+| `accessor` | Accessor declarations when extracted separately from their owning property | Search/filter symbol |
+| `annotation` | Annotation declarations or annotation-like language constructs | Metadata/search symbol |
 | `async_function` | JavaScript/TypeScript async function declarations | Callable definition; participates in callers/callees through reference rows |
 | `async_generator` | JavaScript/TypeScript async generator declarations | Callable definition; participates in callers/callees through reference rows |
 | `attribute` | Razor attributes and metadata-like declarations | Context/search symbol; not a call edge by itself |
 | `associatedtype` | Swift associated type declarations | Type-like definition target |
 | `class` | Class declarations across object-oriented languages | Definition target and container |
+| `class_hook` | Python class hook methods such as dunder hooks reclassified from functions | Callable/search symbol |
 | `code` | Markdown fenced or structured code blocks | Search/outline symbol |
 | `constant` | Constant declarations where the language distinguishes them | Search/filter symbol |
 | `delegate` | C# / F# delegate declarations | Callable type definition and container-like target |
@@ -160,19 +163,25 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `module` | Module declarations | Definition target and container |
 | `namespace` | Namespace declarations | Definition target and container |
 | `operator` | C# operator overload and conversion operator declarations | Callable definition; participates in callers/callees through reference rows |
+| `object` | Object-literal/object container context used by nested extracted symbols | Container context |
 | `package` | Package declarations | Namespace-like context symbol |
 | `property` | Properties and property-like fields | Definition target; not treated as a call edge by itself |
+| `procedure` | Procedure declarations in languages such as Fortran | Callable definition |
+| `program` | Program block declarations in languages such as Fortran | Definition target and container |
 | `protocol` | Protocol declarations in languages that distinguish protocols from interfaces | Definition target and container |
 | `reference` | Secondary extracted symbolic references, such as HTML classes or metadata keys | Search/filter symbol |
 | `route` | Razor route directives | Context/search symbol |
 | `service` | Service declarations in IDL/protobuf-like languages | Definition target and container |
 | `specialization` | C++ template specialization declarations | Definition target for specialized type/function forms |
 | `struct` | Struct declarations | Definition target and container |
+| `submodule` | Fortran submodule declarations | Namespace/module-like definition target |
+| `subroutine` | Fortran subroutine declarations | Callable definition |
 | `test.method` | Test methods detected by test-aware extraction | Callable definition; participates in callers/callees through reference rows |
 | `trait` | Trait declarations in languages that distinguish traits from interfaces | Definition target and container |
 | `type` | Type declarations where a narrower class/interface/struct/enum kind is not available | Definition target |
 | `typealias` | Type alias declarations | Definition target for alias names |
 | `union` | Union declarations | Definition target and container |
+| `block data` | Fortran block data declarations | Definition target |
 | `variable` | Variable bindings | Search/filter symbol |
 
 `symbol_references.reference_kind` uses this separate reference taxonomy:
@@ -190,6 +199,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `extends` | Inheritance or type-extension relationship |
 | `from` | Dockerfile `FROM <stage>` dependency |
 | `friend` | C++ friend declaration relationship |
+| `generic_type_argument` | Generic type argument attached to an explicit invocation |
 | `implement` | Interface implementation relationship |
 | `implicit_implementation` | C# implicit interface implementation relationship |
 | `import` | Import/include/reference through a module system |

@@ -117,6 +117,7 @@ public class DatabaseTests : IDisposable
 
     [Theory]
     [InlineData("annotation")]
+    [InlineData("generic_type_argument")]
     [InlineData("subscribe")]
     [InlineData("implicit_implementation")]
     public void InsertReferences_ExistingReferenceKinds_AreAccepted(string referenceKind)
@@ -153,14 +154,23 @@ public class DatabaseTests : IDisposable
     }
 
     [Theory]
+    [InlineData("accessor")]
+    [InlineData("annotation")]
     [InlineData("async_function")]
     [InlineData("async_generator")]
+    [InlineData("block data")]
+    [InlineData("class_hook")]
     [InlineData("delegate")]
     [InlineData("generator")]
+    [InlineData("object")]
+    [InlineData("procedure")]
+    [InlineData("program")]
     [InlineData("union")]
     [InlineData("specialization")]
     [InlineData("protocol")]
     [InlineData("file_module")]
+    [InlineData("submodule")]
+    [InlineData("subroutine")]
     [InlineData("trait")]
     [InlineData("associatedtype")]
     [InlineData("typealias")]
