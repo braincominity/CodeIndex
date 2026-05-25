@@ -211,6 +211,7 @@ internal static class ProgramRunner
                     "backfill-fold" => IndexCommandRunner.RunBackfillFold(subArgs, jsonOptions),
                     "optimize" => IndexCommandRunner.RunOptimizeFts(subArgs, jsonOptions),
                     "vacuum" => QueryCommandRunner.RunVacuum(subArgs, jsonOptions),
+                    "validate-config" => CdidxConfigFile.RunValidate(subArgs, jsonOptions),
                     "db" => DbCommandRunner.RunIntegrityCheck(subArgs, jsonOptions),
                     "report" => ReportCommandRunner.Run(subArgs, jsonOptions, appVersion),
                     _ when IsProjectPathArg(commandName)

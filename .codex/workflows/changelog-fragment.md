@@ -29,6 +29,19 @@ Treat any request to "update the changelog" as a fragment request unless the tas
 7. Do not include release headings or compare-link footer definitions.
 8. Validate fragments before committing.
 
+## Validation
+
+Run the fragment validator before committing any changelog fragment:
+
+```bash
+dotnet run --project tools/CodeIndex.Changelog -- check
+```
+
+The command validates every `changelog.d/unreleased/*.md` fragment and fails
+with file-specific messages. For example, a non-issue fragment that writes
+`issues: null` fails with an invalid issue-number error; omit the `issues`
+field entirely instead.
+
 ## Template
 
 ```md
