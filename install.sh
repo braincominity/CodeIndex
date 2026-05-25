@@ -185,8 +185,8 @@ probe_temp_root() {
         error "TMPDIR not usable: ${root} is not a directory. Set TMPDIR to a writable directory with at least 100 MiB free."
     fi
 
-    local probe="${root%/}/.cdidx-install-probe-$$"
-    if ! ( : > "$probe" ) 2>/dev/null; then
+    local probe
+    if ! probe="$(mktemp "${root%/}/.cdidx-install-probe.XXXXXX")"; then
         error "TMPDIR not writable: ${root}. Set TMPDIR to a writable directory and rerun the installer."
     fi
     rm -f "$probe"
