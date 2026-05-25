@@ -13,7 +13,7 @@ public partial class DbReader
     /// Search indexed references such as call sites.
     /// 呼び出し箇所などのインデックス済み参照を検索する。
     /// </summary>
-    public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, bool excludeSelfReferences = false)
+    public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, bool excludeSelfReferences = false, int offset = 0)
     {
         maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
         lang = NormalizeQueryLanguage(lang);
@@ -22,10 +22,12 @@ public partial class DbReader
             return new List<ReferenceResult>();
 
         if (!ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
-            return SearchReferencesCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, 0, maxLineWidth, excludeSelfReferences);
+            return SearchReferencesCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, offset, maxLineWidth, excludeSelfReferences);
 
         var rawLimit = Math.Max(limit, CSharpUsingStaticReferenceFilterChunkSize);
         var rawOffset = 0;
+        var acceptedBeforePage = Math.Max(0, offset);
+        var accepted = 0;
         var filtered = new List<ReferenceResult>();
         while (filtered.Count < limit)
         {
@@ -38,6 +40,13 @@ public partial class DbReader
                 if (ShouldSuppressCSharpUsingStaticConstantPatternReference(result))
                     continue;
 
+                if (accepted < acceptedBeforePage)
+                {
+                    accepted++;
+                    continue;
+                }
+
+                accepted++;
                 filtered.Add(result);
                 if (filtered.Count >= limit)
                     break;

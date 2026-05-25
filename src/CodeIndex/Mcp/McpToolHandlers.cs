@@ -169,6 +169,27 @@ public partial class McpServer
     /// </summary>
     private static int ClampLimit(int limit) => Math.Clamp(limit, 1, MaxLimit);
 
+    private static int ReadOffset(JsonNode? args)
+        => Math.Max(0, args?["offset"]?.GetValue<int>() ?? 0);
+
+    private static bool AddLimitMetadata<T>(JsonObject payload, List<T> results, int limit, int offset = 0, bool includePagination = false)
+    {
+        var truncated = results.Count > limit;
+        if (truncated)
+            results.RemoveRange(limit, results.Count - limit);
+
+        payload["count"] = results.Count;
+        payload["truncated"] = truncated;
+        payload["more_available"] = truncated;
+        if (includePagination)
+        {
+            payload["offset"] = offset;
+            if (truncated)
+                payload["next_offset"] = offset + results.Count;
+        }
+        return truncated;
+    }
+
     /// <summary>
     /// Return true when the requested reference kind is NOT a call-graph kind (i.e. metadata
     /// `attribute` / `annotation`, compile-time `type_reference`, or structural `import`) —
@@ -404,7 +425,16 @@ public partial class McpServer
     {
         payload["count"] = returnedCount;
         payload["truncated"] = truncated;
+        payload["more_available"] = truncated;
         payload["total"] = total.HasValue ? JsonValue.Create(total.Value) : null;
+    }
+
+    private static void AddPaginatedResultEnvelope(JsonObject payload, int returnedCount, int? total, bool truncated, int offset)
+    {
+        AddResultEnvelope(payload, returnedCount, total, truncated);
+        payload["offset"] = offset;
+        if (truncated)
+            payload["next_offset"] = offset + returnedCount;
     }
 
     private static bool ReadCountOnly(JsonNode? args) => args?["countOnly"]?.GetValue<bool>() ?? args?["count_only"]?.GetValue<bool>() ?? false;
@@ -883,6 +913,7 @@ public partial class McpServer
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var offset = ReadOffset(args);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var pathPatterns = ReadScopedPathList(args);
@@ -909,9 +940,9 @@ public partial class McpServer
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "reference")}.", countOnlyPayload);
             }
 
-            var results = reader.SearchReferences(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
+            var results = reader.SearchReferences(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth, offset: offset);
             var truncated = TrimToRequestedLimit(results, limit);
-            var total = truncated
+            var total = truncated || offset > 0
                 ? reader.CountSearchReferences(query, int.MaxValue, lang, kind, pathPatterns, excludePaths, excludeTests, exact)
                 : results.Count;
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
@@ -940,7 +971,7 @@ public partial class McpServer
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
                 ["results"] = ToJsonArray(results)
             };
-            AddResultEnvelope(payload, results.Count, total, truncated);
+            AddPaginatedResultEnvelope(payload, results.Count, total, truncated, offset);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
@@ -969,6 +1000,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, BuildNonCallGraphKindRejectionMessage("callers", kind!));
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var offset = ReadOffset(args);
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -995,9 +1027,9 @@ public partial class McpServer
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "caller")}.", countOnlyPayload);
             }
 
-            var results = reader.GetCallers(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
+            var results = reader.GetCallers(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode, offset: offset);
             var truncated = TrimToRequestedLimit(results, limit);
-            var total = truncated
+            var total = truncated || offset > 0
                 ? reader.CountCallers(query, int.MaxValue, lang, kind, pathPatterns, excludePaths, excludeTests, exact)
                 : results.Count;
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
@@ -1026,7 +1058,7 @@ public partial class McpServer
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
                 ["results"] = ToJsonArray(results)
             };
-            AddResultEnvelope(payload, results.Count, total, truncated);
+            AddPaginatedResultEnvelope(payload, results.Count, total, truncated, offset);
             payload["aggregate_truncated"] = results.Any(result => result.AggregateTruncated);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
@@ -1056,6 +1088,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, BuildNonCallGraphKindRejectionMessage("callees", kind!));
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var offset = ReadOffset(args);
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -1082,9 +1115,9 @@ public partial class McpServer
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "callee")}.", countOnlyPayload);
             }
 
-            var results = reader.GetCallees(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
+            var results = reader.GetCallees(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode, offset: offset);
             var truncated = TrimToRequestedLimit(results, limit);
-            var total = truncated
+            var total = truncated || offset > 0
                 ? reader.CountCallees(query, int.MaxValue, lang, kind, pathPatterns, excludePaths, excludeTests, exact)
                 : results.Count;
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
@@ -1113,7 +1146,7 @@ public partial class McpServer
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
                 ["results"] = ToJsonArray(results)
             };
-            AddResultEnvelope(payload, results.Count, total, truncated);
+            AddPaginatedResultEnvelope(payload, results.Count, total, truncated, offset);
             payload["aggregate_truncated"] = results.Any(result => result.AggregateTruncated);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);

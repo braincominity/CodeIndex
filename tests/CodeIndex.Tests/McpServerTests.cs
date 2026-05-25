@@ -117,6 +117,54 @@ public class McpServerTests : IDisposable
         writer.MarkCSharpSymbolNameContractReady();
     }
 
+    [Fact]
+    public void ToolsCall_Callers_TruncatedResponseIncludesNextOffsetAndPages()
+    {
+        InsertIndexedFile(
+            "src/paged-callers.cs",
+            "csharp",
+            """
+            class PagedCallers {
+                void Alpha() { Target(); }
+                void Beta() { Target(); }
+                void Gamma() { Target(); }
+                void Target() { }
+            }
+            """);
+
+        var firstRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Target","lang":"csharp","exactName":true,"path":"src/paged-callers.cs","limit":2}}}""")!;
+        var firstResponse = _server.HandleMessage(firstRequest)!;
+        var first = firstResponse["result"]!["structuredContent"]!;
+
+        Assert.Equal(2, first["count"]!.GetValue<int>());
+        Assert.True(first["truncated"]!.GetValue<bool>());
+        Assert.True(first["more_available"]!.GetValue<bool>());
+        Assert.Equal(2, first["next_offset"]!.GetValue<int>());
+        var firstNames = first["results"]!.AsArray()
+            .Select(row => row!["callerName"]!.GetValue<string>())
+            .ToArray();
+
+        var secondRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Target","lang":"csharp","exactName":true,"path":"src/paged-callers.cs","limit":2,"offset":2}}}""")!;
+        var secondResponse = _server.HandleMessage(secondRequest)!;
+        var second = secondResponse["result"]!["structuredContent"]!;
+
+        Assert.Equal(2, second["offset"]!.GetValue<int>());
+        Assert.False(second["truncated"]!.GetValue<bool>());
+        Assert.False(second["more_available"]!.GetValue<bool>());
+        Assert.Null(second["next_offset"]);
+        var secondNames = second["results"]!.AsArray()
+            .Select(row => row!["callerName"]!.GetValue<string>())
+            .ToArray();
+
+        var allNames = firstNames.Concat(secondNames).ToArray();
+        Assert.Equal(allNames.Distinct().Count(), allNames.Length);
+        Assert.Contains("Alpha", allNames);
+        Assert.Contains("Beta", allNames);
+        Assert.Contains("Gamma", allNames);
+    }
+
     // --- Protocol tests / プロトコルテスト ---
 
     [Fact]
@@ -2137,6 +2185,44 @@ public class McpServerTests : IDisposable
         Assert.NotNull(properties["path"]);
         Assert.NotNull(properties["excludePaths"]);
         Assert.NotNull(properties["excludeTests"]);
+    }
+
+    [Fact]
+    public void ToolsList_CommonSchemasAdvertiseClientSideConstraints()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var searchTool = tools.First(t => t!["name"]!.GetValue<string>() == "search")!;
+        var searchProperties = searchTool["inputSchema"]!["properties"]!;
+        Assert.Equal(1, searchProperties["query"]!["minLength"]!.GetValue<int>());
+        Assert.Equal(1024, searchProperties["query"]!["maxLength"]!.GetValue<int>());
+        Assert.Equal(1, searchProperties["limit"]!["minimum"]!.GetValue<int>());
+        Assert.Equal(200, searchProperties["limit"]!["maximum"]!.GetValue<int>());
+
+        var pathStringSchema = searchProperties["path"]!["oneOf"]!.AsArray()[0]!;
+        Assert.Equal(4096, pathStringSchema["maxLength"]!.GetValue<int>());
+        Assert.NotNull(pathStringSchema["pattern"]);
+
+        var referencesTool = tools.First(t => t!["name"]!.GetValue<string>() == "references")!;
+        var kindEnum = referencesTool["inputSchema"]!["properties"]!["kind"]!["enum"]!.AsArray()
+            .Select(v => v!.GetValue<string>())
+            .ToArray();
+        Assert.Contains("call", kindEnum);
+        Assert.Contains("type_reference", kindEnum);
+    }
+
+    [Fact]
+    public void ToolCall_WithStructuredContent_DeclaresJsonMimeType()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ping","arguments":{}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var content = response["result"]!["content"]!.AsArray()[0]!;
+        Assert.Equal("text", content["type"]!.GetValue<string>());
+        Assert.Equal("application/json", content["mimeType"]!.GetValue<string>());
     }
 
     [Fact]

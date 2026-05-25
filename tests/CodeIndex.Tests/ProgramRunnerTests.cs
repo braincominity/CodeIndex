@@ -360,6 +360,45 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void Run_ForcedGlobalToolLogging_JsonFormatWritesJsonLines()
+    {
+        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_json_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(logDir);
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+            "CDIDX_DISABLE_PERSISTENT_LOG",
+            "CDIDX_GLOBAL_TOOL_LOG_DIR",
+            GlobalToolLog.LogFormatEnvironmentVariable,
+            GlobalToolLog.LogRetainEnvironmentVariable,
+            GlobalToolLog.LogMaxSizeMbEnvironmentVariable);
+
+        try
+        {
+            env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["--log-format", "json", "definitely-not-a-command"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("Unknown command: definitely-not-a-command", stderr);
+
+            var logPath = Directory.GetFiles(logDir, "stderr-*.log", SearchOption.TopDirectoryOnly).Single();
+            var firstLine = File.ReadLines(logPath).First();
+            using var document = JsonDocument.Parse(firstLine);
+            Assert.Equal("INFO", document.RootElement.GetProperty("level").GetString());
+            Assert.Contains("session_start", document.RootElement.GetProperty("msg").GetString());
+            Assert.True(document.RootElement.TryGetProperty("ts", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(logDir);
+        }
+    }
+
+    [Fact]
     public void Run_ForcedGlobalToolLogging_OnUnix_HardensExistingAndCurrentLogFiles()
     {
         if (OperatingSystem.IsWindows())
@@ -482,6 +521,56 @@ public class ProgramRunnerTests
             Assert.DoesNotContain("stderr-20240101.log", logs);
             Assert.DoesNotContain("stderr-20240105.log", logs);
             Assert.Contains($"stderr-{DateTime.UtcNow:yyyyMMdd}.log", logs);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(logDir);
+        }
+    }
+
+    [Fact]
+    public void Run_ForcedGlobalToolLogging_HonorsRetainCountAndSizeRotation()
+    {
+        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_rotation_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(logDir);
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+            "CDIDX_DISABLE_PERSISTENT_LOG",
+            "CDIDX_GLOBAL_TOOL_LOG_DIR",
+            GlobalToolLog.LogFormatEnvironmentVariable,
+            GlobalToolLog.LogRetainEnvironmentVariable,
+            GlobalToolLog.LogMaxSizeMbEnvironmentVariable);
+
+        try
+        {
+            for (var i = 0; i < 4; i++)
+            {
+                var path = Path.Combine(logDir, $"stderr-2024010{i + 1}.log");
+                File.WriteAllText(path, $"old {i}");
+                File.SetLastWriteTimeUtc(path, new DateTime(2024, 1, i + 1, 0, 0, 0, DateTimeKind.Utc));
+            }
+
+            var currentPath = Path.Combine(logDir, $"stderr-{DateTime.UtcNow:yyyyMMdd}.log");
+            File.WriteAllBytes(currentPath, new byte[1024 * 1024]);
+            File.SetLastWriteTimeUtc(currentPath, DateTime.UtcNow);
+
+            env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["--log-retain-count=2", "--log-max-size-mb=1", "definitely-not-a-command"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("Unknown command: definitely-not-a-command", stderr);
+
+            var logs = Directory.GetFiles(logDir, "stderr-*.log", SearchOption.TopDirectoryOnly)
+                .Select(Path.GetFileName)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
+            Assert.Equal(2, logs.Length);
+            Assert.Contains($"stderr-{DateTime.UtcNow:yyyyMMdd}-1.log", logs);
         }
         finally
         {

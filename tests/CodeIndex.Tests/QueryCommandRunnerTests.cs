@@ -5021,6 +5021,11 @@ jobs:
             Assert.DoesNotContain(longLine, json.GetProperty("content").GetString());
             Assert.Contains("TARGET", json.GetProperty("content").GetString());
             Assert.True(json.GetProperty("content").GetString()!.Length <= 96);
+            var semanticTokens = json.GetProperty("semantic_tokens").EnumerateArray().ToArray();
+            Assert.Contains(semanticTokens, token =>
+                token.GetProperty("type").GetString() == "variable" &&
+                token.GetProperty("start_line").GetInt32() == 1 &&
+                token.GetProperty("start_column").GetInt32() > 0);
         }
         finally
         {

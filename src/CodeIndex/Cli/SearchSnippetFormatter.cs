@@ -49,6 +49,7 @@ public static class SearchSnippetFormatter
             ContextBefore = excerpt.ContextBefore,
             ContextAfter = excerpt.ContextAfter,
             TruncatedLineCount = excerpt.TruncatedLineCount,
+            DroppedMatchLineCount = excerpt.DroppedMatchLineCount,
             TruncationContext = excerpt.TruncationContext,
             Score = result.Score,
         };
@@ -103,13 +104,16 @@ public static class SearchSnippetFormatter
         var matchIndexes = FindMatchingLineIndexes(matchLinesSource, normalizedQuery, tokens, caseSensitive);
         var focusStart = matchIndexes.Count > 0 ? matchIndexes[0] : 0;
         var focusEnd = focusStart;
+        var includedMatchLineCount = Math.Min(1, matchIndexes.Count);
         foreach (var matchIndex in matchIndexes.Skip(1))
         {
             if ((matchIndex - focusStart) + 1 > maxLines)
                 break;
 
             focusEnd = matchIndex;
+            includedMatchLineCount++;
         }
+        var droppedMatchLineCount = Math.Max(0, matchIndexes.Count - includedMatchLineCount);
 
         var focusLength = Math.Max(1, (focusEnd - focusStart) + 1);
         var remaining = Math.Max(0, maxLines - focusLength);
@@ -166,6 +170,9 @@ public static class SearchSnippetFormatter
 
             var absoluteLine = absoluteStartLine + i;
             matchLines.Add(absoluteLine);
+            var termOccurrences = normalizeCSharpVerbatimNames && normalizedLines != null && rawIndexMaps != null
+                ? GetMatchedTermOccurrences(normalizedLines[i], absoluteLine, normalizedQuery, tokens, caseSensitive, originalLine, rawIndexMaps[i])
+                : GetMatchedTermOccurrences(originalLine, absoluteLine, normalizedQuery, tokens, caseSensitive);
             highlights.Add(new SearchHighlight
             {
                 Line = absoluteLine,
@@ -174,6 +181,7 @@ public static class SearchSnippetFormatter
                 Truncated = clamped.Truncated,
                 TruncatedCharCounts = clamped.Truncated ? [clamped.TruncatedCharCount] : [],
                 Terms = GetMatchedTerms(normalizeCSharpVerbatimNames && normalizedLines != null ? normalizedLines[i] : originalLine, normalizedQuery, tokens, caseSensitive),
+                TermOccurrences = termOccurrences,
             });
         }
 
@@ -189,6 +197,7 @@ public static class SearchSnippetFormatter
             TruncatedBefore = start > 0,
             TruncatedAfter = end < lines.Length - 1,
             TruncatedLineCount = truncatedLineCount,
+            DroppedMatchLineCount = droppedMatchLineCount,
             TruncationContext = new SearchTruncationContext
             {
                 LineCount = truncatedLineCount,
@@ -396,6 +405,55 @@ public static class SearchSnippetFormatter
         return matches;
     }
 
+    private static List<SearchTermOccurrence> GetMatchedTermOccurrences(string line, int absoluteLine, string query, string[] tokens, bool caseSensitive = false, string? rawLine = null, int[]? rawIndexMap = null)
+    {
+        var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var occurrences = new List<SearchTermOccurrence>();
+        if (!string.IsNullOrWhiteSpace(query))
+            AddTermOccurrences(occurrences, line, absoluteLine, query, comparison, rawLine, rawIndexMap);
+
+        foreach (var token in tokens)
+            AddTermOccurrences(occurrences, line, absoluteLine, token, comparison, rawLine, rawIndexMap);
+
+        return occurrences;
+    }
+
+    private static void AddTermOccurrences(List<SearchTermOccurrence> occurrences, string line, int absoluteLine, string term, StringComparison comparison, string? rawLine, int[]? rawIndexMap)
+    {
+        if (string.IsNullOrEmpty(term))
+            return;
+
+        var index = 0;
+        while ((index = line.IndexOf(term, index, comparison)) >= 0)
+        {
+            var occurrenceColumn = index + 1;
+            var occurrenceLength = term.Length;
+            var occurrenceTerm = line.Substring(index, term.Length);
+            if (rawLine != null && rawIndexMap != null && TryReconstructRawSpan(rawIndexMap, index, term.Length, out var rawColumn, out var rawLength))
+            {
+                occurrenceColumn = rawColumn;
+                occurrenceLength = rawLength;
+                occurrenceTerm = rawLine.Substring(rawColumn - 1, rawLength);
+            }
+
+            if (!occurrences.Any(occurrence =>
+                    occurrence.Line == absoluteLine &&
+                    occurrence.Column == occurrenceColumn &&
+                    occurrence.Length == occurrenceLength &&
+                    string.Equals(occurrence.Term, occurrenceTerm, StringComparison.OrdinalIgnoreCase)))
+            {
+                occurrences.Add(new SearchTermOccurrence
+                {
+                    Term = occurrenceTerm,
+                    Line = absoluteLine,
+                    Column = occurrenceColumn,
+                    Length = occurrenceLength,
+                });
+            }
+            index += Math.Max(1, term.Length);
+        }
+    }
+
     private static List<string> GetMatchedTerms(string line, string query, string[] tokens, bool caseSensitive = false)
     {
         var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
@@ -449,6 +507,7 @@ public sealed class CompactSearchResult
     public int ContextBefore { get; set; }
     public int ContextAfter { get; set; }
     public int TruncatedLineCount { get; set; }
+    public int DroppedMatchLineCount { get; set; }
     public SearchTruncationContext TruncationContext { get; set; } = new();
     public double Score { get; set; }
 }
@@ -468,6 +527,15 @@ public sealed class SearchHighlight
     public bool Truncated { get; set; }
     public List<int> TruncatedCharCounts { get; set; } = [];
     public List<string> Terms { get; set; } = [];
+    public List<SearchTermOccurrence> TermOccurrences { get; set; } = [];
+}
+
+public sealed class SearchTermOccurrence
+{
+    public string Term { get; set; } = string.Empty;
+    public int Line { get; set; }
+    public int Column { get; set; }
+    public int Length { get; set; }
 }
 
 public sealed class SearchTruncationContext
@@ -489,5 +557,6 @@ public sealed class SearchSnippetExcerpt
     public bool TruncatedBefore { get; set; }
     public bool TruncatedAfter { get; set; }
     public int TruncatedLineCount { get; set; }
+    public int DroppedMatchLineCount { get; set; }
     public SearchTruncationContext TruncationContext { get; set; } = new();
 }

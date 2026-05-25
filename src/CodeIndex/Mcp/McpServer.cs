@@ -2471,8 +2471,9 @@ public partial class McpServer : IDisposable
     /// Create a tool result response (MCP format).
     /// ツール結果レスポンスを作成（MCP形式）。
     /// </summary>
-    private static JsonObject CreateToolResult(JsonNode? id, string text, JsonNode? structuredContent = null)
+    private static JsonObject CreateToolResult(JsonNode? id, string text, JsonNode? structuredContent = null, string? mimeType = null)
     {
+        mimeType ??= structuredContent is null ? "text/plain" : "application/json";
         var result = new JsonObject
         {
             ["content"] = new JsonArray
@@ -2480,6 +2481,7 @@ public partial class McpServer : IDisposable
                 new JsonObject
                 {
                     ["type"] = "text",
+                    ["mimeType"] = mimeType,
                     ["text"] = text
                 }
             }
