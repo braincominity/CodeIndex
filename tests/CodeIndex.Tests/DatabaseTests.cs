@@ -115,6 +115,43 @@ public class DatabaseTests : IDisposable
         Assert.Contains("Unknown symbol kind", ex.Message);
     }
 
+    [Theory]
+    [InlineData("annotation")]
+    [InlineData("subscribe")]
+    [InlineData("implicit_implementation")]
+    public void InsertReferences_ExistingReferenceKinds_AreAccepted(string referenceKind)
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = $"src/{referenceKind}.cs",
+            Lang = "csharp",
+            Size = 32,
+            Lines = 1,
+            Modified = new DateTime(2026, 5, 25, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = referenceKind,
+        });
+
+        _writer.InsertReferences(
+        [
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Target",
+                ReferenceKind = referenceKind,
+                Line = 1,
+                Column = 1,
+                Context = "Target();",
+                ContainerKind = "function",
+                ContainerName = "Caller",
+            },
+        ]);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE reference_kind = @kind";
+        cmd.Parameters.AddWithValue("@kind", referenceKind);
+        Assert.Equal(1L, (long)cmd.ExecuteScalar()!);
+    }
+
     [Fact]
     public void InitializeSchema_ConstrainsKindColumns()
     {

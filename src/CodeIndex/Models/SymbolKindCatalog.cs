@@ -40,19 +40,27 @@ public static class SymbolKindCatalog
 
     public static readonly string[] ReferenceKinds =
     [
+        "annotation",
         "attribute",
         "augmentation",
         "call",
+        "capture",
+        "consumes_hook",
         "const_assertion",
         "copy_from",
         "extends",
         "from",
+        "friend",
         "implement",
+        "implicit_implementation",
         "import",
         "instantiate",
         "metadata",
         "stage",
+        "razor_event_binding",
+        "subscribe",
         "type_reference",
+        "unsubscribe",
         "use",
     ];
 

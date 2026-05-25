@@ -168,19 +168,27 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 
 | Reference kind | Meaning |
 |---|---|
+| `annotation` | Annotation usage in languages that distinguish annotations from attributes |
 | `attribute` | Metadata/attribute usage |
 | `augmentation` | TypeScript declaration/interface merge edge |
 | `call` | Function, method, operator, macro, or command call |
+| `capture` | Captured callback/delegate relationship used by impact analysis |
+| `consumes_hook` | React hook consumption relationship |
 | `const_assertion` | TypeScript `as const` assertion edge |
 | `copy_from` | Dockerfile `COPY --from=<stage>` stage dependency |
 | `extends` | Inheritance or type-extension relationship |
 | `from` | Dockerfile `FROM <stage>` dependency |
+| `friend` | C++ friend declaration relationship |
 | `implement` | Interface implementation relationship |
+| `implicit_implementation` | C# implicit interface implementation relationship |
 | `import` | Import/include/reference through a module system |
 | `instantiate` | Constructor or object creation |
 | `metadata` | Metadata-only reference |
+| `razor_event_binding` | Razor event binding relationship |
 | `stage` | Build-stage relationship |
+| `subscribe` | Event subscription relationship |
 | `type_reference` | Type annotation, generic constraint, or other type-position reference |
+| `unsubscribe` | Event unsubscription relationship |
 | `use` | Generic usage relationship when no narrower reference kind applies |
 
 ### Status freshness age threshold
