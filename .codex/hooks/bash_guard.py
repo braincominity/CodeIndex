@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Codex PreToolUse Bash guard for Widthdom/CodeIndex."""
+"""
+Codex PreToolUse Bash guard for Widthdom/CodeIndex.
+
+Tool-specific adapter around the shared guard core in
+.agent_harness/command_guard_core.py. Claude Code uses the sibling adapter at
+.claude/hooks/bash-guard.py.
+"""
 
 from __future__ import annotations
 

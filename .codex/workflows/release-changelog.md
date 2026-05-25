@@ -40,6 +40,30 @@ version. The NuGet publish job validates that the pushed `v*` tag exactly
 matches `version.json` before packing, so do not tag a release from a commit
 where `version.json` still contains the previous version.
 
+Fragment validation can also be run independently:
+
+```bash
+dotnet run --project tools/CodeIndex.Changelog -- check
+```
+
+Run this before committing release-preparation changes if you edited or
+received new fragments after the last `prepare` run.
+
+## GitHub release notes
+
+The release workflow publishes the curated `CHANGELOG.md` section for the tag,
+not GitHub's generated commit summary. Before creating the release it runs:
+
+```bash
+dotnet run --project tools/CodeIndex.Changelog -- release-notes --version 1.17.0
+```
+
+The command extracts the matching English and 日本語 `### [1.17.0]` blocks from
+`CHANGELOG.md` and fails if either section is missing or both are empty. This
+means the release-preparation PR must land before the `v*` tag is pushed. The
+workflow keeps GitHub-generated notes only as an explicit
+`workflow_dispatch` fallback via `allow_generated_notes`.
+
 ## Compare-link footer
 
 For a release from `1.16.0` to `1.17.0`, the footer must change from:
@@ -140,6 +164,18 @@ The release CI's install-verification step asserts that `cdidx --version` equals
 the tag name, but the tag/`version.json` consistency is also worth checking at
 the source-tree level before any artifact is built. Run this immediately after
 the tag is pushed:
+
+Release artifacts are packaged with stable timestamps and sorted member lists,
+and the release workflow compares the final archive member list against the
+expected publish output before upload. If that validation fails, fix the
+packaging step and re-run the failed release lane instead of uploading the
+archive manually.
+
+Each release archive also contains `MANIFEST.sha256`, generated from the
+published payload before upload. `install.sh` verifies that manifest after
+extraction for releases that require it, so do not remove or hand-edit it when
+diagnosing release artifacts. Older explicit-version installs may not contain
+the manifest and fall back to archive-level checksum verification.
 
 ```bash
 git show "v1.17.0:version.json" | grep -q '"version": "1.17.0"' \
