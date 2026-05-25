@@ -2480,11 +2480,72 @@ public partial class McpServer : IDisposable
         {
             ["name"] = name,
             ["description"] = AppendLanguageSupportClause(name, description),
-            ["inputSchema"] = inputSchema
+            ["inputSchema"] = inputSchema,
+            ["examples"] = BuildToolExamples(name),
         };
         if (annotations != null)
             def["annotations"] = annotations;
         return def;
+    }
+
+    private static JsonArray BuildToolExamples(string name)
+    {
+        var args = name switch
+        {
+            "search" => new JsonObject { ["query"] = "Run", ["lang"] = "csharp", ["limit"] = 5 },
+            "definition" => new JsonObject { ["query"] = "App", ["exactName"] = true },
+            "references" => new JsonObject { ["query"] = "Run", ["kind"] = "call" },
+            "callers" => new JsonObject { ["query"] = "Run", ["rankBy"] = "weighted" },
+            "callees" => new JsonObject { ["query"] = "App.Run" },
+            "symbols" => new JsonObject { ["query"] = "App", ["kind"] = "class" },
+            "files" => new JsonObject { ["query"] = "app.cs", ["lang"] = "csharp" },
+            "excerpt" => new JsonObject { ["path"] = "src/app.cs", ["startLine"] = 1, ["endLine"] = 5 },
+            "find_in_file" => new JsonObject { ["path"] = "src/app.cs", ["query"] = "Run", ["before"] = 1, ["after"] = 1 },
+            "map" => new JsonObject { ["limit"] = 5, ["excludeTests"] = true },
+            "analyze_symbol" => new JsonObject { ["query"] = "Run", ["includeBody"] = true },
+            "impact_analysis" => new JsonObject { ["query"] = "Run", ["maxHops"] = 2, ["withPaths"] = true },
+            "status" => new JsonObject(),
+            "outline" => new JsonObject { ["path"] = "src/app.cs" },
+            "deps" => new JsonObject { ["path"] = "src/", ["reverse"] = false, ["limit"] = 10 },
+            "languages" => new JsonObject(),
+            "validate" => new JsonObject { ["kind"] = "line_too_long" },
+            "ping" => new JsonObject(),
+            "batch_query" => new JsonObject
+            {
+                ["queries"] = new JsonArray
+                {
+                    new JsonObject { ["tool"] = "search", ["arguments"] = new JsonObject { ["query"] = "Run", ["limit"] = 3 } },
+                    new JsonObject { ["tool"] = "definition", ["arguments"] = new JsonObject { ["query"] = "App", ["limit"] = 3 } },
+                },
+            },
+            "index" => new JsonObject { ["path"] = ".", ["rebuild"] = false },
+            "backfill_fold" => new JsonObject(),
+            "symbol_hotspots" => new JsonObject { ["lang"] = "csharp", ["limit"] = 10 },
+            "unused_symbols" => new JsonObject { ["lang"] = "csharp", ["limit"] = 10 },
+            "suggest_improvement" => new JsonObject
+            {
+                ["category"] = "output_format",
+                ["description"] = "The tool response should make truncation easier to detect.",
+            },
+            _ => new JsonObject(),
+        };
+
+        return new JsonArray
+        {
+            new JsonObject
+            {
+                ["request"] = new JsonObject
+                {
+                    ["method"] = "tools/call",
+                    ["params"] = new JsonObject
+                    {
+                        ["name"] = name,
+                        ["arguments"] = args,
+                    },
+                },
+                ["response_excerpt"] = "A successful MCP tool result includes content and, when available, structuredContent.",
+            },
+        };
     }
 
     private static string AppendLanguageSupportClause(string name, string description)
