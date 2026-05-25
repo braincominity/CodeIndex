@@ -2409,10 +2409,13 @@ bash ./install.sh --self-test-local-mirror
 
 ### 方法B: NuGet グローバルツール
 
-[.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0) が必要です。
-CodeIndex は `net8.0` を対象にしており、公開ツールのサポート対象
-SDK/runtime 系列は .NET 8.x です。一方で、CI のテストスイートは
-テストプロジェクトを `net9.0` でも検証します。
+[.NET 8.x SDK または runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
+が必要です。CodeIndex は `net8.0` を対象にしており、公開ツールの
+サポート対象 runtime 系列は .NET 8.x です。一方で、CI のテストスイートは
+テストプロジェクトを `net9.0` でも検証します。NuGet package は
+framework-dependent であり、RID-specific / self-contained ではありません。
+Apple Silicon、Linux ARM64、Windows ARM64 で host 側が .NET 8 runtime を
+管理していない場合は、`install.sh` を優先してください。
 
 ```bash
 dotnet tool install -g cdidx
