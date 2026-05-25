@@ -1059,7 +1059,7 @@ public sealed class InstallScriptTests : IDisposable
             mkdir -p "{{payloadDir}}"
             cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
             #!/usr/bin/env bash
-            echo "NEW_BINARY"
+            echo "cdidx v1.2.3"
             EOF
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
@@ -1158,7 +1158,7 @@ public sealed class InstallScriptTests : IDisposable
             mkdir -p "{{payloadDir}}"
             cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
             #!/usr/bin/env bash
-            echo "BROKEN_NEW_BINARY"
+            echo "cdidx v1.2.3"
             EOF
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
@@ -1262,7 +1262,7 @@ public sealed class InstallScriptTests : IDisposable
             mkdir -p "{{payloadDir}}"
             cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
             #!/usr/bin/env bash
-            echo "NEW_BINARY"
+            echo "cdidx v1.2.3"
             EOF
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
@@ -1394,7 +1394,7 @@ public sealed class InstallScriptTests : IDisposable
             mkdir -p "{{payloadDir}}"
             cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
             #!/usr/bin/env bash
-            echo "NEW_BINARY"
+            echo "cdidx v1.2.3"
             EOF
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
@@ -1530,7 +1530,7 @@ public sealed class InstallScriptTests : IDisposable
             mkdir -p "{{payloadDir}}"
             cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
             #!/usr/bin/env bash
-            echo "NEW_BINARY"
+            echo "cdidx v1.2.3"
             EOF
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
@@ -2900,6 +2900,125 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Equal(string.Empty, stderr);
         Assert.Contains("https://mirror.example/releases/Widthdom/CodeIndex/releases/download/v1.2.3/CodeIndex-linux-x64.tar.gz", stdout);
         Assert.Contains("https://mirror.example/releases/Widthdom/CodeIndex/releases/download/v1.2.3/sha256sums.txt", stdout);
+    }
+
+    [Fact]
+    public void ProbeTempRoot_UnwritableTmpdir_PrintsSpecificError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tmpdir = Path.Combine(_tempRoot, "not_a_dir");
+        File.WriteAllText(tmpdir, "not a directory");
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            probe_temp_root
+            """,
+            new Dictionary<string, string?>
+            {
+                ["TMPDIR"] = tmpdir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("TMPDIR not usable", stderr);
+    }
+
+    [Fact]
+    public void VerifyCdidxBinary_VersionMismatch_FailsBeforeSuccess()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var binDir = Path.Combine(_tempRoot, "verify_mismatch");
+        Directory.CreateDirectory(binDir);
+        var binaryPath = Path.Combine(binDir, "cdidx");
+        File.WriteAllText(binaryPath, "#!/usr/bin/env bash\necho 'cdidx v9.9.9'\n");
+        File.SetUnixFileMode(binaryPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            VERSION="v1.2.3"
+            verify_cdidx_binary "{{binaryPath}}"
+            echo "UNREACHABLE"
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("UNREACHABLE", stdout);
+        Assert.Contains("Installed binary version mismatch", stderr);
+        Assert.Contains("expected 1.2.3, got 9.9.9", stderr);
+    }
+
+    [Fact]
+    public void CheckPath_WhenOlderCdidxPrecedesInstallDir_WarnsAboutShadowing()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var oldDir = Path.Combine(_tempRoot, "old_path_bin");
+        var installDir = Path.Combine(_tempRoot, "new_path_bin");
+        Directory.CreateDirectory(oldDir);
+        Directory.CreateDirectory(installDir);
+        var oldBinary = Path.Combine(oldDir, "cdidx");
+        var newBinary = Path.Combine(installDir, "cdidx");
+        File.WriteAllText(oldBinary, "#!/usr/bin/env bash\necho 'cdidx v1.0.0'\n");
+        File.WriteAllText(newBinary, "#!/usr/bin/env bash\necho 'cdidx v1.2.3'\n");
+        File.SetUnixFileMode(oldBinary, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        File.SetUnixFileMode(newBinary, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            check_path
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+                ["PATH"] = oldDir + Path.PathSeparator + installDir,
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("cdidx binaries found on PATH", stdout);
+        Assert.Contains(oldBinary, stdout);
+        Assert.Contains(newBinary, stdout);
+        Assert.Contains("shadowing the new install", stderr);
+    }
+
+    [Fact]
+    public void CheckPath_UpdatePathOptIn_AppendsProfileExportAndUpdatesCurrentPath()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var homeDir = Path.Combine(_tempRoot, "path_profile_home");
+        var installDir = Path.Combine(_tempRoot, "profile_install_bin");
+        Directory.CreateDirectory(homeDir);
+        Directory.CreateDirectory(installDir);
+        var newBinary = Path.Combine(installDir, "cdidx");
+        File.WriteAllText(newBinary, "#!/usr/bin/env bash\necho 'cdidx v1.2.3'\n");
+        File.SetUnixFileMode(newBinary, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            export HOME="{{homeDir}}"
+            export SHELL="/bin/bash"
+            check_path
+            echo "ACTIVE:$(command -v cdidx)"
+            cat "{{Path.Combine(homeDir, ".bashrc")}}"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+                ["CDIDX_INSTALL_UPDATE_PATH"] = "1",
+                ["PATH"] = "/usr/bin:/bin",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains($"Added {installDir} to PATH", stdout);
+        Assert.Contains($"ACTIVE:{newBinary}", stdout);
+        Assert.Contains($"export PATH=\"{installDir}:$PATH\"", stdout);
+        Assert.Contains($"{installDir} is not in your PATH", stderr);
     }
 
     [Fact]
