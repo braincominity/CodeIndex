@@ -253,6 +253,38 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void GlobalToolLog_TryStart_DisposesWriterWhenStartupAfterWriterCreationFails()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+            "CDIDX_DISABLE_PERSISTENT_LOG",
+            "CDIDX_GLOBAL_TOOL_LOG_DIR");
+        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_fault_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(logDir);
+        var writer = new TrackingStreamWriter();
+
+        try
+        {
+            env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+
+            var session = GlobalToolLog.TryStartForTesting(
+                ["status"],
+                "1.10.0",
+                _ => writer,
+                () => throw new UnauthorizedAccessException("prune failed"));
+
+            Assert.Null(session);
+            Assert.True(writer.WasDisposed);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(logDir);
+        }
+    }
+
+    [Fact]
     public void Run_ForcedGlobalToolLogging_WritesLifecycleAndMirrorsStderr()
     {
         var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_{Guid.NewGuid():N}");
@@ -1036,6 +1068,22 @@ public class ProgramRunnerTests
     {
         public JsonTypeInfo? GetTypeInfo(Type type, JsonSerializerOptions options) =>
             throw new InvalidOperationException(JsonOutputFailure.ReflectionDisabledMessage);
+    }
+
+    private sealed class TrackingStreamWriter : StreamWriter
+    {
+        public TrackingStreamWriter()
+            : base(new MemoryStream())
+        {
+        }
+
+        public bool WasDisposed { get; private set; }
+
+        protected override void Dispose(bool disposing)
+        {
+            WasDisposed = true;
+            base.Dispose(disposing);
+        }
     }
 
     // --- --audit-log flag parsing (#1562) ---

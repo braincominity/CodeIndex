@@ -13,7 +13,22 @@ internal static class GlobalToolLog
     private static readonly AsyncLocal<Session?> CurrentSession = new();
 
     internal static IDisposable? TryStart(string[] args, string appVersion)
+        => TryStart(args, appVersion, createWriter: null, afterWriterCreated: null);
+
+    internal static IDisposable? TryStartForTesting(
+        string[] args,
+        string appVersion,
+        Func<string, StreamWriter>? createWriter = null,
+        Action? afterWriterCreated = null)
+        => TryStart(args, appVersion, createWriter, afterWriterCreated);
+
+    private static IDisposable? TryStart(
+        string[] args,
+        string appVersion,
+        Func<string, StreamWriter>? createWriter,
+        Action? afterWriterCreated)
     {
+        StreamWriter? writer = null;
         try
         {
             if (!ShouldEnable())
@@ -23,14 +38,13 @@ internal static class GlobalToolLog
             Directory.CreateDirectory(logDirectory);
             HardenLogFiles(logDirectory);
             var logPath = Path.Combine(logDirectory, $"stderr-{DateTime.UtcNow:yyyyMMdd}.log");
-            var writer = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), new UTF8Encoding(false))
-            {
-                AutoFlush = true,
-            };
+            writer = createWriter?.Invoke(logPath) ?? CreateLogWriter(logPath);
+            afterWriterCreated?.Invoke();
             SetLogFilePermissions(logPath);
             PruneOldLogs(logDirectory);
 
             var session = new Session(writer, logPath);
+            writer = null;
             CurrentSession.Value = session;
             session.AttachErrorMirror();
             session.Write("INFO", $"session_start pid={Environment.ProcessId} version={appVersion}");
@@ -42,10 +56,17 @@ internal static class GlobalToolLog
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            writer?.Dispose();
             CurrentSession.Value = null;
             return null;
         }
     }
+
+    private static StreamWriter CreateLogWriter(string logPath) =>
+        new(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), new UTF8Encoding(false))
+        {
+            AutoFlush = true,
+        };
 
     internal static void Info(string message) => CurrentSession.Value?.Write("INFO", message);
 
