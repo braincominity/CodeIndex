@@ -85,8 +85,10 @@ Install choice and network notes:
 | Self-contained binary with no .NET runtime | `install.sh` |
 | .NET global tool workflow | `dotnet tool install -g cdidx` with .NET 8 installed |
 | ARM64 host without a preinstalled .NET 8 runtime | `install.sh` |
+| Proxy or mirrored GitHub access | `install.sh --doctor` and `CDIDX_GITHUB_BASE_URL` / `CDIDX_GITHUB_API_BASE_URL` |
 
-See [DISTRIBUTION.md](DISTRIBUTION.md) for the full channel matrix.
+See [DISTRIBUTION.md](DISTRIBUTION.md) for the full channel matrix and
+[isolated network install notes](USER_GUIDE.md#isolated-networks-and-proxies).
 
 ### Shell Completion
 

@@ -478,6 +478,36 @@ RUN export CDIDX_INSTALL_DIR=/usr/local/bin \
     && curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 
+#### Isolated networks and proxies
+
+Use `--doctor` before installing when a corporate proxy, egress allowlist, or
+GitHub mirror is involved:
+
+```bash
+bash ./install.sh --doctor
+HTTPS_PROXY=http://proxy.example:8080 bash ./install.sh --doctor v1.5.0
+```
+
+To point the installer at a mirror, set both release and API base URLs:
+
+```bash
+export CDIDX_GITHUB_BASE_URL=https://github.example.internal
+export CDIDX_GITHUB_API_BASE_URL=https://github.example.internal/api/v3
+curl -fsSL "$CDIDX_GITHUB_BASE_URL/Widthdom/CodeIndex/raw/main/install.sh" | bash
+```
+
+The local mirror self-test verifies the mirror code path without touching real
+release assets. It installs a mock `cdidx` into the selected install directory,
+so use an isolated directory unless you explicitly pass the overwrite guard:
+
+```bash
+export CDIDX_INSTALL_DIR="$(mktemp -d)"
+bash ./install.sh --self-test-local-mirror
+```
+
+If the default local self-test port is busy, set
+`CDIDX_LOCAL_MIRROR_PORT=18766`.
+
 ### Option B: NuGet Global Tool
 
 Requires the [.NET 8.x SDK or runtime](https://dotnet.microsoft.com/download/dotnet/8.0).
