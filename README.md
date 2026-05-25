@@ -72,6 +72,7 @@ Output controls:
 | Need | Option |
 |---|---|
 | Owner-only persistent stderr logs on POSIX | Global tool stderr logs are forced to `0600` permissions on every open, including existing date-stamped log files. Use `--log-format text|json`, `--log-retain-count <N>`, `--log-max-size-mb <N>`, or the matching `CDIDX_LOG_*` environment variables to make lifecycle logs JSONL-friendly and rotate them for aggregation. |
+| Checked-in configuration | Use `.cdidx/config.json` for repository defaults such as `search.limit`, `search.snippet_lines`, and `search.max_line_width`; run `cdidx validate-config` to validate the discovered file. |
 | ASCII-only terminal output | Use `--ascii`, `CDIDX_ASCII=1`, `NO_UNICODE`, `TERM=dumb`, accessibility env hints, or a non-UTF-8 locale. Spinners use pipe, slash, dash, and backslash frames; progress bars use `#` / `-`; very narrow terminals fall back to percentage-only progress. |
 | Color and terminal capability | `--color auto` emits ANSI only for capable interactive terminals; `TERM=dumb`, `CI=true`, missing Unix terminal hints, `NO_COLOR`, or `CLICOLOR=0` disable ANSI/progress control sequences. `--palette basic|256|truecolor` can override the `COLORTERM` / `TERM` color-depth detection. |
 | UTF-8 JSON pipelines | CLI `--json` output is written as UTF-8 without a BOM and never includes ANSI escape sequences, even when color is forced for human output. |
@@ -105,14 +106,14 @@ file completion.
 | Area | What cdidx provides |
 |---|---|
 | Search surfaces | CLI-first output for humans and machines; full-text, symbol, reference, caller/callee, dependency, map, inspect, and excerpt commands. |
-| Ranking and filters | Public/exported symbol matches rank ahead of protected, internal, and private matches. Use `--no-visibility-rank` for legacy order, and `--visibility` / `--exclude-visibility` with `symbols`, `definition`, `unused`, and `hotspots`. |
+| Ranking and filters | Public/exported symbol matches rank ahead of protected, internal, and private matches. Use `--no-visibility-rank` for legacy order, and `--visibility` / `--exclude-visibility` with `symbols`, `definition`, `unused`, and `hotspots`. Query defaults can be adjusted with `CDIDX_DEFAULT_LIMIT`, `CDIDX_DEFAULT_SNIPPET_LINES`, and `CDIDX_DEFAULT_MAX_LINE_WIDTH`; explicit CLI flags still win. |
 | Project scoping | `.sln` / `.csproj`-aware <code>--project &lt;name&#124;path&gt;</code> filters for indexing and queries, plus `--solution <path>` when a workspace has multiple solution files. |
 | MCP integration | MCP server support for AI clients such as Claude Code, Cursor, and Windsurf, including tools, indexed-file resources, starter prompts, schema constraints for local argument validation, `mimeType` on text content blocks, and `Language support:` descriptions sourced from the same registries as `cdidx languages`. |
 | Freshness | Parallel full-scan extraction with `--parallelism`, incremental refreshes with `--files` and `--commits`, continuous `--watch`, exact `status --check`, and configurable stale thresholds via `--stale-after` / `CDIDX_STALE_AFTER`. |
-| Storage | Local-first `.cdidx/codeindex.db` storage. `--data-dir <dir>`, `CDIDX_DATA_DIR`, or `XDG_DATA_HOME` can move default SQLite storage outside the workspace; explicit `--db <path>` still wins. |
+| Storage | Local-first `.cdidx/codeindex.db` storage. Query commands run from nested directories prefer the outermost ancestor `.cdidx/codeindex.db` before falling back to the current directory. `--data-dir <dir>`, `CDIDX_DATA_DIR`, or `XDG_DATA_HOME` can move default SQLite storage outside the workspace; explicit `--db <path>` still wins. |
 | DB maintenance | New indexes use SQLite incremental auto-vacuum. `cdidx vacuum` reclaims free pages from existing DBs, including a one-time full `VACUUM` conversion for legacy no-autovacuum DBs, and `status --json` reports metrics under `db_pragma_settings`. |
 | Security defaults | On POSIX systems, `.cdidx` is created with `0700` permissions and `status --json` reports the effective `data_dir_mode` when available. |
-| Diagnostics | `status --explain <field>` describes readiness fields and remediation. Read commands support `--profile`, `--slow-query-ms <n>`, and <code>--trace=stderr&#124;file&#124;none</code>; file traces write daily `query-trace-YYYYMMDD.jsonl` files next to the lifecycle log. |
+| Diagnostics | `status --config` prints effective configuration with source attribution, and `status --explain <field>` describes readiness fields and remediation. Read commands support `--profile`, `--slow-query-ms <n>`, and <code>--trace=stderr&#124;file&#124;none</code>; file traces write daily `query-trace-YYYYMMDD.jsonl` files next to the lifecycle log. |
 | Query exit codes | Valid zero-result query commands exit `0` by default. Pass `--strict-not-found` when scripts should treat zero rows as exit code `2`. |
 | Drift checks | `cdidx diff <db1> <db2>` compares schema, file, symbol, and reference deltas with stable exit codes: `0` identical, `1` drift, `2` schema mismatch, `3` unreadable DB. |
 | Extensibility and feedback | Post-extraction hooks from `~/.config/cdidx/hooks/*.dll` or `CDIDX_HOOKS_DIR` can enrich symbols and references. `cdidx suggestions` lists, inspects, and exports local suggestion history, with fuzzy MCP suggestion deduplication controlled by CLI, env, or `.cdidxrc.json`. |
@@ -275,6 +276,7 @@ cdidx mcp
 | 目的 | option / 動作 |
 |---|---|
 | POSIX の persistent stderr log を owner-only にする | global tool stderr log は開くたびに `0600` 権限へ補正され、既存の日付付き log file も同じ扱いになります。 |
+| checked-in configuration | repository 既定値には `.cdidx/config.json` を使えます。例: `search.limit`、`search.snippet_lines`、`search.max_line_width`。検出された file は `cdidx validate-config` で検証できます。 |
 | ASCII-only 端末で崩れない表示にする | `--ascii`、`CDIDX_ASCII=1`、`NO_UNICODE`、`TERM=dumb`、accessibility 系の環境変数、非 UTF-8 locale を使います。スピナーは pipe、slash、dash、backslash の frame、進捗バーは `#` / `-` になり、幅が非常に狭い端末では percentage-only になります。 |
 | color と端末 capability | `--color auto` は対応する interactive terminal でだけ ANSI を出力します。`TERM=dumb`、`CI=true`、Unix で端末 hint が無い場合、`NO_COLOR`、`CLICOLOR=0` では ANSI / progress 制御シーケンスを抑止します。`--palette basic|256|truecolor` で `COLORTERM` / `TERM` による color-depth 判定を上書きできます。 |
 | UTF-8 JSON pipeline | CLI の `--json` 出力は BOM なし UTF-8 で書き出され、human output 向けに色を強制していても ANSI escape sequence を含みません。 |
@@ -295,14 +297,14 @@ cdidx mcp
 | 分野 | 内容 |
 |---|---|
 | 検索面 | CLI-first の人間向け / 機械処理向け出力。全文検索、シンボル、参照、caller/callee、依存関係、map、inspect、excerpt コマンドを提供します。 |
-| 順位と filter | public/exported なシンボル一致を protected、internal、private より優先します。従来順は `--no-visibility-rank`、可視性の include / exclude は `symbols`、`definition`、`unused`、`hotspots` の `--visibility` / `--exclude-visibility` で指定できます。 |
+| 順位と filter | public/exported なシンボル一致を protected、internal、private より優先します。従来順は `--no-visibility-rank`、可視性の include / exclude は `symbols`、`definition`、`unused`、`hotspots` の `--visibility` / `--exclude-visibility` で指定できます。query 既定値は `CDIDX_DEFAULT_LIMIT`、`CDIDX_DEFAULT_SNIPPET_LINES`、`CDIDX_DEFAULT_MAX_LINE_WIDTH` で調整でき、明示 CLI flag が常に優先されます。 |
 | project scope | `.sln` / `.csproj` を使った <code>--project &lt;name&#124;path&gt;</code> filter で index と query を .NET project 配下へ絞り込めます。workspace に solution が複数ある場合は `--solution <path>` を指定します。 |
 | MCP 連携 | Claude Code、Cursor、Windsurf などの AI クライアント向け MCP server。tools、インデックス済みファイル resources、starter prompts、ローカル引数検証用の schema constraints、text content block の `mimeType`、`cdidx languages` と同じ言語レジストリ由来の `Language support:` 説明を提供します。 |
 | freshness | `--parallelism` による parallel full-scan、`--files` / `--commits` による差分更新、`--watch` による継続更新、`status --check` による完全一致確認、`--stale-after` / `CDIDX_STALE_AFTER` による age threshold 上書きに対応します。 |
-| storage | `.cdidx/codeindex.db` に保存する local-first 設計。既定の SQLite 保存先は `--data-dir <dir>`、`CDIDX_DATA_DIR`、`XDG_DATA_HOME` で workspace 外へ移せます。明示的な `--db <path>` は引き続き最優先です。 |
+| storage | `.cdidx/codeindex.db` に保存する local-first 設計。ネストしたディレクトリからの query コマンドは、current directory にフォールバックする前に最上位祖先の `.cdidx/codeindex.db` を優先します。既定の SQLite 保存先は `--data-dir <dir>`、`CDIDX_DATA_DIR`、`XDG_DATA_HOME` で workspace 外へ移せます。明示的な `--db <path>` は引き続き最優先です。 |
 | DB maintenance | 新規 index DB は SQLite incremental auto-vacuum を使います。既存 DB は `cdidx vacuum` で free page を回収でき、legacy no-autovacuum DB は初回だけ full `VACUUM` で変換します。`status --json` は `db_pragma_settings` 配下に metrics を出力します。 |
 | security defaults | POSIX では `.cdidx` を `0700` 権限で作成します。`status --json` は利用可能な場合に実効 POSIX mode を `data_dir_mode` として報告します。 |
-| diagnostics | `status --explain <field>` は readiness field の意味と対処を説明します。read 系コマンドは `--profile`、`--slow-query-ms <n>`、<code>--trace=stderr&#124;file&#124;none</code> に対応し、file trace は lifecycle log と同じ場所に日次 `query-trace-YYYYMMDD.jsonl` を書きます。 |
+| diagnostics | `status --config` は source attribution 付きの effective configuration を出力し、`status --explain <field>` は readiness field の意味と対処を説明します。read 系コマンドは `--profile`、`--slow-query-ms <n>`、<code>--trace=stderr&#124;file&#124;none</code> に対応し、file trace は lifecycle log と同じ場所に日次 `query-trace-YYYYMMDD.jsonl` を書きます。 |
 | drift checks | `cdidx diff <db1> <db2>` は schema、file、symbol、reference の差分を比較します。exit code は `0` identical、`1` drift、`2` schema mismatch、`3` unreadable DB です。 |
 | extensibility / feedback | `~/.config/cdidx/hooks/*.dll` または `CDIDX_HOOKS_DIR` の post-extraction hook で永続化前のシンボルと参照を拡張できます。`cdidx suggestions` はローカル提案履歴の一覧表示、詳細表示、エクスポートに対応し、MCP 提案の近似重複排除しきい値は CLI、env、`.cdidxrc.json` で調整できます。 |
 | language coverage | 78 言語を検出し、対応言語ではシンボルとグラフも利用可能です。 |
