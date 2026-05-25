@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using CodeIndex.Models;
 
 namespace CodeIndex.Database;
 
@@ -508,6 +509,9 @@ public class StatusResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<PostExtractionHookStatus>? Hooks { get; set; }
     public string? Version { get; set; }
+    [JsonPropertyName("update_check")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public UpdateCheckResult? UpdateCheck { get; set; }
     /// <summary>
     /// One-line human-readable summary for quick orientation.
     /// クイックオリエンテーション用の1行サマリー。
