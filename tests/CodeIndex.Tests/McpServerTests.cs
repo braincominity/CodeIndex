@@ -4279,6 +4279,43 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Search_IncludesTruncatedAndTotalEnvelope()
+    {
+        InsertIndexedFile("src/search-a.cs", "csharp", "public class SearchA { public void Target() { } }");
+        InsertIndexedFile("src/search-b.cs", "csharp", "public class SearchB { public void Target() { } }");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Target","limit":1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.True(structured["truncated"]!.GetValue<bool>());
+        Assert.Null(structured["total"]);
+        Assert.Single(structured["results"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_References_IncludesTruncatedAndTotalEnvelope()
+    {
+        InsertIndexedFile(
+            "src/reference-envelope.cs",
+            "csharp",
+            """
+            public class CallerOne { public void Run(App app) { app.Run(); } }
+            public class CallerTwo { public void Run(App app) { app.Run(); } }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run","lang":"csharp","limit":1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.True(structured["truncated"]!.GetValue<bool>());
+        Assert.True(structured["total"]!.GetValue<int>() >= 2);
+        Assert.Single(structured["results"]!.AsArray());
+    }
+
+    [Fact]
     public void ToolsCall_Search_AllowsFalseExactNameAlias()
     {
         InsertIndexedFile("src/search_false_alias.cs", "csharp", "void Run() { }\n");

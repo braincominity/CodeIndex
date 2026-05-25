@@ -388,6 +388,24 @@ public partial class McpServer
         return array;
     }
 
+    private static int FetchLimitForEnvelope(int limit) => limit >= int.MaxValue ? int.MaxValue : limit + 1;
+
+    private static bool TrimToRequestedLimit<T>(List<T> results, int limit)
+    {
+        if (results.Count <= limit)
+            return false;
+
+        results.RemoveRange(limit, results.Count - limit);
+        return true;
+    }
+
+    private static void AddResultEnvelope(JsonObject payload, int returnedCount, int? total, bool truncated)
+    {
+        payload["count"] = returnedCount;
+        payload["truncated"] = truncated;
+        payload["total"] = total.HasValue ? JsonValue.Create(total.Value) : null;
+    }
+
     private JsonObject ToAnalyzeSymbolJsonObject(SymbolAnalysisResult analysis)
     {
         var payload = new JsonObject
@@ -598,7 +616,8 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.Search(query, limit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix);
+            var results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix);
+            var truncated = TrimToRequestedLimit(results, limit);
             if (results.Count == 0)
             {
                 var payload = new JsonObject
@@ -609,9 +628,9 @@ public partial class McpServer
                     ["maxLineWidth"] = maxLineWidth,
                     ["path"] = PathEcho(pathPatterns),
                     ["excludeTests"] = excludeTests,
-                    ["count"] = 0,
                     ["results"] = new JsonArray()
                 };
+                AddResultEnvelope(payload, 0, 0, truncated: false);
                 AddFreshnessHint(payload, reader);
                 return CreateToolResult(id, "No results found.", payload);
             }
@@ -624,9 +643,9 @@ public partial class McpServer
                 ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
-                ["count"] = results.Count,
                 ["results"] = ToJsonArray(results, result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines, exact, maxLineWidth))
             };
+            AddResultEnvelope(structured, results.Count, truncated ? null : results.Count, truncated);
             // Include top file paths in summary for quick AI orientation
             // AIが素早く位置把握できるよう、サマリにトップファイルパスを含める
             var topPaths = results.Select(r => r.Path).Distinct().Take(3);
@@ -770,7 +789,8 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.GetDefinitions(query, limit, kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact);
+            var results = reader.GetDefinitions(query, FetchLimitForEnvelope(limit), kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact);
+            var truncated = TrimToRequestedLimit(results, limit);
             var exactSignal = reader.GetDefinitionExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, since);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact,
@@ -786,9 +806,9 @@ public partial class McpServer
                 ["includeBody"] = includeBody,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
-                ["count"] = results.Count,
                 ["results"] = ToJsonArray(results)
             };
+            AddResultEnvelope(payload, results.Count, truncated ? null : results.Count, truncated);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             if (results.Count == 0)
@@ -824,7 +844,11 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.SearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
+            var results = reader.SearchReferences(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
+            var truncated = TrimToRequestedLimit(results, limit);
+            var total = truncated
+                ? reader.CountSearchReferences(query, int.MaxValue, lang, kind, pathPatterns, excludePaths, excludeTests, exact)
+                : results.Count;
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
@@ -849,9 +873,9 @@ public partial class McpServer
                 ["graphLanguage"] = graphSupport.GraphLanguage,
                 ["graphSupported"] = graphSupport.GraphSupported,
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
-                ["count"] = results.Count,
                 ["results"] = ToJsonArray(results)
             };
+            AddResultEnvelope(payload, results.Count, total, truncated);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
@@ -890,7 +914,11 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
+            var results = reader.GetCallers(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
+            var truncated = TrimToRequestedLimit(results, limit);
+            var total = truncated
+                ? reader.CountCallers(query, int.MaxValue, lang, kind, pathPatterns, excludePaths, excludeTests, exact)
+                : results.Count;
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
@@ -915,9 +943,9 @@ public partial class McpServer
                 ["graphLanguage"] = graphSupport.GraphLanguage,
                 ["graphSupported"] = graphSupport.GraphSupported,
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
-                ["count"] = results.Count,
                 ["results"] = ToJsonArray(results)
             };
+            AddResultEnvelope(payload, results.Count, total, truncated);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
@@ -956,7 +984,11 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
+            var results = reader.GetCallees(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
+            var truncated = TrimToRequestedLimit(results, limit);
+            var total = truncated
+                ? reader.CountCallees(query, int.MaxValue, lang, kind, pathPatterns, excludePaths, excludeTests, exact)
+                : results.Count;
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
@@ -981,9 +1013,9 @@ public partial class McpServer
                 ["graphLanguage"] = graphSupport.GraphLanguage,
                 ["graphSupported"] = graphSupport.GraphSupported,
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
-                ["count"] = results.Count,
                 ["results"] = ToJsonArray(results)
             };
+            AddResultEnvelope(payload, results.Count, total, truncated);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
