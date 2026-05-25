@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Models;
 
@@ -113,6 +114,42 @@ public class GitHubIssueReporterTests : IDisposable
         var input = "Both `import React` and `require('foo')` are missed";
         var result = GitHubIssueReporter.ScrubInlineCode(input);
         Assert.Equal("Both [code example removed] and [code example removed] are missed", result);
+    }
+
+    [Fact]
+    public void ScrubInlineCode_RemovesInlineSpanContainingNestedBackticks()
+    {
+        var input = "Template examples like `const x = `template`` should not leak";
+        var result = GitHubIssueReporter.ScrubInlineCode(input);
+        Assert.Equal("Template examples like [code example removed] should not leak", result);
+        Assert.DoesNotContain("template", result);
+    }
+
+    [Fact]
+    public void ScrubInlineCode_IgnoresEscapedBackticksInsideInlineSpan()
+    {
+        var input = "Escaped examples like `const x = \\`secret\\`` should not leak";
+        var result = GitHubIssueReporter.ScrubInlineCode(input);
+        Assert.Equal("Escaped examples like [code example removed] should not leak", result);
+        Assert.DoesNotContain("secret", result);
+    }
+
+    [Fact]
+    public void ScrubInlineCode_RemovesInlineSpanFollowedByLetter()
+    {
+        var input = "Call `secret()`when submitting";
+        var result = GitHubIssueReporter.ScrubInlineCode(input);
+        Assert.Equal("Call [code example removed]when submitting", result);
+        Assert.DoesNotContain("secret", result);
+    }
+
+    [Fact]
+    public void ScrubInlineCode_RemovesInlineSpanWithTrailingSpaceBeforeAdjacentText()
+    {
+        var input = "Use `secret `and retry";
+        var result = GitHubIssueReporter.ScrubInlineCode(input);
+        Assert.Equal("Use [code example removed]and retry", result);
+        Assert.DoesNotContain("secret", result);
     }
 
     [Fact]
@@ -248,6 +285,59 @@ public class GitHubIssueReporterTests : IDisposable
         var detail = GitHubIssueReporter.BuildApiErrorDetail(422, "{\n\"message\":\"validation failed\"\n}");
 
         Assert.Equal("422: { \"message\":\"validation failed\" }", detail);
+    }
+
+    [Fact]
+    public void BuildIssueTitle_ClampsFinalTitleToGitHubLimit()
+    {
+        var category = new string('c', 240);
+        var title = GitHubIssueReporter.BuildIssueTitle(category, new string('d', 200));
+
+        Assert.True(title.Length <= GitHubIssueReporter.MaxGitHubIssueTitleLength);
+    }
+
+    [Fact]
+    public async Task TryCreateIssueAsync_PostPayloadTitleDoesNotExceedGitHubLimit()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", "ghp_title_length_test");
+
+        var handler = new RecordingHandler();
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/search/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("""{ "total_count": 0, "items": [] }"""),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Get && req.RequestUri!.AbsolutePath == "/repos/widthdom/CodeIndex/issues",
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = MakeJsonContent("[]"),
+            });
+        handler.AddResponse(req => req.Method == HttpMethod.Post && req.RequestUri!.AbsolutePath.Contains("/issues"),
+            new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = MakeJsonContent("""{ "html_url": "https://github.com/widthdom/CodeIndex/issues/4242" }"""),
+            });
+        using var mockClient = new HttpClient(handler);
+        GitHubIssueReporter.s_httpClientOverride = mockClient;
+        try
+        {
+            var description = new string('d', 500);
+            var record = MakeRecordWithKnownHash();
+            record.Category = new string('c', 240);
+            record.Description = description;
+            record.Hash = SuggestionStore.ComputeHash(record.Category, record.Language, description);
+
+            await GitHubIssueReporter.TryCreateIssueAsync(record, "1.0.0-test");
+
+            var postedJson = Assert.Single(handler.RequestBodies);
+            var payload = JsonNode.Parse(postedJson)!.AsObject();
+            var title = payload["title"]!.GetValue<string>();
+            Assert.True(title.Length <= GitHubIssueReporter.MaxGitHubIssueTitleLength);
+        }
+        finally
+        {
+            GitHubIssueReporter.s_httpClientOverride = null;
+        }
     }
 
     [Fact]
