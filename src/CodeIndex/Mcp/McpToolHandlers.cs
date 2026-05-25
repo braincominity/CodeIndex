@@ -3198,7 +3198,7 @@ public partial class McpServer
     }
 
     private static bool IsMcpCSharpStaticInterfaceContractSymbol(SymbolRecord symbol)
-        => symbol.Kind is "function" or "property"
+        => symbol.Kind is "function" or "operator" or "property"
            && symbol.ContainerKind == "interface"
            && !string.IsNullOrWhiteSpace(symbol.Signature)
            && ContainsMcpCSharpWord(symbol.Signature!, "static")

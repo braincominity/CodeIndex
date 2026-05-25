@@ -99,6 +99,131 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InsertSymbols_UnknownKind_ThrowsBeforePersisting()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = 1,
+                Kind = "metohd",
+                Name = "Run",
+                Line = 1,
+            },
+        ]));
+
+        Assert.Contains("Unknown symbol kind", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("annotation")]
+    [InlineData("column_reference")]
+    [InlineData("const_generic_reference")]
+    [InlineData("cte_body_reference")]
+    [InlineData("decorator")]
+    [InlineData("generic_type_argument")]
+    [InlineData("join_condition_reference")]
+    [InlineData("lifetime_reference")]
+    [InlineData("subscribe")]
+    [InlineData("implicit_implementation")]
+    public void InsertReferences_ExistingReferenceKinds_AreAccepted(string referenceKind)
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = $"src/{referenceKind}.cs",
+            Lang = "csharp",
+            Size = 32,
+            Lines = 1,
+            Modified = new DateTime(2026, 5, 25, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = referenceKind,
+        });
+
+        _writer.InsertReferences(
+        [
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Target",
+                ReferenceKind = referenceKind,
+                Line = 1,
+                Column = 1,
+                Context = "Target();",
+                ContainerKind = "function",
+                ContainerName = "Caller",
+            },
+        ]);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE reference_kind = @kind";
+        cmd.Parameters.AddWithValue("@kind", referenceKind);
+        Assert.Equal(1L, (long)cmd.ExecuteScalar()!);
+    }
+
+    [Theory]
+    [InlineData("accessor")]
+    [InlineData("annotation")]
+    [InlineData("async_function")]
+    [InlineData("async_generator")]
+    [InlineData("block data")]
+    [InlineData("class_hook")]
+    [InlineData("delegate")]
+    [InlineData("generator")]
+    [InlineData("object")]
+    [InlineData("procedure")]
+    [InlineData("program")]
+    [InlineData("rule")]
+    [InlineData("union")]
+    [InlineData("specialization")]
+    [InlineData("protocol")]
+    [InlineData("file_module")]
+    [InlineData("submodule")]
+    [InlineData("subroutine")]
+    [InlineData("trait")]
+    [InlineData("associatedtype")]
+    [InlineData("typealias")]
+    public void InsertSymbols_ExistingExtractorKinds_AreAccepted(string symbolKind)
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = $"src/{symbolKind}.txt",
+            Lang = "csharp",
+            Size = 32,
+            Lines = 1,
+            Modified = new DateTime(2026, 5, 25, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = symbolKind,
+        });
+
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = symbolKind,
+                Name = "Handler",
+                Line = 1,
+            },
+        ]);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE kind = @kind";
+        cmd.Parameters.AddWithValue("@kind", symbolKind);
+        Assert.Equal(1L, (long)cmd.ExecuteScalar()!);
+    }
+
+    [Fact]
+    public void InitializeSchema_ConstrainsKindColumns()
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO symbols (file_id, kind, name, line)
+            VALUES (1, 'metohd', 'Run', 1)
+            """;
+
+        var ex = Assert.Throws<SqliteException>(() => cmd.ExecuteNonQuery());
+        Assert.Equal(19, ex.SqliteErrorCode);
+    }
+
+    [Fact]
     public void OptimizeFts_ResetsIncrementalWriteCounterAndStampsTime()
     {
         Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
