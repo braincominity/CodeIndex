@@ -98,79 +98,24 @@ internal sealed class RepoMapBuilder
         using var txn = _conn.BeginTransaction(deferred: true);
         var fileStats = GetFileStats(lang, pathPatterns, excludePathPatterns, excludeTests);
         ApplyJavaModuleGrouping(fileStats, LoadJavaModuleDescriptors());
+        var aggregate = BuildAggregate(fileStats);
         var freshness = getFreshness();
         var result = new RepoMapResult
         {
-            FileCount = fileStats.Count,
-            TotalLines = fileStats.Sum(file => (long)file.Lines),
-            TotalSymbols = fileStats.Sum(file => (long)file.SymbolCount),
-            TotalReferences = fileStats.Sum(file => (long)file.ReferenceCount),
-            IndexedAt = fileStats.Count > 0 ? fileStats.Max(file => file.IndexedAt) : null,
-            LatestModified = fileStats.Count > 0 ? fileStats.Max(file => file.Modified) : null,
+            FileCount = aggregate.FileCount,
+            TotalLines = aggregate.TotalLines,
+            TotalSymbols = aggregate.TotalSymbols,
+            TotalReferences = aggregate.TotalReferences,
+            IndexedAt = aggregate.IndexedAt,
+            LatestModified = aggregate.LatestModified,
             WorkspaceIndexedAt = freshness.IndexedAt,
             WorkspaceLatestModified = freshness.LatestModified,
-            Languages = fileStats
-                .GroupBy(file => file.Lang ?? "unknown")
-                .Select(group => new RepoLanguageResult
-                {
-                    Lang = group.Key,
-                    Files = group.Count(),
-                    Lines = group.Sum(file => (long)file.Lines),
-                    Symbols = group.Sum(file => (long)file.SymbolCount),
-                    References = group.Sum(file => (long)file.ReferenceCount),
-                })
-                .OrderByDescending(group => group.Files)
-                .ThenBy(group => group.Lang)
-                .Take(limit)
-                .ToList(),
-            Modules = fileStats
-                .GroupBy(GetModuleKey)
-                .Select(group => new RepoModuleResult
-                {
-                    Module = group.Key,
-                    Files = group.Count(),
-                    Lines = group.Sum(file => (long)file.Lines),
-                    Symbols = group.Sum(file => (long)file.SymbolCount),
-                    References = group.Sum(file => (long)file.ReferenceCount),
-                })
-                .OrderByDescending(group => group.References)
-                .ThenByDescending(group => group.Symbols)
-                .ThenByDescending(group => group.Lines)
-                .ThenBy(group => group.Module)
-                .Take(limit)
-                .ToList(),
-            TopFiles = fileStats
-                .Select(CreateScoredFileSummary)
-                .OrderByDescending(file => file.Score)
-                .ThenByDescending(file => file.ReferenceCount)
-                .ThenByDescending(file => file.SymbolCount)
-                .ThenByDescending(file => file.Lines)
-                .ThenBy(file => file.Path)
-                .Take(limit)
-                .ToList(),
-            LargestFiles = fileStats
-                .OrderByDescending(file => file.Lines)
-                .ThenByDescending(file => file.Size)
-                .ThenBy(file => file.Path)
-                .Take(limit)
-                .Select(CreateUnscoredFileSummary)
-                .ToList(),
-            SymbolRichFiles = fileStats
-                .OrderByDescending(file => file.SymbolCount)
-                .ThenByDescending(file => file.ReferenceCount)
-                .ThenByDescending(file => file.Lines)
-                .ThenBy(file => file.Path)
-                .Take(limit)
-                .Select(CreateUnscoredFileSummary)
-                .ToList(),
-            ReferenceRichFiles = fileStats
-                .OrderByDescending(file => file.ReferenceCount)
-                .ThenByDescending(file => file.SymbolCount)
-                .ThenByDescending(file => file.Lines)
-                .ThenBy(file => file.Path)
-                .Take(limit)
-                .Select(CreateUnscoredFileSummary)
-                .ToList(),
+            Languages = BuildLanguageResults(aggregate.Languages, limit),
+            Modules = BuildModuleResults(aggregate.Modules, limit),
+            TopFiles = BuildTopFileResults(aggregate.FileSummaries, limit),
+            LargestFiles = BuildLargestFileResults(aggregate.FileSummaries, limit),
+            SymbolRichFiles = BuildSymbolRichFileResults(aggregate.FileSummaries, limit),
+            ReferenceRichFiles = BuildReferenceRichFileResults(aggregate.FileSummaries, limit),
             Entrypoints = GetEntrypoints(fileStats, limit, lang, pathPatterns, excludePathPatterns, excludeTests, minEntrypointConfidence),
             GraphTableAvailable = _hasReferencesTable,
         };
@@ -224,6 +169,144 @@ internal sealed class RepoMapBuilder
         }
 
         return results;
+    }
+
+    private static RepoMapAggregate BuildAggregate(IReadOnlyList<RepoFileStat> fileStats)
+    {
+        var languages = new Dictionary<string, RepoLanguageResult>(StringComparer.Ordinal);
+        var modules = new Dictionary<string, RepoModuleResult>(StringComparer.Ordinal);
+        var fileSummaries = new List<RepoFileSummaryResult>(fileStats.Count);
+        var aggregate = new RepoMapAggregate
+        {
+            FileCount = fileStats.Count,
+            Languages = languages,
+            Modules = modules,
+            FileSummaries = fileSummaries,
+        };
+
+        foreach (var file in fileStats)
+        {
+            aggregate.TotalLines += file.Lines;
+            aggregate.TotalSymbols += file.SymbolCount;
+            aggregate.TotalReferences += file.ReferenceCount;
+            aggregate.IndexedAt = MaxDateTime(aggregate.IndexedAt, file.IndexedAt);
+            aggregate.LatestModified = MaxDateTime(aggregate.LatestModified, file.Modified);
+
+            var languageKey = file.Lang ?? "unknown";
+            if (!languages.TryGetValue(languageKey, out var language))
+            {
+                language = new RepoLanguageResult { Lang = languageKey };
+                languages.Add(languageKey, language);
+            }
+
+            AddFileStats(language, file);
+
+            var moduleKey = GetModuleKey(file);
+            if (!modules.TryGetValue(moduleKey, out var module))
+            {
+                module = new RepoModuleResult { Module = moduleKey };
+                modules.Add(moduleKey, module);
+            }
+
+            AddFileStats(module, file);
+            fileSummaries.Add(CreateScoredFileSummary(file));
+        }
+
+        return aggregate;
+    }
+
+    private static List<RepoLanguageResult> BuildLanguageResults(IReadOnlyDictionary<string, RepoLanguageResult> languages, int limit)
+    {
+        return languages.Values
+            .OrderByDescending(group => group.Files)
+            .ThenBy(group => group.Lang)
+            .Take(limit)
+            .ToList();
+    }
+
+    private static List<RepoModuleResult> BuildModuleResults(IReadOnlyDictionary<string, RepoModuleResult> modules, int limit)
+    {
+        return modules.Values
+            .OrderByDescending(group => group.References)
+            .ThenByDescending(group => group.Symbols)
+            .ThenByDescending(group => group.Lines)
+            .ThenBy(group => group.Module)
+            .Take(limit)
+            .ToList();
+    }
+
+    private static List<RepoFileSummaryResult> BuildTopFileResults(IReadOnlyList<RepoFileSummaryResult> fileSummaries, int limit)
+    {
+        return fileSummaries
+            .OrderByDescending(file => file.Score)
+            .ThenByDescending(file => file.ReferenceCount)
+            .ThenByDescending(file => file.SymbolCount)
+            .ThenByDescending(file => file.Lines)
+            .ThenBy(file => file.Path)
+            .Take(limit)
+            .ToList();
+    }
+
+    private static List<RepoFileSummaryResult> BuildLargestFileResults(IReadOnlyList<RepoFileSummaryResult> fileSummaries, int limit)
+    {
+        return fileSummaries
+            .OrderByDescending(file => file.Lines)
+            .ThenByDescending(file => file.Size)
+            .ThenBy(file => file.Path)
+            .Take(limit)
+            .Select(CopyUnscoredFileSummary)
+            .ToList();
+    }
+
+    private static List<RepoFileSummaryResult> BuildSymbolRichFileResults(IReadOnlyList<RepoFileSummaryResult> fileSummaries, int limit)
+    {
+        return fileSummaries
+            .OrderByDescending(file => file.SymbolCount)
+            .ThenByDescending(file => file.ReferenceCount)
+            .ThenByDescending(file => file.Lines)
+            .ThenBy(file => file.Path)
+            .Take(limit)
+            .Select(CopyUnscoredFileSummary)
+            .ToList();
+    }
+
+    private static List<RepoFileSummaryResult> BuildReferenceRichFileResults(IReadOnlyList<RepoFileSummaryResult> fileSummaries, int limit)
+    {
+        return fileSummaries
+            .OrderByDescending(file => file.ReferenceCount)
+            .ThenByDescending(file => file.SymbolCount)
+            .ThenByDescending(file => file.Lines)
+            .ThenBy(file => file.Path)
+            .Take(limit)
+            .Select(CopyUnscoredFileSummary)
+            .ToList();
+    }
+
+    private static void AddFileStats(RepoLanguageResult target, RepoFileStat file)
+    {
+        target.Files++;
+        target.Lines += file.Lines;
+        target.Symbols += file.SymbolCount;
+        target.References += file.ReferenceCount;
+    }
+
+    private static void AddFileStats(RepoModuleResult target, RepoFileStat file)
+    {
+        target.Files++;
+        target.Lines += file.Lines;
+        target.Symbols += file.SymbolCount;
+        target.References += file.ReferenceCount;
+    }
+
+    private static DateTime? MaxDateTime(DateTime? current, DateTime? candidate)
+    {
+        if (candidate == null)
+            return current;
+
+        if (current == null || candidate > current)
+            return candidate;
+
+        return current;
     }
 
     private Dictionary<string, string> LoadJavaModuleDescriptors()
@@ -373,6 +456,19 @@ internal sealed class RepoMapBuilder
     }
 
     private static RepoFileSummaryResult CreateUnscoredFileSummary(RepoFileStat file)
+    {
+        return new RepoFileSummaryResult
+        {
+            Path = file.Path,
+            Lang = file.Lang,
+            Lines = file.Lines,
+            Size = file.Size,
+            SymbolCount = file.SymbolCount,
+            ReferenceCount = file.ReferenceCount,
+        };
+    }
+
+    private static RepoFileSummaryResult CopyUnscoredFileSummary(RepoFileSummaryResult file)
     {
         return new RepoFileSummaryResult
         {
@@ -561,5 +657,18 @@ internal sealed class RepoMapBuilder
     private readonly record struct EntrypointScore(int Score, string MatchType, double Confidence, int HintRank)
     {
         public static EntrypointScore None { get; } = new(0, "", 0, 0);
+    }
+
+    private sealed class RepoMapAggregate
+    {
+        public int FileCount { get; init; }
+        public long TotalLines { get; set; }
+        public long TotalSymbols { get; set; }
+        public long TotalReferences { get; set; }
+        public DateTime? IndexedAt { get; set; }
+        public DateTime? LatestModified { get; set; }
+        public required Dictionary<string, RepoLanguageResult> Languages { get; init; }
+        public required Dictionary<string, RepoModuleResult> Modules { get; init; }
+        public required List<RepoFileSummaryResult> FileSummaries { get; init; }
     }
 }

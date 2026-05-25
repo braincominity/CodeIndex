@@ -31,6 +31,7 @@ internal readonly record struct IndexedFileSnapshot(string Path, string? Checksu
 public partial class DbReader
 {
     public const string VerifyFoldReadyRowsEnvironmentVariable = "CDIDX_VERIFY_FOLD_READY_ROWS";
+    internal const int MaxReferenceKindAggregateCharacters = 16 * 1024;
 
     private static readonly Regex ImpactSignatureIdentifierRegex = new(@"[\p{L}_][\p{L}\p{Nd}_]*", RegexOptions.Compiled);
     private static readonly Regex CSharpUsingStaticImportRegex = new(@"^\s*(?:global\s+)?using\s+static\s+(?<target>[^;]+)", RegexOptions.Compiled);
@@ -330,6 +331,16 @@ public partial class DbReader
         if (set.Count == 0)
             return string.IsNullOrEmpty(primaryKind) ? Array.Empty<string>() : new[] { primaryKind };
         return set.ToArray();
+    }
+
+    private static string? TruncateReferenceKindAggregate(string? aggregate, out bool truncated)
+    {
+        truncated = false;
+        if (aggregate == null || aggregate.Length <= MaxReferenceKindAggregateCharacters)
+            return aggregate;
+
+        truncated = true;
+        return aggregate[..MaxReferenceKindAggregateCharacters];
     }
 
     public DbReader(SqliteConnection connection, bool isReadOnly = false)
