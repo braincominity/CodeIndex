@@ -31,6 +31,7 @@ public class DbContext : IDisposable
     private readonly bool _isReadOnly;
     private readonly string? _schemaCacheKey;
     private SqliteTransaction? _activeMigrationTransaction;
+    private bool _readMigrationInsideExternalTransaction;
     private DbSchemaCache? _schemaCache;
     private PreparedCommandCache? _preparedCommands;
     private bool _suppressWriteWorkTracking = true;
@@ -1837,14 +1838,12 @@ public class DbContext : IDisposable
             }
             catch (SqliteException ex) when (IsNestedTransactionError(ex))
             {
-                if (RunReadMigrationSteps())
-                    EnsureForeignKeysEnabled();
+                RunReadMigrationStepsInsideExternalTransaction();
                 return;
             }
             catch (InvalidOperationException ex) when (IsNestedTransactionError(ex))
             {
-                if (RunReadMigrationSteps())
-                    EnsureForeignKeysEnabled();
+                RunReadMigrationStepsInsideExternalTransaction();
                 return;
             }
             catch (SqliteException ex) when (IsReadOnlyOpenError(ex))
@@ -1871,6 +1870,20 @@ public class DbContext : IDisposable
             // resolved as missing; drop the cache so the next DbReader sees the new shape.
             // マイグレーションで列・index が追加された可能性があるためキャッシュを破棄する。
             _schemaCache?.Refresh();
+        }
+    }
+
+    private void RunReadMigrationStepsInsideExternalTransaction()
+    {
+        _readMigrationInsideExternalTransaction = true;
+        try
+        {
+            if (RunReadMigrationSteps())
+                EnsureForeignKeysEnabled();
+        }
+        finally
+        {
+            _readMigrationInsideExternalTransaction = false;
         }
     }
 
@@ -2091,7 +2104,7 @@ public class DbContext : IDisposable
 
     private void EnsureColumn(string tableName, string columnName, string definition)
     {
-        if (_activeMigrationTransaction != null)
+        if (_activeMigrationTransaction != null || _readMigrationInsideExternalTransaction)
         {
             DbColumnEnsurer.EnsureColumn(
                 () => ColumnExists(tableName, columnName),
