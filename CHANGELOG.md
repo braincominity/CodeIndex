@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.26.3] - 2026-05-26
+
+#### Fixed
+
+- Fixed Homebrew formula generation so `version.json` is installed next to the `cdidx` binary, allowing `cdidx --version` to report the packaged release version instead of falling back to `v0.0.0`.
+
 ### [1.26.2] - 2026-05-26
 
 #### Added
@@ -2969,6 +2975,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.26.3] - 2026-05-26
+
+#### 修正
+
+- Homebrew formula 生成で `version.json` を `cdidx` バイナリの隣に配置するよう修正し、`cdidx --version` が `v0.0.0` フォールバックではなく配布版のバージョンを表示できるようにしました。
+
 ### [1.26.2] - 2026-05-26
 
 #### 追加
@@ -5916,7 +5928,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.26.2...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.26.3...HEAD
+[1.26.3]: https://github.com/Widthdom/CodeIndex/compare/v1.26.2...v1.26.3
 [1.26.2]: https://github.com/Widthdom/CodeIndex/compare/v1.26.1...v1.26.2
 [1.26.1]: https://github.com/Widthdom/CodeIndex/compare/v1.26.0...v1.26.1
 [1.26.0]: https://github.com/Widthdom/CodeIndex/compare/v1.25.1...v1.26.0
