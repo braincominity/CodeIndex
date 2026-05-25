@@ -1,5 +1,8 @@
 using System.Diagnostics;
+using System.Formats.Tar;
+using System.IO.Compression;
 using System.Runtime.Versioning;
+using System.Text;
 
 namespace CodeIndex.Tests;
 
@@ -19,6 +22,35 @@ public sealed class InstallScriptTests : IDisposable
     public void Dispose()
     {
         TestProjectHelper.DeleteDirectory(_tempRoot);
+    }
+
+    [Fact]
+    public void Uninstall_RemovesInstalledPayloadAndLeavesProjectData()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "uninstall_bin");
+        Directory.CreateDirectory(installDir);
+        File.WriteAllText(Path.Combine(installDir, "cdidx"), "#!/usr/bin/env bash\n");
+        File.WriteAllText(Path.Combine(installDir, "version.json"), "{}");
+        File.WriteAllText(Path.Combine(installDir, "libe_sqlite3.so"), "");
+        Directory.CreateDirectory(Path.Combine(installDir, "LICENSES"));
+        File.WriteAllText(Path.Combine(installDir, "LICENSES", "Apache-2.0.txt"), "");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            "uninstall_cdidx",
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Uninstall complete", stdout);
+        Assert.False(File.Exists(Path.Combine(installDir, "cdidx")));
+        Assert.False(File.Exists(Path.Combine(installDir, "version.json")));
+        Assert.False(Directory.Exists(Path.Combine(installDir, "LICENSES")));
     }
 
     [Theory]
@@ -63,7 +95,7 @@ public sealed class InstallScriptTests : IDisposable
             echo "cdidx v1.10.0"
             EOF
             chmod +x "{{Path.Combine(installDir, "cdidx")}}"
-            printf '{"version":"1.10.0"}' > "{{Path.Combine(installDir, "version.json")}}"
+            printf '{"version":"1.10.0","integrity_ok":true}' > "{{Path.Combine(installDir, "version.json")}}"
             : > "{{Path.Combine(installDir, nativeAssetName)}}"
             printf 'license text' > "{{Path.Combine(installDir, "LICENSE")}}"
             printf 'commercial license text' > "{{Path.Combine(installDir, "COMMERCIAL_LICENSE.md")}}"
@@ -761,7 +793,7 @@ public sealed class InstallScriptTests : IDisposable
             EOF
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -860,7 +892,7 @@ public sealed class InstallScriptTests : IDisposable
             printf 'trademark text' > "{{Path.Combine(payloadDir, "TRADEMARKS.md")}}"
             printf 'fsl text' > "{{Path.Combine(payloadDir, "LICENSES", "FSL-1.1-ALv2.txt")}}"
             printf 'apache text' > "{{Path.Combine(payloadDir, "LICENSES", "Apache-2.0.txt")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -936,6 +968,327 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void DownloadAndInstall_ReinstallReplacesExistingOptionalDirectories()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "replace_optional_target");
+        var payloadDir = Path.Combine(_tempRoot, "replace_optional_payload");
+        var archivePath = Path.Combine(_tempRoot, "replace_optional.tar.gz");
+        var checksumsPath = Path.Combine(_tempRoot, "replace_optional.sha256sums.txt");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            mkdir -p "{{Path.Combine(installDir, "LICENSES")}}"
+            cat > "{{Path.Combine(installDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "cdidx v1.24.6"
+            EOF
+            chmod +x "{{Path.Combine(installDir, "cdidx")}}"
+            printf '{"version":"1.24.6"}' > "{{Path.Combine(installDir, "version.json")}}"
+            printf 'old-lib' > "{{Path.Combine(installDir, "libe_sqlite3.so")}}"
+            printf 'stale' > "{{Path.Combine(installDir, "LICENSES", "stale.txt")}}"
+
+            mkdir -p "{{payloadDir}}"
+            mkdir -p "{{Path.Combine(payloadDir, "LICENSES")}}"
+            cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "cdidx v1.24.6"
+            EOF
+            chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
+            printf '{"version":"1.24.6"}' > "{{Path.Combine(payloadDir, "version.json")}}"
+            printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
+            printf 'new-license' > "{{Path.Combine(payloadDir, "LICENSES", "new.txt")}}"
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
+
+            checksum="$(calculate_sha256 "{{archivePath}}")"
+            printf '%s  CodeIndex-linux-x64.tar.gz\n' "$checksum" > "{{checksumsPath}}"
+
+            VERSION="v1.24.6"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o) output_path="$2"; shift 2 ;;
+                        -w) shift 2 ;;
+                        *) url="$1"; shift ;;
+                    esac
+                done
+                case "$url" in
+                    */sha256sums.txt) cp "{{checksumsPath}}" "$output_path" ;;
+                    *) cp "{{archivePath}}" "$output_path" ;;
+                esac
+                printf '200'
+                return 0
+            }
+
+            download_and_install
+            echo "REINSTALL_OK"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("REINSTALL_OK", stdout);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal("new-license", File.ReadAllText(Path.Combine(installDir, "LICENSES", "new.txt")));
+        Assert.False(File.Exists(Path.Combine(installDir, "LICENSES", "stale.txt")));
+        Assert.False(Directory.Exists(Path.Combine(installDir, "LICENSES", "LICENSES")));
+    }
+
+    [Fact]
+    public void DownloadAndInstall_LegacyArchiveWithoutManifestStillInstalls()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "legacy_manifest_target");
+        var payloadDir = Path.Combine(_tempRoot, "legacy_manifest_payload");
+        var archivePath = Path.Combine(_tempRoot, "legacy_manifest.tar.gz");
+        var checksumsPath = Path.Combine(_tempRoot, "legacy_manifest.sha256sums.txt");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            mkdir -p "{{payloadDir}}"
+            cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "cdidx v1.24.5"
+            EOF
+            chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
+            printf '{"version":"1.24.5"}' > "{{Path.Combine(payloadDir, "version.json")}}"
+            printf 'legacy-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
+            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+
+            checksum="$(calculate_sha256 "{{archivePath}}")"
+            printf '%s  CodeIndex-linux-x64.tar.gz\n' "$checksum" > "{{checksumsPath}}"
+
+            VERSION="v1.24.5"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o) output_path="$2"; shift 2 ;;
+                        -w) shift 2 ;;
+                        *) url="$1"; shift ;;
+                    esac
+                done
+                case "$url" in
+                    */sha256sums.txt) cp "{{checksumsPath}}" "$output_path" ;;
+                    *) cp "{{archivePath}}" "$output_path" ;;
+                esac
+                printf '200'
+                return 0
+            }
+
+            download_and_install
+            echo "LEGACY_INSTALL_OK"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("LEGACY_INSTALL_OK", stdout);
+        Assert.Contains("falling back to archive-level checksum verification", stderr);
+        Assert.Equal("""{"version":"1.24.5","integrity_ok":true}""" + Environment.NewLine, File.ReadAllText(Path.Combine(installDir, "version.json")));
+    }
+
+    [Fact]
+    public void DownloadAndInstall_NewArchiveWithoutManifestFails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "new_manifest_required_target");
+        var payloadDir = Path.Combine(_tempRoot, "new_manifest_required_payload");
+        var archivePath = Path.Combine(_tempRoot, "new_manifest_required.tar.gz");
+        var checksumsPath = Path.Combine(_tempRoot, "new_manifest_required.sha256sums.txt");
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            $$"""
+            mkdir -p "{{payloadDir}}"
+            cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "cdidx v1.24.6"
+            EOF
+            chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
+            printf '{"version":"1.24.6"}' > "{{Path.Combine(payloadDir, "version.json")}}"
+            printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
+            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+
+            checksum="$(calculate_sha256 "{{archivePath}}")"
+            printf '%s  CodeIndex-linux-x64.tar.gz\n' "$checksum" > "{{checksumsPath}}"
+
+            VERSION="v1.24.6"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o) output_path="$2"; shift 2 ;;
+                        -w) shift 2 ;;
+                        *) url="$1"; shift ;;
+                    esac
+                done
+                case "$url" in
+                    */sha256sums.txt) cp "{{checksumsPath}}" "$output_path" ;;
+                    *) cp "{{archivePath}}" "$output_path" ;;
+                esac
+                printf '200'
+                return 0
+            }
+
+            download_and_install
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("Release payload is missing MANIFEST.sha256", stderr);
+        Assert.False(File.Exists(Path.Combine(installDir, "cdidx")));
+    }
+
+    [Fact]
+    public void ValidateArchiveMembers_RejectsTraversalBeforeExtraction()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var workDir = Path.Combine(_tempRoot, "unsafe_archive");
+        var baseDir = Path.Combine(workDir, "base");
+        var extractDir = Path.Combine(workDir, "extract");
+        var archivePath = Path.Combine(workDir, "unsafe.tar.gz");
+        var outsidePath = Path.Combine(workDir, "escape_marker");
+
+        Directory.CreateDirectory(workDir);
+        using (var archive = File.Create(archivePath))
+        using (var gzip = new GZipStream(archive, CompressionLevel.SmallestSize))
+        using (var writer = new TarWriter(gzip, leaveOpen: false))
+        {
+            var bytes = Encoding.UTF8.GetBytes("escape");
+            using var data = new MemoryStream(bytes);
+            writer.WriteEntry(new PaxTarEntry(TarEntryType.RegularFile, "../escape_marker")
+            {
+                DataStream = data,
+            });
+        }
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            mkdir -p "{{baseDir}}" "{{extractDir}}"
+
+            status=0
+            if validate_archive_members "{{archivePath}}"; then
+                tar xzf "{{archivePath}}" -C "{{extractDir}}"
+            else
+                status=$?
+            fi
+
+            echo "STATUS:$status"
+            [ -e "{{outsidePath}}" ] && echo "OUTSIDE_CREATED" || echo "OUTSIDE_MISSING"
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("STATUS:1", stdout);
+        Assert.Contains("OUTSIDE_MISSING", stdout);
+        Assert.Contains("Release archive contains unsafe member path before extraction: ../escape_marker", stderr);
+        Assert.False(File.Exists(outsidePath));
+    }
+
+    [Fact]
+    public void DownloadAndInstall_ArchiveWithUnmanifestedFileFails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "unmanifested_file_target");
+        var payloadDir = Path.Combine(_tempRoot, "unmanifested_file_payload");
+        var archivePath = Path.Combine(_tempRoot, "unmanifested_file.tar.gz");
+        var checksumsPath = Path.Combine(_tempRoot, "unmanifested_file.sha256sums.txt");
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            $$"""
+            mkdir -p "{{payloadDir}}"
+            cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "cdidx v1.24.6"
+            EOF
+            chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
+            printf '{"version":"1.24.6"}' > "{{Path.Combine(payloadDir, "version.json")}}"
+            printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
+            (
+                cd "{{payloadDir}}"
+                find . -type f ! -name MANIFEST.sha256 ! -name .MANIFEST.sha256.tmp | sed 's#^\./##' | LC_ALL=C sort | while IFS= read -r file; do
+                    printf '%s  %s\n' "$(calculate_sha256 "$file")" "$file"
+                done > .MANIFEST.sha256.tmp
+                mv .MANIFEST.sha256.tmp MANIFEST.sha256
+            )
+            mkdir -p "{{Path.Combine(payloadDir, "LICENSES")}}"
+            printf 'extra-license' > "{{Path.Combine(payloadDir, "LICENSES", "extra.txt")}}"
+            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+
+            checksum="$(calculate_sha256 "{{archivePath}}")"
+            printf '%s  CodeIndex-linux-x64.tar.gz\n' "$checksum" > "{{checksumsPath}}"
+
+            VERSION="v1.24.6"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o) output_path="$2"; shift 2 ;;
+                        -w) shift 2 ;;
+                        *) url="$1"; shift ;;
+                    esac
+                done
+                case "$url" in
+                    */sha256sums.txt) cp "{{checksumsPath}}" "$output_path" ;;
+                    *) cp "{{archivePath}}" "$output_path" ;;
+                esac
+                printf '200'
+                return 0
+            }
+
+            download_and_install
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("Release payload contains file not listed in MANIFEST.sha256: LICENSES/extra.txt", stderr);
+        Assert.False(File.Exists(Path.Combine(installDir, "LICENSES", "extra.txt")));
+    }
+
+    [Fact]
     public void DownloadAndInstall_StageDirMktempFailure_AbortsBeforeInstallWritesUnderStrictMode()
     {
         if (OperatingSystem.IsWindows())
@@ -957,7 +1310,7 @@ public sealed class InstallScriptTests : IDisposable
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
             printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -1059,12 +1412,12 @@ public sealed class InstallScriptTests : IDisposable
             mkdir -p "{{payloadDir}}"
             cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
             #!/usr/bin/env bash
-            echo "NEW_BINARY"
+            echo "cdidx v1.2.3"
             EOF
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
             printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -1158,11 +1511,11 @@ public sealed class InstallScriptTests : IDisposable
             mkdir -p "{{payloadDir}}"
             cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
             #!/usr/bin/env bash
-            echo "BROKEN_NEW_BINARY"
+            echo "cdidx v1.2.3"
             EOF
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -1262,12 +1615,12 @@ public sealed class InstallScriptTests : IDisposable
             mkdir -p "{{payloadDir}}"
             cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
             #!/usr/bin/env bash
-            echo "NEW_BINARY"
+            echo "cdidx v1.2.3"
             EOF
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
             printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -1394,12 +1747,12 @@ public sealed class InstallScriptTests : IDisposable
             mkdir -p "{{payloadDir}}"
             cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
             #!/usr/bin/env bash
-            echo "NEW_BINARY"
+            echo "cdidx v1.2.3"
             EOF
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
             printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -1530,12 +1883,12 @@ public sealed class InstallScriptTests : IDisposable
             mkdir -p "{{payloadDir}}"
             cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
             #!/usr/bin/env bash
-            echo "NEW_BINARY"
+            echo "cdidx v1.2.3"
             EOF
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
             printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -1669,7 +2022,7 @@ public sealed class InstallScriptTests : IDisposable
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
             printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -1809,7 +2162,7 @@ public sealed class InstallScriptTests : IDisposable
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
             : > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             printf '%s  %s\n' deadbeef CodeIndex-linux-arm64.tar.gz > "{{checksumsPath}}"
 
@@ -2842,7 +3195,7 @@ public sealed class InstallScriptTests : IDisposable
             chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
             printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
             printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
-            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+            make_payload_archive "{{payloadDir}}" "{{archivePath}}"
 
             if command -v sha256sum > /dev/null 2>&1; then
                 checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
@@ -2900,6 +3253,125 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Equal(string.Empty, stderr);
         Assert.Contains("https://mirror.example/releases/Widthdom/CodeIndex/releases/download/v1.2.3/CodeIndex-linux-x64.tar.gz", stdout);
         Assert.Contains("https://mirror.example/releases/Widthdom/CodeIndex/releases/download/v1.2.3/sha256sums.txt", stdout);
+    }
+
+    [Fact]
+    public void ProbeTempRoot_UnwritableTmpdir_PrintsSpecificError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tmpdir = Path.Combine(_tempRoot, "not_a_dir");
+        File.WriteAllText(tmpdir, "not a directory");
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            probe_temp_root
+            """,
+            new Dictionary<string, string?>
+            {
+                ["TMPDIR"] = tmpdir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("TMPDIR not usable", stderr);
+    }
+
+    [Fact]
+    public void VerifyCdidxBinary_VersionMismatch_FailsBeforeSuccess()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var binDir = Path.Combine(_tempRoot, "verify_mismatch");
+        Directory.CreateDirectory(binDir);
+        var binaryPath = Path.Combine(binDir, "cdidx");
+        File.WriteAllText(binaryPath, "#!/usr/bin/env bash\necho 'cdidx v9.9.9'\n");
+        File.SetUnixFileMode(binaryPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            VERSION="v1.2.3"
+            verify_cdidx_binary "{{binaryPath}}"
+            echo "UNREACHABLE"
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("UNREACHABLE", stdout);
+        Assert.Contains("Installed binary version mismatch", stderr);
+        Assert.Contains("expected 1.2.3, got 9.9.9", stderr);
+    }
+
+    [Fact]
+    public void CheckPath_WhenOlderCdidxPrecedesInstallDir_WarnsAboutShadowing()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var oldDir = Path.Combine(_tempRoot, "old_path_bin");
+        var installDir = Path.Combine(_tempRoot, "new_path_bin");
+        Directory.CreateDirectory(oldDir);
+        Directory.CreateDirectory(installDir);
+        var oldBinary = Path.Combine(oldDir, "cdidx");
+        var newBinary = Path.Combine(installDir, "cdidx");
+        File.WriteAllText(oldBinary, "#!/usr/bin/env bash\necho 'cdidx v1.0.0'\n");
+        File.WriteAllText(newBinary, "#!/usr/bin/env bash\necho 'cdidx v1.2.3'\n");
+        File.SetUnixFileMode(oldBinary, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        File.SetUnixFileMode(newBinary, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            check_path
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+                ["PATH"] = oldDir + Path.PathSeparator + installDir,
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("cdidx binaries found on PATH", stdout);
+        Assert.Contains(oldBinary, stdout);
+        Assert.Contains(newBinary, stdout);
+        Assert.Contains("shadowing the new install", stderr);
+    }
+
+    [Fact]
+    public void CheckPath_UpdatePathOptIn_AppendsProfileExportAndUpdatesCurrentPath()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var homeDir = Path.Combine(_tempRoot, "path_profile_home");
+        var installDir = Path.Combine(_tempRoot, "profile_install_bin");
+        Directory.CreateDirectory(homeDir);
+        Directory.CreateDirectory(installDir);
+        var newBinary = Path.Combine(installDir, "cdidx");
+        File.WriteAllText(newBinary, "#!/usr/bin/env bash\necho 'cdidx v1.2.3'\n");
+        File.SetUnixFileMode(newBinary, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            export HOME="{{homeDir}}"
+            export SHELL="/bin/bash"
+            check_path
+            echo "ACTIVE:$(command -v cdidx)"
+            cat "{{Path.Combine(homeDir, ".bashrc")}}"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+                ["CDIDX_INSTALL_UPDATE_PATH"] = "1",
+                ["PATH"] = "/usr/bin:/bin",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains($"Added {installDir} to PATH", stdout);
+        Assert.Contains($"ACTIVE:{newBinary}", stdout);
+        Assert.Contains($"export PATH=\"{installDir}:$PATH\"", stdout);
+        Assert.Contains($"{installDir} is not in your PATH", stderr);
     }
 
     [Fact]
@@ -4589,6 +5061,18 @@ public sealed class InstallScriptTests : IDisposable
                 {{(enforceStrictMode ? "set -euo pipefail" : "")}}
                 export CDIDX_INSTALL_SH_LIB_ONLY=1
                 source "{{GetInstallScriptPath()}}"
+                make_payload_archive() {
+                    local payload_dir="$1"
+                    local archive_path="$2"
+                    (
+                        cd "$payload_dir"
+                        find . -type f ! -name MANIFEST.sha256 ! -name .MANIFEST.sha256.tmp | sed 's#^\./##' | LC_ALL=C sort | while IFS= read -r file; do
+                            calculate_sha256 "$file" | awk -v file="$file" '{ print $1 "  " file }'
+                        done > .MANIFEST.sha256.tmp
+                        mv .MANIFEST.sha256.tmp MANIFEST.sha256
+                    )
+                    tar czf "$archive_path" -C "$payload_dir" .
+                }
                 {{snippet}}
                 """);
             File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);

@@ -1,4 +1,8 @@
+using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 
 namespace CodeIndex.Cli;
@@ -10,10 +14,41 @@ namespace CodeIndex.Cli;
 internal static class GlobalToolLog
 {
     private const int RetainedLogFileCount = 30;
+    internal const string LogFormatEnvironmentVariable = "CDIDX_LOG_FORMAT";
+    internal const string LogRetainEnvironmentVariable = "CDIDX_LOG_RETAIN";
+    internal const string LogMaxSizeMbEnvironmentVariable = "CDIDX_LOG_MAX_SIZE_MB";
+    private const string RedactedValue = "<redacted>";
     private static readonly AsyncLocal<Session?> CurrentSession = new();
+    private static readonly Regex SensitiveAssignmentPattern = new(
+        @"^(?<name>--?[^=\s]*(?:token|password|passwd|pwd|secret|auth|apikey|api-key|access-key|credential)[^=\s]*)=(?<value>.+)$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex UriUserInfoPattern = new(
+        @"(?<scheme>[a-z][a-z0-9+\-.]*://)(?<user>[^:@/\s]+):(?<password>[^@/\s]+)@",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex LongHexPattern = new(
+        @"\b[0-9a-f]{32,}\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex LongBase64Pattern = new(
+        @"\b[A-Za-z0-9+/]{40,}={0,2}\b",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     internal static IDisposable? TryStart(string[] args, string appVersion)
+        => TryStart(args, appVersion, createWriter: null, afterWriterCreated: null);
+
+    internal static IDisposable? TryStartForTesting(
+        string[] args,
+        string appVersion,
+        Func<string, StreamWriter>? createWriter = null,
+        Action? afterWriterCreated = null)
+        => TryStart(args, appVersion, createWriter, afterWriterCreated);
+
+    private static IDisposable? TryStart(
+        string[] args,
+        string appVersion,
+        Func<string, StreamWriter>? createWriter,
+        Action? afterWriterCreated)
     {
+        StreamWriter? writer = null;
         try
         {
             if (!ShouldEnable())
@@ -22,15 +57,15 @@ internal static class GlobalToolLog
             var logDirectory = ResolveLogDirectory();
             Directory.CreateDirectory(logDirectory);
             HardenLogFiles(logDirectory);
-            var logPath = Path.Combine(logDirectory, $"stderr-{DateTime.UtcNow:yyyyMMdd}.log");
-            var writer = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), new UTF8Encoding(false))
-            {
-                AutoFlush = true,
-            };
+            var options = LogOptions.FromEnvironment();
+            var logPath = ResolveLogPath(logDirectory, options);
+            writer = createWriter?.Invoke(logPath) ?? CreateLogWriter(logPath);
+            afterWriterCreated?.Invoke();
             SetLogFilePermissions(logPath);
-            PruneOldLogs(logDirectory);
+            PruneOldLogs(logDirectory, options.RetainCount);
 
-            var session = new Session(writer, logPath);
+            var session = new Session(writer, logPath, options.Format);
+            writer = null;
             CurrentSession.Value = session;
             session.AttachErrorMirror();
             session.Write("INFO", $"session_start pid={Environment.ProcessId} version={appVersion}");
@@ -42,14 +77,24 @@ internal static class GlobalToolLog
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            writer?.Dispose();
             CurrentSession.Value = null;
             return null;
         }
     }
 
+    private static StreamWriter CreateLogWriter(string logPath) =>
+        new(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), new UTF8Encoding(false))
+        {
+            AutoFlush = true,
+        };
+
     internal static void Info(string message) => CurrentSession.Value?.Write("INFO", message);
 
     internal static void Error(string message) => CurrentSession.Value?.Write("ERROR", message);
+
+    internal static void Error(string message, Exception exception, bool includeStacks = true) =>
+        CurrentSession.Value?.Write("ERROR", $"{message}\n{FormatExceptionChain(exception, includeStacks)}");
 
     internal static string FormatExceptionChain(Exception ex, bool includeStacks = false)
     {
@@ -142,14 +187,60 @@ internal static class GlobalToolLog
         }
     }
 
+    internal static bool LooksLikeDevelopmentExecutionForTesting(string? path) => LooksLikeDevelopmentExecution(path);
+
     private static bool LooksLikeDevelopmentExecution(string? path)
     {
         if (string.IsNullOrWhiteSpace(path))
             return false;
 
-        var normalized = path.Replace('\\', '/');
-        return normalized.Contains("/src/CodeIndex/bin/", StringComparison.OrdinalIgnoreCase)
-            || normalized.Contains("/tests/CodeIndex.Tests/bin/", StringComparison.OrdinalIgnoreCase);
+        var normalized = NormalizePathForDevelopmentDetection(path);
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        return ContainsPathSegments(normalized, ["src", "CodeIndex", "bin"], comparison)
+            || ContainsPathSegments(normalized, ["tests", "CodeIndex.Tests", "bin"], comparison);
+    }
+
+    private static string NormalizePathForDevelopmentDetection(string path)
+    {
+        try
+        {
+            path = Path.GetFullPath(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+        }
+
+        return path
+            .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
+            .Replace('\\', Path.DirectorySeparatorChar)
+            .Replace('/', Path.DirectorySeparatorChar);
+    }
+
+    private static bool ContainsPathSegments(string path, string[] expectedSegments, StringComparison comparison)
+    {
+        var segments = path.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length < expectedSegments.Length)
+            return false;
+
+        for (var start = 0; start <= segments.Length - expectedSegments.Length; start++)
+        {
+            var matched = true;
+            for (var offset = 0; offset < expectedSegments.Length; offset++)
+            {
+                if (!string.Equals(segments[start + offset], expectedSegments[offset], comparison))
+                {
+                    matched = false;
+                    break;
+                }
+            }
+
+            if (matched)
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -166,41 +257,86 @@ internal static class GlobalToolLog
 
     private static string ResolveLogDirectory()
     {
+        foreach (var candidate in EnumerateLogDirectoryCandidates())
+        {
+            if (!TryNormalizeLogDirectoryCandidate(candidate, out var fullPath))
+                continue;
+
+            if (CanWriteProbe(fullPath))
+                return fullPath;
+        }
+
+        var fallback = Path.Combine(Path.GetTempPath(), "cdidx", "logs");
+        return Path.GetFullPath(fallback);
+    }
+
+    internal static bool TryNormalizeLogDirectoryCandidate(string candidate, out string fullPath)
+    {
+        try
+        {
+            fullPath = Path.GetFullPath(candidate);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or PathTooLongException or UnauthorizedAccessException)
+        {
+            fullPath = string.Empty;
+            return false;
+        }
+    }
+
+    private static IEnumerable<string> EnumerateLogDirectoryCandidates()
+    {
         var overrideDirectory = Environment.GetEnvironmentVariable("CDIDX_GLOBAL_TOOL_LOG_DIR");
         if (!string.IsNullOrWhiteSpace(overrideDirectory))
-            return Path.GetFullPath(ExpandUserLogDirectory(overrideDirectory));
+            yield return ExpandUserLogDirectory(overrideDirectory);
 
         var xdgStateHome = Environment.GetEnvironmentVariable("XDG_STATE_HOME");
         if (!string.IsNullOrWhiteSpace(xdgStateHome))
-            return Path.Combine(xdgStateHome, "cdidx", "logs");
+            yield return Path.Combine(xdgStateHome, "cdidx", "logs");
 
         var xdgCacheHome = Environment.GetEnvironmentVariable("XDG_CACHE_HOME");
         if (!string.IsNullOrWhiteSpace(xdgCacheHome))
-            return Path.Combine(xdgCacheHome, "cdidx", "logs");
+            yield return Path.Combine(xdgCacheHome, "cdidx", "logs");
 
         var xdgRuntimeDir = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
         if (!string.IsNullOrWhiteSpace(xdgRuntimeDir))
-            return Path.Combine(xdgRuntimeDir, "cdidx", "logs");
+            yield return Path.Combine(xdgRuntimeDir, "cdidx", "logs");
 
         if (OperatingSystem.IsWindows())
         {
             var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             if (!string.IsNullOrWhiteSpace(localAppData))
-                return Path.Combine(localAppData, "cdidx", "logs");
+                yield return Path.Combine(localAppData, "cdidx", "logs");
         }
 
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (OperatingSystem.IsMacOS() && !string.IsNullOrWhiteSpace(home))
-            return Path.Combine(home, "Library", "Logs", "cdidx");
+            yield return Path.Combine(home, "Library", "Logs", "cdidx");
 
         if (!string.IsNullOrWhiteSpace(home))
-            return Path.Combine(home, ".local", "state", "cdidx", "logs");
+            yield return Path.Combine(home, ".local", "state", "cdidx", "logs");
 
         var fallback = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         if (!string.IsNullOrWhiteSpace(fallback))
-            return Path.Combine(fallback, "cdidx", "logs");
+            yield return Path.Combine(fallback, "cdidx", "logs");
 
-        return Path.Combine(Path.GetTempPath(), "cdidx", "logs");
+        yield return Path.Combine(Path.GetTempPath(), "cdidx", "logs");
+    }
+
+    private static bool CanWriteProbe(string directory)
+    {
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var probePath = Path.Combine(directory, $".cdidx-write-probe-{Guid.NewGuid():N}.tmp");
+            File.WriteAllText(probePath, string.Empty, Encoding.UTF8);
+            File.Delete(probePath);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return false;
+        }
     }
 
     private static string ExpandUserLogDirectory(string directory)
@@ -239,14 +375,32 @@ internal static class GlobalToolLog
         return string.IsNullOrWhiteSpace(home) ? original : home;
     }
 
-    private static void PruneOldLogs(string logDirectory)
+    private static string ResolveLogPath(string logDirectory, LogOptions options)
+    {
+        var date = DateTime.UtcNow.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture);
+        if (options.MaxSizeBytes <= 0)
+            return Path.Combine(logDirectory, $"stderr-{date}.log");
+
+        for (var index = 0; index < 10_000; index++)
+        {
+            var suffix = index == 0 ? "" : $"-{index}";
+            var candidate = Path.Combine(logDirectory, $"stderr-{date}{suffix}.log");
+            if (!File.Exists(candidate) || new FileInfo(candidate).Length < options.MaxSizeBytes)
+                return candidate;
+        }
+
+        return Path.Combine(logDirectory, $"stderr-{date}-{Guid.NewGuid():N}.log");
+    }
+
+    private static void PruneOldLogs(string logDirectory, int retainedLogFileCount)
     {
         try
         {
             var oldLogs = new DirectoryInfo(logDirectory)
                 .EnumerateFiles("stderr-*.log", SearchOption.TopDirectoryOnly)
-                .OrderByDescending(file => file.Name, StringComparer.Ordinal)
-                .Skip(RetainedLogFileCount)
+                .OrderByDescending(file => file.LastWriteTimeUtc)
+                .ThenByDescending(file => file.Name, StringComparer.Ordinal)
+                .Skip(retainedLogFileCount)
                 .ToList();
 
             foreach (var file in oldLogs)
@@ -289,12 +443,77 @@ internal static class GlobalToolLog
         }
     }
 
-    private static string FormatArgs(string[] args)
+    internal static string FormatArgs(string[] args)
     {
         if (args.Length == 0)
             return "<none>";
 
-        return string.Join(" ", args.Select(QuoteArg));
+        return string.Join(" ", RedactArgs(args).Select(QuoteArg));
+    }
+
+    private static IEnumerable<string> RedactArgs(string[] args)
+    {
+        var mode = Environment.GetEnvironmentVariable("CDIDX_LOG_REDACT");
+        if (string.Equals(mode, "none", StringComparison.OrdinalIgnoreCase))
+            return args;
+
+        var full = string.Equals(mode, "full", StringComparison.OrdinalIgnoreCase);
+        var redacted = new string[args.Length];
+        for (var i = 0; i < args.Length; i++)
+        {
+            var current = RedactSensitiveText(args[i]);
+            if (IsSensitiveFlag(args[i]) && i + 1 < args.Length)
+            {
+                redacted[i] = current;
+                redacted[++i] = RedactedValue;
+                continue;
+            }
+
+            redacted[i] = full ? RedactPathLikeValue(current) : current;
+        }
+
+        return redacted;
+    }
+
+    private static bool IsSensitiveFlag(string arg)
+    {
+        if (!arg.StartsWith('-') || arg.Contains('=', StringComparison.Ordinal))
+            return false;
+
+        return arg.Contains("token", StringComparison.OrdinalIgnoreCase)
+            || arg.Contains("password", StringComparison.OrdinalIgnoreCase)
+            || arg.Contains("passwd", StringComparison.OrdinalIgnoreCase)
+            || arg.Contains("pwd", StringComparison.OrdinalIgnoreCase)
+            || arg.Contains("secret", StringComparison.OrdinalIgnoreCase)
+            || arg.Contains("auth", StringComparison.OrdinalIgnoreCase)
+            || arg.Contains("apikey", StringComparison.OrdinalIgnoreCase)
+            || arg.Contains("api-key", StringComparison.OrdinalIgnoreCase)
+            || arg.Contains("access-key", StringComparison.OrdinalIgnoreCase)
+            || arg.Contains("credential", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string RedactSensitiveText(string value)
+    {
+        var assignment = SensitiveAssignmentPattern.Match(value);
+        if (assignment.Success)
+            value = $"{assignment.Groups["name"].Value}={RedactedValue}";
+
+        value = UriUserInfoPattern.Replace(value, match => $"{match.Groups["scheme"].Value}{match.Groups["user"].Value}:{RedactedValue}@");
+        value = LongHexPattern.Replace(value, RedactedValue);
+        value = LongBase64Pattern.Replace(value, RedactedValue);
+        return value;
+    }
+
+    private static string RedactPathLikeValue(string value)
+    {
+        if (value.Length < 2 || value.StartsWith("-", StringComparison.Ordinal))
+            return value;
+
+        if (!value.Contains("/", StringComparison.Ordinal) && !value.Contains("\\", StringComparison.Ordinal))
+            return value;
+
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        return $"<path:{Convert.ToHexString(bytes, 0, 8).ToLowerInvariant()}>";
     }
 
     private static string QuoteArg(string arg)
@@ -309,13 +528,15 @@ internal static class GlobalToolLog
     {
         private readonly object _gate = new();
         private readonly StreamWriter _writer;
+        private readonly string _format;
         private TextWriter? _originalError;
         private TextWriter? _teeError;
         private bool _disposed;
 
-        public Session(StreamWriter writer, string logPath)
+        public Session(StreamWriter writer, string logPath, string format)
         {
             _writer = writer;
+            _format = format;
             LogPath = logPath;
         }
 
@@ -343,7 +564,21 @@ internal static class GlobalToolLog
 
                 try
                 {
-                    _writer.WriteLine($"{DateTimeOffset.UtcNow:O} [{level}] {message}");
+                    if (string.Equals(_format, "json", StringComparison.Ordinal))
+                    {
+                        _writer.WriteLine(JsonSerializer.Serialize(new Dictionary<string, string>
+                        {
+                            ["ts"] = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+                            ["level"] = level,
+                            ["msg"] = message,
+                        }));
+                    }
+                    else
+                    {
+                        _writer.WriteLine(string.Create(
+                            CultureInfo.InvariantCulture,
+                            $"{DateTimeOffset.UtcNow:yyyy-MM-ddTHH:mm:ss.fffZ} [{level}] {message}"));
+                    }
                     _writer.Flush();
                 }
                 catch (Exception ex) when (ex is IOException or ObjectDisposedException)
@@ -374,6 +609,26 @@ internal static class GlobalToolLog
                 CurrentSession.Value = null;
                 _writer.Dispose();
             }
+        }
+    }
+
+    internal sealed record LogOptions(string Format, int RetainCount, long MaxSizeBytes)
+    {
+        public static LogOptions FromEnvironment()
+        {
+            var format = Environment.GetEnvironmentVariable(LogFormatEnvironmentVariable)?.Trim().ToLowerInvariant();
+            if (format is not "json")
+                format = "text";
+
+            var retainCount = RetainedLogFileCount;
+            if (int.TryParse(Environment.GetEnvironmentVariable(LogRetainEnvironmentVariable), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedRetain))
+                retainCount = Math.Clamp(parsedRetain, 1, 10_000);
+
+            long maxSizeBytes = 0;
+            if (int.TryParse(Environment.GetEnvironmentVariable(LogMaxSizeMbEnvironmentVariable), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedMb) && parsedMb > 0)
+                maxSizeBytes = parsedMb * 1024L * 1024L;
+
+            return new LogOptions(format, retainCount, maxSizeBytes);
         }
     }
 

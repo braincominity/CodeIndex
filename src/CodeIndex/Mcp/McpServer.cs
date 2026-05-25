@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -59,9 +60,13 @@ public partial class McpServer : IDisposable
     // 直後にリセットする。`WithDbReader` が `DbReader` にライブな cancellation token
     // を渡せるようにするため (#1567)。
     private readonly AsyncLocal<CancellationToken> _currentRequestToken = new();
+    private readonly AsyncLocal<bool> _isolateDbForCurrentRequest = new();
     private readonly AsyncLocal<Action<string>?> _currentOutOfBandFrameWriter = new();
     private readonly AsyncLocal<List<Action>?> _deferredFrameLogs = new();
-    private bool _running = true;
+    private static readonly AsyncLocal<RequestCorrelationContext?> CurrentCorrelationContext = new();
+    private volatile bool _running = true;
+    private bool _initializedNotificationPending;
+    private bool _initializedNotificationSent;
     // Per-session DbContext reused across MCP tool calls. Holding the connection open
     // avoids reopening SQLite, reapplying pragmas, and re-registering every SQL function
     // on each invocation (issue #1494).
@@ -83,6 +88,8 @@ public partial class McpServer : IDisposable
     // ツール呼び出し監査ログ (#1562)。`--audit-log` 未指定時は null。AuditLogSink のライフサイクル
     // (ファイルハンドル / rotation) は ProgramRunner 側で所有する。
     private readonly AuditLogSink? _auditLog;
+    private readonly TimeSpan _requestTimeout;
+    private readonly SemaphoreSlim _textWriterGate = new(1, 1);
     // `initialize.clientInfo` echoed into every audit record so the trail can answer
     // "which client issued this call?" without a second log source. Updated on every
     // `initialize` so a single-session reconnection picks up the new caller identity.
@@ -90,6 +97,9 @@ public partial class McpServer : IDisposable
     // にする。`initialize` 毎に上書きすることで再接続時に caller identity が追随する。
     private string? _clientName;
     private string? _clientVersion;
+    private JsonNode? _clientCapabilities;
+    private JsonArray _clientRoots = [];
+    private string _mcpLogLevel = "info";
     // Opaque per-server-instance session id copied into suggestion attribution records (#1873).
     // #1873 の提案 attribution 用に保存する、サーバーインスタンス単位の不透明セッションID。
     private readonly string _sessionId = Guid.NewGuid().ToString("D");
@@ -137,6 +147,8 @@ public partial class McpServer : IDisposable
     private const int MaxContextLines = 1000;
     internal const int MaxLineCharacterCount = 1_000_000;
     internal const int MaxLineByteLength = 1_048_576;
+    internal const int DefaultMaxResponseBytes = 10 * 1024 * 1024;
+    private const string MaxResponseBytesEnvVar = "CDIDX_MCP_RESPONSE_MAX_BYTES";
     internal const int MaxJsonDepth = 32;
     internal const int MaxBatchRequestCount = 100;
     // Stdio buffer for the JSON-RPC loop. Sized to fit typical large MCP payloads (e.g. batch_query)
@@ -149,6 +161,9 @@ public partial class McpServer : IDisposable
     // tool calls wedge the SQLite reader lock or balloon memory (#1567).
     // 同時 in-flight ツール呼び出し数の既定上限 (#1567)。
     internal const int DefaultMaxConcurrency = 8;
+    internal static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(60);
+    internal static readonly TimeSpan DefaultEofDrainTimeout = TimeSpan.FromSeconds(5);
+    internal static readonly TimeSpan DefaultEofPostCancelDrainTimeout = TimeSpan.FromSeconds(5);
 
     public McpServer(string dbPath, string version, bool dbPathExplicit = false)
         : this(dbPath, version, dbPathExplicit, null, null, null, null, DefaultMaxConcurrency)
@@ -231,6 +246,7 @@ public partial class McpServer : IDisposable
         RateLimiter = new RateLimiter(RateLimiterOptions.FromEnvironment());
         _concurrencyGate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
         MaxConcurrency = maxConcurrency;
+        _requestTimeout = DefaultRequestTimeout;
     }
 
     /// <summary>
@@ -271,6 +287,7 @@ public partial class McpServer : IDisposable
     internal string CurrentSessionId => _sessionId;
 
     internal Action<JsonNode?>? RequestRegisteredForTests { get; set; }
+    internal Func<CancellationToken, Task>? RequestDelayForTests { get; set; }
 
     /// <summary>
     /// Cap configured for concurrent in-flight tool calls (#1567). Surfaced for tests so
@@ -278,6 +295,14 @@ public partial class McpServer : IDisposable
     /// 現在設定されている in-flight ツール呼び出し上限 (#1567)。テスト向けに公開。
     /// </summary>
     internal int MaxConcurrency { get; }
+
+    internal TimeSpan RequestTimeout
+    {
+        get => _requestTimeout;
+        init => _requestTimeout = value <= TimeSpan.Zero
+            ? throw new ArgumentOutOfRangeException(nameof(value), value, "MCP request timeout must be greater than zero.")
+            : value;
+    }
 
     /// <summary>
     /// Run the MCP server loop on the default stdio transport. Kept as a thin wrapper around
@@ -452,6 +477,7 @@ public partial class McpServer : IDisposable
                     }
 
                     await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
+                    await EmitInitializedNotificationIfPendingAsync(transport, loopToken).ConfigureAwait(false);
                     FlushDeferredFrameLogs();
 
                     // `notifications/shutdown` flips `_running` inside `HandleMessage`; exit the loop
@@ -485,8 +511,8 @@ public partial class McpServer : IDisposable
 
     private async Task RunConcurrentFrameLoopAsync(IMcpTransport transport, CancellationToken loopToken)
     {
-        using var writeGate = new SemaphoreSlim(1, 1);
-        using var normalFrameGate = new SemaphoreSlim(1, 1);
+        var writeGate = new SemaphoreSlim(1, 1);
+        var normalFrameGate = new SemaphoreSlim(1, 1);
         var tasks = new List<Task>();
 
         while (_running)
@@ -572,6 +598,7 @@ public partial class McpServer : IDisposable
                     try
                     {
                         await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
+                        await EmitInitializedNotificationIfPendingAsync(transport, loopToken).ConfigureAwait(false);
                         FlushDeferredFrameLogs();
                     }
                     finally
@@ -587,8 +614,58 @@ public partial class McpServer : IDisposable
             SpinWait.SpinUntil(() => !_running || _activeRequests.Count > 0, TimeSpan.FromMilliseconds(50));
         }
 
-        await Task.WhenAll(tasks).ConfigureAwait(false);
+        await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout, DefaultEofPostCancelDrainTimeout).ConfigureAwait(false);
         Console.Error.WriteLine("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
+    }
+
+    private async Task DrainInFlightTasksAsync(List<Task> tasks, TimeSpan gracePeriod, TimeSpan postCancelGracePeriod)
+    {
+        tasks.RemoveAll(task => task.IsCompleted);
+        if (tasks.Count == 0)
+            return;
+
+        var allTasks = Task.WhenAll(tasks);
+        var completed = await Task.WhenAny(allTasks, Task.Delay(gracePeriod)).ConfigureAwait(false);
+        if (completed == allTasks)
+        {
+            await ObserveInFlightTasksAsync(allTasks).ConfigureAwait(false);
+            return;
+        }
+
+        Console.Error.WriteLine($"[cdidx-mcp] EOF reached with {tasks.Count} in-flight request(s); cancelling after {gracePeriod.TotalMilliseconds:0}ms grace period.");
+        try
+        {
+            if (!_shutdownCts.IsCancellationRequested)
+                _shutdownCts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposal raced EOF drain; no further action is possible.
+        }
+
+        completed = await Task.WhenAny(allTasks, Task.Delay(postCancelGracePeriod)).ConfigureAwait(false);
+        if (completed == allTasks)
+        {
+            await ObserveInFlightTasksAsync(allTasks).ConfigureAwait(false);
+            return;
+        }
+
+        _ = allTasks.ContinueWith(task =>
+        {
+            _ = task.Exception;
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
+    private static async Task ObserveInFlightTasksAsync(Task tasks)
+    {
+        try
+        {
+            await tasks.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[cdidx-mcp] In-flight request ended during EOF drain ({ex.GetType().Name}).");
+        }
     }
 
     /// <summary>
@@ -606,12 +683,21 @@ public partial class McpServer : IDisposable
         {
             try
             {
-                await WriteJsonLineAsync(writer, response).ConfigureAwait(false);
-                FlushDeferredFrameLogs();
+                await _textWriterGate.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    await WriteJsonLineAsync(writer, response).ConfigureAwait(false);
+                    await EmitInitializedNotificationIfPendingAsync(writer).ConfigureAwait(false);
+                    FlushDeferredFrameLogs();
+                }
+                finally
+                {
+                    _textWriterGate.Release();
+                }
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
             {
-                Console.Error.WriteLine(BuildResponseWriteErrorLog(ex.Message));
+                WriteMcpLogLine(BuildResponseWriteErrorLog(ex.Message));
                 FlushDeferredFrameLogs();
             }
         }
@@ -632,12 +718,50 @@ public partial class McpServer : IDisposable
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            Console.Error.WriteLine(BuildResponseWriteErrorLog("write operation was canceled"));
+            WriteMcpLogLine(BuildResponseWriteErrorLog("write operation was canceled"));
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException)
         {
-            Console.Error.WriteLine(BuildResponseWriteErrorLog(ex.Message));
+            WriteMcpLogLine(BuildResponseWriteErrorLog(ex.Message));
         }
+    }
+
+    private async Task EmitInitializedNotificationIfPendingAsync(IMcpTransport transport, CancellationToken cancellationToken)
+    {
+        var notification = ConsumeInitializedNotification();
+        if (notification is null)
+            return;
+        if (transport is IOutOfBandMcpTransport outOfBandTransport)
+        {
+            await outOfBandTransport.WriteOutOfBandFrameAsync(notification, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        await WriteFrameSafelyAsync(transport, notification, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task EmitInitializedNotificationIfPendingAsync(TextWriter writer)
+    {
+        var notification = ConsumeInitializedNotification();
+        if (notification is null)
+            return;
+        await WriteJsonLineAsync(writer, notification).ConfigureAwait(false);
+    }
+
+    private string? ConsumeInitializedNotification()
+    {
+        if (!_initializedNotificationPending)
+            return null;
+        _initializedNotificationPending = false;
+        if (_initializedNotificationSent)
+            return null;
+        _initializedNotificationSent = true;
+        var notification = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["method"] = "notifications/initialized",
+            ["params"] = new JsonObject()
+        };
+        return notification.ToJsonString(_jsonOptions);
     }
 
     private string BuildInvalidUtf8ParseErrorResponse(DecoderFallbackException ex)
@@ -684,6 +808,7 @@ public partial class McpServer : IDisposable
         JsonNode? request = null;
         var responseHasId = true;
         JsonNode? responseId = null;
+        IDisposable? frameCorrelationScope = null;
         try
         {
             request = JsonNode.Parse(line, documentOptions: new JsonDocumentOptions { MaxDepth = MaxJsonDepth });
@@ -691,7 +816,9 @@ public partial class McpServer : IDisposable
                 return null;
 
             ExtractResponseId(request, out responseHasId, out responseId);
-            var response = await HandleMessageAsync(request).ConfigureAwait(false);
+            if (responseHasId && CurrentCorrelationContext.Value is null)
+                frameCorrelationScope = BeginRequestCorrelation(responseId);
+            var response = await HandleMessageAsync(request, isolateRequestDb: true).ConfigureAwait(false);
             return response != null ? SerializeResponseOrFallback(response, responseHasId, responseId) : null;
         }
         catch (JsonException ex)
@@ -722,13 +849,23 @@ public partial class McpServer : IDisposable
                 retrySafe: classification.RetrySafe);
             return SerializeResponseOrFallback(errorResponse, responseHasId, responseId);
         }
+        finally
+        {
+            frameCorrelationScope?.Dispose();
+        }
     }
 
     private string SerializeResponseOrFallback(JsonNode response, bool hasId, JsonNode? id)
     {
         try
         {
-            return _serializeResponse(response);
+            var serialized = _serializeResponse(response);
+            var responseBytes = Encoding.UTF8.GetByteCount(serialized);
+            var responseLimit = GetMaxResponseBytes();
+            if (responseBytes <= responseLimit)
+                return serialized;
+
+            return CreateResponseTooLargeError(hasId, id, responseBytes, responseLimit).ToJsonString(_jsonOptions);
         }
         catch (Exception ex)
         {
@@ -738,18 +875,33 @@ public partial class McpServer : IDisposable
     }
 
     private void DeferFrameLog(string message)
-        => DeferFrameLog(() => Console.Error.WriteLine(message));
+        => DeferFrameLog(() => WriteMcpLogLine(message));
 
     private void DeferFrameLog(Action writeLog)
     {
+        var context = CurrentCorrelationContext.Value;
         var logs = _deferredFrameLogs.Value;
         if (logs is null)
         {
-            writeLog();
+            WriteWithCorrelationContext(context, writeLog);
             return;
         }
 
-        logs.Add(writeLog);
+        logs.Add(() => WriteWithCorrelationContext(context, writeLog));
+    }
+
+    private static void WriteWithCorrelationContext(RequestCorrelationContext? context, Action writeLog)
+    {
+        var previous = CurrentCorrelationContext.Value;
+        try
+        {
+            CurrentCorrelationContext.Value = context;
+            writeLog();
+        }
+        finally
+        {
+            CurrentCorrelationContext.Value = previous;
+        }
     }
 
     private void BeginDeferredFrameLogs()
@@ -764,6 +916,34 @@ public partial class McpServer : IDisposable
         _deferredFrameLogs.Value = null;
         foreach (var log in logs)
             log();
+    }
+
+    private static void WriteMcpLogLine(string message)
+    {
+        var line = AddCorrelationPrefix(message);
+        try
+        {
+            Console.Error.WriteLine(line);
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            // Best-effort diagnostics: a closed redirected stderr must not break the MCP request.
+        }
+        GlobalToolLog.Info(line);
+    }
+
+    private static string AddCorrelationPrefix(string message)
+    {
+        var context = CurrentCorrelationContext.Value;
+        if (context is null)
+            return message;
+
+        var prefix = context.RequestId == null
+            ? $"[cid={context.CorrelationId}] "
+            : $"[rid={context.RequestId} cid={context.CorrelationId}] ";
+        return message.StartsWith("[cdidx-mcp] ", StringComparison.Ordinal)
+            ? "[cdidx-mcp] " + prefix + message["[cdidx-mcp] ".Length..]
+            : prefix + message;
     }
 
     private static void ExtractResponseId(JsonNode request, out bool hasId, out JsonNode? id)
@@ -788,6 +968,7 @@ public partial class McpServer : IDisposable
         var message = $"Internal error while serializing MCP response ({ex.GetType().Name}). See cdidx server stderr for details.";
         var builder = new StringBuilder("{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,\"message\":");
         builder.Append(JsonSerializer.Serialize(message));
+        AppendMinimalCorrelationData(builder);
         builder.Append('}');
         if (hasId)
         {
@@ -798,17 +979,36 @@ public partial class McpServer : IDisposable
         return builder.ToString();
     }
 
+    private static void AppendMinimalCorrelationData(StringBuilder builder)
+    {
+        var context = CurrentCorrelationContext.Value;
+        if (context is null)
+            return;
+
+        builder.Append(",\"data\":{\"correlation_id\":");
+        builder.Append(JsonSerializer.Serialize(context.CorrelationId));
+        if (context.RequestId != null)
+        {
+            builder.Append(",\"request_id\":");
+            builder.Append(JsonSerializer.Serialize(context.RequestId));
+        }
+        builder.Append('}');
+    }
+
     /// <summary>
     /// Route a JSON-RPC message to the appropriate handler.
     /// JSON-RPCメッセージを適切なハンドラにルーティング。
     /// </summary>
     internal JsonNode? HandleMessage(JsonNode request)
-        => HandleMessageAsync(request).GetAwaiter().GetResult();
+        => HandleMessageAsync(request, isolateRequestDb: false).GetAwaiter().GetResult();
 
-    internal async Task<JsonNode?> HandleMessageAsync(JsonNode request)
+    internal Task<JsonNode?> HandleMessageAsync(JsonNode request)
+        => HandleMessageAsync(request, isolateRequestDb: false);
+
+    private async Task<JsonNode?> HandleMessageAsync(JsonNode request, bool isolateRequestDb)
     {
         if (request is JsonArray batch)
-            return HandleBatchMessage(batch);
+            return await HandleBatchMessageAsync(batch, isolateRequestDb).ConfigureAwait(false);
 
         if (request is not JsonObject obj)
             return CreateErrorResponse(hasId: false, id: null, code: -32600, message: "Invalid request: expected JSON object",
@@ -830,13 +1030,15 @@ public partial class McpServer : IDisposable
                 suggestion: "JSON-RPC 2.0 `id` must be a string, integer, or null. Booleans/objects/arrays are not allowed.",
                 retrySafe: false);
 
+        using var correlationScope = hasId && CurrentCorrelationContext.Value is null ? BeginRequestCorrelation(id) : null;
+
         if (method == "$/cancelRequest" || method == "notifications/cancelled")
         {
             var cancelAuth = _authenticator.Authenticate(request);
             if (cancelAuth.IsAuthenticated)
                 TryCancelRequest(request["params"]);
             else
-                Console.Error.WriteLine(BuildAuthFailureLog(method, cancelAuth.FailureReason));
+                WriteMcpLogLine(BuildAuthFailureLog(method, cancelAuth.FailureReason));
             return null;
         }
 
@@ -856,7 +1058,7 @@ public partial class McpServer : IDisposable
         if (string.Equals(method, "notifications/shutdown", StringComparison.Ordinal)
             || string.Equals(method, "notifications/exit", StringComparison.Ordinal))
         {
-            Console.Error.WriteLine($"[cdidx-mcp] Received {method}; draining in-flight work and shutting down.");
+            WriteMcpLogLine($"[cdidx-mcp] Received {method}; draining in-flight work and shutting down.");
             _running = false;
             try
             {
@@ -874,7 +1076,7 @@ public partial class McpServer : IDisposable
         if (!hasId)
         {
             if (method != null && method.StartsWith("notifications/", StringComparison.OrdinalIgnoreCase))
-                Console.Error.WriteLine(BuildUnknownNotificationLog(method));
+                WriteMcpLogLine(BuildUnknownNotificationLog(method));
             return null;
         }
 
@@ -904,7 +1106,7 @@ public partial class McpServer : IDisposable
                 retrySafe: false);
         }
 
-        return await DispatchWithRequestCancellationAsync(id, () => method switch
+        return await DispatchWithRequestCancellationAsync(id, isolateRequestDb, () => method switch
         {
             "initialize" => Task.FromResult<JsonNode>(HandleInitialize(id, request["params"])),
             "tools/list" => Task.FromResult<JsonNode>(HandleToolsList(id)),
@@ -913,15 +1115,16 @@ public partial class McpServer : IDisposable
             "resources/read" => Task.FromResult<JsonNode>(HandleResourcesRead(id, request["params"])),
             "prompts/list" => Task.FromResult<JsonNode>(HandlePromptsList(id)),
             "prompts/get" => Task.FromResult<JsonNode>(HandlePromptsGet(id, request["params"])),
+            "logging/setLevel" => Task.FromResult<JsonNode>(HandleLoggingSetLevel(id, request["params"])),
             "ping" => Task.FromResult<JsonNode>(CreateSuccessResponse(hasId, id, new JsonObject())),
             _ => Task.FromResult<JsonNode>(CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Method not found: {method}",
                 category: McpErrorEnvelope.CategoryMethodNotFound,
-                suggestion: "Supported methods: initialize, tools/list, tools/call, resources/list, resources/read, prompts/list, prompts/get, ping, notifications/initialized, notifications/cancelled, notifications/shutdown.",
+                suggestion: "Supported methods: initialize, tools/list, tools/call, resources/list, resources/read, prompts/list, prompts/get, logging/setLevel, ping, notifications/initialized, notifications/cancelled, notifications/shutdown.",
                 retrySafe: false)),
         }).ConfigureAwait(false);
     }
 
-    private JsonNode? HandleBatchMessage(JsonArray batch)
+    private async Task<JsonNode?> HandleBatchMessageAsync(JsonArray batch, bool isolateRequestDb)
     {
         if (batch.Count == 0)
             return CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: empty batch",
@@ -962,7 +1165,7 @@ public partial class McpServer : IDisposable
             }
             else
             {
-                response = HandleMessage(item);
+                response = await HandleMessageAsync(item, isolateRequestDb).ConfigureAwait(false);
             }
 
             if (response != null)
@@ -973,17 +1176,18 @@ public partial class McpServer : IDisposable
     }
 
     private JsonNode DispatchWithRequestCancellation(JsonNode? id, Func<JsonNode> action)
-        => DispatchWithRequestCancellationAsync(id, () => Task.FromResult(action())).GetAwaiter().GetResult();
+        => DispatchWithRequestCancellationAsync(id, isolateRequestDb: false, () => Task.FromResult(action())).GetAwaiter().GetResult();
 
-    private async Task<JsonNode> DispatchWithRequestCancellationAsync(JsonNode? id, Func<Task<JsonNode>> action)
+    private async Task<JsonNode> DispatchWithRequestCancellationAsync(JsonNode? id, bool isolateRequestDb, Func<Task<JsonNode>> action)
     {
         var requestKey = SerializeRequestId(id);
         if (requestKey == null)
             return await action().ConfigureAwait(false);
 
-        using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(_currentRequestToken.Value, _shutdownCts.Token);
+        var requestCts = CancellationTokenSource.CreateLinkedTokenSource(_currentRequestToken.Value, _shutdownCts.Token);
         if (!_activeRequests.TryAdd(requestKey, requestCts))
         {
+            requestCts.Dispose();
             return CreateErrorResponse(hasId: true, id: id, code: -32600, message: "Duplicate in-flight request id",
                 category: McpErrorEnvelope.CategoryInvalidRequest,
                 suggestion: "JSON-RPC request ids must be unique while a previous request with the same id is still running.",
@@ -992,20 +1196,118 @@ public partial class McpServer : IDisposable
         RequestRegisteredForTests?.Invoke(id);
 
         var previousToken = _currentRequestToken.Value;
+        var stopwatch = Stopwatch.StartNew();
+        var cleanupNow = true;
         try
         {
             _currentRequestToken.Value = requestCts.Token;
+            requestCts.CancelAfter(_requestTimeout);
             requestCts.Token.ThrowIfCancellationRequested();
-            return await action().ConfigureAwait(false);
+            if (!isolateRequestDb)
+            {
+                if (RequestDelayForTests is { } delay)
+                    await delay(requestCts.Token).ConfigureAwait(false);
+                return await action().ConfigureAwait(false);
+            }
+
+            var actionTask = Task.Run(async () =>
+            {
+                var previousIsolation = _isolateDbForCurrentRequest.Value;
+                _isolateDbForCurrentRequest.Value = isolateRequestDb;
+                try
+                {
+                    if (RequestDelayForTests is { } delay)
+                        await delay(requestCts.Token).ConfigureAwait(false);
+                    return await action().ConfigureAwait(false);
+                }
+                finally
+                {
+                    _isolateDbForCurrentRequest.Value = previousIsolation;
+                }
+            }, requestCts.Token);
+            var completed = await Task.WhenAny(actionTask, Task.Delay(_requestTimeout)).ConfigureAwait(false);
+            if (completed != actionTask)
+            {
+                try { requestCts.Cancel(); }
+                catch (ObjectDisposedException) { /* completed while timeout cancellation was being delivered. */ }
+                cleanupNow = false;
+                _ = actionTask.ContinueWith(task =>
+                {
+                    _ = task.Exception;
+                    _activeRequests.TryRemove(requestKey, out _);
+                    requestCts.Dispose();
+                }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                return CreateRequestTimeoutResponse(id, stopwatch.Elapsed);
+            }
+
+            return await actionTask.ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (requestCts.IsCancellationRequested)
         {
+            if (!previousToken.IsCancellationRequested && !_shutdownCts.IsCancellationRequested && stopwatch.Elapsed >= _requestTimeout)
+                return CreateRequestTimeoutResponse(id, stopwatch.Elapsed);
             return CreateCancelledResponse(id);
         }
         finally
         {
             _currentRequestToken.Value = previousToken;
-            _activeRequests.TryRemove(requestKey, out _);
+            if (cleanupNow)
+            {
+                _activeRequests.TryRemove(requestKey, out _);
+                requestCts.Dispose();
+            }
+        }
+    }
+
+    private static JsonObject CreateRequestTimeoutResponse(JsonNode? id, TimeSpan elapsed)
+        => CreateErrorResponse(hasId: true, id: id, code: -32603, message: "Request timed out",
+            category: McpErrorEnvelope.CategoryInternalError,
+            suggestion: "Retry with a narrower query, refresh the index if it is degraded, or increase the MCP request timeout before retrying.",
+            retrySafe: true,
+            extraData: new JsonObject
+            {
+                ["reason"] = "timeout",
+                ["elapsed_ms"] = (long)Math.Ceiling(elapsed.TotalMilliseconds),
+            });
+
+    private static IDisposable BeginRequestCorrelation(JsonNode? id)
+    {
+        var previous = CurrentCorrelationContext.Value;
+        CurrentCorrelationContext.Value = new RequestCorrelationContext(
+            SerializeRequestId(id),
+            Guid.NewGuid().ToString("D"));
+        return new CorrelationScope(previous);
+    }
+
+    private static IDisposable BeginChildCorrelation(int childIndex)
+    {
+        var previous = CurrentCorrelationContext.Value;
+        var requestId = previous?.RequestId;
+        var correlationId = previous == null
+            ? Guid.NewGuid().ToString("D")
+            : $"{previous.CorrelationId}.{childIndex.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+        CurrentCorrelationContext.Value = new RequestCorrelationContext(requestId, correlationId);
+        return new CorrelationScope(previous);
+    }
+
+    private sealed record RequestCorrelationContext(string? RequestId, string CorrelationId);
+
+    private sealed class CorrelationScope : IDisposable
+    {
+        private readonly RequestCorrelationContext? _previous;
+        private bool _disposed;
+
+        public CorrelationScope(RequestCorrelationContext? previous)
+        {
+            _previous = previous;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+            CurrentCorrelationContext.Value = _previous;
+            _disposed = true;
         }
     }
 
@@ -1111,6 +1413,7 @@ public partial class McpServer : IDisposable
     private JsonNode HandleInitialize(JsonNode? id, JsonNode? _params)
     {
         CaptureClientInfo(_params);
+        CaptureClientSession(_params);
         // Caller stickiness: allow upgrading from the default "unknown" bucket to a named
         // identity, but reject re-initialize attempts that swap one named identity for
         // another. Otherwise a single networked session could reset its rate-limit bucket
@@ -1159,7 +1462,8 @@ public partial class McpServer : IDisposable
                 ["prompts"] = new JsonObject
                 {
                     ["listChanged"] = false
-                }
+                },
+                ["logging"] = new JsonObject()
             },
             ["serverInfo"] = new JsonObject
             {
@@ -1170,6 +1474,8 @@ public partial class McpServer : IDisposable
             // サーバー指示 — AIクライアント向けツール選択ガイダンス
             ["instructions"] = BuildInstructions()
         };
+        if (!_initializedNotificationSent)
+            _initializedNotificationPending = true;
         return CreateSuccessResponse(true, id, result);
     }
 
@@ -1213,6 +1519,42 @@ public partial class McpServer : IDisposable
         _clientName = TryReadStringMember(info, "name");
         _clientVersion = TryReadStringMember(info, "version");
     }
+
+    private void CaptureClientSession(JsonNode? initializeParams)
+    {
+        _clientCapabilities = null;
+        _clientRoots = [];
+        if (initializeParams is not JsonObject obj)
+            return;
+
+        if (!obj.TryGetPropertyValue("capabilities", out var capabilities))
+            obj.TryGetPropertyValue("clientCapabilities", out capabilities);
+        if (capabilities is not null)
+            _clientCapabilities = JsonNode.Parse(capabilities.ToJsonString());
+
+        if (TryReadStringValue(obj["rootUri"]) is { Length: > 0 } rootUri)
+            _clientRoots.Add(rootUri);
+
+        if (obj["roots"] is JsonArray roots)
+        {
+            foreach (var root in roots)
+            {
+                var uri = TryReadStringValue(root?["uri"]) ?? TryReadStringValue(root);
+                if (!string.IsNullOrWhiteSpace(uri))
+                    _clientRoots.Add(uri);
+            }
+        }
+    }
+
+    internal JsonNode? ClientCapabilitiesForTests => _clientCapabilities is null ? null : JsonNode.Parse(_clientCapabilities.ToJsonString());
+
+    internal string[] ClientRootsForTests => _clientRoots
+        .Select(root => root?.GetValue<string>())
+        .Where(root => !string.IsNullOrWhiteSpace(root))
+        .Cast<string>()
+        .ToArray();
+
+    internal string McpLogLevelForTests => _mcpLogLevel;
 
     private static string? TryReadStringMember(JsonObject obj, string key)
     {
@@ -1356,6 +1698,21 @@ public partial class McpServer : IDisposable
             ["description"] = name,
             ["messages"] = messages,
         });
+    }
+
+    private JsonNode HandleLoggingSetLevel(JsonNode? id, JsonNode? setLevelParams)
+    {
+        var level = TryReadStringValue(setLevelParams?["level"]);
+        if (!IsSupportedMcpLogLevel(level))
+            return CreateErrorResponse(hasId: true, id: id, code: -32602, message: "Invalid logging level",
+                category: McpErrorEnvelope.CategoryInvalidArgument,
+                suggestion: "logging/setLevel requires params.level to be one of: debug, info, notice, warning, error, critical, alert, emergency.",
+                retrySafe: false);
+
+        var previous = _mcpLogLevel;
+        _mcpLogLevel = level!;
+        EmitLogNotification("info", $"MCP logging level changed from {previous} to {_mcpLogLevel}.");
+        return CreateSuccessResponse(true, id, new JsonObject());
     }
 
     private static JsonObject CreatePromptDefinition(string name, string description, string argumentName, string argumentDescription)
@@ -1503,7 +1860,7 @@ public partial class McpServer : IDisposable
             McpErrorEnvelope.CategoryInvalidArgument,
             "Reissue `initialize` with one of `data.supportedVersions` in `params.protocolVersion`, or omit the field to fall back to the server's newest supported version.",
             retrySafe: false,
-            extra);
+            AddCorrelationData(extra));
 
         var error = new JsonObject
         {
@@ -1560,7 +1917,7 @@ public partial class McpServer : IDisposable
             category: McpErrorEnvelope.CategoryRateLimited,
             suggestion: $"Back off for at least {retryAfterMs} ms before retrying this tool, or raise {RateLimiterOptions.RpsEnvVar} / {RateLimiterOptions.BurstEnvVar} on the server.",
             retrySafe: true,
-            extraData: extraData);
+            extraData: AddCorrelationData(extraData));
         var error = new JsonObject
         {
             ["code"] = -32000,
@@ -1722,7 +2079,7 @@ public partial class McpServer : IDisposable
             // パスや索引内容が漏れる（#1530）。
             DeferFrameLog(() =>
             {
-                Console.Error.WriteLine(BuildToolErrorLog(toolName, ex.Message));
+                WriteMcpLogLine(BuildToolErrorLog(toolName, ex.Message));
                 Database.DbDebug.DumpToStderr(ex);
             });
             metricsError = ex.GetType().Name;
@@ -1762,7 +2119,36 @@ public partial class McpServer : IDisposable
         // 出力する。Stopwatch.Stop は冪等。TryEmitAudit 内部でベストエフォート化済み (#1562)。
         metricsStopwatch.Stop();
         TryEmitAudit(toolName, id, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, errorType: metricsError);
+        EmitToolInvocationTelemetry(toolName, args, response, metricsStartedAt, metricsStopwatch.Elapsed.TotalMilliseconds, metricsError);
         return response;
+    }
+
+    private void EmitToolInvocationTelemetry(string toolName, JsonNode? args, JsonNode response, DateTimeOffset startedAt, double elapsedMs, string? errorType)
+    {
+        var context = CurrentCorrelationContext.Value;
+        var (errorCode, observedErrorType) = ExtractErrorCode(response);
+        var resultCount = ExtractResultCount(response);
+        var (argKeys, argLengths, _) = SanitizeArgs(args, includeValues: false);
+        var argsObject = new JsonObject();
+        foreach (var pair in argLengths)
+            argsObject[pair.Key] = pair.Value;
+
+        var evt = new JsonObject
+        {
+            ["event"] = "mcp.tool.invocation",
+            ["timestamp"] = startedAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            ["tool"] = toolName,
+            ["request_id"] = context?.RequestId,
+            ["correlation_id"] = context?.CorrelationId,
+            ["elapsed_ms"] = Math.Round(elapsedMs, 3),
+            ["status"] = errorCode == 0 ? "success" : "error",
+            ["error_code"] = errorCode == 0 ? null : errorCode,
+            ["error_type"] = errorType ?? observedErrorType,
+            ["result_count"] = resultCount,
+            ["arg_keys"] = JsonSerializer.SerializeToNode(argKeys, _jsonOptions),
+            ["arg_lengths"] = argsObject,
+        };
+        DeferFrameLog(() => WriteMcpLogLine(evt.ToJsonString(_jsonOptions)));
     }
 
     private static JsonNode? TryReadProgressToken(JsonNode? callParams)
@@ -1791,6 +2177,25 @@ public partial class McpServer : IDisposable
             ["jsonrpc"] = "2.0",
             ["method"] = "notifications/progress",
             ["params"] = parameters,
+        };
+        writer(notification.ToJsonString(_jsonOptions));
+    }
+
+    private void EmitLogNotification(string level, string message)
+    {
+        if (_currentOutOfBandFrameWriter.Value is not { } writer)
+            return;
+
+        var notification = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["method"] = "notifications/message",
+            ["params"] = new JsonObject
+            {
+                ["level"] = level,
+                ["logger"] = "cdidx",
+                ["data"] = message,
+            },
         };
         writer(notification.ToJsonString(_jsonOptions));
     }
@@ -1998,6 +2403,9 @@ public partial class McpServer : IDisposable
     internal static string BuildUnknownNotificationLog(string method) =>
         $"[cdidx-mcp] Ignoring unknown notification: {method}";
 
+    internal static bool IsSupportedMcpLogLevel(string? level)
+        => level is "debug" or "info" or "notice" or "warning" or "error" or "critical" or "alert" or "emergency";
+
     // Wire-safe error body for the tool catch-all. Mentions the tool and the
     // exception type so the client can branch (retry vs. surface to user)
     // while keeping bound values or matched content out of the response (#1530).
@@ -2060,14 +2468,25 @@ public partial class McpServer : IDisposable
                 retrySafe: true);
         }
 
+        var requestToken = _currentRequestToken.Value;
+        requestToken.ThrowIfCancellationRequested();
+        if (_isolateDbForCurrentRequest.Value)
+        {
+            using var isolatedDb = new DbContext(_dbPath);
+            isolatedDb.TryMigrateForRead();
+            var isolatedReader = new DbReader(isolatedDb, requestToken);
+            isolatedReader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
+            return isolatedReader.RunWithGeneratedScope(() => action(isolatedReader));
+        }
+
         var db = GetOrOpenSharedDb();
         if (!_sharedDbReadMigrated)
         {
             db.TryMigrateForRead();
             _sharedDbReadMigrated = true;
         }
-        // Reuse the connection-scoped schema cache so each MCP tool call no longer
-        // re-runs PRAGMA table_info / PRAGMA index_list per DbReader (issue #1565),
+        // Reuse the connection-scoped schema cache for single-threaded direct callers so each
+        // call no longer re-runs PRAGMA table_info / PRAGMA index_list per DbReader (issue #1565),
         // and hand the per-request cancellation token to the reader so SQLite work
         // the tool kicks off can observe shutdown / client-disconnect cancellation
         // (#1567). The token is `CancellationToken.None` outside an in-flight request,
@@ -2076,21 +2495,18 @@ public partial class McpServer : IDisposable
         // MCP ツール呼び出しごとの schema 再走査を排除し (issue #1565)、
         // per-request cancellation token を reader に渡して SQLite 作業が
         // shutdown / 切断を観測できるようにする (#1567)。
-        var requestToken = _currentRequestToken.Value;
-        requestToken.ThrowIfCancellationRequested();
         var reader = new DbReader(db, requestToken);
         reader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
         return reader.RunWithGeneratedScope(() => action(reader));
     }
 
     /// <summary>
-    /// Open the per-session DbContext on first use and reuse it on every subsequent call.
+    /// Open the per-session DbContext on first use and reuse it on every subsequent direct call.
     /// Centralising the open lets us pay the connection setup, pragma application, and SQL
-    /// function registration once per MCP session instead of once per tool invocation
-    /// (#1494). The MCP loop is single-threaded, so no locking is required.
-    /// MCP セッション初回呼び出し時に DbContext を開き、以後は再利用する。接続セットアップや
-    /// PRAGMA・SQL 関数登録のコストを毎ツール呼び出しごとに払わないようにする（#1494）。
-    /// MCP ループは単一スレッドのためロック不要。
+    /// function registration once per direct session instead of once per tool invocation
+    /// (#1494). Transport requests that may time out independently use isolated DB contexts.
+    /// 直接呼び出しセッション初回に DbContext を開き、以後は再利用する。timeout 後も独立して
+    /// 継続し得る transport リクエストは、共有接続を避けるためリクエスト単位の DB context を使う。
     /// </summary>
     internal DbContext GetOrOpenSharedDb()
     {
@@ -2167,6 +2583,7 @@ public partial class McpServer : IDisposable
 
     private static JsonObject CreateSuccessResponse(bool hasId, JsonNode? id, JsonNode result)
     {
+        AddResponseMeta(result);
         var response = new JsonObject
         {
             ["jsonrpc"] = "2.0",
@@ -2175,6 +2592,32 @@ public partial class McpServer : IDisposable
         if (hasId)
             response["id"] = id is null ? JsonNode.Parse("null") : JsonNode.Parse(id.ToJsonString());
         return response;
+    }
+
+    private static void AddResponseMeta(JsonNode result)
+    {
+        var context = CurrentCorrelationContext.Value;
+        if (context is null || result is not JsonObject obj)
+            return;
+
+        var meta = obj["_meta"] as JsonObject ?? new JsonObject();
+        meta["correlation_id"] = context.CorrelationId;
+        if (context.RequestId != null)
+            meta["request_id"] = context.RequestId;
+        obj["_meta"] = meta;
+    }
+
+    private static JsonObject? AddCorrelationData(JsonObject? extraData)
+    {
+        var context = CurrentCorrelationContext.Value;
+        if (context is null)
+            return extraData;
+
+        var data = extraData is null ? new JsonObject() : (JsonObject)extraData.DeepClone();
+        data["correlation_id"] = context.CorrelationId;
+        if (context.RequestId != null)
+            data["request_id"] = context.RequestId;
+        return data;
     }
 
     private static JsonObject CreateErrorResponse(JsonNode? id, int code, string message,
@@ -2198,7 +2641,7 @@ public partial class McpServer : IDisposable
             {
                 ["code"] = code,
                 ["message"] = message,
-                ["data"] = McpErrorEnvelope.BuildData(category, suggestion, retrySafe, extraData),
+                ["data"] = McpErrorEnvelope.BuildData(category, suggestion, retrySafe, AddCorrelationData(extraData)),
             }
         };
         if (hasId)
@@ -2217,8 +2660,9 @@ public partial class McpServer : IDisposable
     /// Create a tool result response (MCP format).
     /// ツール結果レスポンスを作成（MCP形式）。
     /// </summary>
-    private static JsonObject CreateToolResult(JsonNode? id, string text, JsonNode? structuredContent = null)
+    private static JsonObject CreateToolResult(JsonNode? id, string text, JsonNode? structuredContent = null, string? mimeType = null)
     {
+        mimeType ??= structuredContent is null ? "text/plain" : "application/json";
         var result = new JsonObject
         {
             ["content"] = new JsonArray
@@ -2226,13 +2670,46 @@ public partial class McpServer : IDisposable
                 new JsonObject
                 {
                     ["type"] = "text",
+                    ["mimeType"] = mimeType,
                     ["text"] = text
                 }
             }
         };
         if (structuredContent != null)
             result["structuredContent"] = structuredContent;
-        return CreateSuccessResponse(true, id, result);
+        var response = CreateSuccessResponse(true, id, result);
+        var responseBytes = Encoding.UTF8.GetByteCount(response.ToJsonString());
+        var responseLimit = GetMaxResponseBytes();
+        if (responseBytes <= responseLimit)
+            return response;
+
+        return CreateResponseTooLargeError(true, id, responseBytes, responseLimit);
+    }
+
+    private static JsonObject CreateResponseTooLargeError(bool hasId, JsonNode? id, int responseBytes, int responseLimit)
+    {
+        return CreateErrorResponse(
+            hasId: hasId,
+            id: id,
+            code: -32603,
+            message: $"MCP response exceeded the server byte limit ({responseBytes} > {responseLimit}). Narrow the query or lower the result limit.",
+            category: McpErrorEnvelope.CategoryInvalidArgument,
+            suggestion: "Narrow the query, add path/language filters, lower limit, or use countOnly for a summary-first probe.",
+            retrySafe: false,
+            extraData: new JsonObject
+            {
+                ["reason"] = "response_too_large",
+                ["limit_bytes"] = responseLimit,
+                ["actual_bytes"] = responseBytes,
+            });
+    }
+
+    private static int GetMaxResponseBytes()
+    {
+        var configured = Environment.GetEnvironmentVariable(MaxResponseBytesEnvVar);
+        if (int.TryParse(configured, out var limit) && limit > 0)
+            return limit;
+        return DefaultMaxResponseBytes;
     }
 
     /// <summary>
@@ -2291,7 +2768,7 @@ public partial class McpServer : IDisposable
                 }
             },
             ["isError"] = true,
-            ["structuredContent"] = McpErrorEnvelope.BuildData(category, suggestion, retrySafe, extraData),
+            ["structuredContent"] = McpErrorEnvelope.BuildData(category, suggestion, retrySafe, AddCorrelationData(extraData)),
         };
         if (similarValues != null && similarValues.Count > 0)
         {
@@ -2313,11 +2790,72 @@ public partial class McpServer : IDisposable
         {
             ["name"] = name,
             ["description"] = AppendLanguageSupportClause(name, description),
-            ["inputSchema"] = inputSchema
+            ["inputSchema"] = inputSchema,
+            ["examples"] = BuildToolExamples(name),
         };
         if (annotations != null)
             def["annotations"] = annotations;
         return def;
+    }
+
+    private static JsonArray BuildToolExamples(string name)
+    {
+        var args = name switch
+        {
+            "search" => new JsonObject { ["query"] = "Run", ["lang"] = "csharp", ["limit"] = 5 },
+            "definition" => new JsonObject { ["query"] = "App", ["exactName"] = true },
+            "references" => new JsonObject { ["query"] = "Run", ["kind"] = "call" },
+            "callers" => new JsonObject { ["query"] = "Run", ["rankBy"] = "weighted" },
+            "callees" => new JsonObject { ["query"] = "App.Run" },
+            "symbols" => new JsonObject { ["query"] = "App", ["kind"] = "class" },
+            "files" => new JsonObject { ["query"] = "app.cs", ["lang"] = "csharp" },
+            "excerpt" => new JsonObject { ["path"] = "src/app.cs", ["startLine"] = 1, ["endLine"] = 5 },
+            "find_in_file" => new JsonObject { ["path"] = "src/app.cs", ["query"] = "Run", ["before"] = 1, ["after"] = 1 },
+            "map" => new JsonObject { ["limit"] = 5, ["excludeTests"] = true },
+            "analyze_symbol" => new JsonObject { ["query"] = "Run", ["includeBody"] = true },
+            "impact_analysis" => new JsonObject { ["query"] = "Run", ["maxHops"] = 2, ["withPaths"] = true },
+            "status" => new JsonObject(),
+            "outline" => new JsonObject { ["path"] = "src/app.cs" },
+            "deps" => new JsonObject { ["path"] = "src/", ["reverse"] = false, ["limit"] = 10 },
+            "languages" => new JsonObject(),
+            "validate" => new JsonObject { ["kind"] = "line_too_long" },
+            "ping" => new JsonObject(),
+            "batch_query" => new JsonObject
+            {
+                ["queries"] = new JsonArray
+                {
+                    new JsonObject { ["tool"] = "search", ["arguments"] = new JsonObject { ["query"] = "Run", ["limit"] = 3 } },
+                    new JsonObject { ["tool"] = "definition", ["arguments"] = new JsonObject { ["query"] = "App", ["limit"] = 3 } },
+                },
+            },
+            "index" => new JsonObject { ["path"] = ".", ["rebuild"] = false },
+            "backfill_fold" => new JsonObject(),
+            "symbol_hotspots" => new JsonObject { ["lang"] = "csharp", ["limit"] = 10 },
+            "unused_symbols" => new JsonObject { ["lang"] = "csharp", ["limit"] = 10 },
+            "suggest_improvement" => new JsonObject
+            {
+                ["category"] = "output_format",
+                ["description"] = "The tool response should make truncation easier to detect.",
+            },
+            _ => new JsonObject(),
+        };
+
+        return new JsonArray
+        {
+            new JsonObject
+            {
+                ["request"] = new JsonObject
+                {
+                    ["method"] = "tools/call",
+                    ["params"] = new JsonObject
+                    {
+                        ["name"] = name,
+                        ["arguments"] = args,
+                    },
+                },
+                ["response_excerpt"] = "A successful MCP tool result includes content and, when available, structuredContent.",
+            },
+        };
     }
 
     private static string AppendLanguageSupportClause(string name, string description)

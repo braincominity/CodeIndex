@@ -1097,11 +1097,11 @@ public static partial class SymbolExtractor
             // これにより C# 11 の `static abstract` / `abstract static` interface 変換演算子
             // （generic math: `System.Numerics.INumber<TSelf>` など）と、interface 上の
             // default implementation / member hiding 形態を黙って取りこぼさない。Closes #244.
-            new("function",  new Regex(
+            new("operator",  new Regex(
                 $@"^\s*"
               + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)*static\s+)"
               + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)+"
-              + $@"(?<conversionKind>implicit|explicit)\s+operator\b",
+              + @"(?<name>(?:implicit|explicit)\s+operator\s+.+?)\s*\(",
                 RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Operator overload (+ - * / == != < > etc.) — must come before method pattern.
             // Visibility may appear before or after `static`. Closes #355.
@@ -1115,7 +1115,7 @@ public static partial class SymbolExtractor
             // これにより C# 11 の `static abstract` / `abstract static` interface 演算子
             // （generic math: `IAdditionOperators<T>`、`IComparisonOperators<T>` など）を
             // 黙って取りこぼさない。Closes #244.
-            new("function",  new Regex(
+            new("operator",  new Regex(
                 $@"^\s*"
               + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)*static\s+)"
               + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)+"
@@ -2143,8 +2143,9 @@ public static partial class SymbolExtractor
     /// <param name="content">Full file content / ファイル全体の内容</param>
     /// <param name="filePath">Relative file path when available / 利用可能なら相対ファイルパス</param>
     /// <returns>List of extracted symbols / 抽出されたシンボルのリスト</returns>
-    public static List<SymbolRecord> Extract(long fileId, string? lang, string content, string? filePath = null, string? projectRoot = null)
+    public static List<SymbolRecord> Extract(long fileId, string? lang, string content, string? filePath = null, string? projectRoot = null, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var originalLang = lang;
         lang = NormalizeLanguage(lang);
         var pluginLanguage = NormalizePluginLanguage(originalLang);
@@ -2179,6 +2180,7 @@ public static partial class SymbolExtractor
         if (content.Contains('\r'))
             content = content.Replace("\r\n", "\n").Replace("\r", "\n");
         content = FileIndexer.StripLineLeadingInvisibles(content);
+        cancellationToken.ThrowIfCancellationRequested();
 
         if (pluginLanguage != null
             && !PatternCache.ContainsKey(pluginLanguage)
@@ -2220,6 +2222,7 @@ public static partial class SymbolExtractor
         // で `^\s*` 固定パターンを成立させる。行頭以外の U+FEFF (文字列リテラル中
         // の意図的な ZWNBSP 等) はそのまま保持する。Closes #183.
         var lines = content.Split('\n');
+        cancellationToken.ThrowIfCancellationRequested();
         var pythonModulePrefix = lang == "python"
             ? GetPythonModulePrefix(filePath)
             : null;
@@ -2288,6 +2291,9 @@ public static partial class SymbolExtractor
 
         for (int i = 0; i < lines.Length; i++)
         {
+            if ((i & 0x3f) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
+
             if (lang == "csharp" && i <= csharpSuppressedContinuationUntil)
                 continue;
 
@@ -3894,6 +3900,9 @@ public static partial class SymbolExtractor
 
                 if (restartPatternScanOffset >= 0)
                 {
+                    if (restartPatternScanOffset <= patternStartOffset)
+                        break;
+
                     patternStartOffset = restartPatternScanOffset;
                     continue;
                 }

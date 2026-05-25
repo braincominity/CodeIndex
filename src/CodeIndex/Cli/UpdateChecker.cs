@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using CodeIndex.Models;
 
 namespace CodeIndex.Cli;
 
@@ -17,6 +18,52 @@ internal static class UpdateChecker
             ResolveDefaultCachePath(),
             DateTimeOffset.UtcNow,
             FetchLatestReleaseTagAsync);
+
+    internal static UpdateCheckResult Check(string currentVersion)
+        => Check(
+            currentVersion,
+            ResolveDefaultCachePath(),
+            DateTimeOffset.UtcNow,
+            FetchLatestReleaseTagAsync);
+
+    internal static UpdateCheckResult Check(
+        string currentVersion,
+        string cachePath,
+        DateTimeOffset now,
+        Func<CancellationToken, Task<string?>> fetchLatestReleaseTagAsync)
+    {
+        if (IsDisabled())
+            return new UpdateCheckResult(currentVersion, null, false, false, "disabled");
+
+        var cache = ReadCache(cachePath);
+        var fromCache = cache is not null && now - cache.CheckedAt < CacheTtl;
+        string? latestTag = fromCache ? cache!.LatestTag : null;
+        string? error = null;
+
+        if (!fromCache)
+        {
+            try
+            {
+                latestTag = fetchLatestReleaseTagAsync(CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+            }
+            catch (Exception ex)
+            {
+                latestTag = cache?.LatestTag;
+                error = ex.GetType().Name;
+            }
+
+            TryWriteCache(cachePath, new UpdateCheckCache(now, latestTag));
+        }
+
+        return new UpdateCheckResult(
+            currentVersion,
+            latestTag,
+            IsNewerRelease(latestTag, currentVersion),
+            fromCache,
+            error);
+    }
 
     internal static string? GetNewerReleaseHint(
         string currentVersion,
@@ -94,10 +141,13 @@ internal static class UpdateChecker
 
     private static string ResolveDefaultCachePath()
     {
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var root = string.IsNullOrWhiteSpace(localAppData)
-            ? Path.Combine(Path.GetTempPath(), "cdidx")
-            : Path.Combine(localAppData, "cdidx");
+        var xdgCacheHome = Environment.GetEnvironmentVariable("XDG_CACHE_HOME");
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var root = !string.IsNullOrWhiteSpace(xdgCacheHome)
+            ? Path.Combine(xdgCacheHome, "cdidx")
+            : !string.IsNullOrWhiteSpace(home)
+                ? Path.Combine(home, ".cache", "cdidx")
+                : Path.Combine(Path.GetTempPath(), "cdidx");
         return Path.Combine(root, "update-check.json");
     }
 

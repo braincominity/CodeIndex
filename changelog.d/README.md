@@ -43,6 +43,18 @@ issue number.
 If the fragment is not tied to an issue, omit `issues` from the front matter
 entirely; do not write `issues: null` or `issues: []`.
 
+## Validation
+
+Validate fragments locally before committing:
+
+```bash
+dotnet run --project tools/CodeIndex.Changelog -- check
+```
+
+The validator reads every `changelog.d/unreleased/*.md` fragment and reports the
+fragment path with the failed rule. For example, `issues: null` is rejected as
+an invalid issue number; omit `issues` entirely for non-issue fragments.
+
 ## Categories
 
 Allowed categories:

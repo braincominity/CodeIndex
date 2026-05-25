@@ -1203,6 +1203,49 @@ public class FileIndexer
     internal static bool CanIndexFile(string filePath)
         => GetFileIndexability(filePath) == FileProbeStatus.Supported;
 
+    internal static bool IsWindowsDevicePath(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+            return false;
+
+        var normalized = filePath.Replace('\\', '/');
+        if (normalized.StartsWith("//./", StringComparison.Ordinal)
+            || normalized.StartsWith("//?/GLOBALROOT/Device/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        foreach (var segment in normalized.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var name = segment;
+            var extensionIndex = name.IndexOf('.');
+            if (extensionIndex >= 0)
+                name = name[..extensionIndex];
+
+            if (IsWindowsReservedDeviceName(name))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsWindowsReservedDeviceName(string name)
+    {
+        if (name.Equals("CON", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("PRN", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("AUX", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("NUL", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return name.Length == 4
+            && (name.StartsWith("COM", StringComparison.OrdinalIgnoreCase)
+                || name.StartsWith("LPT", StringComparison.OrdinalIgnoreCase))
+            && name[3] >= '1'
+            && name[3] <= '9';
+    }
+
     internal static bool HasSkippedAttributes(FileAttributes attributes, bool isWindows)
     {
         if ((attributes & FileAttributes.ReparsePoint) != 0)
@@ -1247,6 +1290,9 @@ public class FileIndexer
 
     internal static FileProbeStatus GetFileIndexability(string filePath)
     {
+        if (OperatingSystem.IsWindows() && IsWindowsDevicePath(filePath))
+            return FileProbeStatus.Unsupported;
+
         // Reject symlinks/reparse points here so every caller (full scan, --files / --commits update mode,
         // dry-run) gets the same skip behavior. On Windows, Hidden/System paths are also rejected to avoid
         // indexing OS-owned caches such as System Volume Information and $Recycle.Bin during broad scans.
@@ -1637,8 +1683,10 @@ public class FileIndexer
 
     internal ScanFilesResult ScanFilesDetailed(
         IReadOnlySet<string>? checkpointedDirectories = null,
-        bool continueOnError = true)
+        bool continueOnError = true,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var files = new List<string>();
         var errors = new List<ScanError>();
         var nonIndexablePaths = new HashSet<string>(StringComparer.Ordinal);
@@ -1656,7 +1704,7 @@ public class FileIndexer
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         if (preloadResult.IgnoreRulesAvailable)
         {
-            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeCheckpointedDirectories, attributePrunedDirectories, nestedRepositories, visitedFileIdentities, preloadResult.Rules, isProjectRoot: true, continueOnError);
+            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeCheckpointedDirectories, attributePrunedDirectories, nestedRepositories, visitedFileIdentities, preloadResult.Rules, isProjectRoot: true, continueOnError, cancellationToken);
         }
         return new ScanFilesResult(
             files,
@@ -1687,8 +1735,10 @@ public class FileIndexer
         HashSet<FileIdentity> visitedFileIdentities,
         IgnoreRuleSet activeIgnoreRules,
         bool isProjectRoot = false,
-        bool continueOnError = true)
+        bool continueOnError = true,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var relativeDir = ToRelativePath(dir);
 
         if (checkpointedDirectories.Contains(relativeDir))
@@ -1702,7 +1752,7 @@ public class FileIndexer
             return true;
         }
 
-        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, visitedFileIdentities, activeIgnoreRules, continueOnError);
+        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, visitedFileIdentities, activeIgnoreRules, continueOnError, cancellationToken);
     }
 
     private bool IsNestedGitRepository(string dir)
@@ -1728,8 +1778,10 @@ public class FileIndexer
         HashSet<string> nestedRepositories,
         HashSet<FileIdentity> visitedFileIdentities,
         IgnoreRuleSet inheritedIgnoreRules,
-        bool continueOnError)
+        bool continueOnError,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var fullyScanned = true;
         try
         {
@@ -1761,6 +1813,7 @@ public class FileIndexer
                     : null;
                 foreach (var enumeratedFile in _enumerateFiles(dir))
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     // Strip any \\?\ prefix returned by EnumerateFiles when we passed a long-path
                     // directory, so downstream relative-path math (which compares against the
                     // un-prefixed _projectRoot) still produces the canonical project-relative key.
@@ -1878,6 +1931,7 @@ public class FileIndexer
 
             foreach (var enumeratedSubDir in Directory.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir)))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
                 if (IsNestedGitRepository(subDir) && !IsSubmoduleOrAncestor(subDir))
                 {
@@ -1921,7 +1975,7 @@ public class FileIndexer
                     continue;
                 }
 
-                var childFullyScanned = ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, visitedFileIdentities, activeIgnoreRules, continueOnError: continueOnError);
+                var childFullyScanned = ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, visitedFileIdentities, activeIgnoreRules, continueOnError: continueOnError, cancellationToken: cancellationToken);
                 fullyScanned &= childFullyScanned;
                 if (!continueOnError && !childFullyScanned)
                     break;
@@ -2494,9 +2548,9 @@ public class FileIndexer
     /// Build a FileRecord and return file content (avoids reading the file twice).
     /// FileRecordを構築しファイル内容も返す（二重読み込み防止）。
     /// </summary>
-    public (FileRecord record, string content, string? warning) BuildRecord(string absolutePath)
+    public (FileRecord record, string content, string? warning) BuildRecord(string absolutePath, CancellationToken cancellationToken = default)
     {
-        var (record, content, _, warning) = BuildRecordWithRawBytes(absolutePath);
+        var (record, content, _, warning) = BuildRecordWithRawBytes(absolutePath, cancellationToken);
         return (record, content, warning);
     }
 
@@ -2506,8 +2560,9 @@ public class FileIndexer
     /// FileRecordを構築し、デコード済み内容とraw bytesを返す。
     /// 呼び出し側は再読込なしでエンコーディング検証できる。
     /// </summary>
-    public (FileRecord record, string content, byte[] rawBytes, string? warning) BuildRecordWithRawBytes(string absolutePath)
+    public (FileRecord record, string content, byte[] rawBytes, string? warning) BuildRecordWithRawBytes(string absolutePath, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!IsFilePathSyntaxIndexable(absolutePath))
             throw new InvalidOperationException("Cannot index a file path that contains NUL or control characters.");
 
@@ -2566,6 +2621,7 @@ public class FileIndexer
             int read;
             while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 total += read;
                 if (total > _maxFileSizeBytes)
                     throw new FileTooLargeSkippedException(
@@ -2597,7 +2653,9 @@ public class FileIndexer
         // Closes #1544.
         var checksum = ComputeChecksum(bytes);
 
-        if (ContainsIndexBlockingNullByte(bytes))
+        var isUtf16Encoded = TryDetectUtf16Encoding(bytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
+
+        if (!isUtf16Encoded && ContainsIndexBlockingNullByte(bytes))
             throw new BinaryFileSkippedException($"{relativePath}: binary file skipped because it contains NULL bytes");
 
         string content;
@@ -2611,15 +2669,9 @@ public class FileIndexer
         // デコーダで毎バイト U+FFFD / NUL に変換され、ファイル内のシンボルが丸ごと
         // 消える。UTF-32 LE は UTF-16 LE と先頭 2 バイトを共有する (FF FE [00 00])
         // ため、UTF-16 LE 経路から除外し UTF-8 fallback に流す。Closes #1540.
-        if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
+        if (isUtf16Encoded)
         {
-            content = new UnicodeEncoding(bigEndian: true, byteOrderMark: false, throwOnInvalidBytes: false)
-                .GetString(bytes);
-        }
-        else if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE
-                 && !(bytes.Length >= 4 && bytes[2] == 0x00 && bytes[3] == 0x00))
-        {
-            content = new UnicodeEncoding(bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: false)
+            content = new UnicodeEncoding(utf16BigEndian, byteOrderMark: hasUtf16Bom, throwOnInvalidBytes: false)
                 .GetString(bytes);
         }
         else
@@ -2978,19 +3030,16 @@ public class FileIndexer
         // (UTF-16 LE では ASCII 部の片バイトが NUL、CRLF は 0D 00 0A 00)。代わりに
         // `utf16_bom` 1 件を出して `validate` が「UTF-16 として解釈した」ことを示し、
         // 不正サロゲートペアに備え content 側 U+FFFD 走査は継続する。Closes #1540.
-        var hasUtf16BeBom = rawBytes.Length >= 2 && rawBytes[0] == 0xFE && rawBytes[1] == 0xFF;
-        var hasUtf16LeBom = rawBytes.Length >= 2 && rawBytes[0] == 0xFF && rawBytes[1] == 0xFE
-            && !(rawBytes.Length >= 4 && rawBytes[2] == 0x00 && rawBytes[3] == 0x00);
-        var isUtf16 = hasUtf16BeBom || hasUtf16LeBom;
+        var isUtf16 = TryDetectUtf16Encoding(rawBytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
 
-        if (isUtf16)
+        if (isUtf16 && hasUtf16Bom)
         {
             issues.Add(new FileIssue
             {
                 Path = relativePath,
                 Kind = "utf16_bom",
                 Line = 1,
-                Message = hasUtf16BeBom
+                Message = utf16BigEndian
                     ? "UTF-16 BE BOM detected (decoded as UTF-16)"
                     : "UTF-16 LE BOM detected (decoded as UTF-16)",
             });
@@ -3193,11 +3242,86 @@ public class FileIndexer
 
     internal static bool ContainsIndexBlockingNullByte(byte[] rawBytes)
     {
-        var hasUtf16BeBom = rawBytes.Length >= 2 && rawBytes[0] == 0xFE && rawBytes[1] == 0xFF;
-        var hasUtf16LeBom = rawBytes.Length >= 2 && rawBytes[0] == 0xFF && rawBytes[1] == 0xFE
-            && !(rawBytes.Length >= 4 && rawBytes[2] == 0x00 && rawBytes[3] == 0x00);
-        return !hasUtf16BeBom && !hasUtf16LeBom && rawBytes.Any(b => b == 0);
+        return !TryDetectUtf16Encoding(rawBytes, allowHeuristic: true, out _, out _) && rawBytes.Any(b => b == 0);
     }
+
+    internal static bool TryDetectUtf16Encoding(
+        byte[] rawBytes,
+        bool allowHeuristic,
+        out bool bigEndian,
+        out bool hasBom)
+    {
+        bigEndian = false;
+        hasBom = false;
+
+        if (rawBytes.Length >= 2 && rawBytes[0] == 0xFE && rawBytes[1] == 0xFF)
+        {
+            bigEndian = true;
+            hasBom = true;
+            return true;
+        }
+
+        if (rawBytes.Length >= 2 && rawBytes[0] == 0xFF && rawBytes[1] == 0xFE
+            && !(rawBytes.Length >= 4 && rawBytes[2] == 0x00 && rawBytes[3] == 0x00))
+        {
+            hasBom = true;
+            return true;
+        }
+
+        if (!allowHeuristic || rawBytes.Length < 4)
+            return false;
+
+        var sampleLength = Math.Min(rawBytes.Length, 4096);
+        sampleLength -= sampleLength % 2;
+        var pairs = sampleLength / 2;
+        if (pairs == 0)
+            return false;
+
+        var evenNulls = 0;
+        var oddNulls = 0;
+        var oddTextBytes = 0;
+        var evenTextBytes = 0;
+        for (var i = 0; i < sampleLength; i += 2)
+        {
+            if (rawBytes[i] == 0)
+                evenNulls++;
+            if (rawBytes[i + 1] == 0)
+                oddNulls++;
+            if (IsLikelyTextByte(rawBytes[i + 1]))
+                oddTextBytes++;
+            if (IsLikelyTextByte(rawBytes[i]))
+                evenTextBytes++;
+        }
+
+        const double NullParityThreshold = 0.30;
+        const double OppositeNullThreshold = 0.01;
+        const double TextByteThreshold = 0.80;
+        var beScore = (double)evenNulls / pairs;
+        var leScore = (double)oddNulls / pairs;
+        var beOppositeScore = (double)oddNulls / pairs;
+        var leOppositeScore = (double)evenNulls / pairs;
+
+        if (beScore >= NullParityThreshold
+            && beOppositeScore <= OppositeNullThreshold
+            && (double)oddTextBytes / pairs >= TextByteThreshold)
+        {
+            bigEndian = true;
+            return true;
+        }
+
+        if (leScore >= NullParityThreshold
+            && leOppositeScore <= OppositeNullThreshold
+            && (double)evenTextBytes / pairs >= TextByteThreshold)
+        {
+            bigEndian = false;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsLikelyTextByte(byte value)
+        => value is 0x09 or 0x0A or 0x0D || value >= 0x20;
 
     internal sealed class BinaryFileSkippedException(string message) : InvalidOperationException(message);
 

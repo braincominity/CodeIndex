@@ -11,6 +11,137 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.26.1] - 2026-05-26
+
+#### Fixed
+
+- **Windows release ZIP archives now preserve nested license paths** — The release workflow now writes Windows ZIP entries with explicit relative paths, so `LICENSES/*.txt` files stay under `LICENSES/` and archive member validation no longer fails after packaging.
+
+### [1.26.0] - 2026-05-26
+
+#### Added
+
+- **Graph queries can inline body excerpts (#1594)** — `references`, `callers`, `callees`, and `impact` now accept `--body` with `--snippet-lines` and `--max-line-width` to include capped body excerpts beside each matched location.
+- **MCP graph tools now expose offset pagination (#1729)** — `references`, `callers`, and `callees` accept `offset` and return `next_offset` on truncated pages so clients can fetch subsequent pages without re-fetching earlier rows.
+- **Added MCP `countOnly` probing for large result sets (#1732)** — `search`, `references`, `callers`, `callees`, and `impact_analysis` can now return count metadata plus a small top-file histogram without row payloads.
+- **Added `cdidx upgrade` for release self-upgrades (#1744)** — `upgrade` checks GitHub release freshness, supports `--check-only`, refuses unwritable install directories, and reruns the signed `install.sh` installer for the latest release.
+- **Excerpt JSON now includes semantic token ranges (#1746)** — `excerpt --json` emits `semantic_tokens` with 1-based ranges and token types so IDE and LLM clients can render excerpt spans without reparsing `content`.
+- **Added explicit update checks (#1748)** — `cdidx --check-updates` and `cdidx status --check-updates` now use the cached GitHub latest-release check so operators can ask for version freshness without running an upgrade.
+- **Added installer uninstall mode (#1750)** — `install.sh --uninstall` removes files installed next to the `cdidx` binary and `--purge-cache` can also remove the per-user cdidx cache, while documenting what remains manual.
+- **Added workspace version pin warnings (#1752)** — `.cdidx-version` now warns when the running CLI version differs from the workspace pin, and `--strict-version` / `CDIDX_STRICT_VERSION=1` can turn the mismatch into exit code 64.
+- **MCP tools now publish inline call examples (#1810)** — every `tools/list` tool definition includes an `examples` array with a canonical `tools/call` request shape.
+- **`status --config` now prints effective configuration with source attribution (#1813)** — the JSON output includes resolved DB/data-dir settings, numeric query defaults, log directory, and version without requiring the DB to exist.
+- **MCP JSON-RPC batch arrays are now supported (#1892)** - batch frames dispatch each request through the normal MCP path, omit responses for notification-only batches, and reject empty or nested batches with clear `-32600` errors.
+- **MCP tool invocation telemetry is emitted to stderr (#1898)** — every MCP `tools/call` now writes a structured `mcp.tool.invocation` event with timing, status, result-count, and redacted argument-shape metadata.
+- **Project `.cdidx/config.json` is now a supported config-file surface (#1926)** — cdidx validates the versioned sections and can materialize search defaults from checked-in config; `cdidx validate-config` reports whether the discovered config is valid.
+- **Repo map entrypoints now expose confidence metadata (#2003)** — `map` entrypoint candidates now include `match_type`, `confidence`, and `hint_rank`, and `--min-entrypoint-confidence` can filter weaker heuristic matches.
+- **Numeric query defaults can now be set with environment variables (#2036)** — `CDIDX_DEFAULT_LIMIT`, `CDIDX_DEFAULT_SNIPPET_LINES`, and `CDIDX_DEFAULT_MAX_LINE_WIDTH` set the default values that CLI flags can still override.
+
+#### Fixed
+
+- **MCP text content blocks now declare MIME type (#1685)** — tool responses include `mimeType: "application/json"` when structured JSON is attached and `text/plain` otherwise, giving clients a stable rendering hint.
+- **MCP logging capability is documented (#1688)** — the developer contract now records that the MCP server advertises `logging`, supports `logging/setLevel`, and can emit `notifications/message`.
+- **Rejected malformed persisted kind values (#1691)** — new schemas add CHECK constraints for symbol/reference kind columns, and writer paths fail fast when extractors try to persist unregistered kind values.
+- **MCP tool schemas now advertise common validation constraints (#1692)** — `tools/list` includes bounds for limits and line counts, length caps for free-text inputs, path traversal/NUL guards for path filters, and common enum values for kind filters so clients can validate earlier.
+- **Out-of-range query numeric flags now fail closed (#1700)** — numeric options such as `--depth 999999999` return usage errors instead of being silently coerced or clamped.
+- **Unknown query flags now fail closed (#1705, #1801)** — query commands reject unknown dash-prefixed tokens unless the user explicitly passes them after `--`.
+- **Global tool logging now disposes the log writer when startup fails (#1713)** — if lifecycle-log startup fails after opening the writer, `cdidx` now closes that writer before falling back without persistent logging.
+- **Global tool logging now detects development executions with canonicalized paths (#1719)** — build-output path checks now normalize separators and compare directory segments so mixed-separator paths do not fall through to persistent install logging.
+- **MCP capped result payloads now disclose truncation (#1727)** — capped search and graph tool responses now include `truncated` and `more_available` so clients can distinguish exact-limit result sets from incomplete pages.
+- **DbWriter transaction depth is serialized for shared writers (#1733)** — transaction scopes on one writer now wait across threads while preserving same-thread nested savepoints, preventing depth races from leaking or mis-targeting savepoints.
+- **MCP server shutdown and request handling now have stronger concurrency guards (#1736, #1737, #1738, #1742)** — request processing now has a bounded timeout response, shared text-writer output is serialized, EOF drains in-flight stdio work with a grace period, and the run-loop flag uses volatile visibility.
+- **MCP status now surfaces initialize client identity (#1739)** — `status` tool responses include optional `mcp_session.client_info` with the captured `clientInfo.name` and `clientInfo.version` for session diagnostics.
+- **Savepoint cleanup failures are now diagnosable (#1741)** — savepoint scopes now throw an explicit invalid-operation error when their SQLite connection is missing and log cleanup rollback failures before best-effort disposal continues.
+- **MCP tool responses now have a server-wide byte ceiling (#1745)** — oversized responses fail with structured `response_too_large` metadata instead of being serialized and written unbounded.
+- **The installer now verifies the installed binary before reporting success (#1751)** — `install.sh` runs `cdidx --version`, checks that the installed version matches the requested release, and reports likely architecture or native-runtime problems before printing the success path.
+- **Persistent log directory fallback now checks writability (#1763)** — `GlobalToolLog` probes each candidate directory with a write/delete round trip before using it, so read-only or invalid locations fall through cleanly.
+- **The installer now preflights temporary storage before `mktemp` use (#1766)** — `install.sh` checks that `TMPDIR` is a writable directory with at least 100 MiB free and warns when it appears to be mounted `noexec`.
+- **Persistent log timestamps are invariant ISO-8601 UTC (#1771)** — daily lifecycle log lines now use `yyyy-MM-ddTHH:mm:ss.fffZ` with invariant culture so logs remain parseable across locales.
+- **Search highlights now include per-occurrence positions (#1773)** — `highlights[].term_occurrences` records every matched term with its line, column, and length while preserving the existing distinct `terms` list.
+- **Search snippets now report omitted match lines (#1775)** — `search --json` exposes `dropped_match_line_count` when additional matching lines fall outside the selected snippet window.
+- **MCP initialize now emits the ready notification (#1780)** — after the `initialize` response is written, the server sends one compatibility `notifications/initialized` ready signal per session for clients that wait for a server-side ready signal; HTTP clients receive it through a connected `/events` stream.
+- **Reference context links are cleared instead of dangling after reference-line deletion (#1781)** — `symbol_references.reference_line_id` now uses `ON DELETE SET NULL`, and existing indexes are migrated by nulling already-dangling line-context pointers before rebuilding the table constraint.
+- **DbWriter transaction depth now survives begin failures (#1783)** — failed SQLite transaction or savepoint starts no longer leave `_transactionDepth` advanced without a matching active transaction.
+- **Stale file purges remove cross-file references to symbols defined only by the purged files (#1785)** — cleanup now drops phantom symbol edges when a deleted file was the only remaining definition for the referenced name.
+- **Global tool lifecycle logs can now be JSONL and configurable (#1788)** — `--log-format json`, `--log-retain-count`, `--log-max-size-mb`, and the matching `CDIDX_LOG_*` environment variables let operators emit structured log lines and tune retention/size rotation without string parsing.
+- **MCP JSON-RPC input now enforces character, UTF-8 byte, and nesting-depth limits (#1799, #1996)** - request frames are capped before dispatch, multi-byte UTF-8 payloads can no longer bypass the byte ceiling, and MCP `status` exposes the configured limits under `mcp.limits`.
+- **MCP suggestion submission no longer blocks on sync-over-async GitHub calls (#1802)** — `suggest_improvement` now awaits GitHub issue creation through the MCP dispatch path and preserves request cancellation.
+- **Unknown `index` options now stop the run (#1803)** — `cdidx index` treats unknown options as usage errors with did-you-mean hints instead of warning and continuing.
+- **Query commands now prefer the workspace-root `.cdidx/codeindex.db` when run from nested directories (#1806)** — implicit query DB resolution walks ancestor `.cdidx` directories and uses the outermost workspace root before falling back to the current directory.
+- **MCP search and graph responses now expose result envelope metadata (#1808)** — `search`, `definition`, `references`, `callers`, and `callees` include `truncated` and `total` fields so clients can distinguish complete result sets from server-limited responses.
+- **MCP request IDs now flow into diagnostics (#1814)** — MCP stderr diagnostics and error payloads now include request/correlation metadata so operators can tie failures back to the JSON-RPC request that produced them.
+- **Malformed MCP JSON-RPC frames now return parse errors with `id: null` (#1816)** - invalid JSON now produces JSON-RPC `-32700` parse-error responses with a spec-compliant null id instead of omitting the id field.
+- **Added cancellation-path regression tests for indexing and extractors (#1818)** — the test suite now exercises in-process index cancellation and cancelled-token entry points for the scanner, symbol extractor, and reference extractor so signal/Ctrl-C wiring regressions are caught earlier.
+- **Unhandled exceptions now keep stack traces in the persistent log (#1819)** — top-level failures still show concise stderr output, but `GlobalToolLog` records the full exception chain and stack frames for post-mortem debugging.
+- **Stale file purges delete file rows in chunked batches (#1826)** — purge paths now issue chunked `DELETE ... IN (...)` statements instead of one delete statement per stale file.
+- **UTF-16 text is no longer skipped as binary because of NUL bytes (#1829)** - `cdidx` now treats BOM-less UTF-16 LE/BE byte patterns as text and suppresses raw NUL-byte validation for those files.
+- **Case-varied built-in skip directory names stay excluded on case-insensitive scans (#1832)** — regression coverage now locks in that directories such as `Node_Modules/` match the built-in `node_modules` skip rule.
+- **Interactive terminal detection now honors CI and terminal opt-outs (#1833)** — `TERM=dumb`, truthy `CI`, missing Unix terminal hints, redirected stdout, and test captures suppress spinner/progress control sequences.
+- **Documented color-depth controls for ANSI output (#1834)** — README output controls now describe `COLORTERM` / `TERM` palette detection and the `--palette basic|256|truecolor` override.
+- **MCP initialize now preserves session negotiation details (#1836, #1840)** — `initialize` captures client capabilities and roots for MCP session diagnostics, and the advertised capabilities now include logging.
+- **MCP logging and notification handling are clearer (#1837, #1895)** — `logging/setLevel` updates the session log level at runtime, and unknown `notifications/*` methods are covered by regression tests to ensure they log without sending a JSON-RPC response.
+- **Index cancellation now reaches scanner, file IO, and extractor work (#1841)** — `cdidx index` and MCP indexing now pass cancellation tokens into file scanning, raw file reads, symbol extraction, and reference extraction so Ctrl-C and request cancellation can stop deeper in-flight work sooner.
+- **GitHub releases now use curated changelog notes (#1849)** - the release workflow renders the matching `CHANGELOG.md` section into the GitHub release body and keeps generated notes only as an explicit manual fallback.
+- **MCP responses now expose stable correlation IDs (#1897)** — each MCP request now receives a server-generated correlation ID, successful responses echo it under `_meta`, errors include it in structured data, and `batch_query` slots get child IDs.
+- Added the shared agent guide and Claude Code entry point to the README documentation table.
+- **Repo map section building now reuses shared file-stat aggregates (#1948)** — `map` avoids rebuilding the same language, module, and file-summary intermediates across output sections while preserving existing ordering and counts.
+- **Redirected CLI output now uses UTF-8 without a BOM (#1953)** — JSON pipelines receive stable UTF-8 bytes instead of falling back to the host console code page.
+- **JSON output now suppresses ANSI styling even when color is forced (#1956)** — `--json` commands keep shared symbol-kind formatting machine-clean while preserving forced color for human output.
+- **Fold readiness can now verify row completeness on demand (#1964)** — when `CDIDX_VERIFY_FOLD_READY_ROWS=1` is set, `status` detects DBs whose fold-ready bit is set even though folded-name rows are incomplete, reports `fold_ready_bit_set_but_rows_incomplete`, and keeps `fold_ready=false`.
+- **C# operator overloads now use the `operator` symbol kind (#1965)** — arithmetic, comparison, conversion, checked, and static abstract interface operators are no longer indexed as generic `function` symbols.
+- **MCP status now mirrors fold degradation remediation (#1973)** — when `fold_ready=false`, MCP `status` includes `degraded_reason`, `recommended_action`, and `alternative_action` alongside `fold_ready_reason`, matching CLI status guidance for Unicode exact-name readiness.
+- Added a workflow link check script and precommit reminder so `.codex/workflows/*.md` references fail fast when targets are missing or empty.
+- **Column migrations re-check after taking the write lock (#1988)** — standalone `ALTER TABLE ADD COLUMN` migrations now re-read column state after `BEGIN IMMEDIATE`, avoiding duplicate concurrent DDL attempts when another process completed the migration first.
+- Documented the Codex and Claude Code Bash guard adapters and their shared guard core to reduce policy drift.
+- Clarified the command-guard enforcement boundary between Codex hooks and Claude Code settings.
+- Cross-linked the shared agent guide and workflow directory README for easier workflow discovery.
+- **GitHub suggestion code scrubbing now handles nested and escaped backticks (#2006)** — inline code spans containing template-style or escaped backticks are removed before outbound issue submission.
+- **GitHub suggestion titles are now clamped to the REST API title limit (#2007)** — generated issue titles are bounded before `POST /issues`, avoiding avoidable validation failures for long categories or descriptions.
+- **Suggestion dedup hashes now use the GitHub-visible title and scrubbed description (#2008)** — inline-code-only differences no longer create a different local dedup identity than the issue title and body users would see on GitHub.
+- **The installer can now update shell profiles for PATH setup on opt-in (#2011)** — users can rerun with `CDIDX_INSTALL_UPDATE_PATH=1` to append the installer PATH export to the detected shell profile and make the new path active for the installer process.
+- **Installer reuse now requires a completed integrity marker (#2012)** — `install.sh` writes `integrity_ok` only after staging validated runtime assets, and existing installs without that marker are treated as incomplete.
+- **The installer now warns when an older `cdidx` shadows the new install on PATH (#2014)** — `check_path` resolves the active binary, lists every `cdidx` found on PATH with versions, and points users to put the install directory first.
+- **Workspace-local ignore files, nested repository boundaries, and Unicode path spelling are now handled consistently (#2022, #2023, #1947)** — indexing loads `.codeindex/.cdidxignore`, skips nested `.git` repositories by default, and stores/looks up indexed paths in Unicode NFC form.
+- **Metadata stamps now skip DBs without `codeindex_meta` (#2025)** — writer metadata updates are best-effort when the metadata table is absent, preventing missing-table failures from turning indexing cleanup into an unhelpful crash.
+- **`codeindex_meta` now has a metadata-policy schema stamp (#2026)** — schema initialization records the metadata-key policy version and prunes known deprecated null keys while preserving unknown future contract stamps for forward-compatibility checks.
+- **Search snippet compaction now supports lazy enumeration (#2027)** — MCP search uses a formatter iterator so compact snippet rows are produced only as the response array is built.
+- **Bounded grouped reference-kind aggregates in MCP graph results (#2029)** — caller and callee rows now cap parsed `GROUP_CONCAT` reference-kind aggregates and surface `aggregate_truncated` when an aggregate is trimmed before JSON serialization.
+- **Query commands now reject non-CodeIndex SQLite DBs early (#2037)** — `--db` query paths validate the minimal CodeIndex table set before opening a reader and print a direct rebuild hint for empty or wrong-schema SQLite files.
+- **Installer extraction now verifies per-file release payload checksums (#2040)** — release archives include `MANIFEST.sha256`, and `install.sh` refuses to install if any extracted payload file is missing or has a mismatched digest.
+- **Release archives now validate stable member lists (#2041)** — release packaging normalizes artifact timestamps, writes archive members in sorted order, and compares the final archive listing before upload.
+- **Windows device paths are skipped during indexing (#2043)** - `cdidx` now rejects reserved device paths such as `\\.\COM1`, `NUL`, `CON`, and `LPT1` before probing file contents.
+- **Rust multiline conditional derives now emit trait type references (#2052)** - `cfg_attr(..., derive(...))` attributes spanning multiple lines and nested cfg predicates now index every derived trait, including qualified trait paths.
+- **Rust unsafe blocks and mutable reference types are now indexed (#2053)** - `unsafe { ... }` regions are emitted as scoped containers, and `&mut Type` positions now keep the referenced type visible for unsafe-code audits.
+- **Interrupted full-scan and rebuild indexing no longer demote or empty a healthy index after rollback (#2642)** — the full-scan batch marker is now written inside the same rollback boundary as readiness demotion and file updates, and `--rebuild` no longer drops the existing index before the transactional write phase while still removing rows for files that become non-indexable.
+- **Full index refresh now fails with a bounded extraction-stall diagnostic (#2665, #2680, #2683)** — full scans detect when extraction stops making progress and report the active file/phase instead of waiting indefinitely on a large source file.
+- **Ready-bit stamping no longer starts nested SQLite transactions on shared writers (#2676)** — `SetReadyBit` now shares the writer transaction gate and uses provider-managed immediate transactions, so concurrent calls wait for an active scope before updating `PRAGMA user_version`.
+- Made fuzzy suggestion duplicate diagnostics tolerate unavailable stderr so deduplication does not fail during parallel test output capture.
+- **Indexing no longer stalls indefinitely on pathological symbol extraction (#2687, #2689, #2690, #2693)** - `cdidx index` now bounds symbol extraction progress and reports `E013_INDEX_EXTRACTION_STALLED` instead of hanging or misreporting the run as a user interrupt.
+
+#### Security
+
+- **Persistent command-argument logs now redact common secrets (#1905)** — logged arguments redact secret-looking flags, URI passwords, and long token-like values by default, with `CDIDX_LOG_REDACT` available for controlled diagnostics.
+
+#### Documentation
+
+- **Documented the symbol kind taxonomy (#1762)** — `DEVELOPER_GUIDE.md` now lists the public symbol/reference kind values, and `SymbolKindCatalog` centralizes the registered values for code paths that need to enforce the taxonomy.
+- **Documented implicit-AND search semantics (#1843)** — default `cdidx search` now explains that whitespace-separated terms require all terms to match, with `--fts 'foo OR bar'` and raw quoted phrases documented as alternatives.
+- **Documented raw `--fts` operators (#1844)** — help, USER_GUIDE, and MCP schema text now list column filters, `NEAR`, boolean operators, grouping, prefixes, and quoted phrases exposed by raw FTS5 mode.
+- **Documented search case-sensitivity by mode (#1846)** — USER_GUIDE now explains FTS5 `unicode61` case and diacritic behavior, exact substring matching via `instr()`, and the separate `--exact-name` fold path.
+- **Documented `--no-dedup` rationale (#1848)** — USER_GUIDE, CLI help, and MCP schema text now explain that search chunks overlap by 10 lines and `--no-dedup` returns every raw chunk hit for boundary debugging or match-density analysis.
+- **Documented the JSON and MCP stability contract (#1902)** — the integration policy now describes SemVer expectations, additive changes, breaking changes, deprecation windows, and client routing guidance.
+- **Clarified the MCP tool count and inventory wording (#1911)** — the user guide now describes the count as registered MCP tools and points clients to the authoritative `tools/list` response.
+- **NuGet global tool docs now call out the .NET 8 runtime requirement on ARM64 (#1951)** - The install guidance distinguishes the framework-dependent NuGet path from the self-contained `install.sh` path.
+- **Distribution channel documentation now has a comparison matrix (#1952)** - `DISTRIBUTION.md` documents supported and planned install channels, update paths, prerequisites, package maintainer boundaries, and release verification checks.
+- **Installer mirror and proxy recovery paths are now documented (#1957)** - README and USER_GUIDE link to `--doctor`, GitHub base URL overrides, and the local mirror self-test for restricted networks.
+- **Documented MCP error response handling in the user guide (#1978)** — the MCP section now lists JSON-RPC error codes, meanings, and recommended client actions.
+- **Documented changelog fragment validation (#1999)** - the fragment, release, and precommit workflows now point agents to `dotnet run --project tools/CodeIndex.Changelog -- check`, including the failure mode for `issues: null`.
+
+#### Internal
+
+- **MCP response shape tests now cover tool schemas and examples (#1820)** — tests assert the shared `tools/list` schema/example contract and representative MCP result envelopes.
+- **Expanded folded-column backfill regression coverage (#1993)** — tests now cover partial NULL states across `symbols.name_folded`, `symbol_references.symbol_name_folded`, and `symbol_references.container_name_folded`, including deterministic repeated checks.
+
 ### [1.25.1] - 2026-05-25
 
 #### Fixed
@@ -2815,6 +2946,137 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.26.1] - 2026-05-26
+
+#### 修正
+
+- **Windows リリース ZIP が入れ子のライセンスパスを保持するようになりました** — リリース workflow は Windows ZIP entry を明示的な相対パスで書き込むようになり、`LICENSES/*.txt` が `LICENSES/` 配下に残るため、packaging 後の archive member 検証が失敗しなくなりました。
+
+### [1.26.0] - 2026-05-26
+
+#### 追加
+
+- **グラフ系クエリで本文抜粋をインライン表示できるようになりました (#1594)** — `references`、`callers`、`callees`、`impact` は `--body`、`--snippet-lines`、`--max-line-width` を受け付け、各一致位置に上限付きの本文抜粋を付与します。
+- **MCP graph tool が offset pagination を公開するようになりました (#1729)** — `references`、`callers`、`callees` は `offset` を受け取り、truncated page では `next_offset` を返すため、クライアントは既存行を再取得せず次ページを取得できます。
+- **大きな結果セット向けに MCP `countOnly` プローブを追加しました (#1732)** — `search`、`references`、`callers`、`callees`、`impact_analysis` が、行 payload を返さずに件数 metadata と小さな top-file histogram を返せるようになりました。
+- **リリース自己更新用の `cdidx upgrade` を追加しました (#1744)** — `upgrade` は GitHub release の鮮度を確認し、`--check-only` をサポートし、書き込み不能なインストール先を拒否したうえで最新リリース向けに署名済み `install.sh` を再実行します。
+- **excerpt JSON が semantic token range を含むようになりました (#1746)** — `excerpt --json` は 1-based range と token type を持つ `semantic_tokens` を返し、IDE や LLM クライアントが `content` を再パースせずに抜粋範囲を描画できるようにします。
+- **明示的な更新確認を追加しました (#1748)** — `cdidx --check-updates` と `cdidx status --check-updates` がキャッシュ付き GitHub latest-release 確認を使うようになり、upgrade せずにバージョン鮮度を確認できます。
+- **インストーラーに uninstall モードを追加しました (#1750)** — `install.sh --uninstall` は `cdidx` バイナリ横に配置されたファイルを削除し、`--purge-cache` ではユーザー単位の cdidx キャッシュも削除できます。手動で残るものも明示します。
+- **ワークスペースのバージョン固定警告を追加しました (#1752)** — `.cdidx-version` と実行中 CLI のバージョンが異なる場合に警告し、`--strict-version` / `CDIDX_STRICT_VERSION=1` で不一致を exit code 64 にできます。
+- **MCP ツールが inline call example を公開するようになりました (#1810)** — `tools/list` の全ツール定義に、標準的な `tools/call` リクエスト形状を示す `examples` 配列を追加しました。
+- **`status --config` が source attribution 付きの effective configuration を出力するようになりました (#1813)** — JSON 出力に解決済み DB/data-dir 設定、数値 query 既定値、log directory、version が含まれ、DB が存在しなくても確認できます。
+- **MCP JSON-RPC の batch array に対応しました (#1892)** - batch frame は各 request を通常の MCP 経路で dispatch し、notification のみの batch は応答なし、空またはネストした batch は明確な `-32600` エラーで拒否します。
+- **MCP tool invocation telemetry を stderr に出力するようになりました (#1898)** — 各 MCP `tools/call` が、所要時間、status、result count、引数形状の redacted metadata を含む構造化 `mcp.tool.invocation` event を出力します。
+- **project `.cdidx/config.json` を config-file surface としてサポートしました (#1926)** — cdidx は versioned section を検証し、checked-in config から search 既定値を反映できます。`cdidx validate-config` で検出された config が valid か確認できます。
+- **repo map の entrypoint が confidence metadata を返すようになりました (#2003)** — `map` の entrypoint 候補に `match_type`、`confidence`、`hint_rank` を追加し、`--min-entrypoint-confidence` で弱い heuristic match を除外できるようにしました。
+- **数値 query 既定値を環境変数で設定できるようになりました (#2036)** — `CDIDX_DEFAULT_LIMIT`、`CDIDX_DEFAULT_SNIPPET_LINES`、`CDIDX_DEFAULT_MAX_LINE_WIDTH` で既定値を設定でき、CLI フラグは引き続きそれらを上書きします。
+
+#### 修正
+
+- **MCP の text content block が MIME type を宣言するようになりました (#1685)** — tool response は構造化 JSON を伴う場合に `mimeType: "application/json"`、それ以外では `text/plain` を含み、クライアントが安定して表示方法を選べます。
+- **MCP logging capability を文書化しました (#1688)** — MCP サーバーが `logging` を advertise し、`logging/setLevel` と `notifications/message` に対応することを開発者向け契約に明記しました。
+- **不正な kind 値の永続化を拒否するようにしました (#1691)** — 新規 schema が symbol/reference kind 列に CHECK 制約を追加し、extractor が未登録 kind 値を永続化しようとした場合は writer path が早期に失敗します。
+- **MCP tool schema が共通の検証制約を公開するようになりました (#1692)** — `tools/list` は limit / 行番号の上下限、自由入力文字列の長さ上限、path filter の traversal / NUL ガード、kind filter の共通 enum 値を含むため、クライアント側で早期検証できます。
+- **範囲外の query 数値フラグを fail-closed にしました (#1700)** — `--depth 999999999` のような数値 option は silent な補正や clamp ではなく usage error を返します。
+- **未知の query flag を fail-closed にしました (#1705, #1801)** — query command は、ユーザーが明示的に `--` の後ろへ置いた場合を除き、未知の dash 始まり token を拒否します。
+- **global tool logging の起動失敗時に log writer を破棄するようになりました (#1713)** — lifecycle log の起動処理が writer を開いた後に失敗した場合、persistent logging なしで続行する前に writer を閉じるようになりました。
+- **global tool logging が正規化した path で開発実行を判定するようになりました (#1719)** — build output path の確認で separator を正規化し、directory segment 単位で照合するため、separator が混在した path が persistent install logging に流れにくくなりました。
+- **MCP の上限付き result payload が truncation を明示するようになりました (#1727)** — 上限付きの search / graph tool response が `truncated` と `more_available` を返すため、クライアントはちょうど `limit` 件だった結果と未完了ページを区別できます。
+- **共有 DbWriter の transaction depth を直列化しました (#1733)** — 1 つの writer 上の transaction scope はスレッド間で待機し、同一スレッドの nested savepoint は維持するため、depth race による savepoint 漏れや誤対象化を防ぎます。
+- **MCP server の shutdown と request handling の concurrency guard を強化しました (#1736, #1737, #1738, #1742)** — request 処理は bounded timeout response を返し、共有 TextWriter 出力を直列化し、EOF 時は stdio の in-flight 処理を猶予付きで drain し、run-loop flag は volatile visibility を使うようになりました。
+- **MCP status に initialize のクライアント識別情報を出すようになりました (#1739)** — `status` ツール応答の `mcp_session.client_info` に、取得済みの `clientInfo.name` と `clientInfo.version` を診断情報として任意で含めます。
+- **savepoint cleanup の失敗を診断できるようにしました (#1741)** — savepoint scope は SQLite connection が欠けている場合に明示的な invalid-operation error を投げ、cleanup rollback の失敗は best-effort dispose を続ける前にログへ残します。
+- **MCP ツール応答にサーバー全体の byte 上限を追加しました (#1745)** — 過大な応答は無制限に直列化・書き込みされず、構造化された `response_too_large` metadata を持つエラーになります。
+- **インストーラーが成功報告前にインストール済みバイナリを検証するようになりました (#1751)** — `install.sh` は `cdidx --version` を実行し、インストールされたバージョンが要求リリースと一致することを確認し、成功扱いにする前に architecture や native runtime の問題候補を表示します。
+- **永続ログディレクトリの fallback が書き込み可否を確認するようになりました (#1763)** — `GlobalToolLog` は各候補を使う前に write/delete の probe を行うため、読み取り専用または無効な場所では安全に次候補へ進みます。
+- **インストーラーが `mktemp` 使用前に一時領域を事前検査するようになりました (#1766)** — `install.sh` は `TMPDIR` が書き込み可能なディレクトリで 100 MiB 以上の空き容量を持つことを確認し、`noexec` mount と思われる場合は警告します。
+- **永続ログの timestamp が invariant な ISO-8601 UTC になりました (#1771)** — daily lifecycle log の各行は `yyyy-MM-ddTHH:mm:ss.fffZ` を invariant culture で出力するため、locale が異なる環境でも解析しやすくなりました。
+- **検索 highlight が一致ごとの位置を含むようになりました (#1773)** — 既存の distinct な `terms` list は維持しつつ、`highlights[].term_occurrences` に各一致の line、column、length を記録します。
+- **検索スニペットが省略された一致行数を返すようになりました (#1775)** — `search --json` は、選択された snippet window 外に追加の一致行がある場合に `dropped_match_line_count` を返します。
+- **MCP initialize が ready 通知を送るようになりました (#1780)** — `initialize` レスポンスを書き終えた後、サーバー側の ready signal を待つクライアント向けに、セッションごとに 1 回だけ互換性用の `notifications/initialized` ready signal を送信します。HTTP クライアントは接続済みの `/events` stream から受信します。
+- **reference-line 削除後の参照コンテキストリンクが dangling ではなく NULL 化されるようになりました (#1781)** — `symbol_references.reference_line_id` は `ON DELETE SET NULL` を使い、既存 index は既に dangling になっている line-context pointer を NULL 化してからテーブル制約を再構築します。
+- **DbWriter の transaction depth が begin 失敗後も整合するようになりました (#1783)** — SQLite transaction / savepoint の開始に失敗しても、対応する active transaction がないまま `_transactionDepth` だけが進む状態を残しません。
+- **stale file purge が purge 対象ファイルにしか定義が残っていないシンボルへの cross-file reference を削除するようになりました (#1785)** — 削除済みファイルが参照名の唯一の定義だった場合、phantom symbol edge を cleanup で取り除きます。
+- **global tool の lifecycle log を JSONL 化し設定可能にしました (#1788)** — `--log-format json`、`--log-retain-count`、`--log-max-size-mb` と対応する `CDIDX_LOG_*` 環境変数により、文字列解析に頼らず構造化ログを出力し、保持数とサイズローテーションを調整できます。
+- **MCP JSON-RPC 入力で文字数・UTF-8 バイト数・ネスト深さの上限を適用するようになりました (#1799, #1996)** - request frame は dispatch 前に制限され、マルチバイト UTF-8 payload がバイト上限をすり抜けなくなり、MCP `status` は設定済み上限を `mcp.limits` に表示します。
+- **MCP 提案送信が sync-over-async の GitHub 呼び出しでブロックしないようになりました (#1802)** — `suggest_improvement` は MCP dispatch 経路で GitHub Issue 作成を await し、リクエストキャンセルも維持します。
+- **未知の `index` option で実行を停止するようにしました (#1803)** — `cdidx index` は未知 option を warning で続行せず、did-you-mean hint 付きの usage error として扱います。
+- **ネストしたディレクトリからの query コマンドが workspace-root の `.cdidx/codeindex.db` を優先するようになりました (#1806)** — 明示指定なしの query DB 解決は祖先の `.cdidx` を辿り、最上位の workspace root を使ってから current directory にフォールバックします。
+- **MCP の検索・グラフ応答が結果 envelope metadata を返すようになりました (#1808)** — `search`、`definition`、`references`、`callers`、`callees` に `truncated` と `total` を追加し、クライアントが完全な結果とサーバー上限で切られた応答を区別できるようにしました。
+- **MCP request ID が診断情報へ伝播するようになりました (#1814)** — MCP の stderr 診断とエラーペイロードに request/correlation metadata を含め、どの JSON-RPC リクエストが失敗を発生させたか追跡できるようにしました。
+- **不正な MCP JSON-RPC フレームが `id: null` 付きの parse error を返すようになりました (#1816)** - 不正な JSON は id フィールドを省略せず、JSON-RPC 仕様どおり null id を持つ `-32700` parse error として返ります。
+- **index と抽出器のキャンセル経路の回帰テストを追加しました (#1818)** — テストスイートは in-process index cancellation と、scanner・symbol extractor・reference extractor の cancelled-token 入口を検証し、signal / Ctrl-C 配線の退行をより早く検出します。
+- **未処理例外の stack trace を永続ログに残すようになりました (#1819)** — stderr は簡潔なまま、`GlobalToolLog` が事後調査用に例外 chain と stack frame を記録します。
+- **stale file purge が file row を chunked batch で削除するようになりました (#1826)** — purge 経路は stale file ごとに個別の DELETE を発行せず、chunked `DELETE ... IN (...)` を使います。
+- **UTF-16 テキストを NUL バイト理由でバイナリ扱いしないようにしました (#1829)** - BOM なし UTF-16 LE/BE のバイトパターンをテキストとして扱い、それらのファイルでは生 NUL バイト検証を抑止します。
+- **大文字小文字が異なる組み込み skip directory 名も case-insensitive scan では除外され続けます (#1832)** — `Node_Modules/` のような directory が組み込みの `node_modules` skip ルールに一致することを回帰テストで固定しました。
+- **interactive terminal 判定が CI と端末 opt-out を尊重するようになりました (#1833)** — `TERM=dumb`、truthy な `CI`、Unix で端末 hint が無い場合、redirect stdout、test capture では spinner/progress 制御シーケンスを抑止します。
+- **ANSI 出力の color-depth 制御を文書化しました (#1834)** — README の出力制御に `COLORTERM` / `TERM` による palette 判定と `--palette basic|256|truecolor` override を記載しました。
+- **MCP initialize がセッション交渉情報を保持するようになりました (#1836, #1840)** — `initialize` は client capabilities と roots を MCP セッション診断用に保持し、advertise する capabilities に logging を含めるようになりました。
+- **MCP logging と notification 処理が明確になりました (#1837, #1895)** — `logging/setLevel` でセッション中のログレベルを変更できるようにし、未知の `notifications/*` は JSON-RPC 応答を返さずログに残すことを回帰テストで固定しました。
+- **index のキャンセルが scanner・ファイル IO・抽出処理まで届くようになりました (#1841)** — `cdidx index` と MCP indexing は cancellation token をファイル走査、raw file 読み込み、symbol 抽出、reference 抽出に渡すため、Ctrl-C やリクエストキャンセル後に深い処理もより早く停止できます。
+- **GitHub release が curated changelog notes を使うようになりました (#1849)** - release workflow は該当する `CHANGELOG.md` セクションを GitHub release 本文に出力し、generated notes は明示的な手動 fallback のみに限定しました。
+- **MCP レスポンスが安定した correlation ID を返すようになりました (#1897)** — MCP リクエストごとにサーバー生成の correlation ID を割り当て、成功レスポンスは `_meta`、エラーは構造化データに含め、`batch_query` の各スロットにも子 ID を付与します。
+- README のドキュメント表に共有エージェントガイドと Claude Code 入口を追加しました。
+- **repo map の section 構築で共有 file-stat 集計を再利用するようになりました (#1948)** — `map` は既存の順序と件数を保ったまま、language / module / file-summary の中間結果を section ごとに作り直さないようになりました。
+- **redirect された CLI 出力を BOM なし UTF-8 で書くようになりました (#1953)** — JSON pipeline が host console code page にフォールバックせず、安定した UTF-8 byte を受け取れます。
+- **color を強制していても JSON 出力では ANSI styling を抑止するようになりました (#1956)** — `--json` コマンドは共有の symbol-kind 表示を machine-clean に保ちつつ、人間向け出力の強制 color は維持します。
+- **fold readiness が必要時に行レベルの完全性を検証するようになりました (#1964)** — `CDIDX_VERIFY_FOLD_READY_ROWS=1` のとき、fold-ready bit が立っていても folded-name 行が未完了な DB を `status` が検出し、`fold_ready_bit_set_but_rows_incomplete` を報告して `fold_ready=false` のままにします。
+- **C# operator overload が `operator` symbol kind を使うようになりました (#1965)** — 算術、比較、変換、checked、static abstract interface の各 operator が汎用 `function` symbol として index されなくなりました。
+- **MCP status が fold degradation の修復情報を CLI と揃えて返すようになりました (#1973)** — `fold_ready=false` のとき、MCP `status` は `fold_ready_reason` に加えて `degraded_reason`、`recommended_action`、`alternative_action` を返し、Unicode exact-name readiness の案内を CLI status と揃えます。
+- `.codex/workflows/*.md` 参照先の欠落や空ファイルを早期に検出できるよう、workflow link check script と precommit の確認項目を追加しました。
+- **列 migration が write lock 取得後に再確認するようになりました (#1988)** — 単独の `ALTER TABLE ADD COLUMN` migration は `BEGIN IMMEDIATE` 後に列状態を再確認し、別プロセスが先に migration を完了した場合の重複 DDL 試行を避けます。
+- Codex と Claude Code の Bash guard adapter と共有 guard core を明記し、ポリシーの drift を抑えました。
+- Codex hooks と Claude Code settings の command guard enforcement boundary を明確にしました。
+- workflow を見つけやすくするため、共有エージェントガイドと workflow directory README を相互にリンクしました。
+- **GitHub 提案のコード除去がネスト・エスケープされたバッククォートに対応しました (#2006)** — template 風またはエスケープされたバッククォートを含む inline code span を、Issue 送信前に除去します。
+- **GitHub 提案タイトルを REST API のタイトル上限内に収めるようにしました (#2007)** — 長い category や description でも `POST /issues` 前に Issue title を制限し、回避可能な validation failure を防ぎます。
+- **提案の重複排除ハッシュが GitHub 表示用の title と除去済みの description を使うようになりました (#2008)** — inline code だけの違いで、GitHub 上の Issue 件名と本文と異なるローカル重複排除 identity が作られないようにしました。
+- **インストーラーが opt-in で shell profile の PATH 設定を更新できるようになりました (#2011)** — `CDIDX_INSTALL_UPDATE_PATH=1` を付けて再実行すると、検出した shell profile に installer の PATH export を追記し、インストーラー処理内でも新しい PATH を有効化します。
+- **installer の再利用判定が完了済み integrity marker を必須にしました (#2012)** — `install.sh` は検証済み runtime asset の staging 後にだけ `integrity_ok` を書き込み、この marker がない既存 install は未完了として扱います。
+- **古い `cdidx` が PATH 上で新しいインストールを shadow している場合に警告するようになりました (#2014)** — `check_path` は有効なバイナリを解決し、PATH 上の全 `cdidx` とバージョンを一覧表示して、インストール先ディレクトリを先頭に置くよう案内します。
+- **workspace local の ignore ファイル、nested repository 境界、Unicode path 表記を一貫して扱うようになりました (#2022, #2023, #1947)** — indexing は `.codeindex/.cdidxignore` を読み込み、nested `.git` repository を既定でスキップし、index path の保存・lookup を Unicode NFC 形式に統一します。
+- **`codeindex_meta` が無い DB では metadata stamp をスキップするようになりました (#2025)** — metadata table が存在しない場合の writer metadata 更新を best-effort にし、欠落テーブルによる indexing cleanup の分かりにくいクラッシュを防ぎました。
+- **`codeindex_meta` に metadata policy の schema stamp を追加しました (#2026)** — schema 初期化時に metadata key policy version を記録し、既知の廃止済み null key を削除しつつ、forward-compatibility check 用の未知の将来 contract stamp は保持します。
+- **検索スニペットの compact 化が lazy enumeration に対応しました (#2027)** — MCP search は formatter iterator を使い、応答配列を組み立てるタイミングでのみ compact snippet 行を生成します。
+- **MCP graph 結果の reference-kind 集約に上限を設けました (#2029)** — caller / callee 行は `GROUP_CONCAT` された reference-kind 集約の解析量を制限し、JSON 直列化前に切り詰めた場合は `aggregate_truncated` を返します。
+- **query command が CodeIndex ではない SQLite DB を早期に拒否するようになりました (#2037)** — `--db` query 経路は reader を開く前に最小限の CodeIndex table set を検証し、空または別 schema の SQLite file に対して直接的な rebuild hint を表示します。
+- **installer の展開処理が release payload のファイル別 checksum を検証するようになりました (#2040)** — release archive に `MANIFEST.sha256` を含め、`install.sh` は展開後の payload file が欠落または digest 不一致の場合に install を拒否します。
+- **リリースアーカイブの安定した member list を検証するようになりました (#2041)** — release packaging は成果物の timestamp を正規化し、archive member をソート順で書き込み、upload 前に最終的な archive listing を比較します。
+- **Windows のデバイスパスを索引対象から除外しました (#2043)** - `\\.\COM1`、`NUL`、`CON`、`LPT1` などの予約デバイスパスを、ファイル内容の読み取り前に拒否します。
+- **Rust の複数行条件付き derive が trait 型参照を出すようになりました (#2052)** - 複数行にまたがる `cfg_attr(..., derive(...))` とネストした cfg 条件でも、修飾付き trait path を含めて各 derive trait をインデックスします。
+- **Rust の unsafe block と mutable reference 型をインデックスするようになりました (#2053)** - `unsafe { ... }` 領域をスコープ付きコンテナとして出力し、`&mut Type` 位置の参照型も unsafe コード監査で見えるようにしました。
+- **full-scan / rebuild index の中断後に rollback 済みの正常な index が degraded や空にならないようにしました (#2642)** — full-scan の batch marker を readiness 降格や file 更新と同じ rollback 境界内で書くようにし、`--rebuild` は transactional な書き込み phase より前に既存 index を drop しない一方で、非 index 対象になったファイルの行は削除します。
+- **フルインデックス更新が抽出停止時に有界な診断で失敗するようになりました (#2665, #2680, #2683)** — フルスキャンで抽出の進捗が止まった場合、巨大なソースファイルで待ち続ける代わりに、処理中のファイルとフェーズを報告します。
+- **ready-bit stamp が共有 writer 上で nested SQLite transaction を開始しないようにしました (#2676)** — `SetReadyBit` は writer transaction gate と provider-managed immediate transaction を使い、active scope が終わるまで待ってから `PRAGMA user_version` を更新します。
+- fuzzy suggestion duplicate の診断出力で stderr が利用できない場合を許容し、並列テストの出力 capture 中に重複排除が失敗しないようにしました。
+- **病的に遅いシンボル抽出で index が無期限に停止しないようになりました (#2687, #2689, #2690, #2693)** - `cdidx index` はシンボル抽出の進捗停止を制限し、ハングしたりユーザー割り込みとして誤報したりせず `E013_INDEX_EXTRACTION_STALLED` を報告します。
+
+#### セキュリティ
+
+- **永続ログに記録される command argument が一般的な secret を redact するようになりました (#1905)** — secret らしい flag、URI password、長い token 形式の値は既定で伏せられ、制御された診断には `CDIDX_LOG_REDACT` を利用できます。
+
+#### ドキュメント
+
+- **symbol kind taxonomy を文書化しました (#1762)** — `DEVELOPER_GUIDE.md` に公開 symbol/reference kind 値を一覧化し、taxonomy を検証するコードが参照できるよう `SymbolKindCatalog` に登録値を集約しました。
+- **検索の implicit-AND セマンティクスを明文化しました (#1843)** — 既定の `cdidx search` は空白区切りの term すべてを要求することを説明し、代替として `--fts 'foo OR bar'` と raw quoted phrase を案内するようにしました。
+- **raw `--fts` の演算子を明文化しました (#1844)** — help、USER_GUIDE、MCP schema の説明に、raw FTS5 mode が公開する列 filter、`NEAR`、boolean operator、grouping、prefix、quoted phrase を列挙しました。
+- **検索 mode ごとの大小文字区別を文書化しました (#1846)** — USER_GUIDE に FTS5 `unicode61` の大小文字・diacritic の扱い、`instr()` による exact substring、別経路の `--exact-name` fold を説明しました。
+- **`--no-dedup` の意図を文書化しました (#1848)** — USER_GUIDE、CLI help、MCP schema の説明で、検索 chunk が 10 行 overlap し、`--no-dedup` は境界 debug や match density 分析のために全 raw chunk hit を返すことを明記しました。
+- **JSON / MCP の安定性契約を文書化しました (#1902)** — integration policy に SemVer 期待値、additive change、breaking change、deprecation window、client routing guidance を追記しました。
+- **MCP tool count と inventory の表現を明確化しました (#1911)** — USER_GUIDE で registered MCP tools として件数を表現し、権威情報が `tools/list` response であることを明示しました。
+- **NuGet global tool の ARM64 向け .NET 8 ランタイム要件を明記しました (#1951)** - framework-dependent な NuGet 経路と self-contained な `install.sh` 経路の違いをインストール案内で区別しました。
+- **配布チャネルの比較表を追加しました (#1952)** - `DISTRIBUTION.md` に、対応済み/予定中のインストール経路、更新方法、前提条件、パッケージメンテナー向け境界、リリース検証項目をまとめました。
+- **installer の mirror/proxy 復旧経路を文書化しました (#1957)** - README と USER_GUIDE から、制限ネットワーク向けの `--doctor`、GitHub base URL override、local mirror self-test を参照できるようにしました。
+- **USER_GUIDE に MCP error response の扱いを文書化しました (#1978)** — MCP セクションに JSON-RPC error code、意味、推奨される client action の表を追加しました。
+- **changelog fragment の検証手順を文書化しました (#1999)** - fragment / release / precommit workflow が `dotnet run --project tools/CodeIndex.Changelog -- check` を案内し、`issues: null` の失敗例も明示するようになりました。
+
+#### 内部変更
+
+- **MCP response shape テストが tool schema と example を確認するようになりました (#1820)** — `tools/list` の共通 schema/example 契約と代表的な MCP result envelope をテストで固定しました。
+- **folded-column backfill の回帰テスト範囲を拡張しました (#1993)** — `symbols.name_folded`、`symbol_references.symbol_name_folded`、`symbol_references.container_name_folded` の部分的な NULL 状態と、繰り返し実行時の決定性をテストするようになりました。
+
 ### [1.25.1] - 2026-05-25
 
 #### 修正
@@ -5608,7 +5870,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.25.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.26.1...HEAD
+[1.26.1]: https://github.com/Widthdom/CodeIndex/compare/v1.26.0...v1.26.1
+[1.26.0]: https://github.com/Widthdom/CodeIndex/compare/v1.25.1...v1.26.0
 [1.25.1]: https://github.com/Widthdom/CodeIndex/compare/v1.25.0...v1.25.1
 [1.25.0]: https://github.com/Widthdom/CodeIndex/compare/v1.24.5...v1.25.0
 [1.24.5]: https://github.com/Widthdom/CodeIndex/compare/v1.24.4...v1.24.5

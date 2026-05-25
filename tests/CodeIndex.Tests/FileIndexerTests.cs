@@ -18,6 +18,24 @@ namespace CodeIndex.Tests;
 public class FileIndexerTests
 {
     [Fact]
+    public void ScanFilesDetailed_CancelledToken_ThrowsBeforeEnumeration()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-cancel-scan-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        try
+        {
+            Assert.Throws<OperationCanceledException>(() =>
+                new FileIndexer(tempDir).ScanFilesDetailed(cancellationToken: cancellation.Token));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void ScanFilesDetailed_CaseInsensitiveChildDirectory_SkipsCaseOnlyDuplicatePathWithWarning()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-dedupe-{Guid.NewGuid():N}");
@@ -1282,6 +1300,28 @@ public class FileIndexerTests
             if (Directory.Exists(tempDir))
                 Directory.Delete(tempDir, true);
         }
+    }
+
+    [Theory]
+    [InlineData(@"\\.\COM1")]
+    [InlineData(@"\\.\NUL")]
+    [InlineData(@"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1")]
+    [InlineData(@"C:\repo\AUX.cs")]
+    [InlineData(@"C:\repo\con.txt")]
+    [InlineData(@"C:\repo\COM9")]
+    [InlineData(@"C:\repo\LPT1.log")]
+    public void IsWindowsDevicePath_RejectsReservedDeviceNames(string path)
+    {
+        Assert.True(FileIndexer.IsWindowsDevicePath(path));
+    }
+
+    [Theory]
+    [InlineData(@"C:\repo\COM10.cs")]
+    [InlineData(@"C:\repo\company.cs")]
+    [InlineData(@"C:\repo\template1.cs")]
+    public void IsWindowsDevicePath_AllowsOrdinaryNames(string path)
+    {
+        Assert.False(FileIndexer.IsWindowsDevicePath(path));
     }
 
     [Theory]
@@ -3566,6 +3606,64 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void BuildRecord_Utf16LeWithoutBomFile_DecodedAsUtf16()
+    {
+        // Legacy Windows tools can save source files as UTF-16 LE without a BOM. The
+        // regular every-other-byte NUL pattern should be treated as an encoding signal,
+        // not as binary content. Closes #1829.
+        // 古い Windows ツールは BOM なし UTF-16 LE でソースを保存することがある。
+        // 1 バイトおきの NUL パターンはバイナリ混入ではなくエンコーディングのシグナルとして扱う。
+        // Closes #1829.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "utf16le-nobom.cs");
+            var payload = "using System;\nnamespace Utf16LeNoBom;\n";
+            File.WriteAllBytes(filePath, System.Text.Encoding.Unicode.GetBytes(payload));
+
+            var indexer = new FileIndexer(tempDir);
+            var (_, content, _, warning) = indexer.BuildRecordWithRawBytes(filePath);
+
+            Assert.Null(warning);
+            Assert.Contains("namespace Utf16LeNoBom;", content);
+            Assert.False(FileIndexer.ContainsIndexBlockingNullByte(System.Text.Encoding.Unicode.GetBytes(payload)));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecord_Utf16BeWithoutBomFile_DecodedAsUtf16()
+    {
+        // The heuristic must also handle BOM-less UTF-16 BE text so the fix is not tied
+        // to little-endian Windows output only. Closes #1829.
+        // BOM なし UTF-16 BE テキストも扱い、little-endian Windows 出力だけに限定しない。
+        // Closes #1829.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "utf16be-nobom.cs");
+            var payload = "using System;\nnamespace Utf16BeNoBom;\n";
+            File.WriteAllBytes(filePath, System.Text.Encoding.BigEndianUnicode.GetBytes(payload));
+
+            var indexer = new FileIndexer(tempDir);
+            var (_, content, _, warning) = indexer.BuildRecordWithRawBytes(filePath);
+
+            Assert.Null(warning);
+            Assert.Contains("namespace Utf16BeNoBom;", content);
+            Assert.False(FileIndexer.ContainsIndexBlockingNullByte(System.Text.Encoding.BigEndianUnicode.GetBytes(payload)));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ValidateContent_Utf16LeBomFile_EmitsUtf16BomNotRawByteIssues()
     {
         // When a file decodes via UTF-16 LE, the raw bytes are full of NULs (every ASCII
@@ -3590,6 +3688,19 @@ public class FileIndexerTests
         Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings");
         Assert.DoesNotContain(issues, i => i.Kind == "replacement_char");
         Assert.DoesNotContain(issues, i => i.Kind == "non_utf8_likely");
+    }
+
+    [Fact]
+    public void ValidateContent_Utf16WithoutBom_DoesNotEmitNullByteIssue()
+    {
+        var payload = "using System;\nclass C { }\n";
+        var rawBytes = System.Text.Encoding.Unicode.GetBytes(payload);
+
+        var issues = FileIndexer.ValidateContent("utf16le-nobom.cs", rawBytes, payload);
+
+        Assert.DoesNotContain(issues, i => i.Kind == "utf16_bom");
+        Assert.DoesNotContain(issues, i => i.Kind == "null_byte");
+        Assert.DoesNotContain(issues, i => i.Kind == "mixed_line_endings");
     }
 
     [Fact]

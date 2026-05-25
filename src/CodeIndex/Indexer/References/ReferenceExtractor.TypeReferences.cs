@@ -115,7 +115,7 @@ public static partial class ReferenceExtractor
 
         var interfaceGenericParameters = BuildCSharpInterfaceGenericParameterLookup(workspaceSymbols);
         var staticMembersByContainer = symbols
-            .Where(symbol => symbol.Kind is "function" or "property"
+            .Where(symbol => symbol.Kind is "function" or "operator" or "property"
                              && !string.IsNullOrWhiteSpace(symbol.ContainerName)
                              && !string.IsNullOrWhiteSpace(symbol.Signature)
                              && ContainsCSharpWord(symbol.Signature!, "static"))

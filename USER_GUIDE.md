@@ -30,7 +30,7 @@ cdidx suggestions list           # Review local AI feedback history
 cdidx mcp                        # Start MCP server for AI tools
 ```
 
-78 languages supported. 24 MCP tools. Incremental updates. Zero config.
+78 languages supported. 24 registered MCP tools. Incremental updates. Zero config.
 
 | Topic | Link |
 |---|---|
@@ -425,6 +425,17 @@ or `cdidx . --json` refresh so stale paths are purged.
 
 ## Installation
 
+Choose the install channel based on runtime ownership and network shape:
+
+| Channel | Best fit | Prerequisites | Update path |
+|---|---|---|---|
+| `install.sh` | Self-contained installs, CI, containers, ARM64 hosts without managed .NET | Shell tools and release-asset network access | Re-run the installer, optionally with `vX.Y.Z` |
+| NuGet global tool | Workstations already using .NET global tools | .NET 8 SDK for install/update; .NET 8 runtime to run | `dotnet tool update -g cdidx` |
+| Build from source | Contributors and custom local builds | .NET 8 SDK | Pull source and rebuild |
+
+For a full comparison, package maintainer guidance, and planned channels such
+as winget, apt, rpm, Snap, and Flatpak, see [DISTRIBUTION.md](DISTRIBUTION.md).
+
 ### Option A: One-liner install (no .NET required)
 
 Works in containers, CI, and any Linux/macOS environment — no .NET SDK needed.
@@ -467,12 +478,45 @@ RUN export CDIDX_INSTALL_DIR=/usr/local/bin \
     && curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 
+#### Isolated networks and proxies
+
+Use `--doctor` before installing when a corporate proxy, egress allowlist, or
+GitHub mirror is involved:
+
+```bash
+bash ./install.sh --doctor
+HTTPS_PROXY=http://proxy.example:8080 bash ./install.sh --doctor v1.5.0
+```
+
+To point the installer at a mirror, set both release and API base URLs:
+
+```bash
+export CDIDX_GITHUB_BASE_URL=https://github.example.internal
+export CDIDX_GITHUB_API_BASE_URL=https://github.example.internal/api/v3
+curl -fsSL "$CDIDX_GITHUB_BASE_URL/Widthdom/CodeIndex/raw/main/install.sh" | bash
+```
+
+The local mirror self-test verifies the mirror code path without touching real
+release assets. It installs a mock `cdidx` into the selected install directory,
+so use an isolated directory unless you explicitly pass the overwrite guard:
+
+```bash
+export CDIDX_INSTALL_DIR="$(mktemp -d)"
+bash ./install.sh --self-test-local-mirror
+```
+
+If the default local self-test port is busy, set
+`CDIDX_LOCAL_MIRROR_PORT=18766`.
+
 ### Option B: NuGet Global Tool
 
-Requires the [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
-CodeIndex targets `net8.0`; .NET 8.x is the supported SDK/runtime line for the
-published tool, while the CI test suite also covers the test project on
-`net9.0`.
+Requires the [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+for `dotnet tool install` / `dotnet tool update`. CodeIndex targets `net8.0`;
+.NET 8.x is the supported runtime line for the published tool, while the CI
+test suite also covers the test project on `net9.0`. The NuGet package is
+framework-dependent rather than RID-specific or self-contained. On Apple
+Silicon, Linux ARM64, and Windows ARM64, prefer `install.sh` when the host does
+not already manage a .NET 8 runtime.
 
 ```bash
 dotnet tool install -g cdidx
@@ -929,6 +973,40 @@ cdidx report --output report.tgz --json
 | `--include-args` | | Keep literal `cwd=` and `args=` values in the log tail (opt-in; share only with trusted recipients). |
 | `--json` | | Print a stable summary envelope (`output_path`, `version`, `files`, `schema_tables`, `log_lines_included`, `log_included`, `db_included`, `db_path`) instead of the human-friendly output. |
 
+## Search query syntax
+
+Default `cdidx search` uses the literal-safe FTS5 path: each whitespace-separated
+query token is quoted as a phrase, and multiple tokens are combined with FTS5's
+implicit AND semantics. For example, `cdidx search foo bar` means "find chunks
+that contain both `foo` and `bar`"; it is equivalent to a raw FTS5 query that
+requires both terms. Use `--fts 'foo OR bar'` when either term is acceptable, or
+quote a phrase in raw FTS5 mode (`--fts '"foo bar"'`) when adjacency matters.
+With `--fts`, the query is passed to FTS5 as raw syntax. Supported operators
+include `content:term` column filters, `NEAR(foo bar, 5)`, `foo OR bar`,
+`foo NOT bar`, parenthesized groups, prefix tokens such as `foo*`, and quoted
+phrases such as `"foo bar"`. Without `--fts`, those characters are treated as
+literal query content except for cdidx's documented literal-safe prefix
+shorthand.
+
+Search case behavior depends on the mode. Default search and raw `--fts` use
+SQLite FTS5's `unicode61` tokenizer, so ASCII case is folded and Latin
+diacritics are removed by the tokenizer. CJK text is mostly case-neutral, but
+matching still follows FTS5 token boundaries. Locale-specific Unicode cases are
+not a full collation: Turkish dotted/dotless I and German sharp-S versus `SS`
+should be checked with exact mode when identity matters. `--exact-substring`
+uses SQLite `instr()` and is case-sensitive byte-for-byte over the stored text.
+Symbol-name exactness is separate: `--exact-name` uses cdidx's documented NFKC +
+Unicode CaseFold path when the DB reports `fold_ready`.
+
+### Result deduplication
+
+Search chunks overlap by 10 lines so matches near a chunk boundary still have
+context. By default, `search` collapses duplicate hits that come from this
+overlap. Use `--no-dedup` only when you need every raw chunk hit, such as
+debugging chunk-boundary behavior, comparing directly with the `chunks` table,
+or measuring exact raw match density. It can return repeated snippets for the
+same source location.
+
 ## Options
 
 | Option | Applies to | Description |
@@ -987,7 +1065,7 @@ cdidx report --output report.tgz --json
 | `--watch` | `index` | After the initial scan completes, stay running and reindex incrementally as files change (FileSystemWatcher / inotify / FSEvents). Rejects `--commits`, `--changed-between`, `--files`, and `--dry-run` because the loop already drives continuous incremental updates. |
 | `--debounce <ms>` | `index` (watch only) | Coalesce bursts of file events into a single update after `<ms>` of quiet (non-negative integer; default: 500). Invalid values emit a warning and are ignored. |
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | Filter to files modified since this ISO 8601 timestamp. Offsetless values (e.g. `2024-01-01T00:00:00`) are treated as UTC so the same flag resolves to the same instant in every timezone; append `Z` or an explicit offset (`+09:00`) to be explicit. |
-| `--no-dedup` | `search` | Disable overlapping-chunk deduplication for raw results |
+| `--no-dedup` | `search` | Disable overlapping-chunk deduplication and return every raw chunk hit; useful for debugging chunk boundaries or measuring raw match density |
 | `--reverse` | `deps` | Reverse lookup: show files that depend ON the matched path |
 | `--strict-not-found` | Query commands | Return exit code `2` when a valid query produces zero rows. Without this flag, zero-result queries exit `0` and keep their normal empty/zero-result output. |
 | `--top <n>` | Query commands | Alias for `--limit` |
@@ -1402,6 +1480,8 @@ AI agents that query the database directly via SQL need the `sqlite3` CLI.
 
 Human-facing output formats file sizes with binary units (`KiB`, `MiB`, `GiB`, ...), so large repositories and `map` / `files` listings are easier to scan. Use `--bytes` on `files` or `map` when you need raw byte counts in the text output for shell pipelines. JSON output (`--json`) always keeps size fields as raw integer bytes for machine consumers.
 
+`map` entrypoint candidates include `match_type`, `confidence` (0.0..1.0), and `hint_rank` alongside the legacy `score`. `match_type` reports whether the candidate matched a conventional file path, a symbol name, or both; `hint_rank` is the 1-based order of the matched language hint. Confidence near `0.8` or higher means a path and symbol/name heuristic agree, around `0.5` means a single weak heuristic matched, and lower values are advisory candidates such as ambiguous repeated names or file-only fallbacks. Use `cdidx map --min-entrypoint-confidence <0.0..1.0>` to suppress weaker entrypoints in both human and JSON output.
+
 CLI JSON (`--json`) and MCP tool responses are both stable integration surfaces, but they are not identical wire envelopes. CLI commands keep CLI-oriented metadata such as `api_version` and command result fields, while MCP tools return JSON-RPC tool results with camelCase field names and may include MCP-specific metadata. Graph tools that group reference rows (`callers`, `callees`, and bundled `analyze_symbol` caller/callee rows) expose a backward-compatible scalar summary kind plus a sorted kind array and mixed-kind flag; CLI JSON uses `reference_kind` / `reference_kinds` / `has_mixed_reference_kinds`, while MCP uses `referenceKind` / `referenceKinds` / `hasMixedReferenceKinds`. Consumers that need every underlying kind should read the array for the surface they call and ignore unknown future fields. See [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#cli-json-and-mcp-response-compatibility) for the CLI/MCP compatibility table.
 
 ## AI Integration
@@ -1608,6 +1688,10 @@ cdidx includes a built-in **MCP (Model Context Protocol) server**. MCP is a stan
 
 Tool results include structured JSON in `structuredContent` plus a short text summary in `content`, so AI tools can parse typed data without scraping large text blocks.
 
+Capped MCP result tools report `truncated` and `more_available` in `structuredContent` when more rows exist than the requested `limit`, so clients can avoid treating a capped page as exhaustive.
+
+Graph tools that can page through result sets (`references`, `callers`, and `callees`) also return `offset` and, when truncated, `next_offset`; pass that value back as `offset` to fetch the next page without re-reading earlier rows.
+
 ```mermaid
 flowchart LR
     tools["Claude Code<br/>Cursor<br/>Windsurf"]
@@ -1686,7 +1770,7 @@ OpenAI Codex CLI (`codex.json` or `~/.codex/config.json`):
 
 Once configured, the AI can directly call these tools:
 
-The MCP `tools/list` descriptions include compact English/Japanese usage examples for the primary search and navigation tools, so AI clients can discover valid argument shapes directly from the server response.
+The MCP `tools/list` response includes an `examples` array for every registered tool, so AI clients can discover valid `tools/call` argument shapes directly from the server response.
 
 | Tool | Description |
 |---|---|
@@ -1730,6 +1814,26 @@ This recomputes persisted `name_folded` / `*_folded` columns from existing DB ro
 Graph-oriented MCP tools such as `references`, `callers`, and `callees` also return `graph_language`, `graph_supported`, and `graph_support_reason` when a language filter is provided, so clients can distinguish unsupported languages from genuine zero-hit queries.
 
 All MCP tools include `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so AI clients can auto-approve safe read-only queries without prompting the user.
+
+#### MCP error responses
+
+MCP JSON-RPC failures use the standard `error` object. Clients should route on
+`error.code` and, when present, `error.data.category`; do not parse
+`error.message`, which is human-facing diagnostic text.
+
+| Code | Meaning | Client action |
+|---|---|---|
+| `-32700` | Parse error or frame too large | Fix the JSON/frame size before retrying |
+| `-32600` | Invalid JSON-RPC request | Fix request shape before retrying |
+| `-32601` | Method not found or disabled tool | Check server version and `tools/list` |
+| `-32602` | Invalid params, unknown tool, or bad protocol version | Fix arguments or negotiate a supported version |
+| `-32603` | Internal error | Surface the failure and inspect server stderr |
+| `-32000` | Rate limited | Retry after the reported delay |
+| `-32001` | Permission denied | Provide the configured auth token |
+| `-32010` | Index missing | Run `cdidx index <projectPath>` first |
+| `-32011` | Index stale/schema mismatch | Rebuild or refresh the index |
+| `-32012` | Index corrupted/unreadable | Rebuild the index from source |
+| `-32015` | Request cancelled | Retry if the client still needs the result |
 
 #### Optional HTTP transport
 
@@ -2003,6 +2107,9 @@ CodeIndex は source-available / Fair Source-style software であり、OSI-appr
 ## 最初の検索を試す
 
 ```bash
+# Homebrew インストール（macOS/Linux）
+brew install widthdom/tap/codeindex
+
 # .NET 不要のワンライナーインストール（通常は数秒）
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 
@@ -2027,9 +2134,14 @@ cdidx search "handleRequest"
 ## シェル補完
 
 `cdidx --completions <bash|zsh|fish|powershell>` で補完スクリプトを生成できます。
+同じ生成機能は `cdidx completions <shell>` としても利用できます。
+対応 shell は Bash、Zsh、Fish、PowerShell です。
 生成されたスクリプトは subcommand、flag、よく使う flag 値を補完します。
 `--lang` は対応言語、`--kind` は symbol / reference kind を提示し、`--db`、
 `--path`、`--output` など path 系 option は shell の file completion を使います。
+
+利用中の shell の startup file または completion directory にスクリプトを
+インストールしてください。
 
 PowerShell では、`cdidx` のインストール後に生成された `Register-ArgumentCompleter`
 script を profile に追加してください:
@@ -2281,6 +2393,17 @@ freshness が曖昧になった場合は、stale paths を purge できるよう
 
 ## インストール
 
+runtime の管理方法とネットワーク条件に合わせて install channel を選んでください。
+
+| Channel | 向いている用途 | 前提条件 | 更新方法 |
+|---|---|---|---|
+| `install.sh` | self-contained install、CI、container、managed .NET が無い ARM64 host | shell tools と release asset へ到達できるネットワーク | installer を再実行。必要なら `vX.Y.Z` を指定 |
+| NuGet global tool | 既に .NET global tool を使う workstation | install/update には .NET 8 SDK、実行には .NET 8 runtime | `dotnet tool update -g cdidx` |
+| source build | contributor と custom local build | .NET 8 SDK | source を pull して rebuild |
+
+完全な比較、package maintainer guidance、winget / apt / rpm / Snap /
+Flatpak などの予定チャネルは [DISTRIBUTION.md](DISTRIBUTION.md) を参照してください。
+
 ### 方法A: ワンライナーインストール（.NET 不要）
 
 コンテナ、CI、Linux/macOS 環境で .NET SDK なしで使えます。
@@ -2323,12 +2446,46 @@ RUN export CDIDX_INSTALL_DIR=/usr/local/bin \
     && curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 
+#### 隔離ネットワークと proxy
+
+企業 proxy、egress allowlist、GitHub mirror が関係する環境では、install 前に
+`--doctor` で経路を確認してください。
+
+```bash
+bash ./install.sh --doctor
+HTTPS_PROXY=http://proxy.example:8080 bash ./install.sh --doctor v1.5.0
+```
+
+installer を mirror に向ける場合は、release host と API host の両方を設定します。
+
+```bash
+export CDIDX_GITHUB_BASE_URL=https://github.example.internal
+export CDIDX_GITHUB_API_BASE_URL=https://github.example.internal/api/v3
+curl -fsSL "$CDIDX_GITHUB_BASE_URL/Widthdom/CodeIndex/raw/main/install.sh" | bash
+```
+
+local mirror self-test は、実リリース資産に触れずに mirror 経路を検証します。
+選択した install directory に mock `cdidx` を配置するため、明示的に
+overwrite guard を渡す場合を除き、隔離ディレクトリを使ってください。
+
+```bash
+export CDIDX_INSTALL_DIR="$(mktemp -d)"
+bash ./install.sh --self-test-local-mirror
+```
+
+既定の local self-test port が埋まっている場合は
+`CDIDX_LOCAL_MIRROR_PORT=18766` を設定してください。
+
 ### 方法B: NuGet グローバルツール
 
+`dotnet tool install` / `dotnet tool update` には
 [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0) が必要です。
-CodeIndex は `net8.0` を対象にしており、公開ツールのサポート対象
-SDK/runtime 系列は .NET 8.x です。一方で、CI のテストスイートは
-テストプロジェクトを `net9.0` でも検証します。
+CodeIndex は `net8.0` を対象にしており、公開ツールのサポート対象 runtime
+系列は .NET 8.x です。一方で、CI のテストスイートはテストプロジェクトを
+`net9.0` でも検証します。NuGet package は framework-dependent であり、
+RID-specific / self-contained ではありません。Apple Silicon、Linux ARM64、
+Windows ARM64 で host 側が .NET 8 runtime を管理していない場合は、
+`install.sh` を優先してください。
 
 ```bash
 dotnet tool install -g cdidx
@@ -2802,6 +2959,41 @@ cdidx report --output report.tgz --json
 | `--include-args` | | ログ末尾の `cwd=` / `args=` 値を伏字化せずそのまま含めます（信頼できる相手にだけ使用してください）。 |
 | `--json` | | 人間向け出力の代わりに、安定したサマリ JSON（`output_path` / `version` / `files` / `schema_tables` / `log_lines_included` / `log_included` / `db_included` / `db_path`）を出力します。 |
 
+## 検索クエリ構文
+
+既定の `cdidx search` は literal-safe な FTS5 経路を使います。空白で
+区切られた各 query token は phrase として引用され、複数 token は FTS5 の
+implicit AND として結合されます。たとえば `cdidx search foo bar` は
+「`foo` と `bar` の両方を含む chunk」を探す意味で、両方の term を要求する
+raw FTS5 query と同等です。どちらか一方でよい場合は `--fts 'foo OR bar'`、
+隣接 phrase を要求したい場合は raw FTS5 mode で引用します
+（`--fts '"foo bar"'`）。
+`--fts` 付きでは query は raw FTS5 構文としてそのまま渡されます。利用できる
+演算子には `content:term` の列 filter、`NEAR(foo bar, 5)`、`foo OR bar`、
+`foo NOT bar`、括弧 grouping、`foo*` のような prefix token、`"foo bar"` の
+ような quoted phrase があります。`--fts` なしでは、cdidx が明示している
+literal-safe prefix shorthand を除き、これらの文字はリテラルな query 内容として
+扱われます。
+
+検索の大小文字の扱いは mode ごとに異なります。既定検索と raw `--fts` は
+SQLite FTS5 の `unicode61` tokenizer を使うため、ASCII の大小文字は畳み込まれ、
+ラテン文字の diacritic は tokenizer により除去されます。CJK は多くの場合
+大小文字の概念がありませんが、一致範囲は FTS5 token 境界に従います。Unicode の
+locale 固有ケースを完全な collation として扱うわけではないため、トルコ語の
+dotted/dotless I やドイツ語 sharp-S と `SS` の同一性が重要な場合は exact mode で
+確認してください。`--exact-substring` は SQLite `instr()` を使い、保存された本文に
+対して byte-for-byte に大文字小文字を区別します。symbol-name exactness は別経路で、
+`--exact-name` は DB が `fold_ready` のとき cdidx の NFKC + Unicode CaseFold 経路を
+使います。
+
+### 結果の重複排除
+
+検索 chunk は、chunk 境界付近の一致でも文脈を持てるよう 10 行重複しています。
+既定の `search` は、この overlap から生じる重複 hit を折りたたみます。
+`--no-dedup` は、chunk 境界の挙動を調査する、`chunks` table と直接突き合わせる、
+raw match density を正確に測る、といった理由で全 raw chunk hit が必要な場合にだけ
+使います。同じ source location の snippet が繰り返し返ることがあります。
+
 ## オプション一覧
 
 | オプション | 対象 | 説明 |
@@ -2858,7 +3050,7 @@ cdidx report --output report.tgz --json
 | `--watch` | `index` | 初回スキャン完了後もプロセスを残し、ファイル変更を検知して差分更新を繰り返す（FileSystemWatcher / inotify / FSEvents）。連続的な差分更新を内蔵しているため `--commits` / `--changed-between` / `--files` / `--dry-run` との併用は拒否する。 |
 | `--debounce <ms>` | `index`（`--watch` 専用） | 一連のイベントを `<ms>` の静止後に 1 つの更新へ集約する（0 以上の整数。既定: 500）。不正な値は警告を出して無視する。 |
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | 指定タイムスタンプ以降に変更されたファイルのみ（ISO 8601）。オフセットなしの値（例: `2024-01-01T00:00:00`）は UTC として解釈されるため、どのタイムゾーンから呼び出しても同じ UTC 時点になります。明示したい場合は末尾に `Z` または `+09:00` 等のオフセットを付与してください。 |
-| `--no-dedup` | `search` | オーバーラップチャンク重複排除を無効化 |
+| `--no-dedup` | `search` | overlap chunk の重複排除を無効化し、全 raw chunk hit を返す。chunk 境界の debug や raw match density 計測向け |
 | `--reverse` | `deps` | 逆引き: 指定パスに依存しているファイルを表示 |
 | `--workspace-db <path>` | `deps` | file dependency query に別の CodeIndex DB を追加する。複数 member DB を集約する場合は繰り返し指定でき、JSON edge には同じ相対パスを区別できるよう `source_db` / `target_db` が含まれる。 |
 | `--top <n>` | クエリ系 | `--limit` のエイリアス |
@@ -3265,6 +3457,8 @@ AIエージェントがDBを直接SQL検索する場合、`sqlite3` CLIが必要
 
 人間向けの出力では、ファイルサイズを2進単位（`KiB`、`MiB`、`GiB` など）で表示します。大きなリポジトリや `map` / `files` の一覧を読み取りやすくするためです。テキスト出力をシェルパイプラインで扱うなど、生のバイト数が必要な場合は `files` または `map` に `--bytes` を指定してください。JSON 出力（`--json`）では、機械処理向けに size フィールドを常に raw integer bytes のまま返します。
 
+`map` の entrypoint 候補は、従来の `score` に加えて `match_type`、`confidence`（0.0..1.0）、`hint_rank` を返します。`match_type` は候補が慣例的なファイルパス、シンボル名、またはその両方に一致したかを示し、`hint_rank` は一致した言語別 hint の 1-based 順位です。`0.8` 以上に近い confidence は path と symbol/name heuristic が一致したことを示し、`0.5` 前後は単一の弱い heuristic、さらに低い値は曖昧な重複名や file-only fallback のような参考候補です。弱い entrypoint を human / JSON 出力から除外するには `cdidx map --min-entrypoint-confidence <0.0..1.0>` を指定してください。
+
 CLI JSON（`--json`）と MCP tool response はどちらも安定した integration surface ですが、wire envelope は同一ではありません。CLI command は `api_version` や command result field など CLI 向けのメタデータを保持し、MCP tool は JSON-RPC tool result と camelCase field name、および MCP 固有のメタデータを返す場合があります。参照行をグループ化する graph tool（`callers`、`callees`、および bundled `analyze_symbol` の caller/callee 行）は、後方互換の scalar summary kind、ソート済み kind array、mixed-kind flag を返します。CLI JSON は `reference_kind` / `reference_kinds` / `has_mixed_reference_kinds`、MCP は `referenceKind` / `referenceKinds` / `hasMixedReferenceKinds` を使います。すべての underlying kind が必要な consumer は、呼び出した surface の array field を読み、将来追加される未知の field は無視してください。CLI/MCP compatibility table は [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#cli-json-and-mcp-response-compatibility) を参照してください。
 
 遅い検索を調べる場合は、read 系コマンドに `--profile` を追加してください。通常結果の後に `profile.phases`（`name`、`elapsed_ms`、`rows_scanned`）、`profile.query_plan`（`EXPLAIN QUERY PLAN` 行）、`profile.queries`（SQL text）を含む JSON オブジェクトを 1 行追加します。`--slow-query-ms <n>` を併用すると、閾値以上の profiled SQL を persistent tool log に記録します。
@@ -3477,6 +3671,10 @@ ref が分からない場合は `cdidx ./myproject --json` を使い、`cdidx st
 cdidxには**MCP（Model Context Protocol）サーバー**が組み込まれています。MCPは、AIコーディングツールが外部プログラムと通信するための標準プロトコルです。`cdidx mcp` を実行すると、cdidxがstdin/stdoutで待機し、AIツールからの検索リクエストをJSONで受け取り、構築済みインデックスから即座に結果を返します。
 
 ツール結果は `structuredContent` に構造化JSON、`content` に短い要約テキストを返すため、AIツールは巨大なテキストをパースせずに型付きデータを扱えます。
+
+上限付きの MCP result tool は、要求した `limit` より多くの行がある場合に `structuredContent` へ `truncated` と `more_available` を返します。これにより、クライアントは上限で切られたページを網羅的な結果として扱わずに済みます。
+
+ページング可能な graph tool（`references`、`callers`、`callees`）は `offset` と、truncated 時には `next_offset` も返すため、その値を次の呼び出しの `offset` に渡すと、既に取得した行を読み直さずに次ページを取得できます。
 
 ```mermaid
 flowchart LR

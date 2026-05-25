@@ -87,6 +87,143 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_UsesNumericDefaultEnvironmentVariables()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable,
+            QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "42");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, "6");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, "120");
+
+        var options = QueryCommandRunner.ParseArgs(["RunSearch"], jsonDefault: false, allowNamedQuery: true);
+
+        Assert.Equal(42, options.Limit);
+        Assert.Equal(6, options.SnippetLines);
+        Assert.Equal(120, options.MaxLineWidth);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_CliNumericFlagsOverrideDefaultEnvironmentVariables()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable,
+            QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "42");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, "6");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, "120");
+
+        var options = QueryCommandRunner.ParseArgs(
+            ["RunSearch", "--limit", "7", "--snippet-lines", "3", "--max-line-width", "80"],
+            jsonDefault: false,
+            allowNamedQuery: true);
+
+        Assert.Equal(7, options.Limit);
+        Assert.Equal(3, options.SnippetLines);
+        Assert.Equal(80, options.MaxLineWidth);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_InvalidNumericDefaultEnvironmentVariableReportsParseError()
+    {
+        using var env = EnvironmentVariableScope.Capture(QueryCommandRunner.DefaultLimitEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "0");
+
+        var options = QueryCommandRunner.ParseArgs(["RunSearch"], jsonDefault: false, allowNamedQuery: true);
+
+        Assert.Contains(QueryCommandRunner.DefaultLimitEnvironmentVariable, options.ParseError);
+    }
+
+    [Theory]
+    [InlineData("limit")]
+    [InlineData("snippet-lines")]
+    [InlineData("max-line-width")]
+    public void ParseArgs_CliNumericFlagsOverrideInvalidDefaultEnvironmentVariables(string option)
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable,
+            QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "0");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, "0");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, "-1");
+
+        var args = option switch
+        {
+            "limit" => new[] { "RunSearch", "--limit", "7", "--snippet-lines", "3", "--max-line-width", "80" },
+            "snippet-lines" => new[] { "RunSearch", "--limit", "7", "--snippet-lines", "3", "--max-line-width", "80" },
+            _ => new[] { "RunSearch", "--limit", "7", "--snippet-lines", "3", "--max-line-width", "80" },
+        };
+
+        var options = QueryCommandRunner.ParseArgs(args, jsonDefault: false, allowNamedQuery: true);
+
+        Assert.Equal(7, options.Limit);
+        Assert.Equal(3, options.SnippetLines);
+        Assert.Equal(80, options.MaxLineWidth);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void RunLanguages_IgnoresInvalidNumericDefaultEnvironmentVariables()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable,
+            QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "0");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, "0");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, "-1");
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages([], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Contains("Language", stdout);
+        Assert.DoesNotContain(QueryCommandRunner.DefaultLimitEnvironmentVariable, stderr);
+    }
+
+    [Fact]
+    public void ParseArgs_ScopesNumericDefaultValidationByOption()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable,
+            QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "0");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, "0");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, "-1");
+
+        var limitOnly = QueryCommandRunner.ParseArgs(
+            [],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+        Assert.Contains(QueryCommandRunner.DefaultLimitEnvironmentVariable, limitOnly.ParseError);
+        Assert.DoesNotContain(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, limitOnly.ParseError);
+        Assert.DoesNotContain(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, limitOnly.ParseError);
+
+        var maxLineWidthOnly = QueryCommandRunner.ParseArgs(
+            [],
+            jsonDefault: false,
+            validateDefaultLimit: false,
+            validateDefaultSnippetLines: false);
+        Assert.Contains(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, maxLineWidthOnly.ParseError);
+        Assert.DoesNotContain(QueryCommandRunner.DefaultLimitEnvironmentVariable, maxLineWidthOnly.ParseError);
+        Assert.DoesNotContain(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, maxLineWidthOnly.ParseError);
+
+        var none = QueryCommandRunner.ParseArgs(
+            [],
+            jsonDefault: false,
+            validateDefaultLimit: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+        Assert.Null(none.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_ProjectFilterExpandsSolutionProjectToPathGlob_Issue1707()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_filter");
@@ -149,6 +286,80 @@ public class QueryCommandRunnerTests
 
         Assert.True(options.CheckWorkspace);
         Assert.Equal(TimeSpan.FromHours(2), options.StaleAfter);
+    }
+
+    [Fact]
+    public void RunStatusConfig_PrintsEffectiveConfigWithoutOpeningDb()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.DefaultLimitEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "33");
+        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_missing_{Guid.NewGuid():N}.db");
+        var parsed = QueryCommandRunner.ParseArgs(["--config", "--db", missingDb, "--json"], jsonDefault: false, allowStatusCheck: true);
+        Assert.True(parsed.StatusConfig);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--config", "--db", missingDb, "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var effective = document.RootElement.GetProperty("effective_config");
+        Assert.Equal(missingDb, effective.GetProperty("db_path").GetProperty("value").GetString());
+        Assert.Equal("flag", effective.GetProperty("db_path").GetProperty("source").GetString());
+        Assert.Equal(33, effective.GetProperty("limit").GetProperty("value").GetInt32());
+        Assert.Equal($"env:{QueryCommandRunner.DefaultLimitEnvironmentVariable}", effective.GetProperty("limit").GetProperty("source").GetString());
+    }
+
+    [Fact]
+    public void RunStatusConfig_ReportsConfigFileSourceForSearchDefaults()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_config_source");
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            QueryCommandRunner.StaleAfterEnvironmentVariable,
+            "CDIDX_GLOBAL_TOOL_LOG_DIR",
+            CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.StaleAfterEnvironmentVariable,
+            CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + "CDIDX_GLOBAL_TOOL_LOG_DIR");
+        try
+        {
+            var configDir = Path.Combine(projectRoot, ".cdidx");
+            Directory.CreateDirectory(configDir);
+            var configPath = Path.Combine(configDir, "config.json");
+            var logDir = Path.Combine(projectRoot, "logs");
+            File.WriteAllText(configPath, $$"""
+                {
+                  "search": { "limit": 44 },
+                  "stale_after": "2h",
+                  "global_tool_log_dir": {{JsonSerializer.Serialize(logDir)}}
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["status", "--config", "--json"],
+                appVersion: "test-version",
+                configStartDirectory: projectRoot));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var limit = document.RootElement.GetProperty("effective_config").GetProperty("limit");
+            Assert.Equal(44, limit.GetProperty("value").GetInt32());
+            Assert.Equal($"config:{configPath}", limit.GetProperty("source").GetString());
+            var staleAfter = document.RootElement.GetProperty("effective_config").GetProperty("stale_after");
+            Assert.Equal("2h", staleAfter.GetProperty("value").GetString());
+            Assert.Equal($"config:{configPath}", staleAfter.GetProperty("source").GetString());
+            var logPath = document.RootElement.GetProperty("effective_config").GetProperty("global_tool_log_dir");
+            Assert.Equal(logDir, logPath.GetProperty("value").GetString());
+            Assert.Equal($"config:{configPath}", logPath.GetProperty("source").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
@@ -651,6 +862,33 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunBatch_EmptySqliteFileRejectedBeforeQuery_Issue2037()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2037_batch_empty_sqlite");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "empty.db");
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+            }
+
+            var (exitCode, _, stderr) = CaptureConsoleWithInput(
+                "[\"status\",\"--json\"]\n",
+                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains("does not appear to be a valid CodeIndex database", stderr);
+            Assert.Contains("missing required table `files`", stderr);
+            Assert.Contains("Hint: rebuild with `cdidx index <projectPath> --db <path>`", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ParseArgs_ImpactDepthZeroIsRetainedWhenExplicit()
     {
         var options = QueryCommandRunner.ParseArgs(["RunImpact", "--depth", "0"], jsonDefault: false, allowNamedQuery: true);
@@ -688,6 +926,24 @@ public class QueryCommandRunnerTests
         Assert.NotNull(options.ParseError);
         Assert.Contains("--rank-by", options.ParseError);
         Assert.Contains("weighted", options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_MinEntrypointConfidenceFlagParsed()
+    {
+        var options = QueryCommandRunner.ParseArgs(["--min-entrypoint-confidence", "0.65"], jsonDefault: false);
+
+        Assert.Equal(0.65, options.MinEntrypointConfidence);
+    }
+
+    [Fact]
+    public void ParseArgs_InvalidMinEntrypointConfidenceReportsParseError()
+    {
+        var options = QueryCommandRunner.ParseArgs(["--min-entrypoint-confidence", "1.5"], jsonDefault: false);
+
+        Assert.NotNull(options.ParseError);
+        Assert.Contains("--min-entrypoint-confidence", options.ParseError);
+        Assert.Contains("0.0 through 1.0", options.ParseError);
     }
 
     [Fact]
@@ -895,10 +1151,11 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void ParseArgs_AllowsDashPrefixedPositionalQueryLiteral()
+    public void ParseArgs_EndOfOptionsAllowsDashPrefixedPositionalQueryLiteralWithOptions()
     {
-        var options = QueryCommandRunner.ParseArgs(["--open-reports", "--db", "query.db"], jsonDefault: false, allowNamedQuery: true);
+        var options = QueryCommandRunner.ParseArgs(["--", "--open-reports", "--db", "query.db"], jsonDefault: false, allowNamedQuery: true);
 
+        Assert.Null(options.ParseError);
         Assert.Equal("--open-reports", options.Query);
         Assert.Equal("query.db", options.DbPath);
     }
@@ -2881,6 +3138,33 @@ jobs:
     }
 
     [Fact]
+    public void WithDb_EmptySqliteFileRejectedBeforeQuery_Issue2037()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2037_empty_sqlite");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "empty.db");
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+            }
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains("does not appear to be a valid CodeIndex database", stderr);
+            Assert.Contains("missing required table `files`", stderr);
+            Assert.Contains("Hint: rebuild with `cdidx index <projectPath> --db <path>`", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void WithDb_MalformedFileUriSurfacesDbPathParseError_Issue1990()
     {
         const string malformedUri = "file:///tmp/codeindex%ZZ.db?immutable=1";
@@ -3433,6 +3717,28 @@ jobs:
         Assert.Contains("Did you mean: --path?", stderr);
     }
 
+    [Fact]
+    public void RunSearch_UnknownFlagAfterQuery_ReturnsUsageError()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+            ["foo", "--dapth", "3"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--dapth is not supported for search", stderr);
+        Assert.Contains("Did you mean: --path?", stderr);
+    }
+
+    [Fact]
+    public void ParseArgs_EndOfOptionsAllowsDashPrefixedQueryLiteral()
+    {
+        var options = QueryCommandRunner.ParseArgs(["--", "--baar"], jsonDefault: false, allowNamedQuery: true);
+
+        Assert.Null(options.ParseError);
+        Assert.Equal("--baar", options.Query);
+    }
+
     // `find` previously emitted only the raw `Error: unsupported option for find: --paht`
     // line — round-2 fix routes the unknown token through the same suggester so users see
     // `Did you mean: --path?`. Covers both the separated and inline `=value` forms.
@@ -3480,6 +3786,20 @@ jobs:
         Assert.Contains(expectedErrorFragment, stderr);
         Assert.Contains("Hint: fix the invalid or missing option value", stderr);
         Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+        Assert.DoesNotContain("database not found", stderr);
+    }
+
+    [Fact]
+    public void RunImpact_OutOfRangeDepthUpperBound_ReturnsUsageError_Issue1700()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+            ["Target", "--depth", "999999999"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--depth must be less than or equal to 64", stderr);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("impact")}", stderr);
         Assert.DoesNotContain("database not found", stderr);
     }
 
@@ -4701,6 +5021,11 @@ jobs:
             Assert.DoesNotContain(longLine, json.GetProperty("content").GetString());
             Assert.Contains("TARGET", json.GetProperty("content").GetString());
             Assert.True(json.GetProperty("content").GetString()!.Length <= 96);
+            var semanticTokens = json.GetProperty("semantic_tokens").EnumerateArray().ToArray();
+            Assert.Contains(semanticTokens, token =>
+                token.GetProperty("type").GetString() == "variable" &&
+                token.GetProperty("start_line").GetInt32() == 1 &&
+                token.GetProperty("start_column").GetInt32() > 0);
         }
         finally
         {
@@ -7442,7 +7767,7 @@ jobs:
                 """);
 
             var (operatorExitCode, operatorStdout, operatorStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator Money", "--exact-name"],
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "operator", "--name", "explicit operator Money", "--exact-name"],
                 _jsonOptions));
 
             using var operatorDocument = ParseJsonOutput(operatorStdout);
@@ -7453,7 +7778,7 @@ jobs:
             Assert.Equal("explicit operator Money", operatorSymbol.GetProperty("name").GetString());
 
             var (genericExitCode, genericStdout, genericStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator Dictionary<string, int>", "--exact-name"],
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "operator", "--name", "explicit operator Dictionary<string,int>", "--exact-name"],
                 _jsonOptions));
 
             using var genericDocument = ParseJsonOutput(genericStdout);
@@ -7461,10 +7786,10 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, genericExitCode);
             Assert.Equal(string.Empty, genericStderr);
-            Assert.Equal("explicit operator Dictionary<string, int>", genericSymbol.GetProperty("name").GetString());
+            Assert.Equal("explicit operator Dictionary<string,int>", genericSymbol.GetProperty("name").GetString());
 
             var (tupleExitCode, tupleStdout, tupleStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator (int whole, int cents)", "--exact-name"],
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "operator", "--name", "explicit operator (int whole,int cents)", "--exact-name"],
                 _jsonOptions));
 
             using var tupleDocument = ParseJsonOutput(tupleStdout);
@@ -7472,21 +7797,10 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, tupleExitCode);
             Assert.Equal(string.Empty, tupleStderr);
-            Assert.Equal("explicit operator (int whole, int cents)", tupleSymbol.GetProperty("name").GetString());
-
-            var (namedTupleExitCode, namedTupleStdout, namedTupleStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator (Dictionary<string, int> map, int count)?", "--exact-name"],
-                _jsonOptions));
-
-            using var namedTupleDocument = ParseJsonOutput(namedTupleStdout);
-            var namedTupleSymbol = namedTupleDocument.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, namedTupleExitCode);
-            Assert.Equal(string.Empty, namedTupleStderr);
-            Assert.Equal("explicit operator (Dictionary<string, int> map, int count)?", namedTupleSymbol.GetProperty("name").GetString());
+            Assert.Equal("explicit operator (int whole,int cents)", tupleSymbol.GetProperty("name").GetString());
 
             var (arrayTupleExitCode, arrayTupleStdout, arrayTupleStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator (int[] items, int count)", "--exact-name"],
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "operator", "--name", "explicit operator (int[] items, int count)", "--exact-name"],
                 _jsonOptions));
 
             using var arrayTupleDocument = ParseJsonOutput(arrayTupleStdout);
@@ -7496,19 +7810,8 @@ jobs:
             Assert.Equal(string.Empty, arrayTupleStderr);
             Assert.Equal("explicit operator (int[] items, int count)", arrayTupleSymbol.GetProperty("name").GetString());
 
-            var (nestedTupleExitCode, nestedTupleStdout, nestedTupleStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator ((int a, int b) pair, int count)", "--exact-name"],
-                _jsonOptions));
-
-            using var nestedTupleDocument = ParseJsonOutput(nestedTupleStdout);
-            var nestedTupleSymbol = nestedTupleDocument.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, nestedTupleExitCode);
-            Assert.Equal(string.Empty, nestedTupleStderr);
-            Assert.Equal("explicit operator ((int a, int b) pair, int count)", nestedTupleSymbol.GetProperty("name").GetString());
-
             var (pointerExitCode, pointerStdout, pointerStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator int*", "--exact-name"],
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "operator", "--name", "explicit operator int*", "--exact-name"],
                 _jsonOptions));
 
             using var pointerDocument = ParseJsonOutput(pointerStdout);
@@ -7519,7 +7822,7 @@ jobs:
             Assert.Equal("explicit operator int*", pointerSymbol.GetProperty("name").GetString());
 
             var (functionPointerExitCode, functionPointerStdout, functionPointerStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator delegate* unmanaged[Cdecl]<int, void>", "--exact-name"],
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "operator", "--name", "explicit operator delegate* unmanaged[Cdecl]<int,void>", "--exact-name"],
                 _jsonOptions));
 
             using var functionPointerDocument = ParseJsonOutput(functionPointerStdout);
@@ -7527,7 +7830,7 @@ jobs:
 
             Assert.Equal(CommandExitCodes.Success, functionPointerExitCode);
             Assert.Equal(string.Empty, functionPointerStderr);
-            Assert.Equal("explicit operator delegate* unmanaged[Cdecl]<int, void>", functionPointerSymbol.GetProperty("name").GetString());
+            Assert.Equal("explicit operator delegate* unmanaged[Cdecl]<int,void>", functionPointerSymbol.GetProperty("name").GetString());
 
             var (constructorExitCode, constructorStdout, constructorStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "Money", "--exact-name"],
@@ -9070,7 +9373,7 @@ jobs:
             Assert.Equal("Outer.class", classRows[0].RootElement.GetProperty("container_name").GetString());
 
             var (operatorExitCode, operatorStdout, operatorStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "implicit operator List<class>", "--exact-name"],
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "operator", "--name", "implicit operator List<class>", "--exact-name"],
                 _jsonOptions));
 
             using var operatorDocument = ParseJsonOutput(operatorStdout);
@@ -9118,7 +9421,7 @@ jobs:
             }
 
             var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "explicit operator Money", "--exact-name", "--count"],
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "operator", "--name", "explicit operator Money", "--exact-name", "--count"],
                 _jsonOptions));
 
             using var countDocument = ParseJsonOutput(countStdout);
@@ -9131,7 +9434,7 @@ jobs:
             Assert.Contains("csharp_symbol_name_ready=false", countJson.GetProperty("degraded_reason").GetString());
 
             var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--lang", "csharp", "--kind", "function", "--name", "explicit operator Money", "--exact-name"],
+                ["--db", dbPath, "--lang", "csharp", "--kind", "operator", "--name", "explicit operator Money", "--exact-name"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -9205,7 +9508,7 @@ jobs:
                     UPDATE symbols
                     SET name = 'implicit operator List<@class>',
                         name_folded = 'implicit operator list<@class>'
-                    WHERE kind = 'function' AND name = 'implicit operator List<class>';
+                    WHERE kind = 'operator' AND name = 'implicit operator List<class>';
                     DELETE FROM codeindex_meta WHERE key = 'csharp_symbol_name_contract_version';
                     """;
                 cmd.ExecuteNonQuery();
@@ -9242,7 +9545,7 @@ jobs:
             Assert.Contains(degradedReasonToken, namespaceJson.GetProperty("degraded_reason").GetString());
 
             var (operatorExitCode, operatorStdout, operatorStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "implicit operator List<class>", "--exact-name", "--count"],
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "operator", "--name", "implicit operator List<class>", "--exact-name", "--count"],
                 _jsonOptions));
 
             using var operatorDocument = ParseJsonOutput(operatorStdout);
@@ -28591,7 +28894,7 @@ jobs:
     }
 
     [Fact]
-    public void RunSearch_PositionalQueryAcceptsOptionLookingLiteral_Issue799()
+    public void RunSearch_EndOfOptionsAcceptsOptionLookingLiteral()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue799_search_positional_literal");
         try
@@ -28604,7 +28907,7 @@ jobs:
                 "--open-reports appears here\n");
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["--open-reports", "--path", "README.md", "--db", dbPath, "--count"],
+                ["--", "--open-reports", "--path", "README.md", "--db", dbPath, "--count"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);

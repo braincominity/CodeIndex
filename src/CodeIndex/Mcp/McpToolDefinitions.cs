@@ -20,27 +20,28 @@ public partial class McpServer
         {
             CreateToolDefinition(
                 "search",
-                "Full-text search across indexed code chunks using FTS5. Returns compact match-centered snippets with line metadata. The literal-safe path quotes each whitespace-separated token as an FTS5 phrase and matches only what the user typed — for CJK that means `search 計算` no longer also matches `計算する`/`計算機`, because unicode61 keeps adjacent CJK codepoints in one token. Two opt-ins enable FTS5 prefix expansion: (1) trailing `*` on a single token in the `query` string (`search 計算*` to match `計算する`); (2) the `prefix` flag, which promotes every token in the query to a prefix phrase. Use `exactSubstring` for case-sensitive exact-substring matching that bypasses FTS5 entirely; `exact` is the backward-compatible alias documented in USER_GUIDE.md's flag compatibility table. Non-CJK tokens follow the same rule — ASCII identifiers also no longer auto-prefix, so use `--prefix` or trailing `*` to widen. Emoji-mixed tokens cannot be distinguished from their plain ASCII counterpart at the FTS layer (unicode61 drops the emoji on both index and query side — `foo🎉` is FTS-equivalent to `foo`), and pure emoji substring search is 0-result for the same reason; use `exactSubstring` when emoji identity matters. Examples: `search {\"query\":\"handleRequest\",\"lang\":\"csharp\"}`; `search {\"query\":\"Authenticate\",\"lang\":\"csharp\",\"path\":\"src/Auth\",\"prefix\":true}`. / FTS5を使ったコードチャンクの全文検索。一致中心の軽量スニペットと行メタデータを返す。literal-safe 経路は空白区切りの各トークンを FTS5 phrase として引用し、ユーザーが入力したものだけにマッチする。CJK の場合、unicode61 は隣接 CJK コードポイントを一語として扱うため、`search 計算` は `計算する`/`計算機` にはマッチしない。FTS5 prefix への昇格は 2 通りでオプトイン: (1) `query` 文字列内のトークン末尾に `*` を付ける（`search 計算*` で `計算する` にマッチ）。(2) `prefix` フラグで、クエリの全トークンを prefix phrase に昇格させる。`exactSubstring` を使うと FTS5 を経由せず大小文字区別の厳密部分文字列マッチになり、`exact` は USER_GUIDE.md の flag compatibility table に記載された後方互換 alias。CJK 以外（ASCII 識別子等）も同じルールで、自動 prefix は行わないため、広げたい場合は `--prefix` か末尾 `*` を使う。絵文字混在トークンは、unicode61 が indexing とクエリの両側で絵文字を削ぐため FTS 層で素の ASCII トークンと区別できず（`foo🎉` は FTS 上 `foo` と等価）、絵文字単独の部分一致も同じ理由で 0 件になる。絵文字の同一性が必要な場合は `exactSubstring` を使う。例: `search {\"query\":\"handleRequest\",\"lang\":\"csharp\"}`; `search {\"query\":\"Authenticate\",\"lang\":\"csharp\",\"path\":\"src/Auth\",\"prefix\":true}`。",
+                "Full-text search across indexed code chunks using FTS5. Returns compact match-centered snippets with line metadata. The literal-safe path quotes each whitespace-separated token as an FTS5 phrase and combines multiple tokens with implicit AND semantics (`foo bar` requires both terms). For CJK that means `search 計算` no longer also matches `計算する`/`計算機`, because unicode61 keeps adjacent CJK codepoints in one token. Two opt-ins enable FTS5 prefix expansion: (1) trailing `*` on a single token in the `query` string (`search 計算*` to match `計算する`); (2) the `prefix` flag, which promotes every token in the query to a prefix phrase. Use `exactSubstring` for case-sensitive exact-substring matching that bypasses FTS5 entirely; `exact` is the backward-compatible alias documented in USER_GUIDE.md's flag compatibility table. Non-CJK tokens follow the same rule — ASCII identifiers also no longer auto-prefix, so use `--prefix` or trailing `*` to widen. Emoji-mixed tokens cannot be distinguished from their plain ASCII counterpart at the FTS layer (unicode61 drops the emoji on both index and query side — `foo🎉` is FTS-equivalent to `foo`), and pure emoji substring search is 0-result for the same reason; use `exactSubstring` when emoji identity matters. Examples: `search {\"query\":\"handleRequest\",\"lang\":\"csharp\"}`; `search {\"query\":\"Authenticate\",\"lang\":\"csharp\",\"path\":\"src/Auth\",\"prefix\":true}`. / FTS5を使ったコードチャンクの全文検索。一致中心の軽量スニペットと行メタデータを返す。literal-safe 経路は空白区切りの各トークンを FTS5 phrase として引用し、複数 token は implicit AND として結合する（`foo bar` は両方の term を要求する）。CJK の場合、unicode61 は隣接 CJK コードポイントを一語として扱うため、`search 計算` は `計算する`/`計算機` にはマッチしない。FTS5 prefix への昇格は 2 通りでオプトイン: (1) `query` 文字列内のトークン末尾に `*` を付ける（`search 計算*` で `計算する` にマッチ）。(2) `prefix` フラグで、クエリの全トークンを prefix phrase に昇格させる。`exactSubstring` を使うと FTS5 を経由せず大小文字区別の厳密部分文字列マッチになり、`exact` は USER_GUIDE.md の flag compatibility table に記載された後方互換 alias。CJK 以外（ASCII 識別子等）も同じルールで、自動 prefix は行わないため、広げたい場合は `--prefix` か末尾 `*` を使う。絵文字混在トークンは、unicode61 が indexing とクエリの両側で絵文字を削ぐため FTS 層で素の ASCII トークンと区別できず（`foo🎉` は FTS 上 `foo` と等価）、絵文字単独の部分一致も同じ理由で 0 件になる。絵文字の同一性が必要な場合は `exactSubstring` を使う。例: `search {\"query\":\"handleRequest\",\"lang\":\"csharp\"}`; `search {\"query\":\"Authenticate\",\"lang\":\"csharp\",\"path\":\"src/Auth\",\"prefix\":true}`。",
                 new JsonObject
                 {
                     ["type"] = "object",
                     ["properties"] = new JsonObject
                     {
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Search query text. Append `*` to a token to make that token a prefix phrase (`計算*` matches `計算する`)." },
-                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20). Responses include `truncated` and `more_available` when more rows exist.", ["default"] = 20 },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language (e.g. csharp, python, javascript)" },
                         ["snippetLines"] = new JsonObject { ["type"] = "integer", ["description"] = "Max snippet lines per result (default: 8, max: 20)", ["default"] = 8, ["minimum"] = 1, ["maximum"] = SearchSnippetFormatter.MaxSnippetLines },
                         ["maxLineWidth"] = new JsonObject { ["type"] = "integer", ["description"] = "Clamp very long single-line snippets per line (default: 512; 0 disables clamping). Match lines are clamped around the first match; non-match lines are clamped from the head. Each clamp inserts a `...(+N)...` marker showing how many chars were elided.", ["default"] = LineWidthFormatter.DefaultMaxLineWidth, ["minimum"] = 0, ["maximum"] = LineWidthFormatter.MaxAllowedLineWidth },
-                        ["rawQuery"] = new JsonObject { ["type"] = "boolean", ["description"] = "Use raw FTS5 syntax instead of literal-safe quoting", ["default"] = false },
+                        ["rawQuery"] = new JsonObject { ["type"] = "boolean", ["description"] = "Use raw FTS5 syntax instead of literal-safe quoting: content:term, NEAR(a b, 5), OR, NOT, parenthesized groups, prefix*, and quoted phrases.", ["default"] = false },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict glob-style path patterns. `*` and `?` are wildcards. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude glob-style path patterns. `*` and `?` are wildcards." },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
                         ["since"] = new JsonObject { ["type"] = "string", ["description"] = "Filter to files modified since this ISO 8601 timestamp" },
-                        ["noDedup"] = new JsonObject { ["type"] = "boolean", ["description"] = "Disable overlapping-chunk deduplication for raw results", ["default"] = false },
+                        ["noDedup"] = new JsonObject { ["type"] = "boolean", ["description"] = "Disable overlapping-chunk deduplication and return every raw chunk hit; useful for debugging chunk boundaries or measuring raw match density.", ["default"] = false },
                         ["exactSubstring"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preferred explicit name for search's exact mode: case-sensitive exact substring match (bypasses FTS5).", ["default"] = false },
                         ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactSubstring`.", ["default"] = false },
-                        ["prefix"] = new JsonObject { ["type"] = "boolean", ["description"] = "Opt into FTS5 prefix expansion for every token in `query`. Cannot be combined with `exact`/`exactSubstring`.", ["default"] = false }
+                        ["prefix"] = new JsonObject { ["type"] = "boolean", ["description"] = "Opt into FTS5 prefix expansion for every token in `query`. Cannot be combined with `exact`/`exactSubstring`.", ["default"] = false },
+                        ["countOnly"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return only count metadata and a small top-file histogram; omit row payloads.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -81,7 +82,8 @@ public partial class McpServer
                         ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Referenced symbol name pattern to search for" },
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by reference kind (call, instantiate, subscribe, friend, attribute, annotation, type_reference)" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
-                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20). Responses include `truncated`, `more_available`, and `next_offset` when more rows exist.", ["default"] = 20 },
+                        ["offset"] = new JsonObject { ["type"] = "integer", ["description"] = "Zero-based result offset for pagination; use `next_offset` from a truncated response.", ["default"] = 0, ["minimum"] = 0 },
                         ["maxLineWidth"] = new JsonObject { ["type"] = "integer", ["description"] = "Clamp very long single-line context payloads per result (default: 512; 0 disables clamping)", ["default"] = LineWidthFormatter.DefaultMaxLineWidth, ["minimum"] = 0, ["maximum"] = LineWidthFormatter.MaxAllowedLineWidth },
                         ["lsp_compatible"] = new JsonObject { ["type"] = "boolean", ["description"] = "Add file:// uri and LSP range fields to each result", ["default"] = false },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
@@ -89,7 +91,8 @@ public partial class McpServer
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
                         ["exactName"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preferred explicit name for exact referenced-symbol equality. Uses NFKC + Unicode CaseFold so `Run` no longer matches `RunAsync`.", ["default"] = false },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactName`.", ["default"] = false }
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactName`.", ["default"] = false },
+                        ["countOnly"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return only count metadata and a small top-file histogram; omit row payloads.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -106,13 +109,15 @@ public partial class McpServer
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by call-graph reference kind (call, instantiate, subscribe, friend). Non-call-graph kinds — metadata (attribute, annotation) and type-position (type_reference) — are rejected here; use `references` with the desired kind instead." },
                         ["rankBy"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "weighted", "count", "kind" }, ["description"] = "Ranking model: weighted (default; instantiate=3.0, call=1.0, subscribe=0.1, friend=0.3), count, or kind.", ["default"] = "weighted" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
-                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20). Responses include `truncated`, `more_available`, and `next_offset` when more rows exist.", ["default"] = 20 },
+                        ["offset"] = new JsonObject { ["type"] = "integer", ["description"] = "Zero-based result offset for pagination; use `next_offset` from a truncated response.", ["default"] = 0, ["minimum"] = 0 },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
                         ["exactName"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preferred explicit name for exact callee-name equality. Uses NFKC + Unicode CaseFold so `Run` no longer matches `RunAsync`.", ["default"] = false },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactName`.", ["default"] = false }
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactName`.", ["default"] = false },
+                        ["countOnly"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return only count metadata and a small top-file histogram; omit row payloads.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -129,13 +134,15 @@ public partial class McpServer
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by call-graph reference kind (call, instantiate, subscribe). Non-call-graph kinds — metadata (attribute, annotation) and type-position (type_reference) — are rejected here; use `references` with the desired kind instead." },
                         ["rankBy"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "weighted", "count", "kind" }, ["description"] = "Ranking model: weighted (default; instantiate=3.0, call=1.0, subscribe=0.1), count, or kind.", ["default"] = "weighted" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
-                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20)", ["default"] = 20 },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20). Responses include `truncated`, `more_available`, and `next_offset` when more rows exist.", ["default"] = 20 },
+                        ["offset"] = new JsonObject { ["type"] = "integer", ["description"] = "Zero-based result offset for pagination; use `next_offset` from a truncated response.", ["default"] = 0, ["minimum"] = 0 },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict matches to paths containing this text. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
                         ["exactName"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preferred explicit name for exact caller/container equality. Uses NFKC + Unicode CaseFold so `Run` no longer matches `RunAsync`.", ["default"] = false },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactName`.", ["default"] = false }
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Backward-compatible alias for `exactName`.", ["default"] = false },
+                        ["countOnly"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return only count metadata and a small top-file histogram; omit row payloads.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -282,7 +289,8 @@ public partial class McpServer
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude any paths containing these texts" },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
-                        ["withPaths"] = new JsonObject { ["type"] = "boolean", ["description"] = "When true, each caller carries a `paths` array of shortest call chains [resolvedRoot, intermediate..., callerName]; diamond convergence surfaces every shortest route (per-row cap; `pathsTruncated` flag indicates overflow).", ["default"] = false }
+                        ["withPaths"] = new JsonObject { ["type"] = "boolean", ["description"] = "When true, each caller carries a `paths` array of shortest call chains [resolvedRoot, intermediate..., callerName]; diamond convergence surfaces every shortest route (per-row cap; `pathsTruncated` flag indicates overflow).", ["default"] = false },
+                        ["countOnly"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return only count metadata and a small top-file histogram; omit caller and file-impact row payloads.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
                 },
@@ -484,6 +492,7 @@ public partial class McpServer
         };
 
         AddProjectScopeProperties(tools);
+        AddCommonSchemaConstraints(tools);
 
         // Per-deployment enablement gate (#1561). Drop any tool the operator disabled via
         // `CDIDX_MCP_TOOLS_ALLOW` / `CDIDX_MCP_TOOLS_DENY` so AI clients never see destructive
@@ -545,5 +554,87 @@ public partial class McpServer
                 ["description"] = "Solution file used to resolve project filters when the workspace has multiple .sln files.",
             };
         }
+    }
+
+    private static void AddCommonSchemaConstraints(JsonArray tools)
+    {
+        foreach (var tool in tools.OfType<JsonObject>())
+        {
+            var properties = tool["inputSchema"]?["properties"] as JsonObject;
+            if (properties == null)
+                continue;
+
+            var toolName = tool["name"]?.GetValue<string>() ?? string.Empty;
+            foreach (var (name, schema) in properties)
+                ApplyCommonSchemaConstraint(toolName, name, schema);
+        }
+    }
+
+    private static void ApplyCommonSchemaConstraint(string toolName, string name, JsonNode? schema)
+    {
+        if (schema is not JsonObject obj)
+            return;
+
+        if (obj["oneOf"] is JsonArray oneOf)
+        {
+            foreach (var option in oneOf)
+                ApplyCommonSchemaConstraint(toolName, name, option);
+        }
+
+        if (obj["type"]?.GetValue<string>() == "array" && obj["items"] is JsonObject items)
+            ApplyCommonSchemaConstraint(toolName, name, items);
+
+        switch (name)
+        {
+            case "query":
+            case "description":
+            case "context":
+            case "toolInvocationContext":
+                obj.TryAdd("minLength", 1);
+                obj.TryAdd("maxLength", 1024);
+                break;
+            case "path":
+            case "project":
+            case "solution":
+                obj.TryAdd("minLength", 1);
+                obj.TryAdd("maxLength", 4096);
+                obj.TryAdd("pattern", @"^(?!/)(?![A-Za-z]:)(?!.*(^|/)\.\.(/|$))(?!.*\u0000).*$");
+                AppendConstraintDescription(obj, "Must be workspace-relative, non-empty, and must not contain NUL bytes or `..` path traversal segments.");
+                break;
+            case "excludePaths":
+                obj.TryAdd("maxItems", 100);
+                break;
+            case "limit":
+                obj.TryAdd("minimum", 1);
+                obj.TryAdd("maximum", MaxLimit);
+                break;
+            case "startLine":
+            case "endLine":
+                obj.TryAdd("minimum", 1);
+                break;
+            case "before":
+            case "after":
+                obj.TryAdd("maximum", MaxContextLines);
+                break;
+            case "kind":
+                if (toolName is "references")
+                    obj.TryAdd("enum", new JsonArray { "call", "instantiate", "subscribe", "unsubscribe", "friend", "attribute", "annotation", "type_reference" });
+                else if (toolName is "callers" or "callees")
+                    obj.TryAdd("enum", new JsonArray { "call", "instantiate", "subscribe", "unsubscribe", "friend" });
+                break;
+            case "lang":
+            case "language":
+                obj.TryAdd("pattern", "^[A-Za-z0-9_+.#-]{1,64}$");
+                obj.TryAdd("maxLength", 64);
+                break;
+        }
+    }
+
+    private static void AppendConstraintDescription(JsonObject obj, string sentence)
+    {
+        var description = obj["description"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(description) || description.Contains(sentence, StringComparison.Ordinal))
+            return;
+        obj["description"] = $"{description} {sentence}";
     }
 }

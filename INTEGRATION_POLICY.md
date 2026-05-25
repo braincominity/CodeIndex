@@ -82,6 +82,28 @@ CLI payload can be substituted for an MCP payload without adaptation. Additive
 fields may appear on either surface in minor releases; consumers should ignore
 unknown fields and prefer documented fields over positional assumptions.
 
+### JSON and MCP stability contract
+
+CodeIndex follows SemVer for the supported integration surfaces listed above.
+Patch releases may fix incorrect values while preserving documented field names
+and value types. Minor releases may add fields, tools, tool arguments, examples,
+annotations, error `data` members, or enum values when existing consumers can
+ignore them safely. Breaking removals, required-field additions, field renames,
+or incompatible type changes require a major release unless the old shape was
+explicitly documented as preview.
+
+Deprecations are announced in the changelog before removal. Stable fields keep a
+minimum one-major-release compatibility window; preview fields may change in a
+minor release, but the release notes must say so. Tool definitions can expose
+additional metadata such as examples and annotations without changing the
+meaning of existing `inputSchema` entries.
+
+Consumers should branch on documented structural fields, not prose. For MCP
+errors, route on `error.code` and structured `error.data.category` when present;
+do not parse `error.message`, which is diagnostic text and may be clarified in
+minor or patch releases. For CLI automation, route on documented exit codes and
+JSON fields rather than human output.
+
 | Query surface | CLI `--json` shape | MCP response shape | Compatibility notes |
 |---|---|---|---|
 | `search` | One JSON object per result, with CLI query metadata such as `api_version`, `query`, path, line range, snippet, highlights, and truncation details. | Tool result content contains equivalent search-result objects using MCP serialization and tool-call framing. | Result semantics are shared, but the outer envelope and field casing follow the called surface. |
@@ -106,6 +128,12 @@ Version markers for these fields:
 
 The integration is allowed when it helps users operate official CodeIndex
 releases or permissively licensed integration materials.
+
+Third-party package maintainers may publish formulas, manifests, recipes, or
+internal mirrors for unmodified official CodeIndex release artifacts when the
+license, copyright, repository, and trademark notices are preserved and the
+package does not imply official endorsement. See [DISTRIBUTION.md](DISTRIBUTION.md)
+for channel expectations.
 
 The integration may require a separate written agreement when it makes CodeIndex,
 a modified CodeIndex engine, or a derivative work of CodeIndex available to

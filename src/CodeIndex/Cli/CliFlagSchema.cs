@@ -53,8 +53,8 @@ internal static class CliFlagSchema
     public static IReadOnlyList<string> AllCommands { get; } =
     [
         "index", "backfill-fold", "optimize", "search", "definition", "goto", "references", "callers", "callees",
-        "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license",
+        "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status", "validate-config",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license", "upgrade",
     ];
 
     // Commands that accept the `--` end-of-options marker so a user can pass a literal
@@ -118,6 +118,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files"];
     private static readonly string[] ByteFormatCommands = ["files", "map"];
+    private static readonly string[] EntrypointConfidenceCommands = ["map"];
 
     // `--exact` is the legacy shorthand that every name-resolution command accepts.
     // `--exact` は名前解決系の全コマンドで受け付けるレガシー shorthand。
@@ -222,6 +223,7 @@ internal static class CliFlagSchema
             new() { Name = "--strict-not-found", Description = "Return exit code 2 when a valid query has zero rows", Commands = Set(StrictNotFoundCommands) },
             new() { Name = "--since", ValuePlaceholder = "<datetime>", Description = "Filter by modified-since timestamp", Commands = Set(SinceCommands) },
             new() { Name = "--bytes", Description = "Show raw byte counts in human output", Commands = Set(ByteFormatCommands) },
+            new() { Name = "--min-entrypoint-confidence", ValuePlaceholder = "<0.0..1.0>", Description = "Map: omit entrypoint candidates below this confidence", Commands = Set(EntrypointConfidenceCommands) },
             new() { Name = "--query", ValuePlaceholder = "<query>", Description = "Literal query", Commands = Set(QueryCommands) },
             new() { Name = "--body", Description = "Include body", Commands = Set(BodyCommands) },
             new() { Name = "--exact", Description = "Backward-compatible exact shorthand", Commands = Set(ExactCommands) },
@@ -249,9 +251,14 @@ internal static class CliFlagSchema
             new() { Name = "--group-by", ValuePlaceholder = "<symbol|file|statement>", Description = "Hotspots: choose grouping unit", Commands = Set("hotspots") },
             new() { Name = "--group-by-name", Description = "Hotspots: collapse same-name rows across files", Commands = Set("hotspots") },
             new() { Name = "--check", Description = "Verify status freshness/readiness", Commands = Set("status") },
+            new() { Name = "--config", Description = "Print effective configuration with source attribution", Commands = Set("status") },
             new() { Name = "--stale-after", ValuePlaceholder = "<duration>", Description = "Status: freshness age threshold (e.g. 30m, 2h, 7d)", Commands = Set("status") },
             new() { Name = "--explain", ValuePlaceholder = "<field>", Description = "Explain one status readiness field", Commands = Set("status") },
             new() { Name = "--log-path", Description = "Print the active persistent log directory", Commands = Set("status") },
+            new() { Name = "--check-updates", Description = "Check whether a newer cdidx release is available", Commands = Set("status", "upgrade") },
+            new() { Name = "--check-only", Description = "Upgrade: only report whether an upgrade is available", Commands = Set("upgrade") },
+            new() { Name = "--channel", ValuePlaceholder = "<stable|beta>", Description = "Upgrade channel selector (reserved)", Commands = Set("upgrade") },
+            new() { Name = "--prerelease", Description = "Upgrade: include prerelease versions (reserved)", Commands = Set("upgrade") },
             new() { Name = "--integrity-check", Description = "Run PRAGMA integrity_check on the database", Commands = Set("db") },
             new() { Name = "--rebuild", Description = "Delete existing DB and rebuild from scratch", Commands = Set("index") },
             new() { Name = "--optimize", Description = "Optimize the existing FTS5 table without scanning files", Commands = Set("index") },

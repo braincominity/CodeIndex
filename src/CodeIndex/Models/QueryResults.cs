@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using CodeIndex.Models;
 
 namespace CodeIndex.Database;
 
@@ -98,6 +99,18 @@ public class FileExcerptResult
     public int EndLine { get; set; }
     public string Content { get; set; } = string.Empty;
     public bool ContentTruncated { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ExcerptSemanticToken>? SemanticTokens { get; set; }
+}
+
+public class ExcerptSemanticToken
+{
+    public int StartLine { get; set; }
+    public int StartColumn { get; set; }
+    public int EndLine { get; set; }
+    public int EndColumn { get; set; }
+    public string Type { get; set; } = string.Empty;
+    public List<string> Modifiers { get; set; } = [];
 }
 
 public class FileFindResult
@@ -260,6 +273,8 @@ public class CallerResult
     public IReadOnlyList<string> ReferenceKinds { get; set; } = Array.Empty<string>();
     public bool HasMixedReferenceKinds { get; set; }
     public IReadOnlyDictionary<string, int> ReferenceKindCounts { get; set; } = new Dictionary<string, int>();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool AggregateTruncated { get; set; }
     public double ReferenceWeightScore { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
@@ -288,6 +303,8 @@ public class CalleeResult
     public IReadOnlyList<string> ReferenceKinds { get; set; } = Array.Empty<string>();
     public bool HasMixedReferenceKinds { get; set; }
     public IReadOnlyDictionary<string, int> ReferenceKindCounts { get; set; } = new Dictionary<string, int>();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool AggregateTruncated { get; set; }
     public double ReferenceWeightScore { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
@@ -534,6 +551,9 @@ public class StatusResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<PostExtractionHookStatus>? Hooks { get; set; }
     public string? Version { get; set; }
+    [JsonPropertyName("update_check")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public UpdateCheckResult? UpdateCheck { get; set; }
     /// <summary>
     /// One-line human-readable summary for quick orientation.
     /// クイックオリエンテーション用の1行サマリー。
@@ -792,6 +812,9 @@ public class RepoEntrypointResult
     public string Name { get; set; } = string.Empty;
     public int Line { get; set; }
     public int Score { get; set; }
+    public string MatchType { get; set; } = string.Empty;
+    public double Confidence { get; set; }
+    public int HintRank { get; set; }
 }
 
 public class SymbolAnalysisResult

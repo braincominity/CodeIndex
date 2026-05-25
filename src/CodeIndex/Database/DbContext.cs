@@ -1,5 +1,6 @@
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
 
@@ -31,6 +32,7 @@ public class DbContext : IDisposable
     private readonly bool _isReadOnly;
     private readonly string? _schemaCacheKey;
     private SqliteTransaction? _activeMigrationTransaction;
+    private bool _readMigrationInsideExternalTransaction;
     private DbSchemaCache? _schemaCache;
     private PreparedCommandCache? _preparedCommands;
     private bool _suppressWriteWorkTracking = true;
@@ -1035,6 +1037,8 @@ public class DbContext : IDisposable
     // bit 2 (FoldReadyFlag, #86): name_folded 列の完全バックフィル完了を示す。
     public const int FoldReadyFlag = 4;
     public const int CurrentSchemaVersion = GraphReadyFlag | IssuesReadyFlag | FoldReadyFlag; // 7 — full CLI readiness
+    public const int CodeIndexMetaSchemaVersion = 1;
+    public const string CodeIndexMetaSchemaVersionMetaKey = "codeindex_meta_schema_version";
     // Query-semantic readiness for hotspot family grouping. Stored in codeindex_meta instead of
     // PRAGMA user_version because this guards a higher-level interpretation contract
     // (`family_key` / `container_qualified_name` are authoritative for the whole DB), not
@@ -1243,6 +1247,22 @@ public class DbContext : IDisposable
         return raw is string s ? s : null;
     }
 
+    public bool TryValidateIsCodeIndexDb(out string? reason)
+    {
+        var requiredTables = new[] { "files", "symbols" };
+        foreach (var table in requiredTables)
+        {
+            if (!TableExists(table))
+            {
+                reason = $"missing required table `{table}`";
+                return false;
+            }
+        }
+
+        reason = null;
+        return true;
+    }
+
     private bool TableExists(string name)
     {
         using var cmd = _connection.CreateCommand();
@@ -1297,12 +1317,15 @@ public class DbContext : IDisposable
                 UNIQUE(file_id, line, context)
             )");
 
+        var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
+        var referenceKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.ReferenceKinds);
+
         // Symbols table / シンボルテーブル
         Execute(@"
             CREATE TABLE IF NOT EXISTS symbols (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                kind            TEXT,
+                kind            TEXT CHECK (kind IN (" + symbolKindCheck + @")),
                 sub_kind        TEXT,
                 name            TEXT,
                 line            INTEGER,
@@ -1312,7 +1335,7 @@ public class DbContext : IDisposable
                 body_start_line INTEGER,
                 body_end_line   INTEGER,
                 signature       TEXT,
-                container_kind  TEXT,
+                container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN (" + symbolKindCheck + @")),
                 container_name  TEXT,
                 container_qualified_name TEXT,
                 family_key      TEXT,
@@ -1327,12 +1350,12 @@ public class DbContext : IDisposable
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
                 symbol_name     TEXT,
-                reference_kind  TEXT,
+                reference_kind  TEXT CHECK (reference_kind IN (" + referenceKindCheck + @")),
                 line            INTEGER,
                 column_number   INTEGER,
                 context         TEXT,
-                reference_line_id INTEGER REFERENCES reference_lines(id),
-                container_kind  TEXT,
+                reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
+                container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN (" + symbolKindCheck + @")),
                 container_name  TEXT
             )");
 
@@ -1355,6 +1378,7 @@ public class DbContext : IDisposable
                 key    TEXT PRIMARY KEY NOT NULL,
                 value  TEXT
             )");
+        NormalizeCodeIndexMetaKeys();
 
         // Schema migrations for existing DBs / 既存DB向けスキーマ移行
         EnsureColumn("files", "checksum", "TEXT");
@@ -1379,7 +1403,7 @@ public class DbContext : IDisposable
         EnsureColumn(
             "symbol_references",
             "reference_line_id",
-            rebuildsSymbolReferences ? "INTEGER" : "INTEGER REFERENCES reference_lines(id)");
+            rebuildsSymbolReferences ? "INTEGER" : "INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL");
         // #86: Unicode-aware folded name columns for `--exact` name matching across all
         // `--exact` command variants. Populated by the writer via NameFold.Fold; NULL on
         // legacy rows until a full reindex, in which case the reader falls back to the
@@ -1391,6 +1415,7 @@ public class DbContext : IDisposable
         EnsureColumn("symbol_references", "is_self_reference", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn("symbol_references", "is_mutual_recursion", "INTEGER NOT NULL DEFAULT 0");
         EnforceRequiredFileIdConstraints();
+        EnforceReferenceLineSetNullConstraint();
         EnsureReferenceLinesContextKey();
 
         // Indexes / インデックス
@@ -1489,6 +1514,7 @@ public class DbContext : IDisposable
 
     private void EnforceRequiredFileIdConstraints()
     {
+        var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
         Execute("PRAGMA foreign_keys=OFF");
         var legacyAlterTable = ExecuteScalar("PRAGMA legacy_alter_table");
         Execute("PRAGMA legacy_alter_table=ON");
@@ -1510,11 +1536,11 @@ public class DbContext : IDisposable
                 "id, file_id, chunk_index, start_line, end_line, content");
             RebuildTableWithRequiredFileId(
                 "symbols",
-                """
+                $"""
                 CREATE TABLE symbols (
                     id              INTEGER PRIMARY KEY AUTOINCREMENT,
                     file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                    kind            TEXT,
+                    kind            TEXT CHECK (kind IN ({symbolKindCheck})),
                     sub_kind        TEXT,
                     name            TEXT,
                     line            INTEGER,
@@ -1524,7 +1550,7 @@ public class DbContext : IDisposable
                     body_start_line INTEGER,
                     body_end_line   INTEGER,
                     signature       TEXT,
-                    container_kind  TEXT,
+                    container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ({symbolKindCheck})),
                     container_name  TEXT,
                     container_qualified_name TEXT,
                     family_key      TEXT,
@@ -1564,6 +1590,8 @@ public class DbContext : IDisposable
             return;
         }
 
+        var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
+        var referenceKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.ReferenceKinds);
         const string referenceLinesCreateSql =
             """
             CREATE TABLE reference_lines (
@@ -1575,18 +1603,18 @@ public class DbContext : IDisposable
             )
             """;
         const string referenceLinesColumns = "id, file_id, line, context";
-        const string symbolReferencesCreateSql =
-            """
+        var symbolReferencesCreateSql =
+            $"""
             CREATE TABLE symbol_references (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
                 symbol_name     TEXT,
-                reference_kind  TEXT,
+                reference_kind  TEXT CHECK (reference_kind IN ({referenceKindCheck})),
                 line            INTEGER,
                 column_number   INTEGER,
                 context         TEXT,
-                reference_line_id INTEGER REFERENCES reference_lines(id),
-                container_kind  TEXT,
+                reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
+                container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ({symbolKindCheck})),
                 container_name  TEXT,
                 symbol_name_folded TEXT,
                 container_name_folded TEXT,
@@ -1612,11 +1640,81 @@ public class DbContext : IDisposable
         Execute($"DROP TABLE {oldReferenceLines}");
     }
 
+    private void EnforceReferenceLineSetNullConstraint()
+    {
+        if (SymbolReferencesReferenceLineDeletesSetNull())
+            return;
+
+        var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
+        var referenceKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.ReferenceKinds);
+        var symbolReferencesCreateSql =
+            $"""
+            CREATE TABLE symbol_references (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                symbol_name     TEXT,
+                reference_kind  TEXT CHECK (reference_kind IN ({referenceKindCheck})),
+                line            INTEGER,
+                column_number   INTEGER,
+                context         TEXT,
+                reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
+                container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ({symbolKindCheck})),
+                container_name  TEXT,
+                symbol_name_folded TEXT,
+                container_name_folded TEXT,
+                is_self_reference INTEGER NOT NULL DEFAULT 0,
+                is_mutual_recursion INTEGER NOT NULL DEFAULT 0
+            )
+            """;
+        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion";
+        const string oldSymbolReferences = "_symbol_references_reference_line_delete";
+
+        Execute($"DROP TABLE IF EXISTS {oldSymbolReferences}");
+        Execute(@"
+            UPDATE symbol_references
+            SET reference_line_id = NULL
+            WHERE reference_line_id IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM reference_lines
+                  WHERE reference_lines.id = symbol_references.reference_line_id
+              )");
+        Execute($"ALTER TABLE symbol_references RENAME TO {oldSymbolReferences}");
+        Execute(symbolReferencesCreateSql);
+        Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {oldSymbolReferences}");
+        Execute($"DROP TABLE {oldSymbolReferences}");
+    }
+
+    private bool SymbolReferencesReferenceLineDeletesSetNull()
+    {
+        using var cmd = _connection.CreateCommand();
+        if (_activeMigrationTransaction != null)
+            cmd.Transaction = _activeMigrationTransaction;
+        cmd.CommandText = "PRAGMA foreign_key_list('symbol_references')";
+
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var table = reader.GetString(2);
+            var from = reader.GetString(3);
+            var onDelete = reader.GetString(6);
+            if (string.Equals(table, "reference_lines", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(from, "reference_line_id", StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Equals(onDelete, "SET NULL", StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        return false;
+    }
+
     private void EnsureReferenceLinesContextKey()
     {
         if (ReferenceLinesHasContextUniqueKey())
             return;
 
+        var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
+        var referenceKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.ReferenceKinds);
         const string referenceLinesCreateSql =
             """
             CREATE TABLE reference_lines (
@@ -1628,18 +1726,18 @@ public class DbContext : IDisposable
             )
             """;
         const string referenceLinesColumns = "id, file_id, line, context";
-        const string symbolReferencesCreateSql =
-            """
+        var symbolReferencesCreateSql =
+            $"""
             CREATE TABLE symbol_references (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
                 symbol_name     TEXT,
-                reference_kind  TEXT,
+                reference_kind  TEXT CHECK (reference_kind IN ({referenceKindCheck})),
                 line            INTEGER,
                 column_number   INTEGER,
                 context         TEXT,
-                reference_line_id INTEGER REFERENCES reference_lines(id),
-                container_kind  TEXT,
+                reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
+                container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ({symbolKindCheck})),
                 container_name  TEXT,
                 symbol_name_folded TEXT,
                 container_name_folded TEXT,
@@ -1818,14 +1916,12 @@ public class DbContext : IDisposable
             }
             catch (SqliteException ex) when (IsNestedTransactionError(ex))
             {
-                if (RunReadMigrationSteps())
-                    EnsureForeignKeysEnabled();
+                RunReadMigrationStepsInsideExternalTransaction();
                 return;
             }
             catch (InvalidOperationException ex) when (IsNestedTransactionError(ex))
             {
-                if (RunReadMigrationSteps())
-                    EnsureForeignKeysEnabled();
+                RunReadMigrationStepsInsideExternalTransaction();
                 return;
             }
             catch (SqliteException ex) when (IsReadOnlyOpenError(ex))
@@ -1852,6 +1948,20 @@ public class DbContext : IDisposable
             // resolved as missing; drop the cache so the next DbReader sees the new shape.
             // マイグレーションで列・index が追加された可能性があるためキャッシュを破棄する。
             _schemaCache?.Refresh();
+        }
+    }
+
+    private void RunReadMigrationStepsInsideExternalTransaction()
+    {
+        _readMigrationInsideExternalTransaction = true;
+        try
+        {
+            if (RunReadMigrationSteps())
+                EnsureForeignKeysEnabled();
+        }
+        finally
+        {
+            _readMigrationInsideExternalTransaction = false;
         }
     }
 
@@ -1933,14 +2043,14 @@ public class DbContext : IDisposable
                 line            INTEGER,
                 column_number   INTEGER,
                 context         TEXT,
-                reference_line_id INTEGER REFERENCES reference_lines(id),
+                reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
                 container_kind  TEXT,
                 container_name  TEXT,
                 is_self_reference INTEGER NOT NULL DEFAULT 0,
                 is_mutual_recursion INTEGER NOT NULL DEFAULT 0
             )"));
         yield return ("EnsureColumn symbol_references.reference_line_id",
-            () => EnsureColumn("symbol_references", "reference_line_id", "INTEGER REFERENCES reference_lines(id)"));
+            () => EnsureColumn("symbol_references", "reference_line_id", "INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL"));
         yield return ("EnsureColumn symbol_references.is_self_reference",
             () => EnsureColumn("symbol_references", "is_self_reference", "INTEGER NOT NULL DEFAULT 0"));
         yield return ("EnsureColumn symbol_references.is_mutual_recursion",
@@ -2072,8 +2182,19 @@ public class DbContext : IDisposable
 
     private void EnsureColumn(string tableName, string columnName, string definition)
     {
+        if (_activeMigrationTransaction != null || _readMigrationInsideExternalTransaction)
+        {
+            DbColumnEnsurer.EnsureColumn(
+                () => ColumnExists(tableName, columnName),
+                () => Execute($"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition}"));
+            return;
+        }
+
         DbColumnEnsurer.EnsureColumn(
             () => ColumnExists(tableName, columnName),
+            beginImmediate: () => Execute("BEGIN IMMEDIATE"),
+            commit: () => Execute("COMMIT"),
+            rollback: () => Execute("ROLLBACK"),
             () => Execute($"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition}"));
     }
 
@@ -2100,6 +2221,33 @@ public class DbContext : IDisposable
             cmd.Transaction = _activeMigrationTransaction;
         cmd.CommandText = sql;
         return cmd.ExecuteScalar()?.ToString() ?? "";
+    }
+
+    private void NormalizeCodeIndexMetaKeys()
+    {
+        if (!TableExists("codeindex_meta"))
+            return;
+
+        using (var delete = _connection.CreateCommand())
+        {
+            if (_activeMigrationTransaction != null)
+                delete.Transaction = _activeMigrationTransaction;
+
+            delete.CommandText = @"
+                DELETE FROM codeindex_meta
+                WHERE key IN ('hotspot_family_version', 'hotspot_family_marker_fingerprint')
+                  AND value IS NULL";
+            delete.ExecuteNonQuery();
+        }
+
+        using var stamp = _connection.CreateCommand();
+        if (_activeMigrationTransaction != null)
+            stamp.Transaction = _activeMigrationTransaction;
+        stamp.CommandText = @"
+            INSERT INTO codeindex_meta (key, value) VALUES ('codeindex_meta_schema_version', @version)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+        stamp.Parameters.AddWithValue("@version", CodeIndexMetaSchemaVersion.ToString(CultureInfo.InvariantCulture));
+        stamp.ExecuteNonQuery();
     }
 
     internal void MarkWriteWork()
@@ -2167,14 +2315,38 @@ public sealed record DbMigrationFailure(
 
 internal static class DbColumnEnsurer
 {
-    internal static void EnsureColumn(Func<bool> columnExists, Action alterColumn)
+    internal static void EnsureColumn(
+        Func<bool> columnExists,
+        Action? beginImmediate,
+        Action? commit,
+        Action? rollback,
+        Action alterColumn)
     {
         if (columnExists())
             return;
 
+        var hasTransactionHooks = beginImmediate != null && commit != null && rollback != null;
+        var transactionStarted = false;
         try
         {
+            if (hasTransactionHooks)
+            {
+                beginImmediate!();
+                transactionStarted = true;
+                if (columnExists())
+                {
+                    commit!();
+                    transactionStarted = false;
+                    return;
+                }
+            }
+
             alterColumn();
+            if (transactionStarted)
+            {
+                commit!();
+                transactionStarted = false;
+            }
         }
         catch (SqliteException ex) when (IsDuplicateColumnRace(ex, columnExists))
         {
@@ -2184,8 +2356,24 @@ internal static class DbColumnEnsurer
             // or future wording changes still recover (#1532, #1690).
             // 列存在を PRAGMA 相当の状態で再確認し、SQLite の英語メッセージに依存せず
             // 「移行済み」を判定する (#1532)。
+            if (transactionStarted)
+            {
+                try { rollback!(); } catch (SqliteException) { }
+                transactionStarted = false;
+            }
+        }
+        catch
+        {
+            if (transactionStarted)
+            {
+                try { rollback!(); } catch (SqliteException) { }
+            }
+            throw;
         }
     }
+
+    internal static void EnsureColumn(Func<bool> columnExists, Action alterColumn)
+        => EnsureColumn(columnExists, beginImmediate: null, commit: null, rollback: null, alterColumn);
 
     private static bool IsDuplicateColumnRace(SqliteException exception, Func<bool> columnExists)
     {

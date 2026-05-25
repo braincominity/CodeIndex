@@ -4,6 +4,7 @@ This directory contains shared task workflows for CodeIndex coding agents.
 Despite the `.codex` directory name, these workflows are used by both Codex and Claude Code.
 
 Use these workflows instead of pasting long repeated instructions into every prompt.
+Start from the thin entry point for your tool (`AGENTS.md` for Codex or `CLAUDE.md` for Claude Code), then follow `AGENT_GUIDE.md` to the relevant workflow here.
 
 ## Workflows
 
@@ -22,3 +23,7 @@ Use these workflows instead of pasting long repeated instructions into every pro
 - Codex-specific entry instructions go in `AGENTS.md`.
 - Claude-specific entry instructions go in `CLAUDE.md`.
 - Do not duplicate full workflows across entry-point files.
+
+## Link Checks
+
+Run `bash .codex/scripts/check-workflow-links.sh` after renaming, adding, or removing workflow files. The check scans tracked Markdown entry points and workflow docs for `.codex/workflows/*.md` references and fails when a referenced workflow file is missing or empty.

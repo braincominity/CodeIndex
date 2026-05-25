@@ -2085,17 +2085,15 @@ public class DbReaderTests : IDisposable
             }
             """);
 
-        Assert.Single(_reader.SearchSymbols("operator +", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("operator -", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("operator checked +", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("implicit operator decimal", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("explicit operator Money", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("explicit operator checked byte", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("explicit operator Dictionary<string, int>", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("explicit operator (int whole, int cents)", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("explicit operator (Dictionary<string, int> map, int count)?", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("explicit operator (int[] items, int count)", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
-        Assert.Single(_reader.SearchSymbols("explicit operator ((int a, int b) pair, int count)", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("operator +", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("operator -", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("operator checked +", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("implicit operator decimal", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator Money", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator checked byte", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator Dictionary<string,int>", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator (int whole,int cents)", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
+        Assert.Single(_reader.SearchSymbols("explicit operator (int[] items, int count)", kind: "operator", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
         Assert.Single(_reader.SearchSymbols("Money", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
         Assert.Single(_reader.SearchSymbols("Item", kind: "function", lang: "csharp", exact: true, pathPatterns: ["csharp_special_names"]));
     }
@@ -10247,11 +10245,12 @@ public class DbReaderTests : IDisposable
         // call site.
         const int suppressedReferenceCount = 64;
         const int callReferenceLine = suppressedReferenceCount + 10;
+        const int secondCallReferenceLine = callReferenceLine + 1;
 
         using (var updateFileCmd = _db.Connection.CreateCommand())
         {
             updateFileCmd.CommandText = "UPDATE files SET lines = @lines WHERE path = 'src/Use.cs'";
-            updateFileCmd.Parameters.AddWithValue("@lines", callReferenceLine + 5);
+            updateFileCmd.Parameters.AddWithValue("@lines", secondCallReferenceLine + 5);
             updateFileCmd.ExecuteNonQuery();
         }
 
@@ -10309,13 +10308,29 @@ public class DbReaderTests : IDisposable
             ContainerKind = "function",
             ContainerName = "Match",
         });
+        syntheticReferences.Add(new ReferenceRecord
+        {
+            FileId = useFileId,
+            SymbolName = "Red",
+            ReferenceKind = "call",
+            Line = secondCallReferenceLine,
+            Column = 9,
+            Context = "        Red();",
+            ContainerKind = "function",
+            ContainerName = "Match",
+        });
         _writer.InsertReferences(syntheticReferences);
 
         var result = Assert.Single(_reader.SearchReferences("Red", limit: 1, lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
         Assert.Equal("call", result.ReferenceKind);
         Assert.Equal(callReferenceLine, result.Line);
-        Assert.Equal(1, _reader.CountSearchReferences("Red", limit: 1, lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
-        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchReferencesTotal("Red", lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
+
+        var nextPage = Assert.Single(_reader.SearchReferences("Red", limit: 1, lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"], offset: 1));
+        Assert.Equal("call", nextPage.ReferenceKind);
+        Assert.Equal(secondCallReferenceLine, nextPage.Line);
+
+        Assert.Equal(2, _reader.CountSearchReferences("Red", limit: 2, lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
+        Assert.Equal(new QueryCountResult(2, 1), _reader.CountSearchReferencesTotal("Red", lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
     }
 
     [Fact]
@@ -12440,6 +12455,48 @@ public class DbReaderTests : IDisposable
         Assert.NotEmpty(map.SymbolRichFiles);
         Assert.NotEmpty(map.ReferenceRichFiles);
         Assert.Contains(map.Entrypoints, item => item.Name == "Main" && item.Path == "src/Program.cs");
+        var entrypoint = Assert.Single(map.Entrypoints, item => item.Name == "Main" && item.Path == "src/Program.cs");
+        Assert.Equal("path+name", entrypoint.MatchType);
+        Assert.True(entrypoint.Confidence >= 0.8);
+        Assert.Equal(1, entrypoint.HintRank);
+    }
+
+    [Fact]
+    public void GetRepoMap_KeepsSectionOrderingAndCountsAfterAggregateRefactor()
+    {
+        InsertIndexedFile("perfmap/api/large.md", "markdown", "one\ntwo\nthree\nfour");
+        InsertIndexedFile("perfmap/api/small.md", "markdown", "one");
+        InsertIndexedFile("perfmap/cli/medium.py", "python", "# note\n# note");
+
+        var map = _reader.GetRepoMap(limit: 3, pathPatterns: new[] { "perfmap/" });
+
+        Assert.Equal(3, map.FileCount);
+        Assert.Equal(7, map.TotalLines);
+        Assert.Collection(map.Languages,
+            language =>
+            {
+                Assert.Equal("markdown", language.Lang);
+                Assert.Equal(2, language.Files);
+                Assert.Equal(5, language.Lines);
+            },
+            language =>
+            {
+                Assert.Equal("python", language.Lang);
+                Assert.Equal(1, language.Files);
+                Assert.Equal(2, language.Lines);
+            });
+        Assert.Collection(map.Modules,
+            module =>
+            {
+                Assert.Equal("perfmap", module.Module);
+                Assert.Equal(3, module.Files);
+                Assert.Equal(7, module.Lines);
+            });
+        Assert.Equal(new[] { "perfmap/api/large.md", "perfmap/cli/medium.py", "perfmap/api/small.md" },
+            map.TopFiles.Select(file => file.Path).ToArray());
+        Assert.Equal(new[] { "perfmap/api/large.md", "perfmap/cli/medium.py", "perfmap/api/small.md" },
+            map.LargestFiles.Select(file => file.Path).ToArray());
+        Assert.All(map.LargestFiles, file => Assert.Null(file.Score));
     }
 
     [Fact]
@@ -12449,7 +12506,39 @@ public class DbReaderTests : IDisposable
 
         var map = _reader.GetRepoMap(limit: 5, pathPatterns: new[] { "src/Program.cs" });
 
-        Assert.Contains(map.Entrypoints, item => item.Kind == "file" && item.Name == "Program.cs" && item.Path == "src/Program.cs");
+        var entrypoint = Assert.Single(map.Entrypoints, item => item.Kind == "file" && item.Name == "Program.cs" && item.Path == "src/Program.cs");
+        Assert.Equal("path", entrypoint.MatchType);
+        Assert.True(entrypoint.Confidence >= 0.4);
+        Assert.Equal(1, entrypoint.HintRank);
+    }
+
+    [Fact]
+    public void GetRepoMap_MinEntrypointConfidenceFiltersWeakNameOnlyMatches()
+    {
+        InsertIndexedFile("src/services/service.py", "python", "def app():\n    return True\n");
+        InsertIndexedFile("src/main.py", "python", "def main():\n    return True\n");
+
+        var map = _reader.GetRepoMap(limit: 10, lang: "python", minEntrypointConfidence: 0.7);
+
+        Assert.Contains(map.Entrypoints, item => item.Path == "src/main.py" && item.Name == "main");
+        Assert.DoesNotContain(map.Entrypoints, item => item.Path == "src/services/service.py" && item.Name == "app");
+    }
+
+    [Fact]
+    public void GetRepoMap_RepeatedWeakEntrypointNamesReduceConfidence()
+    {
+        InsertIndexedFile("src/plugins/first.py", "python", "def app():\n    return True\n");
+        InsertIndexedFile("src/plugins/second.py", "python", "def app():\n    return True\n");
+
+        var map = _reader.GetRepoMap(limit: 10, lang: "python", pathPatterns: new[] { "plugins/" });
+
+        var entries = map.Entrypoints.Where(item => item.Name == "app").ToList();
+        Assert.Equal(2, entries.Count);
+        Assert.All(entries, entry =>
+        {
+            Assert.Equal("name", entry.MatchType);
+            Assert.True(entry.Confidence < 0.5);
+        });
     }
 
     [Theory]

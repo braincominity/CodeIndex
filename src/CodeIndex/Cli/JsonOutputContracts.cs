@@ -282,6 +282,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(DiffSummaryOnlyJsonResult))]
 [JsonSerializable(typeof(DiffSummaryJsonResult))]
 [JsonSerializable(typeof(ExactZeroHintResult))]
+[JsonSerializable(typeof(ExcerptSemanticToken))]
 [JsonSerializable(typeof(FileDependencyResult))]
 [JsonSerializable(typeof(FileExcerptResult))]
 [JsonSerializable(typeof(FileFindResult))]
@@ -341,6 +342,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(ReportBundleSummary))]
 [JsonSerializable(typeof(SearchHighlight))]
 [JsonSerializable(typeof(SearchResult))]
+[JsonSerializable(typeof(SearchTermOccurrence))]
 [JsonSerializable(typeof(SearchTruncationContext))]
 [JsonSerializable(typeof(StatusResult))]
 [JsonSerializable(typeof(StatusDbPragmaSettings))]
@@ -351,6 +353,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(SymbolHotspotJsonResult))]
 [JsonSerializable(typeof(SymbolResult))]
 [JsonSerializable(typeof(UnusedSymbolResult))]
+[JsonSerializable(typeof(CodeIndex.Models.UpdateCheckResult))]
 [JsonSerializable(typeof(VacuumResult))]
 [JsonSerializable(typeof(VersionInfoJsonResult))]
 internal partial class CliJsonSerializerContext : JsonSerializerContext;
