@@ -30,7 +30,7 @@ cdidx suggestions list           # Review local AI feedback history
 cdidx mcp                        # Start MCP server for AI tools
 ```
 
-78 languages supported. 24 MCP tools. Incremental updates. Zero config.
+78 languages supported. 24 registered MCP tools. Incremental updates. Zero config.
 
 | Topic | Link |
 |---|---|
@@ -1686,7 +1686,7 @@ OpenAI Codex CLI (`codex.json` or `~/.codex/config.json`):
 
 Once configured, the AI can directly call these tools:
 
-The MCP `tools/list` descriptions include compact English/Japanese usage examples for the primary search and navigation tools, so AI clients can discover valid argument shapes directly from the server response.
+The MCP `tools/list` response includes an `examples` array for every registered tool, so AI clients can discover valid `tools/call` argument shapes directly from the server response.
 
 | Tool | Description |
 |---|---|
