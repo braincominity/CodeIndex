@@ -30,6 +30,37 @@ public class SearchSnippetFormatterTests
 
         Assert.Equal([1, 3], excerpt.MatchLines);
         Assert.Equal(2, excerpt.Highlights.Count);
+        Assert.Equal(0, excerpt.DroppedMatchLineCount);
+    }
+
+    [Fact]
+    public void BuildExcerpt_ReportsDroppedMatchLines_WhenTailMatchesExceedWindow()
+    {
+        const string content = "Target 1\nTarget 2\nTarget 3\nTarget 4\nTarget 5";
+
+        var excerpt = SearchSnippetFormatter.BuildExcerpt(content, "Target", absoluteStartLine: 20, maxLines: 3);
+
+        Assert.Equal([20, 21, 22], excerpt.MatchLines);
+        Assert.Equal(2, excerpt.DroppedMatchLineCount);
+    }
+
+    [Fact]
+    public void BuildExcerpt_ReportsEveryTermOccurrenceWithPositions()
+    {
+        const string content = "Foo Foo Foo";
+
+        var excerpt = SearchSnippetFormatter.BuildExcerpt(content, "Foo", absoluteStartLine: 7, maxLines: 1);
+
+        var highlight = Assert.Single(excerpt.Highlights);
+        Assert.Equal(["Foo"], highlight.Terms);
+        Assert.Equal(3, highlight.TermOccurrences.Count);
+        Assert.Equal([1, 5, 9], highlight.TermOccurrences.Select(occurrence => occurrence.Column).ToArray());
+        Assert.All(highlight.TermOccurrences, occurrence =>
+        {
+            Assert.Equal("Foo", occurrence.Term);
+            Assert.Equal(7, occurrence.Line);
+            Assert.Equal(3, occurrence.Length);
+        });
     }
 
     [Fact]
