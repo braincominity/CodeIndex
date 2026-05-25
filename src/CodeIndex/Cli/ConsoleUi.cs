@@ -80,7 +80,8 @@ public static class ConsoleUi
         ("map", "cdidx map [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes]"),
         ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]"),
         ("outline", "cdidx outline <path> [--db <path>] [--json] [--verbose]"),
-        ("status", "cdidx status [--db <path>] [--json] [--verbose] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--stale-after <duration>] [--explain <field>] [--log-path]"),
+        ("status", "cdidx status [--db <path>] [--json] [--verbose] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--stale-after <duration>] [--explain <field>] [--log-path] [--config]"),
+        ("validate-config", "cdidx validate-config"),
         ("db", "cdidx db --integrity-check [--db <path>] [--json]"),
         ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n>]"),
         ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n>] [--no-log] [--include-args]"),
@@ -648,7 +649,8 @@ public static class ConsoleUi
         Console.WriteLine("  map                        Show a repo-level overview for AI orientation");
         Console.WriteLine("  inspect <query>            Bundle definition, graph, and nearby symbol context");
         Console.WriteLine("  outline <path>             Show a file outline ordered by line, start column, kind, and name");
-        Console.WriteLine("  status                     Show database statistics; add --check for freshness, --explain <field> for readiness, or --log-path for logs");
+        Console.WriteLine("  status                     Show database statistics; add --check for freshness, --config for effective config, --explain <field> for readiness, or --log-path for logs");
+        Console.WriteLine("  validate-config            Validate .cdidx/config.json or .cdidxrc.json");
         Console.WriteLine("  db --integrity-check       Run SQLite `PRAGMA integrity_check` and report findings");
         Console.WriteLine("  diff <db1> <db2>           Compare two index databases; exit 0 identical, 1 drift, 2 schema mismatch, 3 unreadable");
         Console.WriteLine("  report --output <path>     Build a redacted crash-repro tarball (.tgz) for bug reports");
@@ -793,6 +795,8 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx files --lang python                      List Python files");
         Console.WriteLine("  cdidx files --since 2024-01-01                 Files modified since a date");
         Console.WriteLine("  cdidx status --json                            DB stats as JSON");
+        Console.WriteLine("  cdidx status --config                          Effective configuration as JSON");
+        Console.WriteLine("  cdidx validate-config                          Validate checked-in config");
         Console.WriteLine("  cdidx languages                                Show supported languages");
         Console.WriteLine("  cdidx --completions zsh > ~/.zfunc/_cdidx      Generate a zsh completion script");
         Console.WriteLine("  cdidx license                                  Show licensing and commercial-use terms");
@@ -1087,7 +1091,7 @@ public static class ConsoleUi
     // generic catch-all となるよう揃える。テストもこの並びを前提にしている。
     private static readonly string[] EnumeratedCompletionCommands =
     [
-        "find", "excerpt", "references", "inspect", "hotspots", "status", "db", "report", "search",
+        "find", "excerpt", "references", "inspect", "hotspots", "status", "validate-config", "db", "report", "search",
     ];
 
     // Generic-branch representative set: union of completion flags from these commands populates
