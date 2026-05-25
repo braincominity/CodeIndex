@@ -23,7 +23,9 @@ namespace CodeIndex.Cli;
 internal static class CdidxConfigFile
 {
     internal const string FileName = ".cdidxrc.json";
+    internal static readonly string ProjectConfigRelativePath = Path.Combine(".cdidx", "config.json");
     internal const string DisableEnvVar = "CDIDX_DISABLE_CONFIG_FILE";
+    internal const string ConfigSourceEnvironmentVariablePrefix = "CDIDX_CONFIG_SOURCE__";
 
     private static readonly IReadOnlyList<string> KnownTopLevelKeys = new[]
     {
@@ -34,11 +36,19 @@ internal static class CdidxConfigFile
         "global_tool_log_dir",
         "stale_after",
         "indexing",
+        "search",
+        "output",
+        "graph",
+        "folding",
         "suggestion_dedup_threshold",
         "mcp",
     };
 
     private static readonly IReadOnlyList<string> KnownIndexingKeys = new[] { "includeKinds", "excludeKinds" };
+    private static readonly IReadOnlyList<string> KnownSearchKeys = new[] { "limit", "snippet_lines", "max_line_width" };
+    private static readonly IReadOnlyList<string> KnownOutputKeys = new[] { "format", "locale" };
+    private static readonly IReadOnlyList<string> KnownGraphKeys = new[] { "max_hops" };
+    private static readonly IReadOnlyList<string> KnownFoldingKeys = new[] { "fold_key_version" };
     private static readonly IReadOnlyList<string> KnownMcpKeys = new[] { "tools", "rate_limit" };
     private static readonly IReadOnlyList<string> KnownMcpToolsKeys = new[] { "allow", "deny" };
     private static readonly IReadOnlyList<string> KnownMcpRateLimitKeys = new[] { "rps", "burst" };
@@ -179,6 +189,37 @@ internal static class CdidxConfigFile
                 }
             }
 
+            if (root.TryGetProperty("search", out var search))
+            {
+                if (search.ValueKind != JsonValueKind.Object)
+                    return new LoadResult(Path: path, Error: $"[cdidx] {path}: `search` must be a JSON object.");
+                if (TryFindUnknownKey(search, KnownSearchKeys, out var unknownSearchKey))
+                    return new LoadResult(Path: path, Error: $"[cdidx] {path}: unknown key `search.{unknownSearchKey}`. Supported keys: {string.Join(", ", KnownSearchKeys)}.");
+                if (search.TryGetProperty("limit", out var limit))
+                {
+                    if (!TryReadSearchInteger(limit, "search.limit", "--limit", allowZero: false, path, out var value, out var err))
+                        return new LoadResult(Path: path, Error: err);
+                    pending.Add((QueryCommandRunner.DefaultLimitEnvironmentVariable, value!));
+                }
+                if (search.TryGetProperty("snippet_lines", out var snippetLines))
+                {
+                    if (!TryReadSearchInteger(snippetLines, "search.snippet_lines", "--snippet-lines", allowZero: false, path, out var value, out var err))
+                        return new LoadResult(Path: path, Error: err);
+                    pending.Add((QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, value!));
+                }
+                if (search.TryGetProperty("max_line_width", out var maxLineWidth))
+                {
+                    if (!TryReadSearchInteger(maxLineWidth, "search.max_line_width", "--max-line-width", allowZero: true, path, out var value, out var err))
+                        return new LoadResult(Path: path, Error: err);
+                    pending.Add((QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, value!));
+                }
+            }
+
+            if (!ValidateOptionalObject(root, "output", KnownOutputKeys, path, out var optionalObjectError)
+                || !ValidateOptionalObject(root, "graph", KnownGraphKeys, path, out optionalObjectError)
+                || !ValidateOptionalObject(root, "folding", KnownFoldingKeys, path, out optionalObjectError))
+                return new LoadResult(Path: path, Error: optionalObjectError);
+
             if (root.TryGetProperty("mcp", out var mcp))
             {
                 if (mcp.ValueKind != JsonValueKind.Object)
@@ -241,7 +282,10 @@ internal static class CdidxConfigFile
             foreach (var (name, value) in pending)
             {
                 if (envReader(name) is null)
+                {
                     envWriter(name, value);
+                    envWriter(ConfigSourceEnvironmentVariablePrefix + name, path);
+                }
             }
 
             return new LoadResult(Path: path, Error: null);
@@ -265,12 +309,57 @@ internal static class CdidxConfigFile
 
         while (current is not null)
         {
+            var projectCandidate = Path.Combine(current.FullName, ProjectConfigRelativePath);
+            if (File.Exists(LongPath.EnsureWindowsPrefix(projectCandidate)))
+                return projectCandidate;
             var candidate = Path.Combine(current.FullName, FileName);
             if (File.Exists(LongPath.EnsureWindowsPrefix(candidate)))
                 return candidate;
             current = current.Parent;
         }
         return null;
+    }
+
+    internal static int RunValidate(string[] args, JsonSerializerOptions jsonOptions)
+    {
+        if (args.Length > 0)
+        {
+            CommandErrorWriter.Write("validate-config does not accept positional arguments.", "run `cdidx validate-config` from the workspace whose config should be validated.");
+            return CommandExitCodes.UsageError;
+        }
+
+        var result = LoadAndApply(Environment.CurrentDirectory, name => name == DisableEnvVar ? null : Environment.GetEnvironmentVariable(name), (_, _) => { });
+        if (result.Failed)
+        {
+            Console.Error.WriteLine(result.Error);
+            return CommandExitCodes.UsageError;
+        }
+
+        var payload = new Dictionary<string, object?>
+        {
+            ["valid"] = true,
+            ["path"] = result.Path,
+        };
+        Console.WriteLine(JsonSerializer.Serialize(payload, jsonOptions));
+        return CommandExitCodes.Success;
+    }
+
+    private static bool ValidateOptionalObject(JsonElement root, string key, IReadOnlyList<string> knownKeys, string path, out string? error)
+    {
+        error = null;
+        if (!root.TryGetProperty(key, out var value))
+            return true;
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            error = $"[cdidx] {path}: `{key}` must be a JSON object.";
+            return false;
+        }
+        if (TryFindUnknownKey(value, knownKeys, out var unknownKey))
+        {
+            error = $"[cdidx] {path}: unknown key `{key}.{unknownKey}`. Supported keys: {string.Join(", ", knownKeys)}.";
+            return false;
+        }
+        return true;
     }
 
     private static bool TryFindUnknownKey(JsonElement obj, IReadOnlyList<string> knownKeys, out string? unknown)
@@ -351,6 +440,34 @@ internal static class CdidxConfigFile
             return false;
         }
         value = element.GetRawText();
+        return true;
+    }
+
+    private static bool TryReadSearchInteger(JsonElement element, string key, string optionName, bool allowZero, string path, out string? value, out string? error)
+    {
+        value = null;
+        error = null;
+        if (element.ValueKind != JsonValueKind.Number)
+        {
+            error = $"[cdidx] {path}: `{key}` must be a number.";
+            return false;
+        }
+
+        if (!element.TryGetInt32(out var parsed) || parsed < 0 || (!allowZero && parsed == 0))
+        {
+            error = allowZero
+                ? $"[cdidx] {path}: `{key}` must be a non-negative integer."
+                : $"[cdidx] {path}: `{key}` must be a positive integer.";
+            return false;
+        }
+
+        if (QueryCommandRunner.NumericFlagUpperBounds.TryGetValue(optionName, out var maxAllowed) && parsed > maxAllowed)
+        {
+            error = $"[cdidx] {path}: `{key}` must be <= {maxAllowed}.";
+            return false;
+        }
+
+        value = parsed.ToString(System.Globalization.CultureInfo.InvariantCulture);
         return true;
     }
 }
