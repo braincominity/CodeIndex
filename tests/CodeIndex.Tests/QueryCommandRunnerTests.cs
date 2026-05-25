@@ -168,6 +168,24 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunLanguages_IgnoresInvalidNumericDefaultEnvironmentVariables()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable,
+            QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "0");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, "0");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, "-1");
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages([], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Contains("Language", stdout);
+        Assert.DoesNotContain(QueryCommandRunner.DefaultLimitEnvironmentVariable, stderr);
+    }
+
+    [Fact]
     public void ParseArgs_ProjectFilterExpandsSolutionProjectToPathGlob_Issue1707()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_filter");

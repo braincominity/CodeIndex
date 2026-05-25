@@ -2133,7 +2133,7 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false, allowStatusCheck: true);
+        var options = ParseArgs(cmdArgs, jsonDefault: false, allowStatusCheck: true, validateDefaultNumericOptions: false);
         if (TryWriteUnsupportedOptionError("status", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("status")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "status"))
@@ -2468,7 +2468,7 @@ public static class QueryCommandRunner
 
     public static int RunVacuum(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        var options = ParseArgs(cmdArgs, jsonDefault: false, validateDefaultNumericOptions: false);
         if (TryWriteUnsupportedOptionError("vacuum", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("vacuum")))
             return CommandExitCodes.UsageError;
         var explicitDbPathError = BuildExplicitDbPathParseError(options);
@@ -3752,7 +3752,7 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        var options = ParseArgs(cmdArgs, jsonDefault: false, validateDefaultNumericOptions: false);
         if (TryWriteUnsupportedOptionError("validate", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("validate")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "validate"))
@@ -3808,7 +3808,7 @@ public static class QueryCommandRunner
 
     public static int RunLanguages(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        var options = ParseArgs(cmdArgs, jsonDefault: false, validateDefaultNumericOptions: false);
         if (TryWriteUnsupportedOptionError("languages", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("languages")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "languages"))
@@ -3882,7 +3882,7 @@ public static class QueryCommandRunner
         return CommandExitCodes.Success;
     }
 
-    public static QueryCommandOptions ParseArgs(string[] args, bool jsonDefault, bool allowNamedQuery = false, bool allowStatusCheck = false)
+    public static QueryCommandOptions ParseArgs(string[] args, bool jsonDefault, bool allowNamedQuery = false, bool allowStatusCheck = false, bool validateDefaultNumericOptions = true)
     {
         string? dbPath = null;
         string? dataDir = null;
@@ -4519,11 +4519,11 @@ public static class QueryCommandRunner
 
         ValidateQueryPathOptionValues(userPathPatterns, excludePaths, AddParseError);
 
-        if (!limitExplicit && defaultLimitError != null)
+        if (validateDefaultNumericOptions && !limitExplicit && defaultLimitError != null)
             AddParseError(defaultLimitError);
-        if (!snippetLinesExplicit && defaultSnippetLinesError != null)
+        if (validateDefaultNumericOptions && !snippetLinesExplicit && defaultSnippetLinesError != null)
             AddParseError(defaultSnippetLinesError);
-        if (!maxLineWidthExplicit && defaultMaxLineWidthError != null)
+        if (validateDefaultNumericOptions && !maxLineWidthExplicit && defaultMaxLineWidthError != null)
             AddParseError(defaultMaxLineWidthError);
 
         var dbResolution = DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, dbPath, dataDir);
