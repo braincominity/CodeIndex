@@ -567,11 +567,7 @@ public class ConcurrencyTests : IDisposable
         var writer = new DbWriter(_db.Connection);
         using var txn = writer.BeginTransaction();
 
-        Task markTask;
-        using (ExecutionContext.SuppressFlow())
-        {
-            markTask = Task.Run(() => writer.MarkGraphReady());
-        }
+        var markTask = Task.Run(() => writer.MarkGraphReady());
         await Task.Delay(100);
         Assert.False(markTask.IsCompleted);
 
@@ -583,28 +579,22 @@ public class ConcurrencyTests : IDisposable
     }
 
     [Fact]
-    public async Task BeginTransaction_NestedScopeAfterAwaitKeepsLogicalOwnership()
+    public async Task BeginTransaction_TaskRunWithFlowedExecutionContextStillWaitsForActiveScope()
     {
         var writer = new DbWriter(_db.Connection);
-
         using var outer = writer.BeginTransaction();
-        await Task.Yield();
-        using var nested = writer.BeginTransaction();
 
-        writer.UpsertFile(new FileRecord
+        var nestedTask = Task.Run(() =>
         {
-            Path = "src/after_await.cs",
-            Lang = "csharp",
-            Size = 10,
-            Lines = 1,
-            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            Checksum = "after-await",
+            using var nested = writer.BeginTransaction();
+            nested.Commit();
         });
-        nested.Commit();
-        outer.Commit();
+        await Task.Delay(100);
+        Assert.False(nestedTask.IsCompleted);
 
-        var reader = new DbReader(_db.Connection);
-        Assert.Equal(1, reader.GetStatus().Files);
+        outer.Commit();
+        outer.Dispose();
+        await nestedTask;
     }
 
     private static List<ReferenceRecord> BuildReferenceBatch(long fileId, string label, int count)

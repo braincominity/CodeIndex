@@ -33,6 +33,7 @@ public class DbWriter
     private int _rowSkipSavepointCounter;
     private long _batchRowsSkipped;
     private int _transactionDepth;
+    private int _transactionOwnerThreadId;
     private Guid _transactionOwnerToken;
     // Outermost SqliteTransaction currently held open by this writer (null when no
     // transaction is active OR after the outermost transaction has been committed /
@@ -160,7 +161,10 @@ public class DbWriter
         {
             lock (_transactionStateLock)
             {
-                if (_transactionDepth > 0 && _transactionOwnerToken != Guid.Empty && _currentTransactionGateToken.Value == _transactionOwnerToken)
+                if (_transactionDepth > 0 &&
+                    _transactionOwnerThreadId == Environment.CurrentManagedThreadId &&
+                    _transactionOwnerToken != Guid.Empty &&
+                    _currentTransactionGateToken.Value == _transactionOwnerToken)
                     return TransactionGateLease.None;
             }
 
@@ -171,6 +175,7 @@ public class DbWriter
                 {
                     var previousToken = _currentTransactionGateToken.Value;
                     var token = Guid.NewGuid();
+                    _transactionOwnerThreadId = Environment.CurrentManagedThreadId;
                     _transactionOwnerToken = token;
                     _currentTransactionGateToken.Value = token;
                     return new TransactionGateLease(this, token, previousToken);
@@ -187,7 +192,10 @@ public class DbWriter
         lock (_transactionStateLock)
         {
             if (_transactionOwnerToken == token)
+            {
+                _transactionOwnerThreadId = 0;
                 _transactionOwnerToken = Guid.Empty;
+            }
         }
         if (_currentTransactionGateToken.Value == token)
             _currentTransactionGateToken.Value = previousToken;
