@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Runtime.Versioning;
@@ -416,6 +417,42 @@ public class IndexCommandRunnerTests
         Assert.NotNull(options.ProjectPath);
         Assert.True(Path.IsPathRooted(options.ProjectPath));
         Assert.Equal(Path.GetFullPath("."), options.ProjectPath);
+    }
+
+    [Fact]
+    public void TryGetFullScanExtractionStallPath_ReportsActivePhaseAfterTimeout()
+    {
+        var staleTimestamp = Stopwatch.GetTimestamp() - Stopwatch.Frequency;
+
+        var stalled = IndexCommandRunner.TryGetFullScanExtractionStallPath(
+            filesProcessed: 23,
+            filesTotal: 376,
+            timeout: TimeSpan.FromMilliseconds(1),
+            lastProgressTimestamp: staleTimestamp,
+            currentFile: null,
+            activeExtractionPhases: ["src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs (symbols)"],
+            out var activePath);
+
+        Assert.True(stalled);
+        Assert.Equal("src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs (symbols)", activePath);
+    }
+
+    [Fact]
+    public void TryGetFullScanExtractionStallPath_DoesNotReportWhenComplete()
+    {
+        var staleTimestamp = Stopwatch.GetTimestamp() - Stopwatch.Frequency;
+
+        var stalled = IndexCommandRunner.TryGetFullScanExtractionStallPath(
+            filesProcessed: 376,
+            filesTotal: 376,
+            timeout: TimeSpan.FromMilliseconds(1),
+            lastProgressTimestamp: staleTimestamp,
+            currentFile: "src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs",
+            activeExtractionPhases: ["src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs (symbols)"],
+            out var activePath);
+
+        Assert.False(stalled);
+        Assert.Null(activePath);
     }
 
     [Fact]
