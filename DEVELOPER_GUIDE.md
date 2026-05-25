@@ -136,6 +136,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | Kind | Current producers / meaning | Graph behavior |
 |---|---|---|
 | `attribute` | Razor attributes and metadata-like declarations | Context/search symbol; not a call edge by itself |
+| `associatedtype` | Swift associated type declarations | Type-like definition target |
 | `class` | Class declarations across object-oriented languages | Definition target and container |
 | `code` | Markdown fenced or structured code blocks | Search/outline symbol |
 | `constant` | Constant declarations where the language distinguishes them | Search/filter symbol |
@@ -143,6 +144,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `enum` | Enum declarations | Definition target and container |
 | `event` | Event declarations | Search/filter symbol |
 | `field` | Field declarations where distinct from properties | Search/filter symbol |
+| `file_module` | File-scoped module/package declarations | Namespace-like context symbol |
 | `function` | Functions, methods, constructors, delegates, tasks, and callable bindings that do not have a narrower kind | Primary callable definition; participates in callers/callees through reference rows |
 | `heading` | Markdown headings | Outline symbol |
 | `hook` | JavaScript/TypeScript React custom hook bindings | Callable-like search/filter symbol |
@@ -157,12 +159,17 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `operator` | C# operator overload and conversion operator declarations | Callable definition; participates in callers/callees through reference rows |
 | `package` | Package declarations | Namespace-like context symbol |
 | `property` | Properties and property-like fields | Definition target; not treated as a call edge by itself |
+| `protocol` | Protocol declarations in languages that distinguish protocols from interfaces | Definition target and container |
 | `reference` | Secondary extracted symbolic references, such as HTML classes or metadata keys | Search/filter symbol |
 | `route` | Razor route directives | Context/search symbol |
 | `service` | Service declarations in IDL/protobuf-like languages | Definition target and container |
+| `specialization` | C++ template specialization declarations | Definition target for specialized type/function forms |
 | `struct` | Struct declarations | Definition target and container |
 | `test.method` | Test methods detected by test-aware extraction | Callable definition; participates in callers/callees through reference rows |
+| `trait` | Trait declarations in languages that distinguish traits from interfaces | Definition target and container |
 | `type` | Type declarations where a narrower class/interface/struct/enum kind is not available | Definition target |
+| `typealias` | Type alias declarations | Definition target for alias names |
+| `union` | Union declarations | Definition target and container |
 | `variable` | Variable bindings | Search/filter symbol |
 
 `symbol_references.reference_kind` uses this separate reference taxonomy:

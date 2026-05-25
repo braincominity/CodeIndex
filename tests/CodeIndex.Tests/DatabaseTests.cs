@@ -152,17 +152,25 @@ public class DatabaseTests : IDisposable
         Assert.Equal(1L, (long)cmd.ExecuteScalar()!);
     }
 
-    [Fact]
-    public void InsertSymbols_ExistingDelegateKind_IsAccepted()
+    [Theory]
+    [InlineData("delegate")]
+    [InlineData("union")]
+    [InlineData("specialization")]
+    [InlineData("protocol")]
+    [InlineData("file_module")]
+    [InlineData("trait")]
+    [InlineData("associatedtype")]
+    [InlineData("typealias")]
+    public void InsertSymbols_ExistingExtractorKinds_AreAccepted(string symbolKind)
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/delegate.cs",
+            Path = $"src/{symbolKind}.txt",
             Lang = "csharp",
             Size = 32,
             Lines = 1,
             Modified = new DateTime(2026, 5, 25, 0, 0, 0, DateTimeKind.Utc),
-            Checksum = "delegate",
+            Checksum = symbolKind,
         });
 
         _writer.InsertSymbols(
@@ -170,14 +178,15 @@ public class DatabaseTests : IDisposable
             new SymbolRecord
             {
                 FileId = fileId,
-                Kind = "delegate",
+                Kind = symbolKind,
                 Name = "Handler",
                 Line = 1,
             },
         ]);
 
         using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE kind = 'delegate'";
+        cmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE kind = @kind";
+        cmd.Parameters.AddWithValue("@kind", symbolKind);
         Assert.Equal(1L, (long)cmd.ExecuteScalar()!);
     }
 

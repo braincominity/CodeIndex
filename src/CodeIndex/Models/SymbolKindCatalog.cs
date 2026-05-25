@@ -9,6 +9,7 @@ public static class SymbolKindCatalog
     public static readonly string[] SymbolKinds =
     [
         "attribute",
+        "associatedtype",
         "class",
         "code",
         "constant",
@@ -16,6 +17,7 @@ public static class SymbolKindCatalog
         "enum",
         "event",
         "field",
+        "file_module",
         "function",
         "heading",
         "hook",
@@ -30,12 +32,17 @@ public static class SymbolKindCatalog
         "operator",
         "package",
         "property",
+        "protocol",
         "reference",
         "route",
         "service",
+        "specialization",
         "struct",
         "test.method",
+        "trait",
         "type",
+        "typealias",
+        "union",
         "variable",
     ];
 
