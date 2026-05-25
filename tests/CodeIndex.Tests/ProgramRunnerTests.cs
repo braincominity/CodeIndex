@@ -10,6 +10,21 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public class ProgramRunnerTests
 {
+    [Theory]
+    [InlineData("--json")]
+    [InlineData("--json=array")]
+    [InlineData("--json-envelope")]
+    public void ContainsJsonOutputFlag_JsonModes_ReturnsTrue(string jsonFlag)
+    {
+        Assert.True(ProgramRunner.ContainsJsonOutputFlag(["search", "Needle", jsonFlag]));
+    }
+
+    [Fact]
+    public void ContainsJsonOutputFlag_AfterPassthrough_ReturnsFalse()
+    {
+        Assert.False(ProgramRunner.ContainsJsonOutputFlag(["search", "--", "--json"]));
+    }
+
     [Fact]
     public void TryConsumeQueryTraceFlag_StripsTraceAndPreservesEscapedQuery()
     {

@@ -425,6 +425,17 @@ or `cdidx . --json` refresh so stale paths are purged.
 
 ## Installation
 
+Choose the install channel based on runtime ownership and network shape:
+
+| Channel | Best fit | Prerequisites | Update path |
+|---|---|---|---|
+| `install.sh` | Self-contained installs, CI, containers, ARM64 hosts without managed .NET | Shell tools and release-asset network access | Re-run the installer, optionally with `vX.Y.Z` |
+| NuGet global tool | Workstations already using .NET global tools | .NET 8 SDK for install/update; .NET 8 runtime to run | `dotnet tool update -g cdidx` |
+| Build from source | Contributors and custom local builds | .NET 8 SDK | Pull source and rebuild |
+
+For a full comparison, package maintainer guidance, and planned channels such
+as winget, apt, rpm, Snap, and Flatpak, see [DISTRIBUTION.md](DISTRIBUTION.md).
+
 ### Option A: One-liner install (no .NET required)
 
 Works in containers, CI, and any Linux/macOS environment — no .NET SDK needed.
@@ -467,12 +478,45 @@ RUN export CDIDX_INSTALL_DIR=/usr/local/bin \
     && curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 
+#### Isolated networks and proxies
+
+Use `--doctor` before installing when a corporate proxy, egress allowlist, or
+GitHub mirror is involved:
+
+```bash
+bash ./install.sh --doctor
+HTTPS_PROXY=http://proxy.example:8080 bash ./install.sh --doctor v1.5.0
+```
+
+To point the installer at a mirror, set both release and API base URLs:
+
+```bash
+export CDIDX_GITHUB_BASE_URL=https://github.example.internal
+export CDIDX_GITHUB_API_BASE_URL=https://github.example.internal/api/v3
+curl -fsSL "$CDIDX_GITHUB_BASE_URL/Widthdom/CodeIndex/raw/main/install.sh" | bash
+```
+
+The local mirror self-test verifies the mirror code path without touching real
+release assets. It installs a mock `cdidx` into the selected install directory,
+so use an isolated directory unless you explicitly pass the overwrite guard:
+
+```bash
+export CDIDX_INSTALL_DIR="$(mktemp -d)"
+bash ./install.sh --self-test-local-mirror
+```
+
+If the default local self-test port is busy, set
+`CDIDX_LOCAL_MIRROR_PORT=18766`.
+
 ### Option B: NuGet Global Tool
 
-Requires the [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
-CodeIndex targets `net8.0`; .NET 8.x is the supported SDK/runtime line for the
-published tool, while the CI test suite also covers the test project on
-`net9.0`.
+Requires the [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+for `dotnet tool install` / `dotnet tool update`. CodeIndex targets `net8.0`;
+.NET 8.x is the supported runtime line for the published tool, while the CI
+test suite also covers the test project on `net9.0`. The NuGet package is
+framework-dependent rather than RID-specific or self-contained. On Apple
+Silicon, Linux ARM64, and Windows ARM64, prefer `install.sh` when the host does
+not already manage a .NET 8 runtime.
 
 ```bash
 dotnet tool install -g cdidx
@@ -929,6 +973,40 @@ cdidx report --output report.tgz --json
 | `--include-args` | | Keep literal `cwd=` and `args=` values in the log tail (opt-in; share only with trusted recipients). |
 | `--json` | | Print a stable summary envelope (`output_path`, `version`, `files`, `schema_tables`, `log_lines_included`, `log_included`, `db_included`, `db_path`) instead of the human-friendly output. |
 
+## Search query syntax
+
+Default `cdidx search` uses the literal-safe FTS5 path: each whitespace-separated
+query token is quoted as a phrase, and multiple tokens are combined with FTS5's
+implicit AND semantics. For example, `cdidx search foo bar` means "find chunks
+that contain both `foo` and `bar`"; it is equivalent to a raw FTS5 query that
+requires both terms. Use `--fts 'foo OR bar'` when either term is acceptable, or
+quote a phrase in raw FTS5 mode (`--fts '"foo bar"'`) when adjacency matters.
+With `--fts`, the query is passed to FTS5 as raw syntax. Supported operators
+include `content:term` column filters, `NEAR(foo bar, 5)`, `foo OR bar`,
+`foo NOT bar`, parenthesized groups, prefix tokens such as `foo*`, and quoted
+phrases such as `"foo bar"`. Without `--fts`, those characters are treated as
+literal query content except for cdidx's documented literal-safe prefix
+shorthand.
+
+Search case behavior depends on the mode. Default search and raw `--fts` use
+SQLite FTS5's `unicode61` tokenizer, so ASCII case is folded and Latin
+diacritics are removed by the tokenizer. CJK text is mostly case-neutral, but
+matching still follows FTS5 token boundaries. Locale-specific Unicode cases are
+not a full collation: Turkish dotted/dotless I and German sharp-S versus `SS`
+should be checked with exact mode when identity matters. `--exact-substring`
+uses SQLite `instr()` and is case-sensitive byte-for-byte over the stored text.
+Symbol-name exactness is separate: `--exact-name` uses cdidx's documented NFKC +
+Unicode CaseFold path when the DB reports `fold_ready`.
+
+### Result deduplication
+
+Search chunks overlap by 10 lines so matches near a chunk boundary still have
+context. By default, `search` collapses duplicate hits that come from this
+overlap. Use `--no-dedup` only when you need every raw chunk hit, such as
+debugging chunk-boundary behavior, comparing directly with the `chunks` table,
+or measuring exact raw match density. It can return repeated snippets for the
+same source location.
+
 ## Options
 
 | Option | Applies to | Description |
@@ -987,7 +1065,7 @@ cdidx report --output report.tgz --json
 | `--watch` | `index` | After the initial scan completes, stay running and reindex incrementally as files change (FileSystemWatcher / inotify / FSEvents). Rejects `--commits`, `--changed-between`, `--files`, and `--dry-run` because the loop already drives continuous incremental updates. |
 | `--debounce <ms>` | `index` (watch only) | Coalesce bursts of file events into a single update after `<ms>` of quiet (non-negative integer; default: 500). Invalid values emit a warning and are ignored. |
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | Filter to files modified since this ISO 8601 timestamp. Offsetless values (e.g. `2024-01-01T00:00:00`) are treated as UTC so the same flag resolves to the same instant in every timezone; append `Z` or an explicit offset (`+09:00`) to be explicit. |
-| `--no-dedup` | `search` | Disable overlapping-chunk deduplication for raw results |
+| `--no-dedup` | `search` | Disable overlapping-chunk deduplication and return every raw chunk hit; useful for debugging chunk boundaries or measuring raw match density |
 | `--reverse` | `deps` | Reverse lookup: show files that depend ON the matched path |
 | `--strict-not-found` | Query commands | Return exit code `2` when a valid query produces zero rows. Without this flag, zero-result queries exit `0` and keep their normal empty/zero-result output. |
 | `--top <n>` | Query commands | Alias for `--limit` |
@@ -2281,6 +2359,17 @@ freshness が曖昧になった場合は、stale paths を purge できるよう
 
 ## インストール
 
+runtime の管理方法とネットワーク条件に合わせて install channel を選んでください。
+
+| Channel | 向いている用途 | 前提条件 | 更新方法 |
+|---|---|---|---|
+| `install.sh` | self-contained install、CI、container、managed .NET が無い ARM64 host | shell tools と release asset へ到達できるネットワーク | installer を再実行。必要なら `vX.Y.Z` を指定 |
+| NuGet global tool | 既に .NET global tool を使う workstation | install/update には .NET 8 SDK、実行には .NET 8 runtime | `dotnet tool update -g cdidx` |
+| source build | contributor と custom local build | .NET 8 SDK | source を pull して rebuild |
+
+完全な比較、package maintainer guidance、winget / apt / rpm / Snap /
+Flatpak などの予定チャネルは [DISTRIBUTION.md](DISTRIBUTION.md) を参照してください。
+
 ### 方法A: ワンライナーインストール（.NET 不要）
 
 コンテナ、CI、Linux/macOS 環境で .NET SDK なしで使えます。
@@ -2323,12 +2412,46 @@ RUN export CDIDX_INSTALL_DIR=/usr/local/bin \
     && curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 
+#### 隔離ネットワークと proxy
+
+企業 proxy、egress allowlist、GitHub mirror が関係する環境では、install 前に
+`--doctor` で経路を確認してください。
+
+```bash
+bash ./install.sh --doctor
+HTTPS_PROXY=http://proxy.example:8080 bash ./install.sh --doctor v1.5.0
+```
+
+installer を mirror に向ける場合は、release host と API host の両方を設定します。
+
+```bash
+export CDIDX_GITHUB_BASE_URL=https://github.example.internal
+export CDIDX_GITHUB_API_BASE_URL=https://github.example.internal/api/v3
+curl -fsSL "$CDIDX_GITHUB_BASE_URL/Widthdom/CodeIndex/raw/main/install.sh" | bash
+```
+
+local mirror self-test は、実リリース資産に触れずに mirror 経路を検証します。
+選択した install directory に mock `cdidx` を配置するため、明示的に
+overwrite guard を渡す場合を除き、隔離ディレクトリを使ってください。
+
+```bash
+export CDIDX_INSTALL_DIR="$(mktemp -d)"
+bash ./install.sh --self-test-local-mirror
+```
+
+既定の local self-test port が埋まっている場合は
+`CDIDX_LOCAL_MIRROR_PORT=18766` を設定してください。
+
 ### 方法B: NuGet グローバルツール
 
+`dotnet tool install` / `dotnet tool update` には
 [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0) が必要です。
-CodeIndex は `net8.0` を対象にしており、公開ツールのサポート対象
-SDK/runtime 系列は .NET 8.x です。一方で、CI のテストスイートは
-テストプロジェクトを `net9.0` でも検証します。
+CodeIndex は `net8.0` を対象にしており、公開ツールのサポート対象 runtime
+系列は .NET 8.x です。一方で、CI のテストスイートはテストプロジェクトを
+`net9.0` でも検証します。NuGet package は framework-dependent であり、
+RID-specific / self-contained ではありません。Apple Silicon、Linux ARM64、
+Windows ARM64 で host 側が .NET 8 runtime を管理していない場合は、
+`install.sh` を優先してください。
 
 ```bash
 dotnet tool install -g cdidx
@@ -2802,6 +2925,41 @@ cdidx report --output report.tgz --json
 | `--include-args` | | ログ末尾の `cwd=` / `args=` 値を伏字化せずそのまま含めます（信頼できる相手にだけ使用してください）。 |
 | `--json` | | 人間向け出力の代わりに、安定したサマリ JSON（`output_path` / `version` / `files` / `schema_tables` / `log_lines_included` / `log_included` / `db_included` / `db_path`）を出力します。 |
 
+## 検索クエリ構文
+
+既定の `cdidx search` は literal-safe な FTS5 経路を使います。空白で
+区切られた各 query token は phrase として引用され、複数 token は FTS5 の
+implicit AND として結合されます。たとえば `cdidx search foo bar` は
+「`foo` と `bar` の両方を含む chunk」を探す意味で、両方の term を要求する
+raw FTS5 query と同等です。どちらか一方でよい場合は `--fts 'foo OR bar'`、
+隣接 phrase を要求したい場合は raw FTS5 mode で引用します
+（`--fts '"foo bar"'`）。
+`--fts` 付きでは query は raw FTS5 構文としてそのまま渡されます。利用できる
+演算子には `content:term` の列 filter、`NEAR(foo bar, 5)`、`foo OR bar`、
+`foo NOT bar`、括弧 grouping、`foo*` のような prefix token、`"foo bar"` の
+ような quoted phrase があります。`--fts` なしでは、cdidx が明示している
+literal-safe prefix shorthand を除き、これらの文字はリテラルな query 内容として
+扱われます。
+
+検索の大小文字の扱いは mode ごとに異なります。既定検索と raw `--fts` は
+SQLite FTS5 の `unicode61` tokenizer を使うため、ASCII の大小文字は畳み込まれ、
+ラテン文字の diacritic は tokenizer により除去されます。CJK は多くの場合
+大小文字の概念がありませんが、一致範囲は FTS5 token 境界に従います。Unicode の
+locale 固有ケースを完全な collation として扱うわけではないため、トルコ語の
+dotted/dotless I やドイツ語 sharp-S と `SS` の同一性が重要な場合は exact mode で
+確認してください。`--exact-substring` は SQLite `instr()` を使い、保存された本文に
+対して byte-for-byte に大文字小文字を区別します。symbol-name exactness は別経路で、
+`--exact-name` は DB が `fold_ready` のとき cdidx の NFKC + Unicode CaseFold 経路を
+使います。
+
+### 結果の重複排除
+
+検索 chunk は、chunk 境界付近の一致でも文脈を持てるよう 10 行重複しています。
+既定の `search` は、この overlap から生じる重複 hit を折りたたみます。
+`--no-dedup` は、chunk 境界の挙動を調査する、`chunks` table と直接突き合わせる、
+raw match density を正確に測る、といった理由で全 raw chunk hit が必要な場合にだけ
+使います。同じ source location の snippet が繰り返し返ることがあります。
+
 ## オプション一覧
 
 | オプション | 対象 | 説明 |
@@ -2858,7 +3016,7 @@ cdidx report --output report.tgz --json
 | `--watch` | `index` | 初回スキャン完了後もプロセスを残し、ファイル変更を検知して差分更新を繰り返す（FileSystemWatcher / inotify / FSEvents）。連続的な差分更新を内蔵しているため `--commits` / `--changed-between` / `--files` / `--dry-run` との併用は拒否する。 |
 | `--debounce <ms>` | `index`（`--watch` 専用） | 一連のイベントを `<ms>` の静止後に 1 つの更新へ集約する（0 以上の整数。既定: 500）。不正な値は警告を出して無視する。 |
 | `--since <datetime>` | `search`, `definition`, `symbols`, `files` | 指定タイムスタンプ以降に変更されたファイルのみ（ISO 8601）。オフセットなしの値（例: `2024-01-01T00:00:00`）は UTC として解釈されるため、どのタイムゾーンから呼び出しても同じ UTC 時点になります。明示したい場合は末尾に `Z` または `+09:00` 等のオフセットを付与してください。 |
-| `--no-dedup` | `search` | オーバーラップチャンク重複排除を無効化 |
+| `--no-dedup` | `search` | overlap chunk の重複排除を無効化し、全 raw chunk hit を返す。chunk 境界の debug や raw match density 計測向け |
 | `--reverse` | `deps` | 逆引き: 指定パスに依存しているファイルを表示 |
 | `--workspace-db <path>` | `deps` | file dependency query に別の CodeIndex DB を追加する。複数 member DB を集約する場合は繰り返し指定でき、JSON edge には同じ相対パスを区別できるよう `source_db` / `target_db` が含まれる。 |
 | `--top <n>` | クエリ系 | `--limit` のエイリアス |

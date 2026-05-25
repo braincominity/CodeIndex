@@ -80,7 +80,8 @@ public static class ConsoleUi
         ("map", "cdidx map [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes]"),
         ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]"),
         ("outline", "cdidx outline <path> [--db <path>] [--json] [--verbose]"),
-        ("status", "cdidx status [--db <path>] [--json] [--verbose] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--stale-after <duration>] [--explain <field>] [--log-path]"),
+        ("status", "cdidx status [--db <path>] [--json] [--verbose] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--stale-after <duration>] [--explain <field>] [--log-path] [--config]"),
+        ("validate-config", "cdidx validate-config"),
         ("db", "cdidx db --integrity-check [--db <path>] [--json]"),
         ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n>]"),
         ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n>] [--no-log] [--include-args]"),
@@ -108,6 +109,7 @@ public static class ConsoleUi
     private static TextWriter? _synchronizedOut;
     private static TextWriter? _synchronizedError;
     private static readonly string[] ByteUnits = ["bytes", "KiB", "MiB", "GiB", "TiB", "PiB"];
+    private static readonly AsyncLocal<int> JsonOutputDepth = new();
 
     private static readonly string[] DefaultBrailleSpinnerFrames =
     [
@@ -150,6 +152,15 @@ public static class ConsoleUi
                 Console.SetError(_synchronizedError);
             }
         }
+    }
+
+    internal static IDisposable SuppressAnsiForJsonOutput(bool enabled)
+    {
+        if (!enabled)
+            return NoopDisposable.Instance;
+
+        JsonOutputDepth.Value++;
+        return new JsonOutputScope();
     }
 
     // --- Spinner / スピナー ---
@@ -648,7 +659,8 @@ public static class ConsoleUi
         Console.WriteLine("  map                        Show a repo-level overview for AI orientation");
         Console.WriteLine("  inspect <query>            Bundle definition, graph, and nearby symbol context");
         Console.WriteLine("  outline <path>             Show a file outline ordered by line, start column, kind, and name");
-        Console.WriteLine("  status                     Show database statistics; add --check for freshness, --explain <field> for readiness, or --log-path for logs");
+        Console.WriteLine("  status                     Show database statistics; add --check for freshness, --config for effective config, --explain <field> for readiness, or --log-path for logs");
+        Console.WriteLine("  validate-config            Validate .cdidx/config.json or .cdidxrc.json");
         Console.WriteLine("  db --integrity-check       Run SQLite `PRAGMA integrity_check` and report findings");
         Console.WriteLine("  diff <db1> <db2>           Compare two index databases; exit 0 identical, 1 drift, 2 schema mismatch, 3 unreadable");
         Console.WriteLine("  report --output <path>     Build a redacted crash-repro tarball (.tgz) for bug reports");
@@ -719,7 +731,7 @@ public static class ConsoleUi
         Console.WriteLine("  --focus-line <line>        excerpt: line whose focused column should stay visible (requires --focus-column)");
         Console.WriteLine("  --focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)");
         Console.WriteLine("  --focus-length <n>         excerpt: width of the focused span (default: 1, requires --focus-column)");
-        WriteHelpLine($"  --fts                      Use raw FTS5 query syntax for search (search query max {QueryLimits.MaxQueryLength} chars; raw FTS parser max {DbReader.MaxRawFtsQueryLength} chars, {DbReader.MaxRawFtsBooleanOperators} boolean ops, {DbReader.MaxRawFtsNearOperators} NEAR ops; trailing * is a prefix shorthand in literal-safe mode)");
+        WriteHelpLine($"  --fts                      Use raw FTS5 query syntax for search (content:term, NEAR(a b, 5), OR, NOT, groups, prefix*, \"phrase\"; search query max {QueryLimits.MaxQueryLength} chars; raw FTS parser max {DbReader.MaxRawFtsQueryLength} chars, {DbReader.MaxRawFtsBooleanOperators} boolean ops, {DbReader.MaxRawFtsNearOperators} NEAR ops; trailing * is a prefix shorthand in literal-safe mode)");
         Console.WriteLine("  --exact                    Backward-compatible shorthand.");
         Console.WriteLine("                              Prefer --exact-substring for search,");
         Console.WriteLine("                              --exact for find,");
@@ -737,6 +749,7 @@ public static class ConsoleUi
         WriteHelpLine("  --exclude-visibility <v[,v]> Exclude symbols/definitions/unused/hotspots by visibility");
         WriteHelpLine("  --count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused ignore --limit, impact/hotspots still use visible page counts");
         Console.WriteLine("  --since <datetime>         Filter to files modified since this timestamp (ISO 8601)");
+        Console.WriteLine("  --no-dedup                 search only: return every raw overlapping chunk hit (debug/density)");
         Console.WriteLine("  --bytes                    Show raw byte counts in human output for files/map instead of binary units; JSON always keeps raw integer bytes");
         WriteHelpLine("  --max-hops <n>             Max BFS hops for impact analysis, inclusive (default: 5; --max-hops 2 returns callers at hop 1 and 2; --max-hops 0 resolves the symbol without traversing callers)");
         Console.WriteLine("  --depth <n>                Deprecated alias for --max-hops");
@@ -793,6 +806,8 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx files --lang python                      List Python files");
         Console.WriteLine("  cdidx files --since 2024-01-01                 Files modified since a date");
         Console.WriteLine("  cdidx status --json                            DB stats as JSON");
+        Console.WriteLine("  cdidx status --config                          Effective configuration as JSON");
+        Console.WriteLine("  cdidx validate-config                          Validate checked-in config");
         Console.WriteLine("  cdidx languages                                Show supported languages");
         Console.WriteLine("  cdidx --completions zsh > ~/.zfunc/_cdidx      Generate a zsh completion script");
         Console.WriteLine("  cdidx license                                  Show licensing and commercial-use terms");
@@ -1019,7 +1034,7 @@ public static class ConsoleUi
     private static readonly string[] Commands =
     [
         "index", "backfill-fold", "optimize", "search", "definition", "references", "callers", "callees",
-        "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
+        "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status", "validate-config",
         "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license",
     ];
 
@@ -1087,7 +1102,7 @@ public static class ConsoleUi
     // generic catch-all となるよう揃える。テストもこの並びを前提にしている。
     private static readonly string[] EnumeratedCompletionCommands =
     [
-        "find", "excerpt", "references", "inspect", "hotspots", "status", "db", "report", "search",
+        "find", "excerpt", "references", "inspect", "hotspots", "status", "validate-config", "db", "report", "search",
     ];
 
     // Generic-branch representative set: union of completion flags from these commands populates
@@ -1586,7 +1601,7 @@ public static class ConsoleUi
     public static string ColorizeKind(string kind, int padWidth = 0)
     {
         var padded = padWidth > 0 ? kind.PadRight(padWidth) : kind;
-        if (ShouldUseColor())
+        if (JsonOutputDepth.Value <= 0 && ShouldUseColor())
         {
             var color = GetKindColorCode(kind, ResolveColorPalette());
             if (color.Length > 0)
@@ -1653,6 +1668,7 @@ public static class ConsoleUi
             Console.Out.Encoding,
             Console.Out is StringWriter,
             HasTerminalEnvironmentHint(),
+            IsTerminalEnvironmentDisabled(),
             OperatingSystem.IsWindows());
 
     internal static bool ShouldUseInteractiveConsole(
@@ -1660,9 +1676,13 @@ public static class ConsoleUi
         Encoding outputEncoding,
         bool isTextWriterCapture,
         bool hasTerminalEnvironmentHint,
+        bool isTerminalEnvironmentDisabled,
         bool isWindows)
     {
         if (isOutputRedirected)
+            return false;
+
+        if (isTerminalEnvironmentDisabled)
             return false;
 
         // StringWriter-based test capture leaves the process console attached, so
@@ -1673,7 +1693,7 @@ public static class ConsoleUi
         if (isTextWriterCapture)
             return false;
 
-        return true;
+        return isWindows || hasTerminalEnvironmentHint;
     }
 
     internal static bool ShouldUseAnsiOutput()
@@ -1682,6 +1702,7 @@ public static class ConsoleUi
             Console.Out.Encoding,
             Console.Out is StringWriter,
             HasTerminalEnvironmentHint(),
+            IsTerminalEnvironmentDisabled(),
             OperatingSystem.IsWindows(),
             GetWindowsVirtualTerminalProcessingEnabled());
 
@@ -1690,10 +1711,11 @@ public static class ConsoleUi
         Encoding outputEncoding,
         bool isTextWriterCapture,
         bool hasTerminalEnvironmentHint,
+        bool isTerminalEnvironmentDisabled,
         bool isWindows,
         bool windowsVirtualTerminalProcessingEnabled)
     {
-        if (!ShouldUseInteractiveConsole(isOutputRedirected, outputEncoding, isTextWriterCapture, hasTerminalEnvironmentHint, isWindows))
+        if (!ShouldUseInteractiveConsole(isOutputRedirected, outputEncoding, isTextWriterCapture, hasTerminalEnvironmentHint, isTerminalEnvironmentDisabled, isWindows))
             return false;
 
         if (!isWindows)
@@ -1736,6 +1758,19 @@ public static class ConsoleUi
         var term = Environment.GetEnvironmentVariable("TERM");
         return !string.IsNullOrWhiteSpace(term)
             && !term.Equals("dumb", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsTerminalEnvironmentDisabled()
+        => IsDumbTerminal() || IsCiEnvironment();
+
+    private static bool IsCiEnvironment()
+    {
+        var ci = Environment.GetEnvironmentVariable("CI");
+        return !string.IsNullOrEmpty(ci)
+            && !ci.Equals("0", StringComparison.OrdinalIgnoreCase)
+            && !ci.Equals("false", StringComparison.OrdinalIgnoreCase)
+            && !ci.Equals("no", StringComparison.OrdinalIgnoreCase)
+            && !ci.Equals("off", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool GetWindowsVirtualTerminalProcessingEnabled()
@@ -1893,5 +1928,22 @@ public static class ConsoleUi
 
         width = 0;
         return false;
+    }
+
+    private sealed class JsonOutputScope : IDisposable
+    {
+        public void Dispose()
+        {
+            if (JsonOutputDepth.Value > 0)
+                JsonOutputDepth.Value--;
+        }
+    }
+
+    private sealed class NoopDisposable : IDisposable
+    {
+        public static readonly NoopDisposable Instance = new();
+        public void Dispose()
+        {
+        }
     }
 }

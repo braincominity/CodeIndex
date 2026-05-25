@@ -9,11 +9,17 @@
 #   bash ./install.sh --self-test-local-mirror [--self-test-allow-overwrite] [vX.Y.Z]
 #   bash ./install.sh --reinstall-real vX.Y.Z
 #   bash ./install.sh --doctor [vX.Y.Z]
+#   HTTPS_PROXY=http://proxy.example:8080 bash ./install.sh --doctor
+#   CDIDX_GITHUB_BASE_URL=https://github.example.internal \
+#     CDIDX_GITHUB_API_BASE_URL=https://github.example.internal/api/v3 \
+#     bash ./install.sh --doctor vX.Y.Z
 #
 # Optional env vars / 任意環境変数:
 #   CDIDX_GITHUB_BASE_URL       Release download base URL override
 #   CDIDX_GITHUB_API_BASE_URL   API base URL override for latest-release lookup
 #   CDIDX_LOCAL_MIRROR_PORT     Local self-test HTTP server port (default: 18765)
+#   HTTPS_PROXY / HTTP_PROXY    Proxy used by curl for release and API probes
+#   NO_PROXY                    Hosts that should bypass the proxy
 #
 # Self-test mock payload safety / セルフテスト mock 上書き防止:
 #   The --self-test-local-mirror path installs a **mock** cdidx that only
@@ -66,6 +72,7 @@ set -euo pipefail
 REPO="Widthdom/CodeIndex"
 INSTALL_DIR="${CDIDX_INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="cdidx"
+MANIFEST_REQUIRED_VERSION="1.24.6"
 GITHUB_BASE_URL="${CDIDX_GITHUB_BASE_URL:-https://github.com}"
 GITHUB_API_BASE_URL="${CDIDX_GITHUB_API_BASE_URL:-https://api.github.com}"
 # Normalize optional base URL overrides by removing a trailing slash.
@@ -196,6 +203,29 @@ acquire_install_lock() {
 
 strip_version_prefix() {
     printf '%s' "$1" | sed 's/^[^0-9]*//'
+}
+
+semver_core() {
+    printf '%s' "$1" | sed 's/^[^0-9]*//' | sed 's/[^0-9.].*$//'
+}
+
+semver_ge() {
+    local left right
+    left="$(semver_core "$1")"
+    right="$(semver_core "$2")"
+
+    awk -v left="$left" -v right="$right" '
+        BEGIN {
+            split(left, l, ".")
+            split(right, r, ".")
+            for (i = 1; i <= 3; i++) {
+                li = (l[i] == "" ? 0 : l[i]) + 0
+                ri = (r[i] == "" ? 0 : r[i]) + 0
+                if (li > ri) exit 0
+                if (li < ri) exit 1
+            }
+            exit 0
+        }'
 }
 
 extract_release_tag_name() {
@@ -490,6 +520,9 @@ existing_install_is_reusable() {
     if [ ! -f "${INSTALL_DIR}/version.json" ]; then
         return 1
     fi
+    if ! grep -Eq '"integrity_ok"[[:space:]]*:[[:space:]]*true' "${INSTALL_DIR}/version.json"; then
+        return 1
+    fi
 
     [ -f "${INSTALL_DIR}/LICENSE" ] || return 1
     [ -f "${INSTALL_DIR}/COMMERCIAL_LICENSE.md" ] || return 1
@@ -508,6 +541,99 @@ existing_install_is_reusable() {
     esac
 
     return 0
+}
+
+calculate_sha256() {
+    local path="$1"
+
+    if command -v sha256sum > /dev/null 2>&1; then
+        sha256sum "$path" | awk '{print $1}'
+    elif command -v shasum > /dev/null 2>&1; then
+        shasum -a 256 "$path" | awk '{print $1}'
+    elif command -v openssl > /dev/null 2>&1; then
+        openssl dgst -sha256 "$path" | awk '{print $NF}'
+    else
+        error "No checksum tool found (need sha256sum, shasum, or openssl). Cannot verify release payload integrity."
+    fi
+}
+
+validate_archive_members() {
+    local archive="$1"
+    local member
+
+    tar tzf "$archive" | while IFS= read -r member || [ -n "$member" ]; do
+        case "$member" in
+            ""|/*|..|../*|*/../*|*/.. )
+                error "Release archive contains unsafe member path before extraction: ${member:-<empty>}"
+                ;;
+        esac
+    done
+}
+
+verify_payload_manifest() {
+    local extract_dir="$1"
+    local manifest="${extract_dir}/MANIFEST.sha256"
+    local manifest_paths line expected path actual extracted_paths
+
+    if [ ! -f "$manifest" ]; then
+        if semver_ge "${VERSION#v}" "$MANIFEST_REQUIRED_VERSION"; then
+            error "Release payload is missing MANIFEST.sha256. Refusing to install without per-file integrity metadata."
+        fi
+
+        warn "Release payload is missing MANIFEST.sha256; falling back to archive-level checksum verification for legacy release ${VERSION}."
+        return 0
+    fi
+
+    if ! manifest_paths="$(mktemp)"; then
+        error "Failed to create temporary manifest path list."
+    fi
+    if ! extracted_paths="$(mktemp)"; then
+        rm -f "$manifest_paths"
+        error "Failed to create temporary extracted path list."
+    fi
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -n "$line" ] || continue
+        expected="${line%%  *}"
+        path="${line#*  }"
+        case "$path" in
+            ""|/*|*"/../"*|../*|*"/.." )
+                error "Invalid path in release payload manifest: ${path}"
+                ;;
+        esac
+        printf '%s\n' "$path" >> "$manifest_paths"
+        if [ ! -f "${extract_dir}/${path}" ]; then
+            rm -f "$manifest_paths" "$extracted_paths"
+            error "Release payload manifest entry missing after extraction: ${path}"
+        fi
+        actual="$(calculate_sha256 "${extract_dir}/${path}")"
+        if [ "$actual" != "$expected" ]; then
+            rm -f "$manifest_paths" "$extracted_paths"
+            error "Release payload checksum mismatch for ${path}.\n  Expected: ${expected}\n  Actual:   ${actual}"
+        fi
+    done < "$manifest"
+
+    (
+        cd "$extract_dir"
+        find . -type f ! -name MANIFEST.sha256 | sed 's#^\./##' | LC_ALL=C sort
+    ) > "$extracted_paths"
+
+    while IFS= read -r path || [ -n "$path" ]; do
+        [ -n "$path" ] || continue
+        if ! grep -Fxq "$path" "$manifest_paths"; then
+            rm -f "$manifest_paths" "$extracted_paths"
+            error "Release payload contains file not listed in MANIFEST.sha256: ${path}"
+        fi
+    done < "$extracted_paths"
+
+    rm -f "$manifest_paths" "$extracted_paths"
+}
+
+write_integrity_version_json() {
+    local target="$1"
+    local version="${VERSION#v}"
+
+    printf '{"version":"%s","integrity_ok":true}\n' "$version" > "$target"
 }
 
 restore_backed_up_files() {
@@ -555,7 +681,7 @@ promote_staged_install() {
     local backed_up_files=""
     local promoted_files=""
 
-    for asset in $required_files; do
+    for asset in ${BINARY_NAME} $required_assets; do
         if [ -e "${install_dir}/${asset}" ]; then
             if ! mv "${install_dir}/${asset}" "${backup_dir}/${asset}"; then
                 report_error "Failed to stage existing ${asset} into backup at ${backup_dir}. Install aborted before replacing the current install."
@@ -787,15 +913,7 @@ download_and_install() {
     fi
 
     local actual_checksum
-    if command -v sha256sum > /dev/null 2>&1; then
-        actual_checksum="$(sha256sum "${tmpdir}/${archive_name}" | awk '{print $1}')"
-    elif command -v shasum > /dev/null 2>&1; then
-        actual_checksum="$(shasum -a 256 "${tmpdir}/${archive_name}" | awk '{print $1}')"
-    elif command -v openssl > /dev/null 2>&1; then
-        actual_checksum="$(openssl dgst -sha256 "${tmpdir}/${archive_name}" | awk '{print $NF}')"
-    else
-        error "No checksum tool found (need sha256sum, shasum, or openssl). Cannot verify download integrity."
-    fi
+    actual_checksum="$(calculate_sha256 "${tmpdir}/${archive_name}")"
 
     if [ "$actual_checksum" != "$expected_checksum" ]; then
         error "Checksum mismatch!\n  Expected: $expected_checksum\n  Actual:   $actual_checksum"
@@ -806,8 +924,12 @@ download_and_install() {
     # 展開用サブディレクトリを使い、アーカイブや checksum ファイルと混在させない。
     local extract_dir="${tmpdir}/extract"
     mkdir -p "$extract_dir"
+    info "Checking archive member paths..."
+    validate_archive_members "${tmpdir}/${archive_name}"
     info "Extracting..."
     tar xzf "${tmpdir}/${archive_name}" -C "$extract_dir"
+    info "Verifying extracted payload..."
+    verify_payload_manifest "$extract_dir"
 
     # Validate the extracted payload before copying anything into INSTALL_DIR.
     # This avoids overwriting a healthy install with a partially broken one
@@ -892,6 +1014,7 @@ download_and_install() {
             staged_assets="${staged_assets} ${asset}"
         fi
     done
+    write_integrity_version_json "${stage_dir}/version.json"
     chmod +x "${stage_dir}/${BINARY_NAME}"
 
     local backup_dir
@@ -1054,23 +1177,21 @@ echo "mock ${BINARY_NAME} (${rehearsal_version}) for local mirror self-test" >&2
 exit 2
 EOF
     chmod +x "${local_payload_dir}/${BINARY_NAME}"
-    printf '{"version":"%s"}\n' "$rehearsal_version_no_prefix" > "${local_payload_dir}/version.json"
+    printf '{"version":"%s","integrity_ok":true}\n' "$rehearsal_version_no_prefix" > "${local_payload_dir}/version.json"
     : > "${local_payload_dir}/${runtime_asset}"
 
     (
         cd "$local_payload_dir"
-        tar czf "../${archive_name}" "${BINARY_NAME}" version.json "${runtime_asset}"
+        {
+            calculate_sha256 "${BINARY_NAME}" | awk -v file="${BINARY_NAME}" '{ print $1 "  " file }'
+            calculate_sha256 version.json | awk '{ print $1 "  version.json" }'
+            calculate_sha256 "${runtime_asset}" | awk -v file="${runtime_asset}" '{ print $1 "  " file }'
+        } > .MANIFEST.sha256.tmp
+        mv .MANIFEST.sha256.tmp MANIFEST.sha256
+        tar czf "../${archive_name}" MANIFEST.sha256 "${BINARY_NAME}" version.json "${runtime_asset}"
     )
 
-    if command -v sha256sum > /dev/null 2>&1; then
-        checksum="$(sha256sum "${local_release_base}/${archive_name}" | awk '{print $1}')"
-    elif command -v shasum > /dev/null 2>&1; then
-        checksum="$(shasum -a 256 "${local_release_base}/${archive_name}" | awk '{print $1}')"
-    elif command -v openssl > /dev/null 2>&1; then
-        checksum="$(openssl dgst -sha256 "${local_release_base}/${archive_name}" | awk '{print $NF}')"
-    else
-        error "No checksum tool found (need sha256sum, shasum, or openssl) for local mirror self-test."
-    fi
+    checksum="$(calculate_sha256 "${local_release_base}/${archive_name}")"
     printf '%s  %s\n' "$checksum" "$archive_name" > "${local_release_base}/sha256sums.txt"
 
     if has_explicit_self_test_install_dir; then

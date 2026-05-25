@@ -220,6 +220,118 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_CancelDuringFreshIndex_ReturnsInterruptedJson()
+    {
+        var projectRoot = CreateTempProject();
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            IndexCommandRunner.FullScanExtractionSchedulingForTesting = (_, _) => cancellation.Cancel();
+
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new StringWriter();
+                try
+                {
+                    Console.SetOut(stdout);
+                    var exitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions, cancellation);
+
+                    Assert.Equal(CommandExitCodes.Interrupted, exitCode);
+                    using var doc = JsonDocument.Parse(stdout.ToString());
+                    Assert.Equal("error", doc.RootElement.GetProperty("status").GetString());
+                    Assert.Equal(CommandErrorCodes.Interrupted, doc.RootElement.GetProperty("error_code").GetString());
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanExtractionSchedulingForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_CancelDuringDryRunScan_ReturnsInterruptedJson()
+    {
+        var projectRoot = CreateTempProject();
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            cancellation.Cancel();
+
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new StringWriter();
+                try
+                {
+                    Console.SetOut(stdout);
+                    var exitCode = IndexCommandRunner.Run([projectRoot, "--dry-run", "--json"], _jsonOptions, cancellation);
+
+                    Assert.Equal(CommandExitCodes.Interrupted, exitCode);
+                    using var doc = JsonDocument.Parse(stdout.ToString());
+                    Assert.Equal("error", doc.RootElement.GetProperty("status").GetString());
+                    Assert.Equal(CommandErrorCodes.Interrupted, doc.RootElement.GetProperty("error_code").GetString());
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_CancelBeforeFreshScan_ReturnsInterruptedJson()
+    {
+        var projectRoot = CreateTempProject();
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            cancellation.Cancel();
+
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var stdout = new StringWriter();
+                try
+                {
+                    Console.SetOut(stdout);
+                    var exitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions, cancellation);
+
+                    Assert.Equal(CommandExitCodes.Interrupted, exitCode);
+                    using var doc = JsonDocument.Parse(stdout.ToString());
+                    Assert.Equal("error", doc.RootElement.GetProperty("status").GetString());
+                    Assert.Equal(CommandErrorCodes.Interrupted, doc.RootElement.GetProperty("error_code").GetString());
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_ExistingIndexDatabase_RunsPragmaOptimizeAfterSuccessfulIndex()
     {
         var projectRoot = CreateTempProject();
