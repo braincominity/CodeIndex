@@ -99,6 +99,46 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void DeleteFileData_WhenReferencedLineIsDeleted_PreservesReferenceWithNullLineContext()
+    {
+        var callerFileId = UpsertTestFile("src/caller.cs", checksum: "caller");
+        var lineOwnerFileId = UpsertTestFile("src/line-owner.cs", checksum: "line-owner");
+
+        long referenceLineId;
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = @"
+                INSERT INTO reference_lines (file_id, line, context)
+                VALUES (@fileId, 3, 'Target();')
+                RETURNING id";
+            cmd.Parameters.AddWithValue("@fileId", lineOwnerFileId);
+            referenceLineId = (long)cmd.ExecuteScalar()!;
+        }
+
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = @"
+                INSERT INTO symbol_references (
+                    file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id
+                )
+                VALUES (@fileId, 'Target', 'call', 1, 1, NULL, @referenceLineId)";
+            cmd.Parameters.AddWithValue("@fileId", callerFileId);
+            cmd.Parameters.AddWithValue("@referenceLineId", referenceLineId);
+            cmd.ExecuteNonQuery();
+        }
+
+        _writer.DeleteFileData(lineOwnerFileId);
+
+        using var readCmd = _db.Connection.CreateCommand();
+        readCmd.CommandText = "SELECT COUNT(*), COUNT(reference_line_id) FROM symbol_references WHERE file_id = @fileId";
+        readCmd.Parameters.AddWithValue("@fileId", callerFileId);
+        using var reader = readCmd.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.Equal(1L, reader.GetInt64(0));
+        Assert.Equal(0L, reader.GetInt64(1));
+    }
+
+    [Fact]
     public void OptimizeFts_ResetsIncrementalWriteCounterAndStampsTime()
     {
         Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
@@ -112,6 +152,17 @@ public class DatabaseTests : IDisposable
         Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
         Assert.False(string.IsNullOrWhiteSpace(_db.GetMetaString(DbWriter.FtsLastOptimizedAtMetaKey)));
     }
+
+    private long UpsertTestFile(string path, string checksum)
+        => _writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "csharp",
+            Size = 100,
+            Lines = 4,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = checksum,
+        });
 
     [Fact]
     public void OptimizeFtsIfIncrementalWriteThresholdReached_RunsOnlyAtThreshold()

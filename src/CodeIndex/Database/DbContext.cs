@@ -1350,7 +1350,7 @@ public class DbContext : IDisposable
                 line            INTEGER,
                 column_number   INTEGER,
                 context         TEXT,
-                reference_line_id INTEGER REFERENCES reference_lines(id),
+                reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
                 container_kind  TEXT,
                 container_name  TEXT
             )");
@@ -1399,7 +1399,7 @@ public class DbContext : IDisposable
         EnsureColumn(
             "symbol_references",
             "reference_line_id",
-            rebuildsSymbolReferences ? "INTEGER" : "INTEGER REFERENCES reference_lines(id)");
+            rebuildsSymbolReferences ? "INTEGER" : "INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL");
         // #86: Unicode-aware folded name columns for `--exact` name matching across all
         // `--exact` command variants. Populated by the writer via NameFold.Fold; NULL on
         // legacy rows until a full reindex, in which case the reader falls back to the
@@ -1411,6 +1411,7 @@ public class DbContext : IDisposable
         EnsureColumn("symbol_references", "is_self_reference", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn("symbol_references", "is_mutual_recursion", "INTEGER NOT NULL DEFAULT 0");
         EnforceRequiredFileIdConstraints();
+        EnforceReferenceLineSetNullConstraint();
         EnsureReferenceLinesContextKey();
 
         // Indexes / インデックス
@@ -1605,7 +1606,7 @@ public class DbContext : IDisposable
                 line            INTEGER,
                 column_number   INTEGER,
                 context         TEXT,
-                reference_line_id INTEGER REFERENCES reference_lines(id),
+                reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
                 container_kind  TEXT,
                 container_name  TEXT,
                 symbol_name_folded TEXT,
@@ -1630,6 +1631,72 @@ public class DbContext : IDisposable
         Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {oldSymbolReferences}");
         Execute($"DROP TABLE {oldSymbolReferences}");
         Execute($"DROP TABLE {oldReferenceLines}");
+    }
+
+    private void EnforceReferenceLineSetNullConstraint()
+    {
+        if (SymbolReferencesReferenceLineDeletesSetNull())
+            return;
+
+        const string symbolReferencesCreateSql =
+            """
+            CREATE TABLE symbol_references (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                symbol_name     TEXT,
+                reference_kind  TEXT,
+                line            INTEGER,
+                column_number   INTEGER,
+                context         TEXT,
+                reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
+                container_kind  TEXT,
+                container_name  TEXT,
+                symbol_name_folded TEXT,
+                container_name_folded TEXT,
+                is_self_reference INTEGER NOT NULL DEFAULT 0,
+                is_mutual_recursion INTEGER NOT NULL DEFAULT 0
+            )
+            """;
+        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion";
+        const string oldSymbolReferences = "_symbol_references_reference_line_delete";
+
+        Execute($"DROP TABLE IF EXISTS {oldSymbolReferences}");
+        Execute(@"
+            UPDATE symbol_references
+            SET reference_line_id = NULL
+            WHERE reference_line_id IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM reference_lines
+                  WHERE reference_lines.id = symbol_references.reference_line_id
+              )");
+        Execute($"ALTER TABLE symbol_references RENAME TO {oldSymbolReferences}");
+        Execute(symbolReferencesCreateSql);
+        Execute($"INSERT INTO symbol_references ({symbolReferencesColumns}) SELECT {symbolReferencesColumns} FROM {oldSymbolReferences}");
+        Execute($"DROP TABLE {oldSymbolReferences}");
+    }
+
+    private bool SymbolReferencesReferenceLineDeletesSetNull()
+    {
+        using var cmd = _connection.CreateCommand();
+        if (_activeMigrationTransaction != null)
+            cmd.Transaction = _activeMigrationTransaction;
+        cmd.CommandText = "PRAGMA foreign_key_list('symbol_references')";
+
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var table = reader.GetString(2);
+            var from = reader.GetString(3);
+            var onDelete = reader.GetString(6);
+            if (string.Equals(table, "reference_lines", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(from, "reference_line_id", StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Equals(onDelete, "SET NULL", StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        return false;
     }
 
     private void EnsureReferenceLinesContextKey()
@@ -1658,7 +1725,7 @@ public class DbContext : IDisposable
                 line            INTEGER,
                 column_number   INTEGER,
                 context         TEXT,
-                reference_line_id INTEGER REFERENCES reference_lines(id),
+                reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
                 container_kind  TEXT,
                 container_name  TEXT,
                 symbol_name_folded TEXT,
