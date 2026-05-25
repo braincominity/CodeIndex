@@ -660,7 +660,7 @@ public partial class DbReader
     private static string GetSearchOrderSql(int coverageTokenCount)
     {
         var coverageOrder = GetSearchCoverageOrderSql(coverageTokenCount);
-        return $"{PathBucketOrder}, {ExactSymbolMatchOrder}, {PrefixSymbolMatchOrder}, {SearchVisibilityOrder}, {PathTextMatchOrder}, {ChunkTextMatchOrder}, {coverageOrder}rank, f.modified DESC, f.path, c.id ASC";
+        return $"{PathBucketOrder}, {ExactSymbolMatchOrder}, {PrefixSymbolMatchOrder}, {SearchVisibilityOrder}, {PathTextMatchOrder}, {ChunkTextMatchOrder}, {ChunkStructuredFieldOrder}, {ChunkSymbolKindOrder}, {ChunkSymbolDepthOrder}, {coverageOrder}rank, f.modified DESC, f.path, c.id ASC";
     }
 
     private static string GetSearchCoverageOrderSql(int coverageTokenCount)
