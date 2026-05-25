@@ -155,6 +155,7 @@ public partial class McpServer : IDisposable
     internal const int DefaultMaxConcurrency = 8;
     internal static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(60);
     internal static readonly TimeSpan DefaultEofDrainTimeout = TimeSpan.FromSeconds(5);
+    internal static readonly TimeSpan DefaultEofPostCancelDrainTimeout = TimeSpan.FromSeconds(5);
 
     public McpServer(string dbPath, string version, bool dbPathExplicit = false)
         : this(dbPath, version, dbPathExplicit, null, null, null, null, DefaultMaxConcurrency)
@@ -501,8 +502,8 @@ public partial class McpServer : IDisposable
 
     private async Task RunConcurrentFrameLoopAsync(IMcpTransport transport, CancellationToken loopToken)
     {
-        using var writeGate = new SemaphoreSlim(1, 1);
-        using var normalFrameGate = new SemaphoreSlim(1, 1);
+        var writeGate = new SemaphoreSlim(1, 1);
+        var normalFrameGate = new SemaphoreSlim(1, 1);
         var tasks = new List<Task>();
 
         while (_running)
@@ -603,11 +604,11 @@ public partial class McpServer : IDisposable
             SpinWait.SpinUntil(() => !_running || _activeRequests.Count > 0, TimeSpan.FromMilliseconds(50));
         }
 
-        await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout).ConfigureAwait(false);
+        await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout, DefaultEofPostCancelDrainTimeout).ConfigureAwait(false);
         Console.Error.WriteLine("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
     }
 
-    private async Task DrainInFlightTasksAsync(List<Task> tasks, TimeSpan gracePeriod)
+    private async Task DrainInFlightTasksAsync(List<Task> tasks, TimeSpan gracePeriod, TimeSpan postCancelGracePeriod)
     {
         tasks.RemoveAll(task => task.IsCompleted);
         if (tasks.Count == 0)
@@ -617,7 +618,7 @@ public partial class McpServer : IDisposable
         var completed = await Task.WhenAny(allTasks, Task.Delay(gracePeriod)).ConfigureAwait(false);
         if (completed == allTasks)
         {
-            await allTasks.ConfigureAwait(false);
+            await ObserveInFlightTasksAsync(allTasks).ConfigureAwait(false);
             return;
         }
 
@@ -630,6 +631,30 @@ public partial class McpServer : IDisposable
         catch (ObjectDisposedException)
         {
             // Disposal raced EOF drain; no further action is possible.
+        }
+
+        completed = await Task.WhenAny(allTasks, Task.Delay(postCancelGracePeriod)).ConfigureAwait(false);
+        if (completed == allTasks)
+        {
+            await ObserveInFlightTasksAsync(allTasks).ConfigureAwait(false);
+            return;
+        }
+
+        _ = allTasks.ContinueWith(task =>
+        {
+            _ = task.Exception;
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
+    private static async Task ObserveInFlightTasksAsync(Task tasks)
+    {
+        try
+        {
+            await tasks.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[cdidx-mcp] In-flight request ended during EOF drain ({ex.GetType().Name}).");
         }
     }
 
