@@ -60,6 +60,7 @@ public partial class McpServer : IDisposable
     // 直後にリセットする。`WithDbReader` が `DbReader` にライブな cancellation token
     // を渡せるようにするため (#1567)。
     private readonly AsyncLocal<CancellationToken> _currentRequestToken = new();
+    private readonly AsyncLocal<bool> _isolateDbForCurrentRequest = new();
     private readonly AsyncLocal<Action<string>?> _currentOutOfBandFrameWriter = new();
     private readonly AsyncLocal<List<Action>?> _deferredFrameLogs = new();
     private volatile bool _running = true;
@@ -740,7 +741,7 @@ public partial class McpServer : IDisposable
                 return null;
 
             ExtractResponseId(request, out responseHasId, out responseId);
-            var response = await HandleMessageAsync(request).ConfigureAwait(false);
+            var response = await HandleMessageAsync(request, isolateRequestDb: true).ConfigureAwait(false);
             return response != null ? SerializeResponseOrFallback(response, responseHasId, responseId) : null;
         }
         catch (JsonException ex)
@@ -852,9 +853,12 @@ public partial class McpServer : IDisposable
     /// JSON-RPCメッセージを適切なハンドラにルーティング。
     /// </summary>
     internal JsonNode? HandleMessage(JsonNode request)
-        => HandleMessageAsync(request).GetAwaiter().GetResult();
+        => HandleMessageAsync(request, isolateRequestDb: false).GetAwaiter().GetResult();
 
-    internal async Task<JsonNode?> HandleMessageAsync(JsonNode request)
+    internal Task<JsonNode?> HandleMessageAsync(JsonNode request)
+        => HandleMessageAsync(request, isolateRequestDb: false);
+
+    private async Task<JsonNode?> HandleMessageAsync(JsonNode request, bool isolateRequestDb)
     {
         if (request is JsonArray batch)
             return HandleBatchMessage(batch);
@@ -953,7 +957,7 @@ public partial class McpServer : IDisposable
                 retrySafe: false);
         }
 
-        return await DispatchWithRequestCancellationAsync(id, () => method switch
+        return await DispatchWithRequestCancellationAsync(id, isolateRequestDb, () => method switch
         {
             "initialize" => Task.FromResult<JsonNode>(HandleInitialize(id, request["params"])),
             "tools/list" => Task.FromResult<JsonNode>(HandleToolsList(id)),
@@ -1022,9 +1026,9 @@ public partial class McpServer : IDisposable
     }
 
     private JsonNode DispatchWithRequestCancellation(JsonNode? id, Func<JsonNode> action)
-        => DispatchWithRequestCancellationAsync(id, () => Task.FromResult(action())).GetAwaiter().GetResult();
+        => DispatchWithRequestCancellationAsync(id, isolateRequestDb: false, () => Task.FromResult(action())).GetAwaiter().GetResult();
 
-    private async Task<JsonNode> DispatchWithRequestCancellationAsync(JsonNode? id, Func<Task<JsonNode>> action)
+    private async Task<JsonNode> DispatchWithRequestCancellationAsync(JsonNode? id, bool isolateRequestDb, Func<Task<JsonNode>> action)
     {
         var requestKey = SerializeRequestId(id);
         if (requestKey == null)
@@ -1049,11 +1053,27 @@ public partial class McpServer : IDisposable
             _currentRequestToken.Value = requestCts.Token;
             requestCts.CancelAfter(_requestTimeout);
             requestCts.Token.ThrowIfCancellationRequested();
-            var actionTask = Task.Run(async () =>
+            if (!isolateRequestDb)
             {
                 if (RequestDelayForTests is { } delay)
                     await delay(requestCts.Token).ConfigureAwait(false);
                 return await action().ConfigureAwait(false);
+            }
+
+            var actionTask = Task.Run(async () =>
+            {
+                var previousIsolation = _isolateDbForCurrentRequest.Value;
+                _isolateDbForCurrentRequest.Value = isolateRequestDb;
+                try
+                {
+                    if (RequestDelayForTests is { } delay)
+                        await delay(requestCts.Token).ConfigureAwait(false);
+                    return await action().ConfigureAwait(false);
+                }
+                finally
+                {
+                    _isolateDbForCurrentRequest.Value = previousIsolation;
+                }
             }, requestCts.Token);
             var completed = await Task.WhenAny(actionTask, Task.Delay(_requestTimeout)).ConfigureAwait(false);
             if (completed != actionTask)
@@ -2151,14 +2171,25 @@ public partial class McpServer : IDisposable
                 retrySafe: true);
         }
 
+        var requestToken = _currentRequestToken.Value;
+        requestToken.ThrowIfCancellationRequested();
+        if (_isolateDbForCurrentRequest.Value)
+        {
+            using var isolatedDb = new DbContext(_dbPath);
+            isolatedDb.TryMigrateForRead();
+            var isolatedReader = new DbReader(isolatedDb, requestToken);
+            isolatedReader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
+            return isolatedReader.RunWithGeneratedScope(() => action(isolatedReader));
+        }
+
         var db = GetOrOpenSharedDb();
         if (!_sharedDbReadMigrated)
         {
             db.TryMigrateForRead();
             _sharedDbReadMigrated = true;
         }
-        // Reuse the connection-scoped schema cache so each MCP tool call no longer
-        // re-runs PRAGMA table_info / PRAGMA index_list per DbReader (issue #1565),
+        // Reuse the connection-scoped schema cache for single-threaded direct callers so each
+        // call no longer re-runs PRAGMA table_info / PRAGMA index_list per DbReader (issue #1565),
         // and hand the per-request cancellation token to the reader so SQLite work
         // the tool kicks off can observe shutdown / client-disconnect cancellation
         // (#1567). The token is `CancellationToken.None` outside an in-flight request,
@@ -2167,21 +2198,18 @@ public partial class McpServer : IDisposable
         // MCP ツール呼び出しごとの schema 再走査を排除し (issue #1565)、
         // per-request cancellation token を reader に渡して SQLite 作業が
         // shutdown / 切断を観測できるようにする (#1567)。
-        var requestToken = _currentRequestToken.Value;
-        requestToken.ThrowIfCancellationRequested();
         var reader = new DbReader(db, requestToken);
         reader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
         return reader.RunWithGeneratedScope(() => action(reader));
     }
 
     /// <summary>
-    /// Open the per-session DbContext on first use and reuse it on every subsequent call.
+    /// Open the per-session DbContext on first use and reuse it on every subsequent direct call.
     /// Centralising the open lets us pay the connection setup, pragma application, and SQL
-    /// function registration once per MCP session instead of once per tool invocation
-    /// (#1494). The MCP loop is single-threaded, so no locking is required.
-    /// MCP セッション初回呼び出し時に DbContext を開き、以後は再利用する。接続セットアップや
-    /// PRAGMA・SQL 関数登録のコストを毎ツール呼び出しごとに払わないようにする（#1494）。
-    /// MCP ループは単一スレッドのためロック不要。
+    /// function registration once per direct session instead of once per tool invocation
+    /// (#1494). Transport requests that may time out independently use isolated DB contexts.
+    /// 直接呼び出しセッション初回に DbContext を開き、以後は再利用する。timeout 後も独立して
+    /// 継続し得る transport リクエストは、共有接続を避けるためリクエスト単位の DB context を使う。
     /// </summary>
     internal DbContext GetOrOpenSharedDb()
     {
