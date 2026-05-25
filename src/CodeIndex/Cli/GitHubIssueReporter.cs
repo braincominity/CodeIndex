@@ -48,6 +48,7 @@ internal static class GitHubIssueReporter
     internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan DefaultRateLimitRetryDelay = TimeSpan.FromMinutes(1);
     private const string TimeoutEnvironmentVariable = "CDIDX_GITHUB_SUBMIT_TIMEOUT_SECONDS";
+    internal const int MaxGitHubIssueTitleLength = 255;
 
     // Static HttpClient singleton — .NET best practice for reuse.
     // 静的 HttpClient シングルトン — .NET の再利用ベストプラクティス。
@@ -321,11 +322,7 @@ internal static class GitHubIssueReporter
 
         // Build the issue title — scrub and truncate for readability.
         // Issue タイトルを構築 — 除去・切り詰めて可読性を確保。
-        var scrubbedForTitle = ScrubInlineCode(record.Description);
-        var shortDesc = scrubbedForTitle.Length > 60
-            ? scrubbedForTitle[..60] + "..."
-            : scrubbedForTitle;
-        var title = $"[AI Suggestion] {record.Category}: {shortDesc}";
+        var title = BuildIssueTitle(record.Category, record.Description);
 
         // Scrub inline code from description and context before external submission.
         // SourceCodeDetector intentionally allows short inline code examples for local
@@ -435,14 +432,108 @@ internal static class GitHubIssueReporter
             @"(?s)```.*?```",
             "[code example removed]");
 
-        // Replace single-backtick inline spans after fenced blocks so triple
-        // fences cannot leave stray backticks around a placeholder.
-        // fenced block を先に置換し、triple fence が placeholder 周辺に残らないようにする。
-        return Regex.Replace(
-            scrubbed,
-            @"(?<!`)`[^`\r\n]+`(?!`)",
-            "[code example removed]");
+        return ScrubSingleBacktickSpans(scrubbed);
     }
+
+    internal static string BuildIssueTitle(string category, string description)
+    {
+        var prefix = $"[AI Suggestion] {category}: ";
+        if (prefix.Length >= MaxGitHubIssueTitleLength)
+            return prefix[..MaxGitHubIssueTitleLength];
+
+        var scrubbedForTitle = ScrubInlineCode(description).Replace("\r", " ").Replace("\n", " ").Trim();
+        var maxDescriptionLength = MaxGitHubIssueTitleLength - prefix.Length;
+        var shortDesc = TruncateWithEllipsis(scrubbedForTitle, Math.Min(63, maxDescriptionLength));
+        var title = prefix + shortDesc;
+        return title.Length <= MaxGitHubIssueTitleLength
+            ? title
+            : title[..MaxGitHubIssueTitleLength];
+    }
+
+    private static string TruncateWithEllipsis(string value, int maxLength)
+    {
+        if (value.Length <= maxLength)
+            return value;
+        if (maxLength <= 3)
+            return value[..maxLength];
+        return value[..(maxLength - 3)] + "...";
+    }
+
+    private static string ScrubSingleBacktickSpans(string text)
+    {
+        var builder = new StringBuilder(text.Length);
+        var index = 0;
+        while (index < text.Length)
+        {
+            if (text[index] != '`' || IsEscaped(text, index) || IsTripleBacktickAt(text, index))
+            {
+                builder.Append(text[index]);
+                index++;
+                continue;
+            }
+
+            var close = FindInlineCodeClose(text, index + 1);
+            if (close < 0)
+            {
+                builder.Append(text[index]);
+                index++;
+                continue;
+            }
+
+            builder.Append("[code example removed]");
+            index = close + 1;
+        }
+
+        return builder.ToString();
+    }
+
+    private static int FindInlineCodeClose(string text, int start)
+    {
+        for (var i = start; i < text.Length; i++)
+        {
+            if (text[i] == '\r' || text[i] == '\n')
+                return -1;
+            if (text[i] != '`' || IsEscaped(text, i) || IsTripleBacktickAt(text, i))
+                continue;
+
+            var next = i + 1 < text.Length ? text[i + 1] : '\0';
+            var previous = i > start ? text[i - 1] : '\0';
+            if ((char.IsWhiteSpace(previous) || previous == '=') &&
+                char.IsLetterOrDigit(next) &&
+                HasLaterInlineBacktick(text, i + 1))
+                continue;
+
+            while (i + 1 < text.Length && text[i + 1] == '`')
+                i++;
+            return i;
+        }
+
+        return -1;
+    }
+
+    private static bool IsEscaped(string text, int index)
+    {
+        var slashCount = 0;
+        for (var i = index - 1; i >= 0 && text[i] == '\\'; i--)
+            slashCount++;
+        return slashCount % 2 == 1;
+    }
+
+    private static bool HasLaterInlineBacktick(string text, int start)
+    {
+        for (var i = start; i < text.Length; i++)
+        {
+            if (text[i] == '\r' || text[i] == '\n')
+                return false;
+            if (text[i] == '`' && !IsEscaped(text, i) && !IsTripleBacktickAt(text, i))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsTripleBacktickAt(string text, int index)
+        => index + 2 < text.Length && text[index + 1] == '`' && text[index + 2] == '`';
 
     internal static string BuildSubmissionFailureMessage(string detail) =>
         $"[cdidx] GitHub issue creation failed: {detail}. The suggestion stays recorded locally; check `CDIDX_GITHUB_TOKEN`, network access, and proxy environment variables (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`), then retry `suggest_improvement` when ready.";

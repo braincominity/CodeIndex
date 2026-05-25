@@ -9,11 +9,11 @@ namespace CodeIndex.Cli;
 
 /// <summary>
 /// Reads and writes improvement suggestions to .cdidx/suggestions-*.json.
-/// Provides deduplication via SHA256 hash of (category + language + normalized description).
+/// Provides deduplication via SHA256 hash of (category + language + externally visible title and description).
 /// All read-modify-write operations are serialized with a file lock to prevent
 /// concurrent writers from silently overwriting each other's changes.
 /// 改善提案を .cdidx/suggestions-*.json に読み書きする。
-/// (category + language + 正規化済み description) のSHA256ハッシュで重複排除する。
+/// (category + language + 外部表示用 title と description) のSHA256ハッシュで重複排除する。
 /// 全ての read-modify-write 操作はファイルロックでシリアライズされ、
 /// 並行書き込み者が互いの変更をサイレントに上書きすることを防ぐ。
 /// </summary>
@@ -92,15 +92,17 @@ public class SuggestionStore
 
     /// <summary>
     /// Compute the dedup hash for a suggestion.
-    /// The hash is derived from category, language (lowered), and description (trimmed + lowered).
-    /// This ensures that trivially different phrasings (e.g. different casing) produce the same hash.
+    /// The hash is derived from category, language (lowered), GitHub-visible title, and
+    /// GitHub-visible description after outbound code scrubbing, trimming, and lowercasing.
     /// 提案の重複排除用ハッシュを計算する。
-    /// category、language（小文字化）、description（trim + 小文字化）から導出する。
-    /// 些細な表現差（大小文字等）で同じハッシュが生成されるようにする。
+    /// category、language（小文字化）、GitHub 表示用 title、GitHub 表示用にコード除去された
+    /// description（trim + 小文字化）から導出する。
     /// </summary>
     public static string ComputeHash(string category, string? language, string description)
     {
-        var normalized = $"{category}|{(language ?? "").ToLowerInvariant()}|{description.Trim().ToLowerInvariant()}";
+        var externallyVisibleDescription = GitHubIssueReporter.ScrubInlineCode(description);
+        var externallyVisibleTitle = GitHubIssueReporter.BuildIssueTitle(category, description);
+        var normalized = $"{category}|{(language ?? "").ToLowerInvariant()}|{externallyVisibleTitle.ToLowerInvariant()}|{externallyVisibleDescription.Trim().ToLowerInvariant()}";
         var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
         return Convert.ToHexString(hashBytes).ToLowerInvariant();
     }
@@ -172,6 +174,17 @@ public class SuggestionStore
     /// </param>
     public AddAndSubmitResult TryAddAndSubmit(SuggestionRecord record, Func<SuggestionRecord, SubmitAttemptResult>? submitToGitHub)
     {
+        return TryAddAndSubmitAsync(
+            record,
+            submitToGitHub == null
+                ? null
+                : r => Task.FromResult(submitToGitHub(r))).GetAwaiter().GetResult();
+    }
+
+    public async Task<AddAndSubmitResult> TryAddAndSubmitAsync(
+        SuggestionRecord record,
+        Func<SuggestionRecord, Task<SubmitAttemptResult>>? submitToGitHub)
+    {
         var reservation = WithFileLock(() =>
         {
             var existing = ReadUnlocked();
@@ -232,7 +245,7 @@ public class SuggestionStore
         SubmitAttemptResult submitResult;
         try
         {
-            submitResult = submitToGitHub(reservation.RecordToSubmit);
+            submitResult = await submitToGitHub(reservation.RecordToSubmit).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
         {
