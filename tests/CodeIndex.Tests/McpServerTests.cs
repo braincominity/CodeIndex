@@ -4355,6 +4355,43 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_ResponseOverByteLimit_ReturnsStructuredError()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_RESPONSE_MAX_BYTES");
+        Environment.SetEnvironmentVariable("CDIDX_MCP_RESPONSE_MAX_BYTES", "256");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32603, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("response_too_large", response["error"]!["data"]!["reason"]!.GetValue<string>());
+        Assert.Equal(256, response["error"]!["data"]!["limit_bytes"]!.GetValue<int>());
+        Assert.True(response["error"]!["data"]!["actual_bytes"]!.GetValue<int>() > 256);
+    }
+
+    [Fact]
+    public async Task ProcessFrameAsync_BatchResponseOverByteLimit_ReturnsStructuredError()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_RESPONSE_MAX_BYTES");
+        Environment.SetEnvironmentVariable("CDIDX_MCP_RESPONSE_MAX_BYTES", "128");
+
+        var frame = "["
+            + string.Join(",", Enumerable.Range(1, 10).Select(id => $$"""{"jsonrpc":"2.0","id":{{id}},"method":"ping"}"""))
+            + "]";
+        var responseText = await _server.ProcessFrameAsync(frame);
+        using var response = JsonDocument.Parse(responseText!);
+        var root = response.RootElement;
+
+        Assert.Equal("2.0", root.GetProperty("jsonrpc").GetString());
+        var error = root.GetProperty("error");
+        Assert.Equal(-32603, error.GetProperty("code").GetInt32());
+        var data = error.GetProperty("data");
+        Assert.Equal("response_too_large", data.GetProperty("reason").GetString());
+        Assert.Equal(128, data.GetProperty("limit_bytes").GetInt32());
+        Assert.True(data.GetProperty("actual_bytes").GetInt32() > 128);
+    }
+
+    [Fact]
     public void ToolsCall_Search_AllowsFalseExactNameAlias()
     {
         InsertIndexedFile("src/search_false_alias.cs", "csharp", "void Run() { }\n");

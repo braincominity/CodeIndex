@@ -1484,6 +1484,7 @@ public partial class McpServer
                 {
                     ["max_request_characters"] = MaxLineCharacterCount,
                     ["max_request_bytes"] = MaxLineByteLength,
+                    ["max_response_bytes"] = GetMaxResponseBytes(),
                     ["max_json_depth"] = MaxJsonDepth,
                     ["max_batch_requests"] = MaxBatchRequestCount,
                 }
