@@ -24,6 +24,35 @@ public sealed class InstallScriptTests : IDisposable
         TestProjectHelper.DeleteDirectory(_tempRoot);
     }
 
+    [Fact]
+    public void Uninstall_RemovesInstalledPayloadAndLeavesProjectData()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "uninstall_bin");
+        Directory.CreateDirectory(installDir);
+        File.WriteAllText(Path.Combine(installDir, "cdidx"), "#!/usr/bin/env bash\n");
+        File.WriteAllText(Path.Combine(installDir, "version.json"), "{}");
+        File.WriteAllText(Path.Combine(installDir, "libe_sqlite3.so"), "");
+        Directory.CreateDirectory(Path.Combine(installDir, "LICENSES"));
+        File.WriteAllText(Path.Combine(installDir, "LICENSES", "Apache-2.0.txt"), "");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            "uninstall_cdidx",
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Uninstall complete", stdout);
+        Assert.False(File.Exists(Path.Combine(installDir, "cdidx")));
+        Assert.False(File.Exists(Path.Combine(installDir, "version.json")));
+        Assert.False(Directory.Exists(Path.Combine(installDir, "LICENSES")));
+    }
+
     [Theory]
     [InlineData("linux", "x64", "linux-x64", "libe_sqlite3.so")]
     [InlineData("osx", "arm64", "osx-arm64", "libe_sqlite3.dylib")]

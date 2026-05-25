@@ -9,6 +9,7 @@
 #   bash ./install.sh --self-test-local-mirror [--self-test-allow-overwrite] [vX.Y.Z]
 #   bash ./install.sh --reinstall-real vX.Y.Z
 #   bash ./install.sh --doctor [vX.Y.Z]
+#   bash ./install.sh --uninstall [--purge-cache]
 #
 # Optional env vars / 任意環境変数:
 #   CDIDX_GITHUB_BASE_URL       Release download base URL override
@@ -92,6 +93,7 @@ SELF_TEST_ALLOW_OVERWRITE=0
 EXISTING_BIN=""
 EXISTING_VERSION=""
 EXPLICIT_VERSION_REQUESTED=0
+PURGE_CACHE_ON_UNINSTALL=0
 
 # --- Helpers / ヘルパー ---
 
@@ -1069,6 +1071,54 @@ check_path() {
     esac
 }
 
+uninstall_cdidx() {
+    info "cdidx uninstaller"
+    acquire_install_lock
+
+    local removed=0
+    local path
+    for path in \
+        "${INSTALL_DIR}/${BINARY_NAME}" \
+        "${INSTALL_DIR}/version.json" \
+        "${INSTALL_DIR}/libe_sqlite3.so" \
+        "${INSTALL_DIR}/libe_sqlite3.dylib" \
+        "${INSTALL_DIR}/LICENSE" \
+        "${INSTALL_DIR}/COMMERCIAL_LICENSE.md" \
+        "${INSTALL_DIR}/INTEGRATION_POLICY.md" \
+        "${INSTALL_DIR}/TRADEMARKS.md" \
+        "${INSTALL_DIR}/MANIFEST.sha256"; do
+        if [ -e "$path" ]; then
+            rm -f "$path"
+            info "Removed ${path}"
+            removed=1
+        fi
+    done
+
+    if [ -d "${INSTALL_DIR}/LICENSES" ]; then
+        rm -rf "${INSTALL_DIR}/LICENSES"
+        info "Removed ${INSTALL_DIR}/LICENSES"
+        removed=1
+    fi
+
+    if [ "$PURGE_CACHE_ON_UNINSTALL" = "1" ]; then
+        local cache_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/cdidx"
+        if [ -d "$cache_dir" ]; then
+            rm -rf "$cache_dir"
+            info "Removed ${cache_dir}"
+            removed=1
+        fi
+    fi
+
+    if [ "$removed" = "0" ]; then
+        warn "No cdidx install files were found under ${INSTALL_DIR}."
+    fi
+
+    echo ""
+    info "Uninstall complete."
+    echo "Not removed: project-local .cdidx/ directories, shell profile PATH edits, shell completion scripts, or global-tool installs managed by dotnet/Homebrew."
+    echo "To remove cached update metadata too, rerun with --uninstall --purge-cache."
+}
+
 report_local_mirror_start_failure() {
     local local_mirror_port="$1"
     local local_mirror_log="$2"
@@ -1808,6 +1858,24 @@ if [ "${CDIDX_INSTALL_SH_LIB_ONLY:-0}" != "1" ]; then
         --doctor)
             shift
             run_doctor "${1:-}"
+            ;;
+        --uninstall)
+            shift
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --purge-cache)
+                        PURGE_CACHE_ON_UNINSTALL=1
+                        shift
+                        ;;
+                    --*)
+                        error "Unknown uninstall option: $1"
+                        ;;
+                    *)
+                        error "--uninstall does not accept a version argument."
+                        ;;
+                esac
+            done
+            uninstall_cdidx
             ;;
         *)
             main "$@"
