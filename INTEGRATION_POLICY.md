@@ -129,6 +129,12 @@ Version markers for these fields:
 The integration is allowed when it helps users operate official CodeIndex
 releases or permissively licensed integration materials.
 
+Third-party package maintainers may publish formulas, manifests, recipes, or
+internal mirrors for unmodified official CodeIndex release artifacts when the
+license, copyright, repository, and trademark notices are preserved and the
+package does not imply official endorsement. See [DISTRIBUTION.md](DISTRIBUTION.md)
+for channel expectations.
+
 The integration may require a separate written agreement when it makes CodeIndex,
 a modified CodeIndex engine, or a derivative work of CodeIndex available to
 third parties as a commercial product or service that substitutes for CodeIndex

@@ -248,6 +248,72 @@ public class McpServerTests : IDisposable
         Assert.False(capabilities["resources"]!["subscribe"]!.GetValue<bool>());
         Assert.False(capabilities["resources"]!["listChanged"]!.GetValue<bool>());
         Assert.False(capabilities["prompts"]!["listChanged"]!.GetValue<bool>());
+        Assert.NotNull(capabilities["logging"]);
+        Assert.Null(capabilities["sampling"]);
+    }
+
+    [Fact]
+    public void Initialize_CapturesClientCapabilitiesAndRootsForSessionStatus()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{"experimental":{"progress":true}},"rootUri":"file:///workspace","roots":[{"uri":"file:///workspace/src"}]}}""")!;
+        _server.HandleMessage(request);
+
+        Assert.True(_server.ClientCapabilitiesForTests!["experimental"]!["progress"]!.GetValue<bool>());
+        Assert.Equal(["file:///workspace", "file:///workspace/src"], _server.ClientRootsForTests);
+
+        var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+        var response = _server.HandleMessage(status)!;
+        var session = response["result"]!["structuredContent"]!["mcp_session"]!;
+
+        Assert.True(session["client_capabilities"]!["experimental"]!["progress"]!.GetValue<bool>());
+        Assert.Equal("file:///workspace", session["roots"]!.AsArray()[0]!.GetValue<string>());
+        Assert.Equal("info", session["log_level"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void LoggingSetLevel_UpdatesSessionLogLevel()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"logging/setLevel","params":{"level":"emergency"}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.NotNull(response["result"]);
+        Assert.Equal("emergency", _server.McpLogLevelForTests);
+    }
+
+    [Fact]
+    public void LoggingSetLevel_InvalidLevel_ReturnsInvalidParams()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"logging/setLevel","params":{"level":"trace"}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("invalid_argument", response["error"]!["data"]!["category"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void UnknownNotification_ReturnsNoResponseAndLogsWarning()
+    {
+        using var writer = new StringWriter();
+        lock (TestConsoleLock.Gate)
+        {
+            var previous = Console.Error;
+            try
+            {
+                Console.SetError(writer);
+                var request = JsonNode.Parse("""{"jsonrpc":"2.0","method":"notifications/initalized"}""")!;
+
+                var response = _server.HandleMessage(request);
+
+                Assert.Null(response);
+            }
+            finally
+            {
+                Console.SetError(previous);
+            }
+        }
+
+        Assert.Contains("Ignoring unknown notification", writer.ToString());
+        Assert.Contains("notifications/initalized", writer.ToString());
     }
 
     [Fact]

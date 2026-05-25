@@ -77,7 +77,7 @@ public class ConsoleUiTests
         Assert.Contains("--snippet-focus <mode>     search only: long-line focus mode (leftmost|quality|proximity, default: quality)", output);
         Assert.Contains("--max-line-width <n>       search/references/callers/callees/find/excerpt/impact/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: 512)", output);
         Assert.Contains("cdidx find <query> --path <glob>", output);
-        Assert.Contains("--fts                      Use raw FTS5 query syntax for search (search query max 1000 chars; raw FTS parser max 2000 chars, 64 boolean ops, 16 NEAR ops", output);
+        Assert.Contains("--fts                      Use raw FTS5 query syntax for search (content:term, NEAR(a b, 5), OR, NOT, groups, prefix*, \"phrase\"; search query max 1000 chars; raw FTS parser max 2000 chars, 64 boolean ops, 16 NEAR ops", output);
         Assert.Contains("--exact                    Backward-compatible shorthand.", output);
         Assert.Contains("                              Prefer --exact-substring for search,", output);
         Assert.Contains("                              --exact for find,", output);
@@ -92,6 +92,7 @@ public class ConsoleUiTests
         Assert.Contains("                              run `cdidx backfill-fold` or check fold_ready.", output);
         Assert.Contains("--kind <kind>              definition/symbols/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind", output);
         Assert.Contains("--count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused ignore --limit, impact/hotspots still use visible page counts", output);
+        Assert.Contains("--no-dedup                 search only: return every raw overlapping chunk hit (debug/density)", output);
         Assert.Contains("--commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)", output);
         Assert.Contains("--files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed", output);
         Assert.Contains("--optimize                 index only: optimize the existing FTS5 table for this project's DB without scanning files", output);

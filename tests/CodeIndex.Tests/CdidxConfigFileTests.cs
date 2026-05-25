@@ -68,6 +68,65 @@ public class CdidxConfigFileTests
     }
 
     [Fact]
+    public void LoadAndApply_ProjectConfigJsonMaterializesSearchDefaults()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir, ".cdidx"));
+            Directory.CreateDirectory(Path.Combine(dir, "src"));
+            File.WriteAllText(Path.Combine(dir, ".cdidx", "config.json"), """
+                {
+                  "$schema": "https://example.invalid/cdidx.schema.json",
+                  "search": {
+                    "limit": 41,
+                    "snippet_lines": 5,
+                    "max_line_width": 120
+                  },
+                  "output": { "format": "json", "locale": "en" },
+                  "graph": { "max_hops": 4 },
+                  "folding": { "fold_key_version": 1 }
+                }
+                """);
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.LoadAndApply(Path.Combine(dir, "src"), env.Read, env.Write);
+
+            Assert.True(result.Loaded);
+            Assert.EndsWith(Path.Combine(".cdidx", "config.json"), result.Path);
+            Assert.Equal("41", env.Writes[QueryCommandRunner.DefaultLimitEnvironmentVariable]);
+            Assert.Equal("5", env.Writes[QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable]);
+            Assert.Equal("120", env.Writes[QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable]);
+            Assert.EndsWith(Path.Combine(".cdidx", "config.json"), env.Writes[CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.DefaultLimitEnvironmentVariable]);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Theory]
+    [InlineData("""{ "search": { "limit": 0 } }""", "positive integer")]
+    [InlineData("""{ "search": { "snippet_lines": -1 } }""", "positive integer")]
+    [InlineData("""{ "search": { "max_line_width": -1 } }""", "non-negative integer")]
+    [InlineData("""{ "search": { "limit": 1.5 } }""", "positive integer")]
+    [InlineData("""{ "search": { "limit": 10001 } }""", "<= 10000")]
+    public void LoadAndApply_ProjectConfigJsonRejectsInvalidSearchDefaults(string json, string expectedError)
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir, ".cdidx"));
+            File.WriteAllText(Path.Combine(dir, ".cdidx", "config.json"), json);
+
+            var env = new TestEnvironment();
+            var result = CdidxConfigFile.LoadAndApply(dir, env.Read, env.Write);
+
+            Assert.True(result.Failed);
+            Assert.Contains(expectedError, result.Error);
+            Assert.Empty(env.Writes);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
     public void LoadAndApply_RealEnvVarWinsOverConfigFile()
     {
         // Precedence contract: CLI > env > config file > defaults. The loader must NOT
