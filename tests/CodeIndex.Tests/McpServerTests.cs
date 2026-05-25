@@ -618,6 +618,63 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsList_EachToolPublishesSchemaAndExampleContract()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        Assert.Equal(24, tools.Count);
+        foreach (var tool in tools)
+        {
+            Assert.False(string.IsNullOrWhiteSpace(tool!["name"]!.GetValue<string>()));
+            Assert.False(string.IsNullOrWhiteSpace(tool["description"]!.GetValue<string>()));
+            Assert.Equal("object", tool["inputSchema"]!["type"]!.GetValue<string>());
+
+            var examples = tool["examples"]!.AsArray();
+            Assert.NotEmpty(examples);
+            foreach (var example in examples)
+            {
+                Assert.Equal("tools/call", example!["request"]!["method"]!.GetValue<string>());
+                Assert.Equal(tool["name"]!.GetValue<string>(), example["request"]!["params"]!["name"]!.GetValue<string>());
+                Assert.NotNull(example["request"]!["params"]!["arguments"]);
+                Assert.False(string.IsNullOrWhiteSpace(example["response_excerpt"]!.GetValue<string>()));
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("ping", """{}""")]
+    [InlineData("status", """{}""")]
+    [InlineData("search", """{"query":"Run","limit":5}""")]
+    public void ToolCall_ResponseShape_HasStableMcpResultEnvelope(string toolName, string argumentsJson)
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = toolName,
+                ["arguments"] = JsonNode.Parse(argumentsJson),
+            },
+        };
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal("2.0", response["jsonrpc"]!.GetValue<string>());
+        Assert.Equal(1, response["id"]!.GetValue<int>());
+        Assert.Null(response["error"]);
+
+        var result = response["result"]!;
+        Assert.NotNull(result["content"]);
+        Assert.Equal("text", result["content"]!.AsArray()[0]!["type"]!.GetValue<string>());
+        Assert.NotNull(result["structuredContent"]);
+        Assert.NotNull(result["_meta"]!["request_id"]);
+        Assert.NotNull(result["_meta"]!["correlation_id"]);
+    }
+
+    [Fact]
     public void Initialize_ReturnsInstructions()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""")!;
