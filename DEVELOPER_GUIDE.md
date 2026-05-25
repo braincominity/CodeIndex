@@ -170,6 +170,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `program` | Program block declarations in languages such as Fortran | Definition target and container |
 | `protocol` | Protocol declarations in languages that distinguish protocols from interfaces | Definition target and container |
 | `reference` | Secondary extracted symbolic references, such as HTML classes or metadata keys | Search/filter symbol |
+| `rule` | CSS/SCSS rule container context used by nested references | Container context |
 | `route` | Razor route directives | Context/search symbol |
 | `service` | Service declarations in IDL/protobuf-like languages | Definition target and container |
 | `specialization` | C++ template specialization declarations | Definition target for specialized type/function forms |
@@ -193,9 +194,13 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `augmentation` | TypeScript declaration/interface merge edge |
 | `call` | Function, method, operator, macro, or command call |
 | `capture` | Captured callback/delegate relationship used by impact analysis |
+| `column_reference` | SQL column reference in a statement-specific context |
 | `consumes_hook` | React hook consumption relationship |
 | `const_assertion` | TypeScript `as const` assertion edge |
+| `const_generic_reference` | Rust const generic argument reference |
 | `copy_from` | Dockerfile `COPY --from=<stage>` stage dependency |
+| `cte_body_reference` | SQL common table expression body reference |
+| `decorator` | Python decorator usage |
 | `extends` | Inheritance or type-extension relationship |
 | `from` | Dockerfile `FROM <stage>` dependency |
 | `friend` | C++ friend declaration relationship |
@@ -204,6 +209,8 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `implicit_implementation` | C# implicit interface implementation relationship |
 | `import` | Import/include/reference through a module system |
 | `instantiate` | Constructor or object creation |
+| `join_condition_reference` | SQL join/merge condition column reference |
+| `lifetime_reference` | Rust/C#-style lifetime or lifetime-like type reference |
 | `metadata` | Metadata-only reference |
 | `reference` | Generic persisted reference row used by fixtures or extractors without a narrower edge kind |
 | `razor_event_binding` | Razor event binding relationship |

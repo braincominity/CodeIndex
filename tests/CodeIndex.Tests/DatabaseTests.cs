@@ -117,7 +117,13 @@ public class DatabaseTests : IDisposable
 
     [Theory]
     [InlineData("annotation")]
+    [InlineData("column_reference")]
+    [InlineData("const_generic_reference")]
+    [InlineData("cte_body_reference")]
+    [InlineData("decorator")]
     [InlineData("generic_type_argument")]
+    [InlineData("join_condition_reference")]
+    [InlineData("lifetime_reference")]
     [InlineData("subscribe")]
     [InlineData("implicit_implementation")]
     public void InsertReferences_ExistingReferenceKinds_AreAccepted(string referenceKind)
@@ -165,6 +171,7 @@ public class DatabaseTests : IDisposable
     [InlineData("object")]
     [InlineData("procedure")]
     [InlineData("program")]
+    [InlineData("rule")]
     [InlineData("union")]
     [InlineData("specialization")]
     [InlineData("protocol")]
