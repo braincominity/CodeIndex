@@ -1,5 +1,8 @@
 using System.Diagnostics;
+using System.Formats.Tar;
+using System.IO.Compression;
 using System.Runtime.Versioning;
+using System.Text;
 
 namespace CodeIndex.Tests;
 
@@ -1149,12 +1152,22 @@ public sealed class InstallScriptTests : IDisposable
         var archivePath = Path.Combine(workDir, "unsafe.tar.gz");
         var outsidePath = Path.Combine(workDir, "escape_marker");
 
+        Directory.CreateDirectory(workDir);
+        using (var archive = File.Create(archivePath))
+        using (var gzip = new GZipStream(archive, CompressionLevel.SmallestSize))
+        using (var writer = new TarWriter(gzip, leaveOpen: false))
+        {
+            var bytes = Encoding.UTF8.GetBytes("escape");
+            using var data = new MemoryStream(bytes);
+            writer.WriteEntry(new PaxTarEntry(TarEntryType.RegularFile, "../escape_marker")
+            {
+                DataStream = data,
+            });
+        }
+
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             $$"""
             mkdir -p "{{baseDir}}" "{{extractDir}}"
-            printf 'escape' > "{{outsidePath}}"
-            tar czf "{{archivePath}}" -C "{{baseDir}}" ../escape_marker
-            rm "{{outsidePath}}"
 
             status=0
             if validate_archive_members "{{archivePath}}"; then
