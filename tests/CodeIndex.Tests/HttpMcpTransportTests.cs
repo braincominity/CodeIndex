@@ -51,6 +51,40 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_PostInitializeWithoutEventsStream_ReturnsOnlyHandshakeResult()
+    {
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+
+        var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("notifications/initialized", body, StringComparison.Ordinal);
+        using var doc = JsonDocument.Parse(body);
+        Assert.Equal(1, doc.RootElement.GetProperty("id").GetInt32());
+    }
+
+    [Fact]
+    public async Task HttpTransport_PostInitializeWithEventsStream_EmitsInitializedNotification()
+    {
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+
+        using var client = new HttpClient();
+        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+
+        await using var eventStream = await events.Content.ReadAsStreamAsync();
+        using var reader = new StreamReader(eventStream, Encoding.UTF8, leaveOpen: true);
+        var initializedTask = ReadUntilAsync(reader, "notifications/initialized");
+
+        var response = await harness.PostJsonAsync("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var initializedFrame = await initializedTask.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Contains("\"method\":\"notifications/initialized\"", initializedFrame, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task HttpTransport_PostNotification_Returns204NoContent()
     {
         await using var harness = await McpHttpHarness.StartAsync(_dbPath);
