@@ -10245,11 +10245,12 @@ public class DbReaderTests : IDisposable
         // call site.
         const int suppressedReferenceCount = 64;
         const int callReferenceLine = suppressedReferenceCount + 10;
+        const int secondCallReferenceLine = callReferenceLine + 1;
 
         using (var updateFileCmd = _db.Connection.CreateCommand())
         {
             updateFileCmd.CommandText = "UPDATE files SET lines = @lines WHERE path = 'src/Use.cs'";
-            updateFileCmd.Parameters.AddWithValue("@lines", callReferenceLine + 5);
+            updateFileCmd.Parameters.AddWithValue("@lines", secondCallReferenceLine + 5);
             updateFileCmd.ExecuteNonQuery();
         }
 
@@ -10307,13 +10308,29 @@ public class DbReaderTests : IDisposable
             ContainerKind = "function",
             ContainerName = "Match",
         });
+        syntheticReferences.Add(new ReferenceRecord
+        {
+            FileId = useFileId,
+            SymbolName = "Red",
+            ReferenceKind = "call",
+            Line = secondCallReferenceLine,
+            Column = 9,
+            Context = "        Red();",
+            ContainerKind = "function",
+            ContainerName = "Match",
+        });
         _writer.InsertReferences(syntheticReferences);
 
         var result = Assert.Single(_reader.SearchReferences("Red", limit: 1, lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
         Assert.Equal("call", result.ReferenceKind);
         Assert.Equal(callReferenceLine, result.Line);
-        Assert.Equal(1, _reader.CountSearchReferences("Red", limit: 1, lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
-        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchReferencesTotal("Red", lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
+
+        var nextPage = Assert.Single(_reader.SearchReferences("Red", limit: 1, lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"], offset: 1));
+        Assert.Equal("call", nextPage.ReferenceKind);
+        Assert.Equal(secondCallReferenceLine, nextPage.Line);
+
+        Assert.Equal(2, _reader.CountSearchReferences("Red", limit: 2, lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
+        Assert.Equal(new QueryCountResult(2, 1), _reader.CountSearchReferencesTotal("Red", lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
     }
 
     [Fact]

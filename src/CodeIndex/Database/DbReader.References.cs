@@ -25,7 +25,9 @@ public partial class DbReader
             return SearchReferencesCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, offset, maxLineWidth, excludeSelfReferences);
 
         var rawLimit = Math.Max(limit, CSharpUsingStaticReferenceFilterChunkSize);
-        var rawOffset = Math.Max(0, offset);
+        var rawOffset = 0;
+        var acceptedBeforePage = Math.Max(0, offset);
+        var accepted = 0;
         var filtered = new List<ReferenceResult>();
         while (filtered.Count < limit)
         {
@@ -38,6 +40,13 @@ public partial class DbReader
                 if (ShouldSuppressCSharpUsingStaticConstantPatternReference(result))
                     continue;
 
+                if (accepted < acceptedBeforePage)
+                {
+                    accepted++;
+                    continue;
+                }
+
+                accepted++;
                 filtered.Add(result);
                 if (filtered.Count >= limit)
                     break;
