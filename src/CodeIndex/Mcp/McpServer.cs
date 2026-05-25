@@ -442,7 +442,7 @@ public partial class McpServer : IDisposable
                             ? frameToWrite => outOfBandTransport.WriteOutOfBandFrameAsync(frameToWrite, loopToken).GetAwaiter().GetResult()
                             : null;
                         BeginDeferredFrameLogs();
-                        response = ProcessFrame(frame);
+                        response = await ProcessFrameAsync(frame).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -522,7 +522,7 @@ public partial class McpServer : IDisposable
             if (IsCancellationFrame(frame))
             {
                 BeginDeferredFrameLogs();
-                var response = ProcessFrame(frame);
+                var response = await ProcessFrameAsync(frame).ConfigureAwait(false);
                 await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
                 try
                 {
@@ -559,7 +559,7 @@ public partial class McpServer : IDisposable
                             }
                         };
                         BeginDeferredFrameLogs();
-                        response = ProcessFrame(frame);
+                        response = await ProcessFrameAsync(frame).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -601,7 +601,7 @@ public partial class McpServer : IDisposable
     internal async Task ProcessLineAsync(string line, TextWriter writer)
     {
         BeginDeferredFrameLogs();
-        var response = ProcessFrame(line);
+        var response = await ProcessFrameAsync(line).ConfigureAwait(false);
         if (response != null)
         {
             try
@@ -661,6 +661,9 @@ public partial class McpServer : IDisposable
     /// <see cref="IMcpTransport"/> 実装が共有するトランスポート非依存の合流点 (issue #1558)。
     /// </summary>
     internal string? ProcessFrame(string line)
+        => ProcessFrameAsync(line).GetAwaiter().GetResult();
+
+    internal async Task<string?> ProcessFrameAsync(string line)
     {
         if (string.IsNullOrWhiteSpace(line))
             return null;
@@ -688,7 +691,7 @@ public partial class McpServer : IDisposable
                 return null;
 
             ExtractResponseId(request, out responseHasId, out responseId);
-            var response = HandleMessage(request);
+            var response = await HandleMessageAsync(request).ConfigureAwait(false);
             return response != null ? SerializeResponseOrFallback(response, responseHasId, responseId) : null;
         }
         catch (JsonException ex)
@@ -800,6 +803,9 @@ public partial class McpServer : IDisposable
     /// JSON-RPCメッセージを適切なハンドラにルーティング。
     /// </summary>
     internal JsonNode? HandleMessage(JsonNode request)
+        => HandleMessageAsync(request).GetAwaiter().GetResult();
+
+    internal async Task<JsonNode?> HandleMessageAsync(JsonNode request)
     {
         if (request is JsonArray batch)
             return HandleBatchMessage(batch);
@@ -898,21 +904,21 @@ public partial class McpServer : IDisposable
                 retrySafe: false);
         }
 
-        return DispatchWithRequestCancellation(id, () => method switch
+        return await DispatchWithRequestCancellationAsync(id, () => method switch
         {
-            "initialize" => HandleInitialize(id, request["params"]),
-            "tools/list" => HandleToolsList(id),
-            "tools/call" => HandleToolsCall(id, request["params"]),
-            "resources/list" => HandleResourcesList(id, request["params"]),
-            "resources/read" => HandleResourcesRead(id, request["params"]),
-            "prompts/list" => HandlePromptsList(id),
-            "prompts/get" => HandlePromptsGet(id, request["params"]),
-            "ping" => CreateSuccessResponse(hasId, id, new JsonObject()),
-            _ => CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Method not found: {method}",
+            "initialize" => Task.FromResult<JsonNode>(HandleInitialize(id, request["params"])),
+            "tools/list" => Task.FromResult<JsonNode>(HandleToolsList(id)),
+            "tools/call" => HandleToolsCallAsync(id, request["params"]),
+            "resources/list" => Task.FromResult<JsonNode>(HandleResourcesList(id, request["params"])),
+            "resources/read" => Task.FromResult<JsonNode>(HandleResourcesRead(id, request["params"])),
+            "prompts/list" => Task.FromResult<JsonNode>(HandlePromptsList(id)),
+            "prompts/get" => Task.FromResult<JsonNode>(HandlePromptsGet(id, request["params"])),
+            "ping" => Task.FromResult<JsonNode>(CreateSuccessResponse(hasId, id, new JsonObject())),
+            _ => Task.FromResult<JsonNode>(CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Method not found: {method}",
                 category: McpErrorEnvelope.CategoryMethodNotFound,
                 suggestion: "Supported methods: initialize, tools/list, tools/call, resources/list, resources/read, prompts/list, prompts/get, ping, notifications/initialized, notifications/cancelled, notifications/shutdown.",
-                retrySafe: false),
-        });
+                retrySafe: false)),
+        }).ConfigureAwait(false);
     }
 
     private JsonNode? HandleBatchMessage(JsonArray batch)
@@ -967,10 +973,13 @@ public partial class McpServer : IDisposable
     }
 
     private JsonNode DispatchWithRequestCancellation(JsonNode? id, Func<JsonNode> action)
+        => DispatchWithRequestCancellationAsync(id, () => Task.FromResult(action())).GetAwaiter().GetResult();
+
+    private async Task<JsonNode> DispatchWithRequestCancellationAsync(JsonNode? id, Func<Task<JsonNode>> action)
     {
         var requestKey = SerializeRequestId(id);
         if (requestKey == null)
-            return action();
+            return await action().ConfigureAwait(false);
 
         using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(_currentRequestToken.Value, _shutdownCts.Token);
         if (!_activeRequests.TryAdd(requestKey, requestCts))
@@ -987,7 +996,7 @@ public partial class McpServer : IDisposable
         {
             _currentRequestToken.Value = requestCts.Token;
             requestCts.Token.ThrowIfCancellationRequested();
-            return action();
+            return await action().ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (requestCts.IsCancellationRequested)
         {
@@ -1575,6 +1584,9 @@ public partial class McpServer : IDisposable
     /// ツール呼び出しを実行。
     /// </summary>
     private JsonNode HandleToolsCall(JsonNode? id, JsonNode? callParams)
+        => HandleToolsCallAsync(id, callParams).GetAwaiter().GetResult();
+
+    private async Task<JsonNode> HandleToolsCallAsync(JsonNode? id, JsonNode? callParams)
     {
         var toolName = callParams?["name"]?.GetValue<string>();
         var args = callParams?["arguments"];
@@ -1657,7 +1669,6 @@ public partial class McpServer : IDisposable
                 else
                 {
                     response = toolName switch
-
                     {
                         "search" => ExecuteSearch(id, args),
                         "definition" => ExecuteDefinition(id, args),
@@ -1682,7 +1693,7 @@ public partial class McpServer : IDisposable
                         "ping" => ExecutePing(id),
                         "index" => ExecuteIndex(id, args, progressToken),
                         "backfill_fold" => ExecuteBackfillFold(id, progressToken),
-                        "suggest_improvement" => ExecuteSuggestImprovement(id, args),
+                        "suggest_improvement" => await ExecuteSuggestImprovementAsync(id, args).ConfigureAwait(false),
                         _ => CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown tool: {toolName}",
                             category: McpErrorEnvelope.CategoryToolUnknown,
                             suggestion: "Call tools/list to enumerate the available tool names for this server. Tool name match is case-sensitive.",
