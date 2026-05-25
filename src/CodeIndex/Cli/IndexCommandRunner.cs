@@ -287,46 +287,6 @@ public static partial class IndexCommandRunner
         "--include-symbol-kind", "--exclude-symbol-kind", "--optimize", "--help",
     ];
 
-    private static readonly string[] AcceptedBackfillFoldFlags =
-    [
-        "--db", "--json", "--help",
-    ];
-
-    private static OptimizeFtsCommandOptions ParseOptimizeFtsArgs(string[] args)
-    {
-        var dbPath = Path.Combine(".cdidx", "codeindex.db");
-        bool json = false;
-        string? parseError = null;
-
-        for (int i = 0; i < args.Length; i++)
-        {
-            switch (args[i])
-            {
-                case "--db" when i + 1 < args.Length:
-                    dbPath = args[++i];
-                    break;
-                case "--json":
-                    json = true;
-                    break;
-                case "--help" or "-h":
-                    return new OptimizeFtsCommandOptions { ShowHelp = true };
-                default:
-                    if (args[i].StartsWith("-", StringComparison.Ordinal))
-                        parseError ??= $"unknown option '{args[i]}'";
-                    else
-                        dbPath = args[i];
-                    break;
-            }
-        }
-
-        return new OptimizeFtsCommandOptions
-        {
-            DbPath = dbPath,
-            Json = json,
-            ParseError = parseError,
-        };
-    }
-
     private static string BuildUnknownIndexOptionError(string token)
     {
         var name = TrimInlineValue(token);
@@ -334,14 +294,6 @@ public static partial class IndexCommandRunner
         return suggestion == null
             ? $"unknown option '{token}'"
             : $"unknown option '{token}'\nDid you mean: {suggestion}?";
-    }
-
-    private static void WriteUnknownBackfillFoldOptionSuggestion(string token)
-    {
-        var name = TrimInlineValue(token);
-        var suggestion = ConsoleUi.FindClosestMatch(name, AcceptedBackfillFoldFlags);
-        if (suggestion != null)
-            Console.Error.WriteLine($"Did you mean: {suggestion}?");
     }
 
     private static string TrimInlineValue(string token)
@@ -747,47 +699,6 @@ public static partial class IndexCommandRunner
             + "Index/query paths were absolutized at the option-parsing boundary so this run "
             + "is unaffected, but later code paths that depend on Environment.CurrentDirectory "
             + "may misbehave. Restore the original working directory or re-resolve relative paths.";
-    }
-
-    private static BackfillFoldCommandOptions ParseBackfillFoldArgs(string[] args)
-    {
-        var dbPath = Path.Combine(".cdidx", "codeindex.db");
-        var json = false;
-
-        for (int i = 0; i < args.Length; i++)
-        {
-            switch (args[i])
-            {
-                case "--db" when i + 1 < args.Length:
-                    dbPath = args[++i];
-                    break;
-                case "--json":
-                    json = true;
-                    break;
-                case "--help" or "-h":
-                    return new BackfillFoldCommandOptions { ShowHelp = true, DbPath = dbPath, Json = json };
-                default:
-                    if (args[i].StartsWith('-'))
-                    {
-                        Console.Error.WriteLine($"Warning: unknown option '{args[i]}' (ignored) / 不明なオプション '{args[i]}'（無視されます）");
-                        WriteUnknownBackfillFoldOptionSuggestion(args[i]);
-                    }
-                    else
-                        return new BackfillFoldCommandOptions
-                        {
-                            DbPath = dbPath,
-                            Json = json,
-                            ParseError = $"backfill-fold does not accept positional arguments: '{args[i]}'"
-                        };
-                    break;
-            }
-        }
-
-        return new BackfillFoldCommandOptions
-        {
-            DbPath = dbPath,
-            Json = json,
-        };
     }
 
     private static int RunUpdateMode(
