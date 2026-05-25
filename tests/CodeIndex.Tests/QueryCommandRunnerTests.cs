@@ -138,6 +138,35 @@ public class QueryCommandRunnerTests
         Assert.Contains(QueryCommandRunner.DefaultLimitEnvironmentVariable, options.ParseError);
     }
 
+    [Theory]
+    [InlineData("limit")]
+    [InlineData("snippet-lines")]
+    [InlineData("max-line-width")]
+    public void ParseArgs_CliNumericFlagsOverrideInvalidDefaultEnvironmentVariables(string option)
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable,
+            QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "0");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, "0");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, "-1");
+
+        var args = option switch
+        {
+            "limit" => new[] { "RunSearch", "--limit", "7", "--snippet-lines", "3", "--max-line-width", "80" },
+            "snippet-lines" => new[] { "RunSearch", "--limit", "7", "--snippet-lines", "3", "--max-line-width", "80" },
+            _ => new[] { "RunSearch", "--limit", "7", "--snippet-lines", "3", "--max-line-width", "80" },
+        };
+
+        var options = QueryCommandRunner.ParseArgs(args, jsonDefault: false, allowNamedQuery: true);
+
+        Assert.Equal(7, options.Limit);
+        Assert.Equal(3, options.SnippetLines);
+        Assert.Equal(80, options.MaxLineWidth);
+        Assert.Null(options.ParseError);
+    }
+
     [Fact]
     public void ParseArgs_ProjectFilterExpandsSolutionProjectToPathGlob_Issue1707()
     {

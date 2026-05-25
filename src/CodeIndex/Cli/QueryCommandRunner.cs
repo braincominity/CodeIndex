@@ -3939,6 +3939,9 @@ public static class QueryCommandRunner
         string? statusExplainField = null;
         bool statusLogPath = false;
         bool statusConfig = false;
+        bool limitExplicit = false;
+        bool snippetLinesExplicit = false;
+        bool maxLineWidthExplicit = false;
         var rankMode = ReferenceRankMode.Weighted;
         var extraNames = new List<string>();
         bool impactDeprecatedDepthUsed = false;
@@ -3948,13 +3951,6 @@ public static class QueryCommandRunner
             parseErrors ??= [];
             parseErrors.Add(error);
         }
-
-        if (defaultLimitError != null)
-            AddParseError(defaultLimitError);
-        if (defaultSnippetLinesError != null)
-            AddParseError(defaultSnippetLinesError);
-        if (defaultMaxLineWidthError != null)
-            AddParseError(defaultMaxLineWidthError);
 
         void AddStatusCheckScopes(string rawScopes)
         {
@@ -4083,6 +4079,7 @@ public static class QueryCommandRunner
                     {
                         WarnIfDuplicateSingleValueOption("--limit", limitValue!);
                         limit = parsedLimit;
+                        limitExplicit = true;
                     }
                     else
                         AddParseError(limitError!);
@@ -4455,6 +4452,7 @@ public static class QueryCommandRunner
                     {
                         WarnIfDuplicateSingleValueOption("--snippet-lines", snippetLinesValue!);
                         snippetLines = parsedSnippetLines;
+                        snippetLinesExplicit = true;
                     }
                     else
                         AddParseError(snippetLinesError!);
@@ -4481,6 +4479,7 @@ public static class QueryCommandRunner
                     {
                         WarnIfDuplicateSingleValueOption("--max-line-width", maxLineWidthValue!);
                         maxLineWidth = parsedMaxLineWidth;
+                        maxLineWidthExplicit = true;
                     }
                     else
                         AddParseError(maxLineWidthError!);
@@ -4519,6 +4518,13 @@ public static class QueryCommandRunner
         }
 
         ValidateQueryPathOptionValues(userPathPatterns, excludePaths, AddParseError);
+
+        if (!limitExplicit && defaultLimitError != null)
+            AddParseError(defaultLimitError);
+        if (!snippetLinesExplicit && defaultSnippetLinesError != null)
+            AddParseError(defaultSnippetLinesError);
+        if (!maxLineWidthExplicit && defaultMaxLineWidthError != null)
+            AddParseError(defaultMaxLineWidthError);
 
         var dbResolution = DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, dbPath, dataDir);
 
