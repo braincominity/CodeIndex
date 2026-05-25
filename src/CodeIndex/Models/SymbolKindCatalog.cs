@@ -8,6 +8,8 @@ public static class SymbolKindCatalog
 {
     public static readonly string[] SymbolKinds =
     [
+        "async_function",
+        "async_generator",
         "attribute",
         "associatedtype",
         "class",
@@ -19,6 +21,7 @@ public static class SymbolKindCatalog
         "field",
         "file_module",
         "function",
+        "generator",
         "heading",
         "hook",
         "implements",

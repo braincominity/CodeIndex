@@ -135,6 +135,8 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 
 | Kind | Current producers / meaning | Graph behavior |
 |---|---|---|
+| `async_function` | JavaScript/TypeScript async function declarations | Callable definition; participates in callers/callees through reference rows |
+| `async_generator` | JavaScript/TypeScript async generator declarations | Callable definition; participates in callers/callees through reference rows |
 | `attribute` | Razor attributes and metadata-like declarations | Context/search symbol; not a call edge by itself |
 | `associatedtype` | Swift associated type declarations | Type-like definition target |
 | `class` | Class declarations across object-oriented languages | Definition target and container |
@@ -146,6 +148,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `field` | Field declarations where distinct from properties | Search/filter symbol |
 | `file_module` | File-scoped module/package declarations | Namespace-like context symbol |
 | `function` | Functions, methods, constructors, delegates, tasks, and callable bindings that do not have a narrower kind | Primary callable definition; participates in callers/callees through reference rows |
+| `generator` | JavaScript/TypeScript generator declarations | Callable definition; participates in callers/callees through reference rows |
 | `heading` | Markdown headings | Outline symbol |
 | `hook` | JavaScript/TypeScript React custom hook bindings | Callable-like search/filter symbol |
 | `implements` | Razor `@implements` directives | Context/search symbol |

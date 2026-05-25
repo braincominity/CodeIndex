@@ -153,7 +153,10 @@ public class DatabaseTests : IDisposable
     }
 
     [Theory]
+    [InlineData("async_function")]
+    [InlineData("async_generator")]
     [InlineData("delegate")]
+    [InlineData("generator")]
     [InlineData("union")]
     [InlineData("specialization")]
     [InlineData("protocol")]
