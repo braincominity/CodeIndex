@@ -1502,6 +1502,9 @@ Piping `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` into
   `serverInfo.name`, `serverInfo.version` (read via
   `ConsoleUi.LoadVersion()` — the same `version.json` source), and the
   long `instructions` string that guides AI clients on tool selection.
+  After that response is written, the server emits one
+  `notifications/initialized` notification per session so clients that wait
+  for a server-side ready signal can proceed without optimistic polling.
 - The advertised capability surface includes `tools`, `resources`, and
   `prompts`. `resources/list` pages indexed files as `cdidx://file/<path>`
   URIs and `resources/read` reconstructs file text from indexed chunks.

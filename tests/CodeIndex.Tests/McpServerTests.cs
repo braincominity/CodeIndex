@@ -238,6 +238,21 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_InitializeEmitsInitializedNotificationAfterResponseOnlyOnce()
+    {
+        var transport = new QueueMcpTransport(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"test-client","version":"1.0"}}}""",
+            """{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"test-client","version":"1.0"}}}""");
+
+        await _server.RunAsync(transport, CancellationToken.None);
+
+        Assert.Equal(3, transport.WrittenFrames.Count);
+        Assert.Equal(1, JsonNode.Parse(transport.WrittenFrames[0])!["id"]!.GetValue<int>());
+        Assert.Equal("notifications/initialized", JsonNode.Parse(transport.WrittenFrames[1])!["method"]!.GetValue<string>());
+        Assert.Equal(2, JsonNode.Parse(transport.WrittenFrames[2])!["id"]!.GetValue<int>());
+    }
+
+    [Fact]
     public void Initialize_AdvertisesResourcesAndPrompts()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""")!;
@@ -9536,6 +9551,38 @@ public class McpServerTests : IDisposable
             Disposed = true;
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class QueueMcpTransport : IMcpTransport, IOutOfBandMcpTransport
+    {
+        private readonly Queue<string> _frames;
+
+        public QueueMcpTransport(params string[] frames)
+        {
+            _frames = new Queue<string>(frames);
+        }
+
+        public string Name => "memory";
+        public string Endpoint => "memory://test";
+        public List<string> WrittenFrames { get; } = [];
+
+        public Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
+            => Task.FromResult(_frames.Count == 0 ? null : _frames.Dequeue());
+
+        public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
+        {
+            if (frame is not null)
+                WrittenFrames.Add(frame);
+            return Task.CompletedTask;
+        }
+
+        public Task WriteOutOfBandFrameAsync(string frame, CancellationToken cancellationToken)
+        {
+            WrittenFrames.Add(frame);
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     // The shutdown helper is the heart of the #1573 fix: cancelling the CTS through Console.CancelKeyPress
