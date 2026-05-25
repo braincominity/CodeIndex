@@ -2134,23 +2134,24 @@ public static partial class SymbolExtractor
         return innermostContainer?.Kind == "protocol";
     }
 
-    /// <summary>
-    /// Extract symbols from the given source content.
-    /// 指定されたソース内容からシンボルを抽出する。
-    /// </summary>
-    /// <param name="fileId">The file ID in the database / データベース上のファイルID</param>
-    /// <param name="lang">Detected language / 検出された言語</param>
-    /// <param name="content">Full file content / ファイル全体の内容</param>
-    /// <param name="filePath">Relative file path when available / 利用可能なら相対ファイルパス</param>
-    /// <returns>List of extracted symbols / 抽出されたシンボルのリスト</returns>
-    public static List<SymbolRecord> Extract(long fileId, string? lang, string content, string? filePath = null, string? projectRoot = null, CancellationToken cancellationToken = default)
+    private static bool TryPrepareSymbolExtraction(
+        long fileId,
+        string? originalLang,
+        string content,
+        string? filePath,
+        CancellationToken cancellationToken,
+        out string? lang,
+        out string preparedContent,
+        out List<SymbolRecord> symbols)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var originalLang = lang;
-        lang = NormalizeLanguage(lang);
+        lang = NormalizeLanguage(originalLang);
         var pluginLanguage = NormalizePluginLanguage(originalLang);
+        preparedContent = content;
+        symbols = [];
+
         if (lang == null && pluginLanguage == null)
-            return [];
+            return true;
 
         // Null / empty fast path — keep the direct-call null-safe contract that
         // FileIndexer.StripLineLeadingInvisibles' IsNullOrEmpty check used to provide
@@ -2159,7 +2160,7 @@ public static partial class SymbolExtractor
         // 入れたことで helper 側の IsNullOrEmpty による null 許容が効かなくなる
         // ため、direct call の null セーフ契約をここで復元する。Closes #183.
         if (string.IsNullOrEmpty(content))
-            return [];
+            return true;
 
         // Oversize-line skip: bail out for files that pack a multi-MB payload
         // into a single physical line (minified bundles, base64 blobs). The
@@ -2172,25 +2173,54 @@ public static partial class SymbolExtractor
         // インデクサが止まることを防ぎ、スキップは `line_too_long` FileIssue
         // として表面化させる。Closes #1542.
         if (ChunkSplitter.HasOversizeLine(content))
-            return [];
+            return true;
 
         if (FileIndexer.HasConflictMarkers(content))
-            return [];
+            return true;
 
         if (content.Contains('\r'))
             content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-        content = FileIndexer.StripLineLeadingInvisibles(content);
+        preparedContent = FileIndexer.StripLineLeadingInvisibles(content);
         cancellationToken.ThrowIfCancellationRequested();
 
         if (pluginLanguage != null
             && !PatternCache.ContainsKey(pluginLanguage)
             && ExtractorPluginRegistry.TryGetSymbolExtractor(pluginLanguage, out var pluginExtractor))
         {
-            return pluginExtractor.Extract(
+            symbols = pluginExtractor.Extract(
                     fileId,
-                    content,
+                    preparedContent,
                     new ExtractionContext(pluginLanguage, filePath))
                 .ToList();
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Extract symbols from the given source content.
+    /// 指定されたソース内容からシンボルを抽出する。
+    /// </summary>
+    /// <param name="fileId">The file ID in the database / データベース上のファイルID</param>
+    /// <param name="lang">Detected language / 検出された言語</param>
+    /// <param name="content">Full file content / ファイル全体の内容</param>
+    /// <param name="filePath">Relative file path when available / 利用可能なら相対ファイルパス</param>
+    /// <returns>List of extracted symbols / 抽出されたシンボルのリスト</returns>
+    public static List<SymbolRecord> Extract(long fileId, string? lang, string content, string? filePath = null, string? projectRoot = null, CancellationToken cancellationToken = default)
+    {
+        var originalLang = lang;
+        if (TryPrepareSymbolExtraction(
+            fileId,
+            originalLang,
+            content,
+            filePath,
+            cancellationToken,
+            out lang,
+            out content,
+            out var preparedSymbols))
+        {
+            return preparedSymbols;
         }
 
         if (lang == "xml")
