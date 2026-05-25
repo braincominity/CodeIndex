@@ -340,6 +340,14 @@ public class DbWriter
         cmd.ExecuteNonQuery();
     }
 
+    private void Execute(string sql, SqliteTransaction? transaction)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
+    }
+
     private void RunPassiveWalCheckpoint()
     {
         using var cmd = _conn.CreateCommand();
@@ -3170,23 +3178,28 @@ public class DbWriter
         // the faster writer's flag. Wrap the read-modify-write in BEGIN IMMEDIATE so
         // SQLite's reserved write lock serialises it across processes (issue #1513).
         bool ownTransaction = !IsInTransaction();
+        bool beganTransaction = ownTransaction;
+        SqliteTransaction? transaction = null;
         if (ownTransaction)
-            Execute("BEGIN IMMEDIATE");
+            transaction = _conn.BeginTransaction(deferred: false);
+        else
+            transaction = _activeTransaction;
         try
         {
             int current;
             using (var read = _conn.CreateCommand())
             {
+                read.Transaction = transaction;
                 read.CommandText = "PRAGMA user_version";
                 var raw = read.ExecuteScalar();
                 current = raw is long l ? (int)l : (raw is int i ? i : 0);
             }
             int next = current | flag;
             if (next != current)
-                Execute($"PRAGMA user_version = {next}");
+                Execute($"PRAGMA user_version = {next}", transaction);
             if (ownTransaction)
             {
-                Execute("COMMIT");
+                transaction!.Commit();
                 ownTransaction = false;
             }
         }
@@ -3194,9 +3207,14 @@ public class DbWriter
         {
             if (ownTransaction)
             {
-                try { Execute("ROLLBACK"); } catch (SqliteException) { /* best effort */ }
+                try { transaction?.Rollback(); } catch (SqliteException) { /* best effort */ }
             }
             throw;
+        }
+        finally
+        {
+            if (beganTransaction)
+                transaction?.Dispose();
         }
     }
 
