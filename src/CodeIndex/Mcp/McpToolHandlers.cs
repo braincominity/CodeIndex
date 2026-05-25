@@ -172,18 +172,21 @@ public partial class McpServer
     private static int ReadOffset(JsonNode? args)
         => Math.Max(0, args?["offset"]?.GetValue<int>() ?? 0);
 
-    private static bool AddLimitMetadata<T>(JsonObject payload, List<T> results, int limit, int offset, bool includeNextOffset = false)
+    private static bool AddLimitMetadata<T>(JsonObject payload, List<T> results, int limit, int offset = 0, bool includePagination = false)
     {
         var truncated = results.Count > limit;
         if (truncated)
             results.RemoveRange(limit, results.Count - limit);
 
-        payload["offset"] = offset;
         payload["count"] = results.Count;
         payload["truncated"] = truncated;
         payload["more_available"] = truncated;
-        if (truncated && includeNextOffset)
-            payload["next_offset"] = offset + results.Count;
+        if (includePagination)
+        {
+            payload["offset"] = offset;
+            if (truncated)
+                payload["next_offset"] = offset + results.Count;
+        }
         return truncated;
     }
 
@@ -591,7 +594,6 @@ public partial class McpServer
             return CreateToolErrorResponse(id, QueryLimits.FormatQueryTooLongError());
 
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
-        const int offset = 0;
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var snippetLines = SearchSnippetFormatter.ClampSnippetLines(args?["snippetLines"]?.GetValue<int>() ?? SearchSnippetFormatter.DefaultSnippetLines);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
@@ -629,7 +631,6 @@ public partial class McpServer
                     ["maxLineWidth"] = maxLineWidth,
                     ["path"] = PathEcho(pathPatterns),
                     ["excludeTests"] = excludeTests,
-                    ["offset"] = offset,
                     ["count"] = 0,
                     ["truncated"] = false,
                     ["more_available"] = false,
@@ -649,7 +650,7 @@ public partial class McpServer
                 ["excludeTests"] = excludeTests,
                 ["results"] = ToJsonArray(results, result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines, exact, maxLineWidth))
             };
-            AddLimitMetadata(structured, results, limit, offset);
+            AddLimitMetadata(structured, results, limit);
             structured["results"] = ToJsonArray(results, result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines, exact, maxLineWidth));
             // Include top file paths in summary for quick AI orientation
             // AIが素早く位置把握できるよう、サマリにトップファイルパスを含める
@@ -876,7 +877,7 @@ public partial class McpServer
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
                 ["results"] = ToJsonArray(results)
             };
-            AddLimitMetadata(payload, results, limit, offset, includeNextOffset: true);
+            AddLimitMetadata(payload, results, limit, offset, includePagination: true);
             payload["results"] = ToJsonArray(results);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
@@ -944,7 +945,7 @@ public partial class McpServer
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
                 ["results"] = ToJsonArray(results)
             };
-            AddLimitMetadata(payload, results, limit, offset, includeNextOffset: true);
+            AddLimitMetadata(payload, results, limit, offset, includePagination: true);
             payload["results"] = ToJsonArray(results);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
@@ -1012,7 +1013,7 @@ public partial class McpServer
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
                 ["results"] = ToJsonArray(results)
             };
-            AddLimitMetadata(payload, results, limit, offset, includeNextOffset: true);
+            AddLimitMetadata(payload, results, limit, offset, includePagination: true);
             payload["results"] = ToJsonArray(results);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
