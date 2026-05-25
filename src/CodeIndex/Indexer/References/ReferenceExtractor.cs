@@ -1144,6 +1144,15 @@ public static partial class ReferenceExtractor
                 references,
                 seen);
         }
+        else if (language == "rust")
+        {
+            RustReferenceExtractor.EmitMultilineAttributeReferences(
+                preparedLines,
+                references,
+                seen,
+                fileId,
+                (lineNumber, _) => FindInnermostContainer(containerCandidates, lineNumber));
+        }
         var pendingCSharpMultiLineTypePattern = default(CSharpMultiLineTypePatternState);
         var pendingCSharpWhereConstraint = language == "csharp" ? new CSharpWhereConstraintState() : null;
         var csharpLocalNamesByFunction = language == "csharp"
