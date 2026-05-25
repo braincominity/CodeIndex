@@ -492,15 +492,6 @@ public static class IndexCommandRunner
         // まだ clear しない。update モードの preflight が失敗しただけで healthy な DB を
         // 縮退状態に落とさないよう、clear は実際に書き込み直前で行う。
 
-        if (options.Rebuild)
-        {
-            db.ClearReadyFlags();
-            var rebuildWriter = new DbWriter(db);
-            rebuildWriter.ClearHotspotFamilyReady();
-            rebuildWriter.ClearMetadataTargetReady();
-            db.DropAll();
-        }
-
         db.InitializeSchema();
         AddToGitExclude(options.ProjectPath, dbPath);
 
@@ -3218,13 +3209,14 @@ public static class IndexCommandRunner
         }
 
         // Full-scan commits to mutating the DB from here on. Keep the whole write phase in
-        // one outer transaction so Ctrl-C/SIGTERM can roll back the readiness demotion,
-        // stale-file purge, and per-file writes instead of leaving a half-cleared index.
-        // full-scan の書き込み全体を outer transaction に入れ、中断時に readiness clear /
-        // purge / per-file write をまとめて rollback する。
+        // one outer transaction so Ctrl-C/SIGTERM can roll back the batch marker,
+        // readiness demotion, stale-file purge, and per-file writes instead of leaving a
+        // half-cleared index.
+        // full-scan の書き込み全体を outer transaction に入れ、中断時に batch marker /
+        // readiness clear / purge / per-file write をまとめて rollback する。
         ThrowIfFullScanCancelled(0, files.Count);
-        writer.MarkBatchInProgress();
         using var fullScanTxn = writer.BeginTransaction();
+        writer.MarkBatchInProgress();
         writer.ClearReadyFlags();
         writer.ClearHotspotFamilyReady();
         writer.ClearMetadataTargetReady();
@@ -3609,7 +3601,7 @@ public static class IndexCommandRunner
                             ResumeIndexSpinnerAfterConsoleWrite();
                         }
 
-                        if (!options.Rebuild && writer.HasFileAtPath(currentJsonIndexFile))
+                        if (writer.HasFileAtPath(currentJsonIndexFile))
                         {
                             using var deleteTxn = writer.BeginTransaction();
                             if (writer.DeleteFileByPath(currentJsonIndexFile))
