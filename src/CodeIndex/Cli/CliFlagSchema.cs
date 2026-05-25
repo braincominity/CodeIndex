@@ -52,7 +52,7 @@ internal static class CliFlagSchema
     // サブコマンド一覧の正本。ConsoleUi.Commands と一致することをテストで確認する。
     public static IReadOnlyList<string> AllCommands { get; } =
     [
-        "index", "backfill-fold", "optimize", "search", "definition", "references", "callers", "callees",
+        "index", "backfill-fold", "optimize", "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
         "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license",
     ];
@@ -63,18 +63,18 @@ internal static class CliFlagSchema
     // クエリ先頭が `-` で始まる場合に `--` end-of-options を受け付けるコマンド集合。
     private static readonly string[] PassthroughCommands =
     [
-        "search", "definition", "references", "callers", "callees", "symbols", "files", "inspect", "impact",
+        "search", "definition", "goto", "references", "callers", "callees", "symbols", "files", "inspect", "impact",
     ];
 
     private static readonly string[] QueryCommands =
     [
-        "search", "definition", "references", "callers", "callees",
+        "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "inspect", "impact",
     ];
 
     private static readonly string[] LimitCapableCommands =
     [
-        "search", "definition", "references", "callers", "callees", "symbols",
+        "search", "definition", "goto", "references", "callers", "callees", "symbols",
         "files", "find", "map", "inspect", "deps", "impact", "unused", "hotspots",
     ];
 
@@ -82,7 +82,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] PathFilterCommands =
     [
-        "search", "definition", "references", "callers", "callees", "symbols", "files",
+        "search", "definition", "goto", "references", "callers", "callees", "symbols", "files",
         "find", "map", "inspect", "deps", "impact", "unused", "hotspots", "validate",
     ];
 
@@ -105,7 +105,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] KindCommands =
     [
-        "definition", "references", "callers", "callees", "symbols", "unused", "hotspots", "validate",
+        "definition", "goto", "references", "callers", "callees", "symbols", "unused", "hotspots", "validate",
     ];
     private static readonly string[] VisibilityCommands =
     [
@@ -114,6 +114,7 @@ internal static class CliFlagSchema
     private static readonly string[] RawKindsCommands = ["callers", "callees"];
     private static readonly string[] RankByCommands = ["callers", "callees"];
     private static readonly string[] ByBucketCommands = ["unused"];
+    private static readonly string[] AllResultCommands = ["goto"];
 
     private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files"];
     private static readonly string[] ByteFormatCommands = ["files", "map"];
@@ -127,7 +128,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] ExactNameCommands =
     [
-        "definition", "references", "callers", "callees", "symbols", "inspect",
+        "definition", "goto", "references", "callers", "callees", "symbols", "inspect",
     ];
 
     // `--exact-substring` is only meaningful on `search`; other name commands accept it
@@ -136,7 +137,7 @@ internal static class CliFlagSchema
     // パーサで受理するだけ。補完では `search` 以外には出さない。
     private static readonly string[] ExactSubstringAccepted =
     [
-        "definition", "references", "callers", "callees", "symbols", "inspect",
+        "definition", "goto", "references", "callers", "callees", "symbols", "inspect",
     ];
 
     private static readonly string[] BodyCommands = ["definition", "references", "callers", "callees", "impact", "inspect"];
@@ -148,7 +149,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] DbPathCommands =
     [
-        "index", "backfill-fold", "optimize", "search", "definition", "references", "callers", "callees",
+        "index", "backfill-fold", "optimize", "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
         "validate", "deps", "impact", "unused", "hotspots", "db", "vacuum", "report", "batch", "mcp",
     ];
@@ -157,16 +158,21 @@ internal static class CliFlagSchema
 
     private static readonly string[] DataDirCommands =
     [
-        "index", "search", "definition", "references", "callers", "callees",
+        "index", "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
         "validate", "deps", "impact", "unused", "hotspots", "batch",
     ];
 
     private static readonly string[] JsonCommands =
     [
-        "index", "backfill-fold", "optimize", "vacuum", "search", "definition", "references", "callers", "callees",
+        "index", "backfill-fold", "optimize", "vacuum", "search", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
         "validate", "deps", "impact", "unused", "hotspots", "languages", "db", "report",
+    ];
+
+    private static readonly string[] FormatCommands =
+    [
+        "search", "definition", "references", "callers", "callees", "find", "validate",
     ];
 
     private static readonly string[] ProfileCommands =
@@ -189,6 +195,7 @@ internal static class CliFlagSchema
             new() { Name = "--workspace-db", ValuePlaceholder = "<path>", Description = "Additional workspace member database path for dependency aggregation", Commands = Set(WorkspaceDbCommands) },
             new() { Name = "--data-dir", ValuePlaceholder = "<dir>", Description = "Directory containing codeindex.db; overrides CDIDX_DATA_DIR/XDG/workspace defaults", Commands = Set(DataDirCommands) },
             new() { Name = "--json", Description = "JSON output; search also accepts --json=array for a single JSON array", Commands = Set(JsonCommands) },
+            new() { Name = "--format", ValuePlaceholder = "<text|json|lsp|qf|sarif>", Description = "Standard output format for editor and CI integrations", Commands = Set(FormatCommands) },
             new() { Name = "--quiet", ShortName = "-q", Description = "Suppress informational stderr output; errors still print", Commands = Set(AllCommands.ToArray()) },
             new() { Name = "--silent", Description = "Alias for --quiet", Commands = Set(AllCommands.ToArray()) },
             new() { Name = "--profile", Description = "Emit SQL timing and EXPLAIN QUERY PLAN profile JSON after the normal result", Commands = Set(ProfileCommands) },
@@ -208,6 +215,7 @@ internal static class CliFlagSchema
             new() { Name = "--visibility", ValuePlaceholder = "<visibility[,visibility]>", Description = "Filter by symbol visibility", Commands = Set(VisibilityCommands) },
             new() { Name = "--exclude-visibility", ValuePlaceholder = "<visibility[,visibility]>", Description = "Exclude symbol visibility", Commands = Set(VisibilityCommands) },
             new() { Name = "--by-bucket", Description = "Unused: include per-bucket grouped result arrays in JSON output", Commands = Set(ByBucketCommands) },
+            new() { Name = "--all", Description = "goto: return all matching LSP locations instead of requiring a single target", Commands = Set(AllResultCommands) },
             new() { Name = "--rank-by", ValuePlaceholder = "<weighted|count|kind>", Description = "Rank callers/callees by weighted structural score, raw count, or kind bucket", Commands = Set(RankByCommands) },
             new() { Name = "--raw-kinds", Description = "Show raw reference kinds instead of logical graph kinds", Commands = Set(RawKindsCommands) },
             new() { Name = "--count", Description = "Count only", Commands = Set(CountCommands) },

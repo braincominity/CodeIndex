@@ -5,6 +5,7 @@ using System.Text.Json.Serialization.Metadata;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Hooks;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
@@ -84,6 +85,7 @@ public static class QueryCommandRunner
         "--explain",
         "--rank-by",
         "--slow-query-ms",
+        "--format",
     ];
     private sealed record StatusReadinessField(
         string FieldName,
@@ -167,11 +169,17 @@ public static class QueryCommandRunner
         "-q",
         "--silent",
         "--by-bucket",
+        "--all",
         "--group-by-name",
         "--with-paths",
         "--bytes",
         "--profile",
     ];
+    private const string OutputFormatText = "text";
+    private const string OutputFormatJson = "json";
+    private const string OutputFormatLsp = "lsp";
+    private const string OutputFormatQf = "qf";
+    private const string OutputFormatSarif = "sarif";
     private static readonly HashSet<string> InlineValueOptions =
         new(ValueTakingOptions.Concat(["--json"]), StringComparer.Ordinal);
     private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
@@ -388,8 +396,12 @@ public static class QueryCommandRunner
             var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank);
             if (results.Count == 0)
             {
+                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
+                    return ZeroResultExitCode(options);
                 if (options.Json)
                 {
+                    if (TryWriteEmptyFormattedResult(options, jsonOptions))
+                        return ZeroResultExitCode(options);
                     if (options.JsonOutputFormat == JsonOutputFormatArray)
                     {
                         Console.WriteLine(JsonSerializer.Serialize(
@@ -413,6 +425,21 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
+                if (options.OutputFormat == OutputFormatLsp)
+                {
+                    WriteLspLocations(results.Select(ToLspLocation), jsonOptions);
+                    return CommandExitCodes.Success;
+                }
+                if (options.OutputFormat == OutputFormatQf)
+                {
+                    WriteQuickfix(results.Select(r => (r.Path, r.StartLine, 1, $"search match: {options.Query}")));
+                    return CommandExitCodes.Success;
+                }
+                if (options.OutputFormat == OutputFormatSarif)
+                {
+                    WriteSarif(results.Select(r => (r.Path, r.StartLine, 1, $"search match: {options.Query}", "search")), jsonOptions);
+                    return CommandExitCodes.Success;
+                }
                 var compactResults = results
                     .Select(r => SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth, r.Lang, options.SnippetFocus))
                     .ToArray();
@@ -456,6 +483,146 @@ public static class QueryCommandRunner
         => Console.WriteLine(JsonSerializer.Serialize(
             new JsonStreamDoneResult(Done: true, Count: count, Interrupted: false),
             CliJsonSerializerContextFactory.Create(jsonOptions).JsonStreamDoneResult));
+
+    public static void AttachLspLocations(IEnumerable<DefinitionResult> results)
+    {
+        foreach (var result in results)
+        {
+            var location = BuildLspLocation(result.Path, result.StartLine, 1, result.EndLine + 1, 1);
+            result.Uri = location.Uri;
+            result.Range = location.Range;
+        }
+    }
+
+    public static void AttachLspLocations(IEnumerable<ReferenceResult> results)
+    {
+        foreach (var result in results)
+        {
+            var location = BuildLspLocation(result.Path, result.Line, result.Column, result.Line, result.Column + 1);
+            result.Uri = location.Uri;
+            result.Range = location.Range;
+        }
+    }
+
+    public static LspLocation BuildLspLocation(string path, int startLine, int startColumn, int endLine, int endColumn)
+    {
+        var absolutePath = Path.IsPathFullyQualified(path)
+            ? path
+            : Path.GetFullPath(path, Environment.CurrentDirectory);
+        return new LspLocation
+        {
+            Uri = new Uri(absolutePath).AbsoluteUri,
+            Range = new LspRange
+            {
+                Start = new LspPosition
+                {
+                    Line = Math.Max(0, startLine - 1),
+                    Character = Math.Max(0, startColumn - 1),
+                },
+                End = new LspPosition
+                {
+                    Line = Math.Max(0, endLine - 1),
+                    Character = Math.Max(0, endColumn - 1),
+                },
+            },
+        };
+    }
+
+    private static LspLocation ToLspLocation(DefinitionResult result)
+        => BuildLspLocation(result.Path, result.StartLine, 1, result.EndLine + 1, 1);
+
+    private static LspLocation ToLspLocation(ReferenceResult result)
+        => BuildLspLocation(result.Path, result.Line, result.Column, result.Line, result.Column + Math.Max(1, result.SymbolName.Length));
+
+    private static LspLocation ToLspLocation(SearchResult result)
+        => BuildLspLocation(result.Path, result.StartLine, 1, result.EndLine + 1, 1);
+
+    private static LspLocation ToLspLocation(FileFindResult result)
+        => BuildLspLocation(result.Path, result.Line, result.Column, result.Line, result.Column + 1);
+
+    private static LspLocation ToLspLocation(FileIssue result)
+        => BuildLspLocation(result.Path, result.Line, 1, result.Line, 1);
+
+    private static LspLocation ToLspLocation(CallerResult result)
+        => BuildLspLocation(result.Path, result.FirstLine, 1, result.FirstLine, 1);
+
+    private static LspLocation ToLspLocation(CalleeResult result)
+        => BuildLspLocation(result.Path, result.FirstLine, 1, result.FirstLine, 1);
+
+    private static void WriteLspLocations(IEnumerable<LspLocation> locations, JsonSerializerOptions jsonOptions)
+        => Console.WriteLine(JsonSerializer.Serialize(locations.ToList(), CliJsonSerializerContextFactory.Create(jsonOptions).ListLspLocation));
+
+    private static bool TryWriteEmptyFormattedResult(QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        if (options.OutputFormat == OutputFormatLsp)
+        {
+            WriteLspLocations([], jsonOptions);
+            return true;
+        }
+        if (options.OutputFormat == OutputFormatQf)
+            return true;
+        if (options.OutputFormat == OutputFormatSarif)
+        {
+            WriteSarif([], jsonOptions);
+            return true;
+        }
+        return false;
+    }
+
+    private static void WriteQuickfix(IEnumerable<(string Path, int Line, int Column, string Message)> items)
+    {
+        foreach (var item in items)
+            Console.WriteLine($"{item.Path}:{item.Line}:{item.Column}:{item.Message}");
+    }
+
+    private static void WriteSarif(IEnumerable<(string Path, int Line, int Column, string Message, string RuleId)> items, JsonSerializerOptions jsonOptions)
+    {
+        var results = new JsonArray();
+        foreach (var item in items)
+        {
+            results.Add(new JsonObject
+            {
+                ["ruleId"] = item.RuleId,
+                ["message"] = new JsonObject { ["text"] = item.Message },
+                ["locations"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["physicalLocation"] = new JsonObject
+                        {
+                            ["artifactLocation"] = new JsonObject { ["uri"] = item.Path },
+                            ["region"] = new JsonObject
+                            {
+                                ["startLine"] = Math.Max(1, item.Line),
+                                ["startColumn"] = Math.Max(1, item.Column),
+                            },
+                        },
+                    },
+                },
+            });
+        }
+
+        var payload = new JsonObject
+        {
+            ["version"] = "2.1.0",
+            ["runs"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["tool"] = new JsonObject
+                    {
+                        ["driver"] = new JsonObject
+                        {
+                            ["name"] = "cdidx",
+                            ["informationUri"] = "https://github.com/Widthdom/CodeIndex",
+                        },
+                    },
+                    ["results"] = results,
+                },
+            },
+        };
+        Console.WriteLine(payload.ToJsonString(jsonOptions));
+    }
 
     public static int RunDefinition(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -555,6 +722,8 @@ public static class QueryCommandRunner
             WriteExactSymbolWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             if (results.Count == 0)
             {
+                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
+                    return ZeroResultExitCode(options);
                 if (!options.Json)
                 {
                     Console.Error.WriteLine(BuildZeroResultLine("No definitions found", options));
@@ -568,6 +737,21 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
+                if (options.OutputFormat == OutputFormatLsp)
+                {
+                    WriteLspLocations(results.Select(ToLspLocation), jsonOptions);
+                    return CommandExitCodes.Success;
+                }
+                if (options.OutputFormat == OutputFormatQf)
+                {
+                    WriteQuickfix(results.Select(r => (r.Path, r.StartLine, 1, $"{r.Kind} {r.Name}")));
+                    return CommandExitCodes.Success;
+                }
+                if (options.OutputFormat == OutputFormatSarif)
+                {
+                    WriteSarif(results.Select(r => (r.Path, r.StartLine, 1, $"{r.Kind} {r.Name}", "definition")), jsonOptions);
+                    return CommandExitCodes.Success;
+                }
                 foreach (var r in results)
                 {
                     if (exact)
@@ -601,6 +785,72 @@ public static class QueryCommandRunner
                 var defFileCount = results.Select(r => r.Path).Distinct().Count();
                 Console.Error.WriteLine($"({results.Count} definitions in {defFileCount} files)");
             }
+            return CommandExitCodes.Success;
+        });
+    }
+
+    public static int RunGoto(string[] cmdArgs, JsonSerializerOptions jsonOptions)
+    {
+        var all = cmdArgs.Any(arg => arg == "--all");
+        var filteredArgs = cmdArgs.Where(arg => arg != "--all").ToArray();
+        var options = ParseArgs(filteredArgs, jsonDefault: true, allowNamedQuery: true);
+        if (TryWriteUnsupportedOptionError("goto", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("goto"), options.Query))
+            return CommandExitCodes.UsageError;
+        if (TryWriteParseError(options, "goto"))
+            return CommandExitCodes.UsageError;
+        if (TryWriteInvalidKindFilterError(options, "goto", KnownSymbolKindFilters))
+            return CommandExitCodes.InvalidArgument;
+        if (!TryResolveNameExactMode(options, "goto", out var exact, out var exactError))
+        {
+            Console.Error.WriteLine(exactError);
+            return CommandExitCodes.UsageError;
+        }
+        if (TryWriteBlankQueryError(options, "goto"))
+            return CommandExitCodes.UsageError;
+        if (string.IsNullOrWhiteSpace(options.Query))
+        {
+            WriteUsageError(
+                "goto requires a symbol query argument",
+                GetUsageLineOrThrow("goto"),
+                "Add the symbol name after the command, for example: `cdidx goto QueryCommandRunner`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                "goto requires a symbol query argument",
+                GetUsageLineOrThrow("goto"),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
+            return CommandExitCodes.UsageError;
+        }
+        if (TryWriteUnexpectedExtraPositionals("goto", options))
+            return CommandExitCodes.UsageError;
+
+        return WithDb(options, jsonOptions, reader =>
+        {
+            var limit = all ? options.Limit : Math.Max(options.Limit, 2);
+            var results = reader.GetDefinitions(options.Query, limit, options.Kind, options.Lang, includeBody: false, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+            if (results.Count == 0)
+            {
+                if (!options.Json)
+                    Console.Error.WriteLine(BuildZeroResultLine("No definitions found", options));
+                return CommandExitCodes.NotFound;
+            }
+
+            if (all)
+            {
+                WriteLspLocations(results.Select(ToLspLocation), jsonOptions);
+                return CommandExitCodes.Success;
+            }
+
+            if (results.Count > 1)
+            {
+                Console.Error.WriteLine($"Error: goto found {results.Count} matching definitions for '{options.Query}'.");
+                Console.Error.WriteLine("Hint: narrow the query with --kind, --lang, --path, or pass --all to return all LSP locations.");
+                return CommandExitCodes.UsageError;
+            }
+
+            Console.WriteLine(JsonSerializer.Serialize(ToLspLocation(results[0]), CliJsonSerializerContextFactory.Create(jsonOptions).LspLocation));
             return CommandExitCodes.Success;
         });
     }
@@ -704,6 +954,8 @@ public static class QueryCommandRunner
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
             if (results.Count == 0)
             {
+                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
+                    return ZeroResultExitCode(options);
                 if (options.Json)
                     WriteGraphZeroJsonResult(reader, "references", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 else if (!options.Json)
@@ -719,6 +971,21 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
+                if (options.OutputFormat == OutputFormatLsp)
+                {
+                    WriteLspLocations(results.Select(ToLspLocation), jsonOptions);
+                    return CommandExitCodes.Success;
+                }
+                if (options.OutputFormat == OutputFormatQf)
+                {
+                    WriteQuickfix(results.Select(r => (r.Path, r.Line, r.Column, $"{r.ReferenceKind} {r.SymbolName}")));
+                    return CommandExitCodes.Success;
+                }
+                if (options.OutputFormat == OutputFormatSarif)
+                {
+                    WriteSarif(results.Select(r => (r.Path, r.Line, r.Column, $"{r.ReferenceKind} {r.SymbolName}", r.ReferenceKind)), jsonOptions);
+                    return CommandExitCodes.Success;
+                }
                 foreach (var r in results)
                 {
                     if (exact)
@@ -833,6 +1100,8 @@ public static class QueryCommandRunner
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
             if (results.Count == 0)
             {
+                if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
+                    return ZeroResultExitCode(options);
                 if (options.Json)
                     WriteGraphZeroJsonResult(reader, "callers", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, queryOptions: options, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 else if (!options.Json)
@@ -848,6 +1117,21 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
+                if (options.OutputFormat == OutputFormatLsp)
+                {
+                    WriteLspLocations(results.Select(ToLspLocation), jsonOptions);
+                    return CommandExitCodes.Success;
+                }
+                if (options.OutputFormat == OutputFormatQf)
+                {
+                    WriteQuickfix(results.Select(r => (r.Path, r.FirstLine, 1, $"{r.CallerName ?? "<top-level>"} -> {r.CalleeName}")));
+                    return CommandExitCodes.Success;
+                }
+                if (options.OutputFormat == OutputFormatSarif)
+                {
+                    WriteSarif(results.Select(r => (r.Path, r.FirstLine, 1, $"{r.CallerName ?? "<top-level>"} -> {r.CalleeName}", r.ReferenceKind)), jsonOptions);
+                    return CommandExitCodes.Success;
+                }
                 foreach (var r in results)
                 {
                     if (exact)
@@ -977,6 +1261,21 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
+                if (options.OutputFormat == OutputFormatLsp)
+                {
+                    WriteLspLocations(results.Select(ToLspLocation), jsonOptions);
+                    return CommandExitCodes.Success;
+                }
+                if (options.OutputFormat == OutputFormatQf)
+                {
+                    WriteQuickfix(results.Select(r => (r.Path, r.FirstLine, 1, $"{r.CallerName ?? "<top-level>"} -> {r.CalleeName}")));
+                    return CommandExitCodes.Success;
+                }
+                if (options.OutputFormat == OutputFormatSarif)
+                {
+                    WriteSarif(results.Select(r => (r.Path, r.FirstLine, 1, $"{r.CallerName ?? "<top-level>"} -> {r.CalleeName}", r.ReferenceKind)), jsonOptions);
+                    return CommandExitCodes.Success;
+                }
                 foreach (var r in results)
                 {
                     if (exact)
@@ -1565,6 +1864,8 @@ public static class QueryCommandRunner
                 var candidateFileCount = reader.CountFindCandidateFiles(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
                 if (options.Json)
                 {
+                    if (TryWriteEmptyFormattedResult(options, jsonOptions))
+                        return ZeroResultExitCode(options);
                     var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", queryOptions: options, extraFields: payload =>
                     {
                         payload["query"] = options.Query;
@@ -1595,6 +1896,21 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
+                if (options.OutputFormat == OutputFormatLsp)
+                {
+                    WriteLspLocations(results.Select(ToLspLocation), jsonOptions);
+                    return CommandExitCodes.Success;
+                }
+                if (options.OutputFormat == OutputFormatQf)
+                {
+                    WriteQuickfix(results.Select(r => (r.Path, r.Line, r.Column, $"find match: {options.Query}")));
+                    return CommandExitCodes.Success;
+                }
+                if (options.OutputFormat == OutputFormatSarif)
+                {
+                    WriteSarif(results.Select(r => (r.Path, r.Line, r.Column, $"find match: {options.Query}", "find")), jsonOptions);
+                    return CommandExitCodes.Success;
+                }
                 foreach (var r in results)
                     Console.WriteLine(JsonSerializer.Serialize(r, CliJsonSerializerContextFactory.Create(jsonOptions).FileFindResult));
             }
@@ -3677,6 +3993,9 @@ public static class QueryCommandRunner
             if (issues.Count == 0)
             {
                 if (options.Json)
+                {
+                    if (TryWriteEmptyFormattedResult(options, jsonOptions))
+                        return CommandExitCodes.Success;
                     Console.WriteLine(new JsonObject
                     {
                         ["count"] = 0,
@@ -3684,6 +4003,7 @@ public static class QueryCommandRunner
                         ["issues_table_available"] = issuesAvailable,
                         ["degraded"] = !issuesAvailable,
                     }.ToJsonString(jsonOptions));
+                }
                 else if (!issuesAvailable)
                     Console.Error.WriteLine("WARN: file_issues table missing in this index (legacy or read-only DB) — validate output is degraded, not a real clean signal.");
                 else
@@ -3696,6 +4016,21 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
+                if (options.OutputFormat == OutputFormatLsp)
+                {
+                    WriteLspLocations(issues.Select(ToLspLocation), jsonOptions);
+                    return CommandExitCodes.Success;
+                }
+                if (options.OutputFormat == OutputFormatQf)
+                {
+                    WriteQuickfix(issues.Select(i => (i.Path, i.Line, 1, $"{i.Kind}: {i.Message}")));
+                    return CommandExitCodes.Success;
+                }
+                if (options.OutputFormat == OutputFormatSarif)
+                {
+                    WriteSarif(issues.Select(i => (i.Path, i.Line, 1, i.Message, i.Kind)), jsonOptions);
+                    return CommandExitCodes.Success;
+                }
                 Console.WriteLine(new JsonObject
                 {
                     ["count"] = issues.Count,
@@ -3848,6 +4183,7 @@ public static class QueryCommandRunner
         int? slowQueryMs = null;
         string? statusExplainField = null;
         bool statusLogPath = false;
+        string outputFormat = OutputFormatText;
         var rankMode = ReferenceRankMode.Weighted;
         var extraNames = new List<string>();
         bool impactDeprecatedDepthUsed = false;
@@ -3966,15 +4302,37 @@ public static class QueryCommandRunner
                     if (inlineValue == null)
                     {
                         json = true;
+                        outputFormat = OutputFormatJson;
                     }
                     else if (TryParseJsonOutputFormat(inlineValue, out var parsedJsonOutputFormat))
                     {
                         json = true;
                         jsonOutputFormat = parsedJsonOutputFormat;
+                        outputFormat = OutputFormatJson;
                     }
                     else
                     {
                         AddParseError($"Error: --json format must be one of ndjson or array, got '{inlineValue}'. Hint: use `--json` or `--json=ndjson` for newline-delimited JSON, or `--json=array` for a single JSON array.");
+                    }
+                    break;
+                case "--format":
+                    if (TryReadStringOptionValue(args, ref i, "--format", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var formatValue, out var formatError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--format", formatValue!);
+                        if (TryParseOutputFormat(formatValue!, out var parsedOutputFormat))
+                        {
+                            outputFormat = parsedOutputFormat;
+                            if (parsedOutputFormat != OutputFormatText)
+                                json = true;
+                        }
+                        else
+                        {
+                            AddParseError($"Error: --format must be one of text, json, lsp, qf, or sarif; got '{formatValue}'.");
+                        }
+                    }
+                    else
+                    {
+                        AddParseError(formatError!);
                     }
                     break;
                 case "--limit":
@@ -4071,6 +4429,8 @@ public static class QueryCommandRunner
                     strictNotFound = true;
                     break;
                 case "--by-bucket":
+                    break;
+                case "--all":
                     break;
                 case "--no-dedup":
                     noDedup = true;
@@ -4422,6 +4782,7 @@ public static class QueryCommandRunner
             DataDirSource = dbResolution.DataDirSource,
             Json = json ?? jsonDefault,
             JsonOutputFormat = jsonOutputFormat,
+            OutputFormat = outputFormat,
             Limit = limit,
             Lang = lang,
             Kind = kind,
@@ -4502,6 +4863,23 @@ public static class QueryCommandRunner
 
         format = JsonOutputFormatNdjson;
         return false;
+    }
+
+    private static bool TryParseOutputFormat(string rawValue, out string format)
+    {
+        switch (rawValue.ToLowerInvariant())
+        {
+            case OutputFormatText:
+            case OutputFormatJson:
+            case OutputFormatLsp:
+            case OutputFormatQf:
+            case OutputFormatSarif:
+                format = rawValue.ToLowerInvariant();
+                return true;
+            default:
+                format = OutputFormatText;
+                return false;
+        }
     }
 
     private static void ValidatePathGlobPattern(string optionName, string pattern, Action<string> addParseError)
@@ -6887,6 +7265,7 @@ public sealed class QueryCommandOptions
     public string? DataDirSource { get; init; }
     public bool Json { get; init; }
     public string JsonOutputFormat { get; init; } = "ndjson";
+    public string OutputFormat { get; init; } = "text";
     public int Limit { get; init; } = 20;
     public string? Lang { get; init; }
     public string? Kind { get; init; }

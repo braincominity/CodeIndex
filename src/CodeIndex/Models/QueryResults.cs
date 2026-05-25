@@ -144,9 +144,31 @@ public class IndexFreshnessCheckResult
 
 public class DefinitionResult : SymbolResult
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Uri { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LspRange? Range { get; set; }
     public string Content { get; set; } = string.Empty;
     public string? BodyContent { get; set; }
     public int? Complexity { get; set; }
+}
+
+public sealed class LspPosition
+{
+    public int Line { get; set; }
+    public int Character { get; set; }
+}
+
+public sealed class LspRange
+{
+    public LspPosition Start { get; set; } = new();
+    public LspPosition End { get; set; } = new();
+}
+
+public sealed class LspLocation
+{
+    public string Uri { get; set; } = string.Empty;
+    public LspRange Range { get; set; } = new();
 }
 
 public class ExactZeroHintResult
@@ -196,6 +218,10 @@ public class ReferenceResult
     public string ReferenceKind { get; set; } = string.Empty;
     public int Line { get; set; }
     public int Column { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Uri { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LspRange? Range { get; set; }
     [JsonIgnore]
     public string RawContext { get; set; } = string.Empty;
     public string Context { get; set; } = string.Empty;
