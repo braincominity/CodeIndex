@@ -2599,10 +2599,12 @@ public partial class McpServer
         writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
 
         // Scan and index / スキャン・インデックス
-        var scanResult = indexer.ScanFilesDetailed();
+        var requestToken = _currentRequestToken.Value;
+        requestToken.ThrowIfCancellationRequested();
+        var scanResult = indexer.ScanFilesDetailed(cancellationToken: requestToken);
         var files = scanResult.Files;
         EmitProgressNotification(progressToken, 0, files.Count, "Index scan complete; indexing files.");
-        var csharpWorkspace = BuildMcpCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectPath, files);
+        var csharpWorkspace = BuildMcpCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectPath, files, requestToken);
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
             csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
         int processed = 0, skipped = 0, errors = 0;
@@ -2613,7 +2615,8 @@ public partial class McpServer
             var fileBatchMarked = false;
             try
             {
-                var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath);
+                requestToken.ThrowIfCancellationRequested();
+                var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath, requestToken);
                 var existingId = writer.GetUnchangedFileId(
                     record.Path,
                     record.Modified,
@@ -2640,7 +2643,7 @@ public partial class McpServer
                 var fileId = writer.UpsertFile(record);
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
-                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, filePath, projectPath);
+                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, filePath, projectPath, requestToken);
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                 var fileContext = new FileContext(projectPath, record.Path, filePath, record.Lang);
                 postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
@@ -2651,7 +2654,8 @@ public partial class McpServer
                     content,
                     symbols,
                     record.Path,
-                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null);
+                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                    requestToken);
                 postExtractionHooks.OnReferencesExtracted(fileContext, references);
                 writer.InsertReferences(references);
                 // Keep MCP index parity with CLI index: persist file-level validation issues too.
@@ -2700,6 +2704,12 @@ public partial class McpServer
                 {
                     errors++;
                 }
+            }
+            catch (OperationCanceledException) when (requestToken.IsCancellationRequested)
+            {
+                if (fileBatchMarked)
+                    writer.ClearBatchInProgress();
+                throw;
             }
             catch
             {
@@ -3113,12 +3123,14 @@ public partial class McpServer
         DbWriter writer,
         FileIndexer indexer,
         string projectRoot,
-        IEnumerable<string> filePaths)
+        IEnumerable<string> filePaths,
+        CancellationToken cancellationToken = default)
     {
         var pendingSymbols = new List<SymbolRecord>();
         var pendingPaths = new HashSet<string>(StringComparer.Ordinal);
         foreach (var filePath in filePaths)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var absolutePath = Path.IsPathRooted(filePath)
                 ? filePath
                 : Path.Combine(projectRoot, filePath.Replace('/', Path.DirectorySeparatorChar));
@@ -3134,11 +3146,15 @@ public partial class McpServer
 
             try
             {
-                var (record, content, _, _) = indexer.BuildRecordWithRawBytes(absolutePath);
+                var (record, content, _, _) = indexer.BuildRecordWithRawBytes(absolutePath, cancellationToken);
                 if (record.Lang != "csharp")
                     continue;
 
-                pendingSymbols.AddRange(SymbolExtractor.Extract(0, record.Lang, content, record.Path));
+                pendingSymbols.AddRange(SymbolExtractor.Extract(0, record.Lang, content, record.Path, cancellationToken: cancellationToken));
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch
             {

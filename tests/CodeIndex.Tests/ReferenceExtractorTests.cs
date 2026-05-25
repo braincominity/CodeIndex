@@ -12,6 +12,16 @@ namespace CodeIndex.Tests;
 public class ReferenceExtractorTests
 {
     [Fact]
+    public void Extract_CancelledToken_ThrowsBeforeWork()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() =>
+            ReferenceExtractor.Extract(1, "csharp", "public class App { }", [], cancellationToken: cancellation.Token));
+    }
+
+    [Fact]
     public void Extract_CSharpSelfCall_StampsSelfReference()
     {
         const string content = """

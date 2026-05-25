@@ -18,6 +18,24 @@ namespace CodeIndex.Tests;
 public class FileIndexerTests
 {
     [Fact]
+    public void ScanFilesDetailed_CancelledToken_ThrowsBeforeEnumeration()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-cancel-scan-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        try
+        {
+            Assert.Throws<OperationCanceledException>(() =>
+                new FileIndexer(tempDir).ScanFilesDetailed(cancellationToken: cancellation.Token));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void ScanFilesDetailed_CaseInsensitiveChildDirectory_SkipsCaseOnlyDuplicatePathWithWarning()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-case-dedupe-{Guid.NewGuid():N}");
