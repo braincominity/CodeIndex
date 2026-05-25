@@ -2140,6 +2140,44 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsList_CommonSchemasAdvertiseClientSideConstraints()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var searchTool = tools.First(t => t!["name"]!.GetValue<string>() == "search")!;
+        var searchProperties = searchTool["inputSchema"]!["properties"]!;
+        Assert.Equal(1, searchProperties["query"]!["minLength"]!.GetValue<int>());
+        Assert.Equal(1024, searchProperties["query"]!["maxLength"]!.GetValue<int>());
+        Assert.Equal(1, searchProperties["limit"]!["minimum"]!.GetValue<int>());
+        Assert.Equal(200, searchProperties["limit"]!["maximum"]!.GetValue<int>());
+
+        var pathStringSchema = searchProperties["path"]!["oneOf"]!.AsArray()[0]!;
+        Assert.Equal(4096, pathStringSchema["maxLength"]!.GetValue<int>());
+        Assert.NotNull(pathStringSchema["pattern"]);
+
+        var referencesTool = tools.First(t => t!["name"]!.GetValue<string>() == "references")!;
+        var kindEnum = referencesTool["inputSchema"]!["properties"]!["kind"]!["enum"]!.AsArray()
+            .Select(v => v!.GetValue<string>())
+            .ToArray();
+        Assert.Contains("call", kindEnum);
+        Assert.Contains("type_reference", kindEnum);
+    }
+
+    [Fact]
+    public void ToolCall_WithStructuredContent_DeclaresJsonMimeType()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ping","arguments":{}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var content = response["result"]!["content"]!.AsArray()[0]!;
+        Assert.Equal("text", content["type"]!.GetValue<string>());
+        Assert.Equal("application/json", content["mimeType"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsList_NavigationDescriptionsIncludeConcreteExamples()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;

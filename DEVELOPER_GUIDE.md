@@ -800,7 +800,7 @@ The documented `status --json` trust contract spans `fold_ready`, `fold_ready_re
 
 `ReferenceResult` includes `is_self_reference` and `is_mutual_recursion`; `CallerResult` includes `has_self_reference` and `has_mutual_recursion`. These fields identify self-recursive edges and direct two-symbol cycles without removing valid recursive calls from default graph results. Reader APIs that need a non-recursive view can opt into self-reference exclusion.
 
-MCP tool calls return structured JSON in `structuredContent` plus a short summary in `content`, so clients can consume typed data directly.
+MCP tool calls return structured JSON in `structuredContent` plus a short summary in `content`, so clients can consume typed data directly. Text content blocks include `mimeType`: `application/json` when a structured payload is present and `text/plain` otherwise. Tool input schemas also carry common JSON Schema constraints (`minimum` / `maximum` for limits and line counts, `maxLength` for free text, `pattern` for workspace-relative path filters, and `enum` for common kind values) so MCP-aware clients can reject invalid requests before dispatch.
 
 Exact-match flag compatibility is documented in [USER_GUIDE.md](USER_GUIDE.md#flag-compatibility-and-migrations). Keep MCP schemas aligned with that table: `search.exact` is the legacy alias for `exactSubstring`, while name-based tools use `exact` as the legacy alias for `exactName`. Do not add new exact-match aliases without updating the compatibility table, CLI help, MCP descriptions, and changelog fragment together.
 
@@ -2614,7 +2614,11 @@ mock に頼らないリリース前検証として、`install.sh --reinstall-rea
 見つかった場所を使い、その後に platform default として Windows では
 `%LOCALAPPDATA%\cdidx\logs\`、macOS では `~/Library/Logs/cdidx/`、
 Linux では `~/.local/state/cdidx/logs/` を使う。ファイル名は `stderr-YYYYMMDD.log`。
-保持世代は新しい 30 ファイルまで。通常の開発/テストサイクルで
+`CDIDX_LOG_FORMAT=json` または `--log-format json` で 1 行 1 JSON object
+（`ts`、`level`、`msg`）の JSONL に切り替えられる。`CDIDX_LOG_RETAIN` /
+`--log-retain-count` は保持ファイル数、`CDIDX_LOG_MAX_SIZE_MB` /
+`--log-max-size-mb` は日次ファイルのサイズローテーション上限を指定する。
+保持世代の既定は新しい 30 ファイルまで。通常の開発/テストサイクルで
 ワークツリー直下に永続ログが増えないよう、`src/CodeIndex/bin/...`
 と `tests/.../bin/...` からのリポジトリ内開発実行は既定で対象外として
 いる。完全に無効化したい場合は `CDIDX_DISABLE_PERSISTENT_LOG=1`、
