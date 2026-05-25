@@ -2156,6 +2156,10 @@ public static class IndexCommandRunner
                 ThrowIfUpdateCancelled();
                 WriteUpdateVerboseStatus($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
             }
+            catch (IndexExtractionStalledException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 if (ex is FileIndexer.BinaryFileSkippedException)
@@ -3761,6 +3765,9 @@ public static class IndexCommandRunner
                 lastExtractionProgressAt = Stopwatch.GetTimestamp();
                 currentJsonIndexFile = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, item.FilePath));
                 EnsureIndexingActivityVisible();
+                if (item.Exception is IndexExtractionStalledException stalledException)
+                    throw stalledException;
+
                 try
                 {
                     if (item.Exception != null)
@@ -3905,6 +3912,10 @@ public static class IndexCommandRunner
                     txn.Commit();
 
                     WriteIndexVerboseStatus($"  [OK  ] {record.Path} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
+                }
+                catch (IndexExtractionStalledException)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
