@@ -270,7 +270,7 @@ public class McpServerTests : IDisposable
     [Fact]
     public void Initialize_CapturesClientCapabilitiesAndRootsForSessionStatus()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{"experimental":{"progress":true}},"rootUri":"file:///workspace","roots":[{"uri":"file:///workspace/src"}]}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"codex","version":"5.0"},"capabilities":{"experimental":{"progress":true}},"rootUri":"file:///workspace","roots":[{"uri":"file:///workspace/src"}]}}""")!;
         _server.HandleMessage(request);
 
         Assert.True(_server.ClientCapabilitiesForTests!["experimental"]!["progress"]!.GetValue<bool>());
@@ -281,6 +281,8 @@ public class McpServerTests : IDisposable
         var session = response["result"]!["structuredContent"]!["mcp_session"]!;
 
         Assert.True(session["client_capabilities"]!["experimental"]!["progress"]!.GetValue<bool>());
+        Assert.Equal("codex", session["client_info"]!["name"]!.GetValue<string>());
+        Assert.Equal("5.0", session["client_info"]!["version"]!.GetValue<string>());
         Assert.Equal("file:///workspace", session["roots"]!.AsArray()[0]!.GetValue<string>());
         Assert.Equal("info", session["log_level"]!.GetValue<string>());
     }

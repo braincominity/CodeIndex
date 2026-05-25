@@ -136,7 +136,7 @@ The documented `status --json` trust contract covers these fields:
 </tbody>
 </table>
 
-For MCP `status`, `mcp_session` is session-scoped diagnostic data rather than persisted index state. It includes `log_level`, `roots`, and optional `client_capabilities`.
+For MCP `status`, `mcp_session` is session-scoped diagnostic data rather than persisted index state. It includes `log_level`, `roots`, optional `client_info`, and optional `client_capabilities`.
 
 `hotspot_family_degraded_reason` uses these values:
 
