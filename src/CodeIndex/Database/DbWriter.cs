@@ -821,7 +821,10 @@ public class DbWriter
             cmd.Parameters["@checksum"].Value = (object?)file.Checksum ?? DBNull.Value;
             cmd.Parameters["@modified"].Value = file.Modified;
             cmd.Parameters["@generated"].Value = file.Generated ? 1 : 0;
-            return (long)cmd.ExecuteScalar()!;
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read())
+                throw new InvalidOperationException("SQLite RETURNING id produced no row for file upsert.");
+            return reader.GetInt64(0);
         }
         finally
         {

@@ -199,24 +199,24 @@ public class McpServerTests : IDisposable
         using var writer = new StringWriter();
         using var error = new StringWriter();
 
-        Monitor.Enter(TestConsoleLock.Gate);
-        try
+        await Task.Run(() =>
         {
-            var previousError = Console.Error;
-            try
+            lock (TestConsoleLock.Gate)
             {
-                Console.SetError(error);
-                await _server.ProcessLineAsync("""{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"ping","arguments":{}}}""", writer);
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(error);
+#pragma warning disable xUnit1031
+                    _server.ProcessLineAsync("""{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"ping","arguments":{}}}""", writer).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
             }
-            finally
-            {
-                Console.SetError(previousError);
-            }
-        }
-        finally
-        {
-            Monitor.Exit(TestConsoleLock.Gate);
-        }
+        });
 
         var line = error.ToString()
             .Split('\n', StringSplitOptions.RemoveEmptyEntries)
@@ -239,24 +239,24 @@ public class McpServerTests : IDisposable
         using var writer = new StringWriter();
         using var error = new StringWriter();
 
-        Monitor.Enter(TestConsoleLock.Gate);
-        try
+        await Task.Run(() =>
         {
-            var previousError = Console.Error;
-            try
+            lock (TestConsoleLock.Gate)
             {
-                Console.SetError(error);
-                await _server.ProcessLineAsync("""{"jsonrpc":"2.0","id":321,"method":"tools/call","params":{"name":42,"arguments":{}}}""", writer);
+                var previousError = Console.Error;
+                try
+                {
+                    Console.SetError(error);
+#pragma warning disable xUnit1031
+                    _server.ProcessLineAsync("""{"jsonrpc":"2.0","id":321,"method":"tools/call","params":{"name":42,"arguments":{}}}""", writer).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                }
+                finally
+                {
+                    Console.SetError(previousError);
+                }
             }
-            finally
-            {
-                Console.SetError(previousError);
-            }
-        }
-        finally
-        {
-            Monitor.Exit(TestConsoleLock.Gate);
-        }
+        });
 
         var response = JsonNode.Parse(writer.ToString())!;
         var data = response["error"]!["data"]!;
@@ -8879,6 +8879,73 @@ public class McpServerTests : IDisposable
         Assert.Equal(0, structuredWrongKind["count"]!.GetValue<int>());
     }
 
+    [Fact]
+    public async Task ProcessFrameAsync_RequestTimeout_ReturnsStructuredTimeoutError()
+    {
+        using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: false)
+        {
+            RequestTimeout = TimeSpan.FromMilliseconds(20),
+        };
+        server.RequestDelayForTests = _ =>
+        {
+            Thread.Sleep(TimeSpan.FromMilliseconds(200));
+            return Task.CompletedTask;
+        };
+
+        var responseText = await server.ProcessFrameAsync(
+            """{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"status"}}""");
+
+        var response = JsonNode.Parse(responseText!)!;
+        var error = response["error"]!;
+        Assert.Equal(-32603, error["code"]!.GetValue<int>());
+        Assert.Equal("Request timed out", error["message"]!.GetValue<string>());
+        Assert.Equal("timeout", error["data"]!["reason"]!.GetValue<string>());
+        Assert.True(error["data"]!["elapsed_ms"]!.GetValue<long>() >= 1);
+        Assert.Equal("internal_error", error["data"]!["category"]!.GetValue<string>());
+        Assert.True(error["data"]!["retry_safe"]!.GetValue<bool>());
+        Assert.Equal(123, response["id"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public async Task ProcessFrameAsync_BatchRequestTimeout_ReturnsStructuredTimeoutError()
+    {
+        using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: false)
+        {
+            RequestTimeout = TimeSpan.FromMilliseconds(20),
+        };
+        server.RequestDelayForTests = _ =>
+        {
+            Thread.Sleep(TimeSpan.FromMilliseconds(200));
+            return Task.CompletedTask;
+        };
+
+        var responseText = await server.ProcessFrameAsync(
+            """[{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"status"}}]""");
+
+        var response = JsonNode.Parse(responseText!)!.AsArray().Single()!;
+        var error = response["error"]!;
+        Assert.Equal(-32603, error["code"]!.GetValue<int>());
+        Assert.Equal("Request timed out", error["message"]!.GetValue<string>());
+        Assert.Equal("timeout", error["data"]!["reason"]!.GetValue<string>());
+        Assert.Equal(123, response["id"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public async Task RunAsync_StdioEofDrainsInFlightRequestBeforeReturning()
+    {
+        using var server = new McpServer(_dbPath, "1.0", dbPathExplicit: false);
+        server.RequestRegisteredForTests = _ => { };
+        var transport = new QueuedFrameTransport(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""");
+
+        await server.RunAsync(transport, CancellationToken.None);
+
+        Assert.Single(transport.WrittenFrames);
+        var response = JsonNode.Parse(transport.WrittenFrames[0]!)!;
+        Assert.Equal(1, response["id"]!.GetValue<int>());
+        Assert.Null(response["error"]);
+    }
+
     private static string CreateLegacyDbWithoutIndexedAt()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_legacy_{Guid.NewGuid():N}.db");
@@ -9690,6 +9757,31 @@ public class McpServerTests : IDisposable
         await runTask.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(0, transport.WriteCalls);
+    }
+
+    private sealed class QueuedFrameTransport : IMcpTransport
+    {
+        private readonly Queue<string?> _frames;
+
+        public QueuedFrameTransport(params string[] frames)
+        {
+            _frames = new Queue<string?>(frames.Cast<string?>().Append(null));
+        }
+
+        public string Name => "stdio";
+        public string Endpoint => "memory://queued";
+        public List<string?> WrittenFrames { get; } = [];
+
+        public Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
+            => Task.FromResult(_frames.Count == 0 ? null : _frames.Dequeue());
+
+        public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
+        {
+            WrittenFrames.Add(frame);
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     /// <summary>

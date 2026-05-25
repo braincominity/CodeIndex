@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -59,10 +60,11 @@ public partial class McpServer : IDisposable
     // 直後にリセットする。`WithDbReader` が `DbReader` にライブな cancellation token
     // を渡せるようにするため (#1567)。
     private readonly AsyncLocal<CancellationToken> _currentRequestToken = new();
+    private readonly AsyncLocal<bool> _isolateDbForCurrentRequest = new();
     private readonly AsyncLocal<Action<string>?> _currentOutOfBandFrameWriter = new();
     private readonly AsyncLocal<List<Action>?> _deferredFrameLogs = new();
     private static readonly AsyncLocal<RequestCorrelationContext?> CurrentCorrelationContext = new();
-    private bool _running = true;
+    private volatile bool _running = true;
     // Per-session DbContext reused across MCP tool calls. Holding the connection open
     // avoids reopening SQLite, reapplying pragmas, and re-registering every SQL function
     // on each invocation (issue #1494).
@@ -84,6 +86,8 @@ public partial class McpServer : IDisposable
     // ツール呼び出し監査ログ (#1562)。`--audit-log` 未指定時は null。AuditLogSink のライフサイクル
     // (ファイルハンドル / rotation) は ProgramRunner 側で所有する。
     private readonly AuditLogSink? _auditLog;
+    private readonly TimeSpan _requestTimeout;
+    private readonly SemaphoreSlim _textWriterGate = new(1, 1);
     // `initialize.clientInfo` echoed into every audit record so the trail can answer
     // "which client issued this call?" without a second log source. Updated on every
     // `initialize` so a single-session reconnection picks up the new caller identity.
@@ -155,6 +159,9 @@ public partial class McpServer : IDisposable
     // tool calls wedge the SQLite reader lock or balloon memory (#1567).
     // 同時 in-flight ツール呼び出し数の既定上限 (#1567)。
     internal const int DefaultMaxConcurrency = 8;
+    internal static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(60);
+    internal static readonly TimeSpan DefaultEofDrainTimeout = TimeSpan.FromSeconds(5);
+    internal static readonly TimeSpan DefaultEofPostCancelDrainTimeout = TimeSpan.FromSeconds(5);
 
     public McpServer(string dbPath, string version, bool dbPathExplicit = false)
         : this(dbPath, version, dbPathExplicit, null, null, null, null, DefaultMaxConcurrency)
@@ -237,6 +244,7 @@ public partial class McpServer : IDisposable
         RateLimiter = new RateLimiter(RateLimiterOptions.FromEnvironment());
         _concurrencyGate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
         MaxConcurrency = maxConcurrency;
+        _requestTimeout = DefaultRequestTimeout;
     }
 
     /// <summary>
@@ -277,6 +285,7 @@ public partial class McpServer : IDisposable
     internal string CurrentSessionId => _sessionId;
 
     internal Action<JsonNode?>? RequestRegisteredForTests { get; set; }
+    internal Func<CancellationToken, Task>? RequestDelayForTests { get; set; }
 
     /// <summary>
     /// Cap configured for concurrent in-flight tool calls (#1567). Surfaced for tests so
@@ -284,6 +293,14 @@ public partial class McpServer : IDisposable
     /// 現在設定されている in-flight ツール呼び出し上限 (#1567)。テスト向けに公開。
     /// </summary>
     internal int MaxConcurrency { get; }
+
+    internal TimeSpan RequestTimeout
+    {
+        get => _requestTimeout;
+        init => _requestTimeout = value <= TimeSpan.Zero
+            ? throw new ArgumentOutOfRangeException(nameof(value), value, "MCP request timeout must be greater than zero.")
+            : value;
+    }
 
     /// <summary>
     /// Run the MCP server loop on the default stdio transport. Kept as a thin wrapper around
@@ -491,8 +508,8 @@ public partial class McpServer : IDisposable
 
     private async Task RunConcurrentFrameLoopAsync(IMcpTransport transport, CancellationToken loopToken)
     {
-        using var writeGate = new SemaphoreSlim(1, 1);
-        using var normalFrameGate = new SemaphoreSlim(1, 1);
+        var writeGate = new SemaphoreSlim(1, 1);
+        var normalFrameGate = new SemaphoreSlim(1, 1);
         var tasks = new List<Task>();
 
         while (_running)
@@ -593,8 +610,58 @@ public partial class McpServer : IDisposable
             SpinWait.SpinUntil(() => !_running || _activeRequests.Count > 0, TimeSpan.FromMilliseconds(50));
         }
 
-        await Task.WhenAll(tasks).ConfigureAwait(false);
+        await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout, DefaultEofPostCancelDrainTimeout).ConfigureAwait(false);
         Console.Error.WriteLine("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
+    }
+
+    private async Task DrainInFlightTasksAsync(List<Task> tasks, TimeSpan gracePeriod, TimeSpan postCancelGracePeriod)
+    {
+        tasks.RemoveAll(task => task.IsCompleted);
+        if (tasks.Count == 0)
+            return;
+
+        var allTasks = Task.WhenAll(tasks);
+        var completed = await Task.WhenAny(allTasks, Task.Delay(gracePeriod)).ConfigureAwait(false);
+        if (completed == allTasks)
+        {
+            await ObserveInFlightTasksAsync(allTasks).ConfigureAwait(false);
+            return;
+        }
+
+        Console.Error.WriteLine($"[cdidx-mcp] EOF reached with {tasks.Count} in-flight request(s); cancelling after {gracePeriod.TotalMilliseconds:0}ms grace period.");
+        try
+        {
+            if (!_shutdownCts.IsCancellationRequested)
+                _shutdownCts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposal raced EOF drain; no further action is possible.
+        }
+
+        completed = await Task.WhenAny(allTasks, Task.Delay(postCancelGracePeriod)).ConfigureAwait(false);
+        if (completed == allTasks)
+        {
+            await ObserveInFlightTasksAsync(allTasks).ConfigureAwait(false);
+            return;
+        }
+
+        _ = allTasks.ContinueWith(task =>
+        {
+            _ = task.Exception;
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
+    private static async Task ObserveInFlightTasksAsync(Task tasks)
+    {
+        try
+        {
+            await tasks.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[cdidx-mcp] In-flight request ended during EOF drain ({ex.GetType().Name}).");
+        }
     }
 
     /// <summary>
@@ -612,8 +679,16 @@ public partial class McpServer : IDisposable
         {
             try
             {
-                await WriteJsonLineAsync(writer, response).ConfigureAwait(false);
-                FlushDeferredFrameLogs();
+                await _textWriterGate.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    await WriteJsonLineAsync(writer, response).ConfigureAwait(false);
+                    FlushDeferredFrameLogs();
+                }
+                finally
+                {
+                    _textWriterGate.Release();
+                }
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
             {
@@ -700,7 +775,7 @@ public partial class McpServer : IDisposable
             ExtractResponseId(request, out responseHasId, out responseId);
             if (responseHasId && CurrentCorrelationContext.Value is null)
                 frameCorrelationScope = BeginRequestCorrelation(responseId);
-            var response = await HandleMessageAsync(request).ConfigureAwait(false);
+            var response = await HandleMessageAsync(request, isolateRequestDb: true).ConfigureAwait(false);
             return response != null ? SerializeResponseOrFallback(response, responseHasId, responseId) : null;
         }
         catch (JsonException ex)
@@ -882,12 +957,15 @@ public partial class McpServer : IDisposable
     /// JSON-RPCメッセージを適切なハンドラにルーティング。
     /// </summary>
     internal JsonNode? HandleMessage(JsonNode request)
-        => HandleMessageAsync(request).GetAwaiter().GetResult();
+        => HandleMessageAsync(request, isolateRequestDb: false).GetAwaiter().GetResult();
 
-    internal async Task<JsonNode?> HandleMessageAsync(JsonNode request)
+    internal Task<JsonNode?> HandleMessageAsync(JsonNode request)
+        => HandleMessageAsync(request, isolateRequestDb: false);
+
+    private async Task<JsonNode?> HandleMessageAsync(JsonNode request, bool isolateRequestDb)
     {
         if (request is JsonArray batch)
-            return HandleBatchMessage(batch);
+            return await HandleBatchMessageAsync(batch, isolateRequestDb).ConfigureAwait(false);
 
         if (request is not JsonObject obj)
             return CreateErrorResponse(hasId: false, id: null, code: -32600, message: "Invalid request: expected JSON object",
@@ -985,7 +1063,7 @@ public partial class McpServer : IDisposable
                 retrySafe: false);
         }
 
-        return await DispatchWithRequestCancellationAsync(id, () => method switch
+        return await DispatchWithRequestCancellationAsync(id, isolateRequestDb, () => method switch
         {
             "initialize" => Task.FromResult<JsonNode>(HandleInitialize(id, request["params"])),
             "tools/list" => Task.FromResult<JsonNode>(HandleToolsList(id)),
@@ -1003,7 +1081,7 @@ public partial class McpServer : IDisposable
         }).ConfigureAwait(false);
     }
 
-    private JsonNode? HandleBatchMessage(JsonArray batch)
+    private async Task<JsonNode?> HandleBatchMessageAsync(JsonArray batch, bool isolateRequestDb)
     {
         if (batch.Count == 0)
             return CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: empty batch",
@@ -1044,7 +1122,7 @@ public partial class McpServer : IDisposable
             }
             else
             {
-                response = HandleMessage(item);
+                response = await HandleMessageAsync(item, isolateRequestDb).ConfigureAwait(false);
             }
 
             if (response != null)
@@ -1055,17 +1133,18 @@ public partial class McpServer : IDisposable
     }
 
     private JsonNode DispatchWithRequestCancellation(JsonNode? id, Func<JsonNode> action)
-        => DispatchWithRequestCancellationAsync(id, () => Task.FromResult(action())).GetAwaiter().GetResult();
+        => DispatchWithRequestCancellationAsync(id, isolateRequestDb: false, () => Task.FromResult(action())).GetAwaiter().GetResult();
 
-    private async Task<JsonNode> DispatchWithRequestCancellationAsync(JsonNode? id, Func<Task<JsonNode>> action)
+    private async Task<JsonNode> DispatchWithRequestCancellationAsync(JsonNode? id, bool isolateRequestDb, Func<Task<JsonNode>> action)
     {
         var requestKey = SerializeRequestId(id);
         if (requestKey == null)
             return await action().ConfigureAwait(false);
 
-        using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(_currentRequestToken.Value, _shutdownCts.Token);
+        var requestCts = CancellationTokenSource.CreateLinkedTokenSource(_currentRequestToken.Value, _shutdownCts.Token);
         if (!_activeRequests.TryAdd(requestKey, requestCts))
         {
+            requestCts.Dispose();
             return CreateErrorResponse(hasId: true, id: id, code: -32600, message: "Duplicate in-flight request id",
                 category: McpErrorEnvelope.CategoryInvalidRequest,
                 suggestion: "JSON-RPC request ids must be unique while a previous request with the same id is still running.",
@@ -1074,22 +1153,79 @@ public partial class McpServer : IDisposable
         RequestRegisteredForTests?.Invoke(id);
 
         var previousToken = _currentRequestToken.Value;
+        var stopwatch = Stopwatch.StartNew();
+        var cleanupNow = true;
         try
         {
             _currentRequestToken.Value = requestCts.Token;
+            requestCts.CancelAfter(_requestTimeout);
             requestCts.Token.ThrowIfCancellationRequested();
-            return await action().ConfigureAwait(false);
+            if (!isolateRequestDb)
+            {
+                if (RequestDelayForTests is { } delay)
+                    await delay(requestCts.Token).ConfigureAwait(false);
+                return await action().ConfigureAwait(false);
+            }
+
+            var actionTask = Task.Run(async () =>
+            {
+                var previousIsolation = _isolateDbForCurrentRequest.Value;
+                _isolateDbForCurrentRequest.Value = isolateRequestDb;
+                try
+                {
+                    if (RequestDelayForTests is { } delay)
+                        await delay(requestCts.Token).ConfigureAwait(false);
+                    return await action().ConfigureAwait(false);
+                }
+                finally
+                {
+                    _isolateDbForCurrentRequest.Value = previousIsolation;
+                }
+            }, requestCts.Token);
+            var completed = await Task.WhenAny(actionTask, Task.Delay(_requestTimeout)).ConfigureAwait(false);
+            if (completed != actionTask)
+            {
+                try { requestCts.Cancel(); }
+                catch (ObjectDisposedException) { /* completed while timeout cancellation was being delivered. */ }
+                cleanupNow = false;
+                _ = actionTask.ContinueWith(task =>
+                {
+                    _ = task.Exception;
+                    _activeRequests.TryRemove(requestKey, out _);
+                    requestCts.Dispose();
+                }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                return CreateRequestTimeoutResponse(id, stopwatch.Elapsed);
+            }
+
+            return await actionTask.ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (requestCts.IsCancellationRequested)
         {
+            if (!previousToken.IsCancellationRequested && !_shutdownCts.IsCancellationRequested && stopwatch.Elapsed >= _requestTimeout)
+                return CreateRequestTimeoutResponse(id, stopwatch.Elapsed);
             return CreateCancelledResponse(id);
         }
         finally
         {
             _currentRequestToken.Value = previousToken;
-            _activeRequests.TryRemove(requestKey, out _);
+            if (cleanupNow)
+            {
+                _activeRequests.TryRemove(requestKey, out _);
+                requestCts.Dispose();
+            }
         }
     }
+
+    private static JsonObject CreateRequestTimeoutResponse(JsonNode? id, TimeSpan elapsed)
+        => CreateErrorResponse(hasId: true, id: id, code: -32603, message: "Request timed out",
+            category: McpErrorEnvelope.CategoryInternalError,
+            suggestion: "Retry with a narrower query, refresh the index if it is degraded, or increase the MCP request timeout before retrying.",
+            retrySafe: true,
+            extraData: new JsonObject
+            {
+                ["reason"] = "timeout",
+                ["elapsed_ms"] = (long)Math.Ceiling(elapsed.TotalMilliseconds),
+            });
 
     private static IDisposable BeginRequestCorrelation(JsonNode? id)
     {
@@ -2287,14 +2423,25 @@ public partial class McpServer : IDisposable
                 retrySafe: true);
         }
 
+        var requestToken = _currentRequestToken.Value;
+        requestToken.ThrowIfCancellationRequested();
+        if (_isolateDbForCurrentRequest.Value)
+        {
+            using var isolatedDb = new DbContext(_dbPath);
+            isolatedDb.TryMigrateForRead();
+            var isolatedReader = new DbReader(isolatedDb, requestToken);
+            isolatedReader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
+            return isolatedReader.RunWithGeneratedScope(() => action(isolatedReader));
+        }
+
         var db = GetOrOpenSharedDb();
         if (!_sharedDbReadMigrated)
         {
             db.TryMigrateForRead();
             _sharedDbReadMigrated = true;
         }
-        // Reuse the connection-scoped schema cache so each MCP tool call no longer
-        // re-runs PRAGMA table_info / PRAGMA index_list per DbReader (issue #1565),
+        // Reuse the connection-scoped schema cache for single-threaded direct callers so each
+        // call no longer re-runs PRAGMA table_info / PRAGMA index_list per DbReader (issue #1565),
         // and hand the per-request cancellation token to the reader so SQLite work
         // the tool kicks off can observe shutdown / client-disconnect cancellation
         // (#1567). The token is `CancellationToken.None` outside an in-flight request,
@@ -2303,21 +2450,18 @@ public partial class McpServer : IDisposable
         // MCP ツール呼び出しごとの schema 再走査を排除し (issue #1565)、
         // per-request cancellation token を reader に渡して SQLite 作業が
         // shutdown / 切断を観測できるようにする (#1567)。
-        var requestToken = _currentRequestToken.Value;
-        requestToken.ThrowIfCancellationRequested();
         var reader = new DbReader(db, requestToken);
         reader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
         return reader.RunWithGeneratedScope(() => action(reader));
     }
 
     /// <summary>
-    /// Open the per-session DbContext on first use and reuse it on every subsequent call.
+    /// Open the per-session DbContext on first use and reuse it on every subsequent direct call.
     /// Centralising the open lets us pay the connection setup, pragma application, and SQL
-    /// function registration once per MCP session instead of once per tool invocation
-    /// (#1494). The MCP loop is single-threaded, so no locking is required.
-    /// MCP セッション初回呼び出し時に DbContext を開き、以後は再利用する。接続セットアップや
-    /// PRAGMA・SQL 関数登録のコストを毎ツール呼び出しごとに払わないようにする（#1494）。
-    /// MCP ループは単一スレッドのためロック不要。
+    /// function registration once per direct session instead of once per tool invocation
+    /// (#1494). Transport requests that may time out independently use isolated DB contexts.
+    /// 直接呼び出しセッション初回に DbContext を開き、以後は再利用する。timeout 後も独立して
+    /// 継続し得る transport リクエストは、共有接続を避けるためリクエスト単位の DB context を使う。
     /// </summary>
     internal DbContext GetOrOpenSharedDb()
     {
