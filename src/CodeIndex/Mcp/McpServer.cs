@@ -602,8 +602,34 @@ public partial class McpServer : IDisposable
             SpinWait.SpinUntil(() => !_running || _activeRequests.Count > 0, TimeSpan.FromMilliseconds(50));
         }
 
-        await Task.WhenAll(tasks).ConfigureAwait(false);
+        await DrainInFlightTasksAsync(tasks, DefaultEofDrainTimeout).ConfigureAwait(false);
         Console.Error.WriteLine("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
+    }
+
+    private async Task DrainInFlightTasksAsync(List<Task> tasks, TimeSpan gracePeriod)
+    {
+        tasks.RemoveAll(task => task.IsCompleted);
+        if (tasks.Count == 0)
+            return;
+
+        var allTasks = Task.WhenAll(tasks);
+        var completed = await Task.WhenAny(allTasks, Task.Delay(gracePeriod)).ConfigureAwait(false);
+        if (completed == allTasks)
+        {
+            await allTasks.ConfigureAwait(false);
+            return;
+        }
+
+        Console.Error.WriteLine($"[cdidx-mcp] EOF reached with {tasks.Count} in-flight request(s); cancelling after {gracePeriod.TotalMilliseconds:0}ms grace period.");
+        try
+        {
+            if (!_shutdownCts.IsCancellationRequested)
+                _shutdownCts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposal raced EOF drain; no further action is possible.
+        }
     }
 
     /// <summary>
