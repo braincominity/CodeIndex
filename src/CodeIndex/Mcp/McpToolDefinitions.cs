@@ -482,6 +482,7 @@ public partial class McpServer
         };
 
         AddProjectScopeProperties(tools);
+        AddCommonSchemaConstraints(tools);
 
         // Per-deployment enablement gate (#1561). Drop any tool the operator disabled via
         // `CDIDX_MCP_TOOLS_ALLOW` / `CDIDX_MCP_TOOLS_DENY` so AI clients never see destructive
@@ -543,5 +544,83 @@ public partial class McpServer
                 ["description"] = "Solution file used to resolve project filters when the workspace has multiple .sln files.",
             };
         }
+    }
+
+    private static void AddCommonSchemaConstraints(JsonArray tools)
+    {
+        foreach (var tool in tools.OfType<JsonObject>())
+        {
+            var properties = tool["inputSchema"]?["properties"] as JsonObject;
+            if (properties == null)
+                continue;
+
+            foreach (var (name, schema) in properties)
+                ApplyCommonSchemaConstraint(name, schema);
+        }
+    }
+
+    private static void ApplyCommonSchemaConstraint(string name, JsonNode? schema)
+    {
+        if (schema is not JsonObject obj)
+            return;
+
+        if (obj["oneOf"] is JsonArray oneOf)
+        {
+            foreach (var option in oneOf)
+                ApplyCommonSchemaConstraint(name, option);
+        }
+
+        if (obj["type"]?.GetValue<string>() == "array" && obj["items"] is JsonObject items)
+            ApplyCommonSchemaConstraint(name, items);
+
+        switch (name)
+        {
+            case "query":
+            case "description":
+            case "context":
+            case "toolInvocationContext":
+                obj.TryAdd("minLength", 1);
+                obj.TryAdd("maxLength", 1024);
+                break;
+            case "path":
+            case "project":
+            case "solution":
+                obj.TryAdd("minLength", 1);
+                obj.TryAdd("maxLength", 4096);
+                obj.TryAdd("pattern", @"^(?!/)(?![A-Za-z]:)(?!.*(^|/)\.\.(/|$))(?!.*\u0000).*$");
+                AppendConstraintDescription(obj, "Must be workspace-relative, non-empty, and must not contain NUL bytes or `..` path traversal segments.");
+                break;
+            case "excludePaths":
+                obj.TryAdd("maxItems", 100);
+                break;
+            case "limit":
+                obj.TryAdd("minimum", 1);
+                obj.TryAdd("maximum", MaxLimit);
+                break;
+            case "startLine":
+            case "endLine":
+                obj.TryAdd("minimum", 1);
+                break;
+            case "before":
+            case "after":
+                obj.TryAdd("maximum", MaxContextLines);
+                break;
+            case "kind":
+                obj.TryAdd("enum", new JsonArray { "function", "class", "interface", "struct", "enum", "property", "field", "method", "namespace", "import", "call", "instantiate", "subscribe", "unsubscribe", "friend", "attribute", "annotation", "type_reference" });
+                break;
+            case "lang":
+            case "language":
+                obj.TryAdd("pattern", "^[A-Za-z0-9_+.#-]{1,64}$");
+                obj.TryAdd("maxLength", 64);
+                break;
+        }
+    }
+
+    private static void AppendConstraintDescription(JsonObject obj, string sentence)
+    {
+        var description = obj["description"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(description) || description.Contains(sentence, StringComparison.Ordinal))
+            return;
+        obj["description"] = $"{description} {sentence}";
     }
 }
