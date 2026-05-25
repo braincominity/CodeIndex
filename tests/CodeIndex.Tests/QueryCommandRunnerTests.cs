@@ -651,6 +651,33 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunBatch_EmptySqliteFileRejectedBeforeQuery_Issue2037()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2037_batch_empty_sqlite");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "empty.db");
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+            }
+
+            var (exitCode, _, stderr) = CaptureConsoleWithInput(
+                "[\"status\",\"--json\"]\n",
+                () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains("does not appear to be a valid CodeIndex database", stderr);
+            Assert.Contains("missing required table `files`", stderr);
+            Assert.Contains("Hint: rebuild with `cdidx index <projectPath> --db <path>`", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ParseArgs_ImpactDepthZeroIsRetainedWhenExplicit()
     {
         var options = QueryCommandRunner.ParseArgs(["RunImpact", "--depth", "0"], jsonDefault: false, allowNamedQuery: true);
@@ -2873,6 +2900,33 @@ jobs:
             Assert.Contains($"Error [{CommandErrorCodes.DbError}]: SQLite database error", stderr);
             Assert.Contains("Hint: check `--db`, verify the index was written by a compatible cdidx version", stderr);
             Assert.DoesNotContain("database error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void WithDb_EmptySqliteFileRejectedBeforeQuery_Issue2037()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue2037_empty_sqlite");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "empty.db");
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+            }
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains("does not appear to be a valid CodeIndex database", stderr);
+            Assert.Contains("missing required table `files`", stderr);
+            Assert.Contains("Hint: rebuild with `cdidx index <projectPath> --db <path>`", stderr);
         }
         finally
         {

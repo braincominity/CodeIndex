@@ -97,6 +97,12 @@ Usage: <command shape>
 
 When an error code is available, the first line is `Error [<code>]: <message>`. Use `CommandErrorWriter` for new CLI parse, validation, and filesystem preflight errors so `ProgramRunner`, `IndexCommandRunner`, and query runners keep the same format. JSON error payloads continue to use `CommandErrorJsonResult`.
 
+### CLI output encoding and terminal controls
+
+CLI JSON output must be machine-clean: redirected stdout is written as UTF-8 without a BOM, and JSON-mode commands must not emit ANSI escape sequences even when `--color=always` or `CLICOLOR_FORCE=1` would color human output. Keep JSON-safe styling suppression close to shared formatting helpers such as `ConsoleUi.ColorizeKind` so future query output paths inherit the invariant.
+
+Interactive terminal controls are allowed only when stdout is not redirected or captured, terminal capability hints are present, and the environment has not opted out. Treat `TERM=dumb`, truthy `CI`, missing Unix terminal hints, `NO_COLOR`, and `CLICOLOR=0` as reasons to suppress ANSI/progress controls unless an explicitly human-facing override is documented for that control.
+
 ### C# / .NET integration
 
 `SolutionProjectResolver` parses the plain-text `.sln` `Project(...) = "...", "...csproj"` entries and resolves C# / F# / VB project files. When exactly one `.sln` exists at the workspace root, `--project <name|path>` uses it automatically; otherwise callers can pass `--solution <path>`.
@@ -177,6 +183,18 @@ Operators can override the defaults with environment variables:
 
 After a successful `cdidx index` run, the writer refreshes SQLite planner statistics so large repositories do not rely on default selectivity estimates for `search`, `references`, `callers`, and related joins. A brand-new index database runs full `ANALYZE` once after the initial population; later successful index runs use SQLite's lighter `PRAGMA optimize`. This maintenance is best-effort and never changes the schema contract.
 
+### MCP request correlation
+
+Each JSON-RPC MCP request gets a server-generated `correlation_id` in addition to the client-controlled JSON-RPC `id`. Successful MCP responses include it under `result._meta.correlation_id`, and error responses include it in `error.data.correlation_id` or tool-error `result.structuredContent.correlation_id`. The serialized JSON-RPC id is echoed as `request_id` in the same metadata when one exists. `batch_query` assigns child correlation IDs to each slot by suffixing the parent value with `.1`, `.2`, and so on.
+
+MCP stderr diagnostics are prefixed with `[rid=<json-rpc-id> cid=<correlation-id>]` when a request context exists. Every `tools/call` also emits one structured JSON line with `event: "mcp.tool.invocation"`, the tool name, elapsed milliseconds, status, result count when available, error metadata, argument keys, and argument lengths. Argument values are intentionally not logged in this telemetry line.
+
+### MCP リクエスト相関
+
+各 JSON-RPC MCP リクエストには、クライアント制御の JSON-RPC `id` とは別に、サーバー生成の `correlation_id` が割り当てられます。成功レスポンスでは `result._meta.correlation_id`、エラーレスポンスでは `error.data.correlation_id` またはツールエラーの `result.structuredContent.correlation_id` に含まれます。JSON-RPC id がある場合は、同じメタデータにシリアライズ済みの値を `request_id` として入れます。`batch_query` は親の値に `.1`、`.2` のような suffix を付けた子 correlation ID を各スロットに割り当てます。
+
+MCP stderr 診断は、リクエストコンテキストがある場合に `[rid=<json-rpc-id> cid=<correlation-id>]` で prefix されます。各 `tools/call` はさらに `event: "mcp.tool.invocation"` の構造化 JSON 行を 1 行出力し、tool 名、経過ミリ秒、status、取得できる場合の result count、エラーメタデータ、引数キー、引数長を含めます。この telemetry 行には引数値を記録しません。
+
 ## Database schema
 
 Persisted SHA-256 hashes are lowercase hexadecimal strings. New hash emitters
@@ -189,7 +207,7 @@ case-sensitive equality so format drift is visible instead of silently accepted.
 -- File metadata
 files (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    path        TEXT NOT NULL UNIQUE,       -- relative path from project root
+    path        TEXT NOT NULL UNIQUE,       -- relative path from project root, slash-normalized and Unicode NFC
     lang        TEXT,                       -- detected language (e.g. "python")
     size        INTEGER,                    -- file size in bytes
     lines       INTEGER,                    -- line count

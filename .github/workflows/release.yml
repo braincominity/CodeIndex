@@ -277,14 +277,63 @@ jobs:
         run: |
           mkdir -p artifacts
           cd publish
-          tar czf "../artifacts/CodeIndex-${{ matrix.rid }}.tar.gz" .
+          find . -exec touch -t 200001010000 {} +
+          if command -v sha256sum >/dev/null 2>&1; then
+            hash_file() { sha256sum "$1"; }
+          else
+            hash_file() { shasum -a 256 "$1"; }
+          fi
+          find . -type f ! -name MANIFEST.sha256 ! -name .MANIFEST.sha256.tmp | sed 's#^\./##' | LC_ALL=C sort | while IFS= read -r file; do
+            hash_file "$file"
+          done > .MANIFEST.sha256.tmp
+          mv .MANIFEST.sha256.tmp MANIFEST.sha256
+          touch -t 200001010000 MANIFEST.sha256
+          find . -type f | sed 's#^\./##' | LC_ALL=C sort > "../artifacts/CodeIndex-${{ matrix.rid }}.members"
+          tar czf "../artifacts/CodeIndex-${{ matrix.rid }}.tar.gz" -T "../artifacts/CodeIndex-${{ matrix.rid }}.members"
+          tar tzf "../artifacts/CodeIndex-${{ matrix.rid }}.tar.gz" | LC_ALL=C sort > "../artifacts/CodeIndex-${{ matrix.rid }}.actual-members"
+          cmp "../artifacts/CodeIndex-${{ matrix.rid }}.members" "../artifacts/CodeIndex-${{ matrix.rid }}.actual-members"
+          rm "../artifacts/CodeIndex-${{ matrix.rid }}.members" "../artifacts/CodeIndex-${{ matrix.rid }}.actual-members"
 
       - name: Archive release artifacts (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifacts
-          Compress-Archive -Path publish\* -DestinationPath "artifacts\CodeIndex-${{ matrix.rid }}.zip"
+          $fixedTimestamp = [DateTime]'2000-01-01T00:00:00Z'
+          Get-ChildItem publish -Recurse | ForEach-Object { $_.LastWriteTimeUtc = $fixedTimestamp }
+          $files = Get-ChildItem publish -File -Recurse |
+            Where-Object { $_.Name -ne 'MANIFEST.sha256' -and $_.Name -ne '.MANIFEST.sha256.tmp' } |
+            Sort-Object FullName
+          $manifestLines = foreach ($file in $files) {
+            $relative = [System.IO.Path]::GetRelativePath((Resolve-Path publish), $file.FullName).Replace('\', '/')
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
+            "$hash  $relative"
+          }
+          $manifestLines | Set-Content -NoNewline:$false -Encoding ascii publish\MANIFEST.sha256
+          (Get-Item publish\MANIFEST.sha256).LastWriteTimeUtc = $fixedTimestamp
+          $files = Get-ChildItem publish -File -Recurse | Sort-Object FullName
+          $relativeFiles = $files | ForEach-Object { [System.IO.Path]::GetRelativePath((Resolve-Path publish), $_.FullName) } | Sort-Object
+          Push-Location publish
+          try {
+            Compress-Archive -Path $relativeFiles -DestinationPath "..\artifacts\CodeIndex-${{ matrix.rid }}.zip"
+          } finally {
+            Pop-Location
+          }
+          $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path "artifacts\CodeIndex-${{ matrix.rid }}.zip"))
+          try {
+            $actual = $zip.Entries | Where-Object { $_.Name } | ForEach-Object { $_.FullName } | Sort-Object
+            $expected = $relativeFiles | ForEach-Object { $_.Replace('\', '/') } | Sort-Object
+            if (@($actual).Count -ne @($expected).Count) {
+              throw "Archive member count mismatch: expected $(@($expected).Count), got $(@($actual).Count)"
+            }
+            for ($i = 0; $i -lt @($expected).Count; $i++) {
+              if (@($actual)[$i] -ne @($expected)[$i]) {
+                throw "Archive member mismatch at index ${i}: expected '$(@($expected)[$i])', got '$(@($actual)[$i])'"
+              }
+            }
+          } finally {
+            $zip.Dispose()
+          }
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

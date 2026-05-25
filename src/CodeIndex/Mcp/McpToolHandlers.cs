@@ -1639,6 +1639,7 @@ public partial class McpServer
                 ["request_index"] = requestIndex,
                 ["tool"] = toolName,
                 ["ok"] = false,
+                ["correlation_id"] = CurrentCorrelationContext.Value?.CorrelationId,
                 ["args_summary"] = BuildArgsSummary(toolArgs),
                 ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                 ["error"] = errorMessage,
@@ -1685,6 +1686,7 @@ public partial class McpServer
                 ["request_index"] = requestIndex,
                 ["tool"] = toolName,
                 ["ok"] = false,
+                ["correlation_id"] = CurrentCorrelationContext.Value?.CorrelationId,
                 ["args_summary"] = BuildArgsSummary(toolArgs),
                 ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                 ["error"] = $"Rate limit exceeded for tool '{toolName}' (retry after {retryAfterMs} ms).",
@@ -1700,6 +1702,7 @@ public partial class McpServer
 
         for (var requestIndex = 0; requestIndex < queries.Count; requestIndex++)
         {
+            using var slotCorrelation = BeginChildCorrelation(requestIndex + 1);
             var q = queries[requestIndex];
             var queryObject = q as JsonObject;
             var toolName = queryObject?["tool"] is JsonValue toolValue && toolValue.TryGetValue<string>(out var parsedToolName)
@@ -1874,6 +1877,7 @@ public partial class McpServer
                     ["request_index"] = requestIndex,
                     ["tool"] = toolName,
                     ["ok"] = true,
+                    ["correlation_id"] = CurrentCorrelationContext.Value?.CorrelationId,
                     ["args_summary"] = BuildArgsSummary(toolArgs),
                     ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                     ["result"] = structured?.DeepClone(),
@@ -2951,6 +2955,9 @@ public partial class McpServer
     /// description と context にソースコードが含まれていないことを検証する。
     /// </summary>
     private JsonNode ExecuteSuggestImprovement(JsonNode? id, JsonNode? args)
+        => ExecuteSuggestImprovementAsync(id, args).GetAwaiter().GetResult();
+
+    private async Task<JsonNode> ExecuteSuggestImprovementAsync(JsonNode? id, JsonNode? args)
     {
         // 1. Validate required parameters / 必須パラメータのバリデーション
         if (!TryReadRequiredStringParameter(args, "category", out var category, out var requiredError))
@@ -3029,14 +3036,15 @@ public partial class McpServer
 
         // Build GitHub submission callback (null if no token configured).
         // GitHub 送信コールバックを構築（トークン未設定なら null）。
-        Func<SuggestionRecord, SuggestionStore.SubmitAttemptResult>? githubCallback = null;
+        Func<SuggestionRecord, Task<SuggestionStore.SubmitAttemptResult>>? githubCallback = null;
         if (GitHubIssueReporter.ResolveToken() != null)
         {
             var version = _version;
-            githubCallback = r => GitHubIssueReporter.TryCreateIssueDetailedAsync(r, version).GetAwaiter().GetResult();
+            var cancellationToken = _currentRequestToken.Value;
+            githubCallback = r => GitHubIssueReporter.TryCreateIssueDetailedAsync(r, version, cancellationToken);
         }
 
-        var result = store.TryAddAndSubmit(record, githubCallback);
+        var result = await store.TryAddAndSubmitAsync(record, githubCallback).ConfigureAwait(false);
 
         if (!result.IsNew)
         {

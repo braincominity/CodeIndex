@@ -146,6 +146,78 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessLineAsync_ToolCallEmitsInvocationTelemetry()
+    {
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+
+        Monitor.Enter(TestConsoleLock.Gate);
+        try
+        {
+            var previousError = Console.Error;
+            try
+            {
+                Console.SetError(error);
+                await _server.ProcessLineAsync("""{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"ping","arguments":{}}}""", writer);
+            }
+            finally
+            {
+                Console.SetError(previousError);
+            }
+        }
+        finally
+        {
+            Monitor.Exit(TestConsoleLock.Gate);
+        }
+
+        var line = error.ToString()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Single(l => l.Contains("\"event\":\"mcp.tool.invocation\"", StringComparison.Ordinal));
+        Assert.Contains("[rid=123 cid=", line);
+        var jsonStart = line.IndexOf('{');
+        using var document = JsonDocument.Parse(line[jsonStart..]);
+        var root = document.RootElement;
+        Assert.Equal("mcp.tool.invocation", root.GetProperty("event").GetString());
+        Assert.Equal("ping", root.GetProperty("tool").GetString());
+        Assert.Equal("123", root.GetProperty("request_id").GetString());
+        Assert.Equal("success", root.GetProperty("status").GetString());
+        Assert.True(root.TryGetProperty("correlation_id", out var correlationId));
+        Assert.False(string.IsNullOrWhiteSpace(correlationId.GetString()));
+    }
+
+    [Fact]
+    public async Task ProcessLineAsync_FallbackErrorIncludesCorrelationData()
+    {
+        using var writer = new StringWriter();
+        using var error = new StringWriter();
+
+        Monitor.Enter(TestConsoleLock.Gate);
+        try
+        {
+            var previousError = Console.Error;
+            try
+            {
+                Console.SetError(error);
+                await _server.ProcessLineAsync("""{"jsonrpc":"2.0","id":321,"method":"tools/call","params":{"name":42,"arguments":{}}}""", writer);
+            }
+            finally
+            {
+                Console.SetError(previousError);
+            }
+        }
+        finally
+        {
+            Monitor.Exit(TestConsoleLock.Gate);
+        }
+
+        var response = JsonNode.Parse(writer.ToString())!;
+        var data = response["error"]!["data"]!;
+        Assert.Equal("321", data["request_id"]!.GetValue<string>());
+        Assert.False(string.IsNullOrWhiteSpace(data["correlation_id"]!.GetValue<string>()));
+        Assert.Contains("[cdidx-mcp] [rid=321 cid=", error.ToString());
+    }
+
+    [Fact]
     public void Initialize_ReturnsProtocolVersion()
     {
         // Issue #1554: negotiation echoes back the client's requested protocolVersion when
@@ -370,6 +442,45 @@ public class McpServerTests : IDisposable
 
         Assert.Null(_server.HandleMessage(unknown));
         Assert.Null(_server.HandleMessage(missing));
+    }
+
+    [Fact]
+    public void ToolCall_ErrorIncludesCorrelationData()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"search","arguments":{}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("42", structured["request_id"]!.GetValue<string>());
+        Assert.False(string.IsNullOrWhiteSpace(structured["correlation_id"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public void ToolCall_ResponseIncludesCorrelationMeta()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":"abc","method":"tools/call","params":{"name":"ping","arguments":{}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var meta = response["result"]!["_meta"]!;
+        Assert.Equal("\"abc\"", meta["request_id"]!.GetValue<string>());
+        Assert.False(string.IsNullOrWhiteSpace(meta["correlation_id"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public void BatchQuery_SlotsIncludeChildCorrelationIds()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"ping","arguments":{}},{"tool":"languages","arguments":{}}]}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
+        var first = results[0]!["correlation_id"]!.GetValue<string>();
+        var second = results[1]!["correlation_id"]!.GetValue<string>();
+        Assert.EndsWith(".1", first, StringComparison.Ordinal);
+        Assert.EndsWith(".2", second, StringComparison.Ordinal);
+        Assert.NotEqual(first, second);
     }
 
     [Theory]
@@ -823,6 +934,10 @@ public class McpServerTests : IDisposable
         var shortResp = server.HandleMessage(shortReq)!;
         var sameLenResp = server.HandleMessage(sameLenReq)!;
 
+        ((JsonObject)shortResp["error"]!["data"]!).Remove("correlation_id");
+        ((JsonObject)sameLenResp["error"]!["data"]!).Remove("correlation_id");
+        ((JsonObject)shortResp["error"]!["data"]!).Remove("request_id");
+        ((JsonObject)sameLenResp["error"]!["data"]!).Remove("request_id");
         Assert.Equal(shortResp.ToJsonString(), sameLenResp.ToJsonString());
         Assert.Equal(-32001, shortResp["error"]!["code"]!.GetValue<int>());
     }
@@ -992,6 +1107,9 @@ public class McpServerTests : IDisposable
         Assert.Equal(42, root.GetProperty("id").GetInt32());
         Assert.Equal(-32603, root.GetProperty("error").GetProperty("code").GetInt32());
         Assert.Contains("serializing MCP response", root.GetProperty("error").GetProperty("message").GetString());
+        var data = root.GetProperty("error").GetProperty("data");
+        Assert.Equal("42", data.GetProperty("request_id").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(data.GetProperty("correlation_id").GetString()));
     }
 
     [Fact]
@@ -5685,7 +5803,7 @@ public class McpServerTests : IDisposable
     public void ToolsCall_BatchQuery_TruncatesAggregateResponse_Issue1416()
     {
         var previous = Environment.GetEnvironmentVariable("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES");
-        Environment.SetEnvironmentVariable("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES", "700");
+        Environment.SetEnvironmentVariable("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES", "950");
         try
         {
             InsertIndexedFile("src/large.cs", "csharp", "// " + new string('x', 5000));
@@ -5695,9 +5813,9 @@ public class McpServerTests : IDisposable
             var structured = response["result"]!["structuredContent"]!;
             Assert.True(structured["truncated"]?.GetValue<bool>() ?? false, response.ToJsonString());
             var actualResponseBytes = Encoding.UTF8.GetByteCount(response.ToJsonString());
-            Assert.True(actualResponseBytes <= 700, $"Actual response was {actualResponseBytes} bytes.");
-            Assert.True(structured["metadata"]!["estimated_response_bytes"]!.GetValue<int>() <= 700);
-            Assert.Equal(700, structured["metadata"]!["response_byte_limit"]!.GetValue<int>());
+            Assert.True(actualResponseBytes <= 950, $"Actual response was {actualResponseBytes} bytes.");
+            Assert.True(structured["metadata"]!["estimated_response_bytes"]!.GetValue<int>() <= 950);
+            Assert.Equal(950, structured["metadata"]!["response_byte_limit"]!.GetValue<int>());
             Assert.Equal(2, structured["metadata"]!["submitted"]!.GetValue<int>());
             Assert.Equal(2, structured["metadata"]!["executed"]!.GetValue<int>());
             Assert.Equal(0, structured["metadata"]!["errors"]!.GetValue<int>());

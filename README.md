@@ -73,6 +73,8 @@ Output controls:
 |---|---|
 | Owner-only persistent stderr logs on POSIX | Global tool stderr logs are forced to `0600` permissions on every open, including existing date-stamped log files. |
 | ASCII-only terminal output | Use `--ascii`, `CDIDX_ASCII=1`, `NO_UNICODE`, `TERM=dumb`, accessibility env hints, or a non-UTF-8 locale. Spinners use pipe, slash, dash, and backslash frames; progress bars use `#` / `-`; very narrow terminals fall back to percentage-only progress. |
+| Color and terminal capability | `--color auto` emits ANSI only for capable interactive terminals; `TERM=dumb`, `CI=true`, missing Unix terminal hints, `NO_COLOR`, or `CLICOLOR=0` disable ANSI/progress control sequences. `--palette basic|256|truecolor` can override the `COLORTERM` / `TERM` color-depth detection. |
+| UTF-8 JSON pipelines | CLI `--json` output is written as UTF-8 without a BOM and never includes ANSI escape sequences, even when color is forced for human output. |
 | Script-friendly query pipelines | Use `--quiet`, `-q`, `--silent`, or `CDIDX_QUIET=1` to suppress informational stderr text while preserving errors. `--quiet` takes precedence over `--verbose`. |
 
 Use `cdidx` when a repository will be searched repeatedly from terminals,
@@ -257,6 +259,8 @@ cdidx mcp
 |---|---|
 | POSIX の persistent stderr log を owner-only にする | global tool stderr log は開くたびに `0600` 権限へ補正され、既存の日付付き log file も同じ扱いになります。 |
 | ASCII-only 端末で崩れない表示にする | `--ascii`、`CDIDX_ASCII=1`、`NO_UNICODE`、`TERM=dumb`、accessibility 系の環境変数、非 UTF-8 locale を使います。スピナーは pipe、slash、dash、backslash の frame、進捗バーは `#` / `-` になり、幅が非常に狭い端末では percentage-only になります。 |
+| color と端末 capability | `--color auto` は対応する interactive terminal でだけ ANSI を出力します。`TERM=dumb`、`CI=true`、Unix で端末 hint が無い場合、`NO_COLOR`、`CLICOLOR=0` では ANSI / progress 制御シーケンスを抑止します。`--palette basic|256|truecolor` で `COLORTERM` / `TERM` による color-depth 判定を上書きできます。 |
+| UTF-8 JSON pipeline | CLI の `--json` 出力は BOM なし UTF-8 で書き出され、human output 向けに色を強制していても ANSI escape sequence を含みません。 |
 | script 向け query pipeline の stderr を静かにする | `--quiet`、`-q`、`--silent`、`CDIDX_QUIET=1` で informational stderr を抑制し、error 行だけを残します。`--quiet` は `--verbose` より優先されます。 |
 
 ターミナル、スクリプト、CI、AI ツールから同じリポジトリを繰り返し検索する
