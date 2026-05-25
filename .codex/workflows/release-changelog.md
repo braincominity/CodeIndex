@@ -141,6 +141,18 @@ the tag name, but the tag/`version.json` consistency is also worth checking at
 the source-tree level before any artifact is built. Run this immediately after
 the tag is pushed:
 
+Release artifacts are packaged with stable timestamps and sorted member lists,
+and the release workflow compares the final archive member list against the
+expected publish output before upload. If that validation fails, fix the
+packaging step and re-run the failed release lane instead of uploading the
+archive manually.
+
+Each release archive also contains `MANIFEST.sha256`, generated from the
+published payload before upload. `install.sh` verifies that manifest after
+extraction for releases that require it, so do not remove or hand-edit it when
+diagnosing release artifacts. Older explicit-version installs may not contain
+the manifest and fall back to archive-level checksum verification.
+
 ```bash
 git show "v1.17.0:version.json" | grep -q '"version": "1.17.0"' \
   && echo "version.json OK" \
