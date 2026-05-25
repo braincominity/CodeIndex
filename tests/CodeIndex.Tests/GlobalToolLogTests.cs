@@ -70,6 +70,17 @@ public class GlobalToolLogTests
     }
 
     [Fact]
+    public void TryNormalizeLogDirectoryCandidate_ReturnsFalseForInvalidPath()
+    {
+        var invalid = "bad" + '\0' + "path";
+
+        var ok = GlobalToolLog.TryNormalizeLogDirectoryCandidate(invalid, out var fullPath);
+
+        Assert.False(ok);
+        Assert.Equal(string.Empty, fullPath);
+    }
+
+    [Fact]
     public void TryStart_WritesInvariantUtcTimestampAndStackTrace()
     {
         var logRoot = Path.Combine(Path.GetTempPath(), $"cdidx_global_log_{Guid.NewGuid():N}");

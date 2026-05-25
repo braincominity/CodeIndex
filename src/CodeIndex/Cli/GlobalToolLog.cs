@@ -187,13 +187,29 @@ internal static class GlobalToolLog
     {
         foreach (var candidate in EnumerateLogDirectoryCandidates())
         {
-            var fullPath = Path.GetFullPath(candidate);
+            if (!TryNormalizeLogDirectoryCandidate(candidate, out var fullPath))
+                continue;
+
             if (CanWriteProbe(fullPath))
                 return fullPath;
         }
 
         var fallback = Path.Combine(Path.GetTempPath(), "cdidx", "logs");
         return Path.GetFullPath(fallback);
+    }
+
+    internal static bool TryNormalizeLogDirectoryCandidate(string candidate, out string fullPath)
+    {
+        try
+        {
+            fullPath = Path.GetFullPath(candidate);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or PathTooLongException or UnauthorizedAccessException)
+        {
+            fullPath = string.Empty;
+            return false;
+        }
     }
 
     private static IEnumerable<string> EnumerateLogDirectoryCandidates()
