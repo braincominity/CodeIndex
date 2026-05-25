@@ -234,13 +234,24 @@ public class QueryCommandRunnerTests
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_config_source");
         using var env = EnvironmentVariableScope.Capture(
             QueryCommandRunner.DefaultLimitEnvironmentVariable,
-            CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.DefaultLimitEnvironmentVariable);
+            QueryCommandRunner.StaleAfterEnvironmentVariable,
+            "CDIDX_GLOBAL_TOOL_LOG_DIR",
+            CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + QueryCommandRunner.StaleAfterEnvironmentVariable,
+            CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + "CDIDX_GLOBAL_TOOL_LOG_DIR");
         try
         {
             var configDir = Path.Combine(projectRoot, ".cdidx");
             Directory.CreateDirectory(configDir);
             var configPath = Path.Combine(configDir, "config.json");
-            File.WriteAllText(configPath, """{ "search": { "limit": 44 } }""");
+            var logDir = Path.Combine(projectRoot, "logs");
+            File.WriteAllText(configPath, $$"""
+                {
+                  "search": { "limit": 44 },
+                  "stale_after": "2h",
+                  "global_tool_log_dir": {{JsonSerializer.Serialize(logDir)}}
+                }
+                """);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
                 ["status", "--config", "--json"],
@@ -253,6 +264,12 @@ public class QueryCommandRunnerTests
             var limit = document.RootElement.GetProperty("effective_config").GetProperty("limit");
             Assert.Equal(44, limit.GetProperty("value").GetInt32());
             Assert.Equal($"config:{configPath}", limit.GetProperty("source").GetString());
+            var staleAfter = document.RootElement.GetProperty("effective_config").GetProperty("stale_after");
+            Assert.Equal("2h", staleAfter.GetProperty("value").GetString());
+            Assert.Equal($"config:{configPath}", staleAfter.GetProperty("source").GetString());
+            var logPath = document.RootElement.GetProperty("effective_config").GetProperty("global_tool_log_dir");
+            Assert.Equal(logDir, logPath.GetProperty("value").GetString());
+            Assert.Equal($"config:{configPath}", logPath.GetProperty("source").GetString());
         }
         finally
         {

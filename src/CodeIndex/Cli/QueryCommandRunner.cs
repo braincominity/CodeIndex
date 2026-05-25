@@ -2397,6 +2397,7 @@ public static class QueryCommandRunner
             ["value"] = JsonSerializer.SerializeToNode(value),
             ["source"] = source,
         };
+        var staleAfterEnvValue = Environment.GetEnvironmentVariable(StaleAfterEnvironmentVariable);
 
         var payload = new JsonObject
         {
@@ -2409,7 +2410,7 @@ public static class QueryCommandRunner
                 ["snippet_lines"] = Entry(options.SnippetLines, ResolveNumericConfigSource(cmdArgs, "--snippet-lines", null, DefaultSnippetLinesEnvironmentVariable)),
                 ["max_line_width"] = Entry(options.MaxLineWidth, ResolveNumericConfigSource(cmdArgs, "--max-line-width", null, DefaultMaxLineWidthEnvironmentVariable)),
                 ["json"] = Entry(options.Json, HasOption(cmdArgs, "--json") ? "flag" : "default"),
-                ["stale_after"] = Entry(options.StaleAfter?.ToString(), options.StaleAfter.HasValue ? "flag" : Environment.GetEnvironmentVariable(StaleAfterEnvironmentVariable) is null ? "default" : $"env:{StaleAfterEnvironmentVariable}"),
+                ["stale_after"] = Entry(options.StaleAfter?.ToString() ?? staleAfterEnvValue, options.StaleAfter.HasValue ? "flag" : ResolveEnvSource(StaleAfterEnvironmentVariable)),
                 ["global_tool_log_dir"] = Entry(GlobalToolLog.ResolveLogDirectoryForStatus(), ResolveEnvSource("CDIDX_GLOBAL_TOOL_LOG_DIR")),
                 ["version"] = Entry(appVersion ?? ConsoleUi.LoadVersion(), "build"),
             },
@@ -2445,7 +2446,12 @@ public static class QueryCommandRunner
 
     private static string ResolveEnvSource(string envName)
     {
-        return Environment.GetEnvironmentVariable(envName) is null ? "default" : $"env:{envName}";
+        if (Environment.GetEnvironmentVariable(envName) is null)
+            return "default";
+        var configSource = Environment.GetEnvironmentVariable(CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + envName);
+        if (!string.IsNullOrWhiteSpace(configSource))
+            return $"config:{configSource}";
+        return $"env:{envName}";
     }
 
     private static bool HasOption(string[] args, string optionName)
