@@ -980,7 +980,7 @@ public class DbWriter
             JOIN files f ON f.id = s.file_id
             WHERE f.lang = 'csharp'
               AND s.container_kind = 'interface'
-              AND s.kind IN ('function', 'property')
+              AND s.kind IN ('function', 'operator', 'property')
               AND s.signature LIKE '%static%'
               AND (s.signature LIKE '%abstract%' OR s.signature LIKE '%virtual%')";
 

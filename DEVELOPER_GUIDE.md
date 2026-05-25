@@ -185,6 +185,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `import` | Import/include/reference through a module system |
 | `instantiate` | Constructor or object creation |
 | `metadata` | Metadata-only reference |
+| `reference` | Generic persisted reference row used by fixtures or extractors without a narrower edge kind |
 | `razor_event_binding` | Razor event binding relationship |
 | `stage` | Build-stage relationship |
 | `subscribe` | Event subscription relationship |

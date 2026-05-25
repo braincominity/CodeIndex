@@ -57,6 +57,7 @@ public static class SymbolKindCatalog
         "import",
         "instantiate",
         "metadata",
+        "reference",
         "stage",
         "razor_event_binding",
         "subscribe",
