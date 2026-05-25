@@ -87,6 +87,58 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_UsesNumericDefaultEnvironmentVariables()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable,
+            QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "42");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, "6");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, "120");
+
+        var options = QueryCommandRunner.ParseArgs(["RunSearch"], jsonDefault: false, allowNamedQuery: true);
+
+        Assert.Equal(42, options.Limit);
+        Assert.Equal(6, options.SnippetLines);
+        Assert.Equal(120, options.MaxLineWidth);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_CliNumericFlagsOverrideDefaultEnvironmentVariables()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable,
+            QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "42");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, "6");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, "120");
+
+        var options = QueryCommandRunner.ParseArgs(
+            ["RunSearch", "--limit", "7", "--snippet-lines", "3", "--max-line-width", "80"],
+            jsonDefault: false,
+            allowNamedQuery: true);
+
+        Assert.Equal(7, options.Limit);
+        Assert.Equal(3, options.SnippetLines);
+        Assert.Equal(80, options.MaxLineWidth);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_InvalidNumericDefaultEnvironmentVariableReportsParseError()
+    {
+        using var env = EnvironmentVariableScope.Capture(QueryCommandRunner.DefaultLimitEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "0");
+
+        var options = QueryCommandRunner.ParseArgs(["RunSearch"], jsonDefault: false, allowNamedQuery: true);
+
+        Assert.Contains(QueryCommandRunner.DefaultLimitEnvironmentVariable, options.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_ProjectFilterExpandsSolutionProjectToPathGlob_Issue1707()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_filter");

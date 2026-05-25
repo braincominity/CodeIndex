@@ -91,7 +91,7 @@ file completion.
 | Area | What cdidx provides |
 |---|---|
 | Search surfaces | CLI-first output for humans and machines; full-text, symbol, reference, caller/callee, dependency, map, inspect, and excerpt commands. |
-| Ranking and filters | Public/exported symbol matches rank ahead of protected, internal, and private matches. Use `--no-visibility-rank` for legacy order, and `--visibility` / `--exclude-visibility` with `symbols`, `definition`, `unused`, and `hotspots`. |
+| Ranking and filters | Public/exported symbol matches rank ahead of protected, internal, and private matches. Use `--no-visibility-rank` for legacy order, and `--visibility` / `--exclude-visibility` with `symbols`, `definition`, `unused`, and `hotspots`. Query defaults can be adjusted with `CDIDX_DEFAULT_LIMIT`, `CDIDX_DEFAULT_SNIPPET_LINES`, and `CDIDX_DEFAULT_MAX_LINE_WIDTH`; explicit CLI flags still win. |
 | Project scoping | `.sln` / `.csproj`-aware <code>--project &lt;name&#124;path&gt;</code> filters for indexing and queries, plus `--solution <path>` when a workspace has multiple solution files. |
 | MCP integration | MCP server support for AI clients such as Claude Code, Cursor, and Windsurf, including tools, indexed-file resources, starter prompts, and `Language support:` descriptions sourced from the same registries as `cdidx languages`. |
 | Freshness | Parallel full-scan extraction with `--parallelism`, incremental refreshes with `--files` and `--commits`, continuous `--watch`, exact `status --check`, and configurable stale thresholds via `--stale-after` / `CDIDX_STALE_AFTER`. |
@@ -274,7 +274,7 @@ cdidx mcp
 | 分野 | 内容 |
 |---|---|
 | 検索面 | CLI-first の人間向け / 機械処理向け出力。全文検索、シンボル、参照、caller/callee、依存関係、map、inspect、excerpt コマンドを提供します。 |
-| 順位と filter | public/exported なシンボル一致を protected、internal、private より優先します。従来順は `--no-visibility-rank`、可視性の include / exclude は `symbols`、`definition`、`unused`、`hotspots` の `--visibility` / `--exclude-visibility` で指定できます。 |
+| 順位と filter | public/exported なシンボル一致を protected、internal、private より優先します。従来順は `--no-visibility-rank`、可視性の include / exclude は `symbols`、`definition`、`unused`、`hotspots` の `--visibility` / `--exclude-visibility` で指定できます。query 既定値は `CDIDX_DEFAULT_LIMIT`、`CDIDX_DEFAULT_SNIPPET_LINES`、`CDIDX_DEFAULT_MAX_LINE_WIDTH` で調整でき、明示 CLI flag が常に優先されます。 |
 | project scope | `.sln` / `.csproj` を使った <code>--project &lt;name&#124;path&gt;</code> filter で index と query を .NET project 配下へ絞り込めます。workspace に solution が複数ある場合は `--solution <path>` を指定します。 |
 | MCP 連携 | Claude Code、Cursor、Windsurf などの AI クライアント向け MCP server。tools、インデックス済みファイル resources、starter prompts、`cdidx languages` と同じ言語レジストリ由来の `Language support:` 説明を提供します。 |
 | freshness | `--parallelism` による parallel full-scan、`--files` / `--commits` による差分更新、`--watch` による継続更新、`status --check` による完全一致確認、`--stale-after` / `CDIDX_STALE_AFTER` による age threshold 上書きに対応します。 |

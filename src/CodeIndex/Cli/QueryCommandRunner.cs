@@ -15,6 +15,9 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class QueryCommandRunner
 {
+    internal const string DefaultLimitEnvironmentVariable = "CDIDX_DEFAULT_LIMIT";
+    internal const string DefaultSnippetLinesEnvironmentVariable = "CDIDX_DEFAULT_SNIPPET_LINES";
+    internal const string DefaultMaxLineWidthEnvironmentVariable = "CDIDX_DEFAULT_MAX_LINE_WIDTH";
     internal const string StaleAfterEnvironmentVariable = "CDIDX_STALE_AFTER";
     internal static readonly TimeSpan DefaultStaleAfter = TimeSpan.FromHours(24);
     [ThreadStatic]
@@ -3798,7 +3801,7 @@ public static class QueryCommandRunner
         string? dataDir = null;
         bool? json = null;
         string jsonOutputFormat = JsonOutputFormatNdjson;
-        int limit = 20;
+        int limit = ResolveDefaultPositiveInt(DefaultLimitEnvironmentVariable, 20, "--limit", out var defaultLimitError);
         string? lang = null;
         string? kind = null;
         string? query = null;
@@ -3813,9 +3816,9 @@ public static class QueryCommandRunner
         int? focusLine = null;
         int? focusColumn = null;
         int focusLength = 1;
-        int snippetLines = SearchSnippetFormatter.DefaultSnippetLines;
+        int snippetLines = ResolveDefaultPositiveInt(DefaultSnippetLinesEnvironmentVariable, SearchSnippetFormatter.DefaultSnippetLines, "--snippet-lines", out var defaultSnippetLinesError);
         var snippetFocus = SearchSnippetFocusMode.Quality;
-        int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
+        int maxLineWidth = ResolveDefaultNonNegativeInt(DefaultMaxLineWidthEnvironmentVariable, LineWidthFormatter.DefaultMaxLineWidth, "--max-line-width", out var defaultMaxLineWidthError);
         bool contextAfterExplicit = false;
         var pathPatterns = new List<string>();
         var userPathPatterns = new List<string>();
@@ -3857,6 +3860,13 @@ public static class QueryCommandRunner
             parseErrors ??= [];
             parseErrors.Add(error);
         }
+
+        if (defaultLimitError != null)
+            AddParseError(defaultLimitError);
+        if (defaultSnippetLinesError != null)
+            AddParseError(defaultSnippetLinesError);
+        if (defaultMaxLineWidthError != null)
+            AddParseError(defaultMaxLineWidthError);
 
         void AddStatusCheckScopes(string rawScopes)
         {
@@ -6620,6 +6630,44 @@ public static class QueryCommandRunner
         if (MissingOptionValueHints.TryGetValue(optionName, out var perFlagHint))
             sb.Append('\n').Append("Hint: ").Append(perFlagHint);
         return sb.ToString();
+    }
+
+    private static int ResolveDefaultPositiveInt(string environmentVariable, int fallback, string optionName, out string? error)
+    {
+        var raw = Environment.GetEnvironmentVariable(environmentVariable);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            error = null;
+            return fallback;
+        }
+
+        if (TryParsePositiveInt(raw, optionName, out var value, out var parseError))
+        {
+            error = null;
+            return value;
+        }
+
+        error = parseError!.Replace(optionName, environmentVariable, StringComparison.Ordinal);
+        return fallback;
+    }
+
+    private static int ResolveDefaultNonNegativeInt(string environmentVariable, int fallback, string optionName, out string? error)
+    {
+        var raw = Environment.GetEnvironmentVariable(environmentVariable);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            error = null;
+            return fallback;
+        }
+
+        if (TryParseNonNegativeInt(raw, optionName, out var value, out var parseError))
+        {
+            error = null;
+            return value;
+        }
+
+        error = parseError!.Replace(optionName, environmentVariable, StringComparison.Ordinal);
+        return fallback;
     }
 
     private static bool TryParsePositiveInt(string rawValue, string optionName, out int value, out string? error)
