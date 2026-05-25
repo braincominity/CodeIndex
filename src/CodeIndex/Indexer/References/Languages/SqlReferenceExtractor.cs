@@ -784,6 +784,48 @@ internal static class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName,
         HashSet<int> suppressedCallIndices)
     {
+        EmitCreateIndexTargetReferences(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName,
+            suppressedCallIndices);
+
+        EmitAlterAndDropIndexTargetReferences(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+    }
+
+    private static void EmitCreateIndexTargetReferences(
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName,
+        HashSet<int> suppressedCallIndices)
+    {
         EmitMultiTargetReferences(
             CreateIndexOnTargetRegex.Matches(statement),
             statement,
@@ -858,7 +900,21 @@ internal static class SqlReferenceExtractor
             resolveContainerForCall,
             shouldIgnoreName,
             suppressedCallIndices);
+    }
 
+    private static void EmitAlterAndDropIndexTargetReferences(
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName)
+    {
         EmitMultiTargetReferences(
             AlterIndexOnTargetRegex.Matches(statement),
             statement,
