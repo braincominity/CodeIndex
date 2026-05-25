@@ -1731,6 +1731,26 @@ Graph-oriented MCP tools such as `references`, `callers`, and `callees` also ret
 
 All MCP tools include `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so AI clients can auto-approve safe read-only queries without prompting the user.
 
+#### MCP error responses
+
+MCP JSON-RPC failures use the standard `error` object. Clients should route on
+`error.code` and, when present, `error.data.category`; do not parse
+`error.message`, which is human-facing diagnostic text.
+
+| Code | Meaning | Client action |
+|---|---|---|
+| `-32700` | Parse error or frame too large | Fix the JSON/frame size before retrying |
+| `-32600` | Invalid JSON-RPC request | Fix request shape before retrying |
+| `-32601` | Method not found or disabled tool | Check server version and `tools/list` |
+| `-32602` | Invalid params, unknown tool, or bad protocol version | Fix arguments or negotiate a supported version |
+| `-32603` | Internal error | Surface the failure and inspect server stderr |
+| `-32000` | Rate limited | Retry after the reported delay |
+| `-32001` | Permission denied | Provide the configured auth token |
+| `-32010` | Index missing | Run `cdidx index <projectPath>` first |
+| `-32011` | Index stale/schema mismatch | Rebuild or refresh the index |
+| `-32012` | Index corrupted/unreadable | Rebuild the index from source |
+| `-32015` | Request cancelled | Retry if the client still needs the result |
+
 #### Optional HTTP transport
 
 By default `cdidx mcp` speaks JSON-RPC over stdin/stdout, which is what every config example above uses. AI clients that prefer to keep one warm server running across many requests — instead of paying subprocess-spawn cost per call — can switch the transport to HTTP:
