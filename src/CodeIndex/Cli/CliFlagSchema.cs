@@ -53,7 +53,7 @@ internal static class CliFlagSchema
     public static IReadOnlyList<string> AllCommands { get; } =
     [
         "index", "backfill-fold", "optimize", "search", "definition", "references", "callers", "callees",
-        "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
+        "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status", "validate-config",
         "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license",
     ];
 
