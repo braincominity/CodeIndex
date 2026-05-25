@@ -53,8 +53,7 @@ public static class DbPathResolver
 
         if (!string.IsNullOrWhiteSpace(xdgDataHome))
         {
-            var workspaceHash = ComputeWorkspaceHash(fullWorkspacePath);
-            return BuildDataDirResolution(Path.Combine(xdgDataHome, "cdidx", workspaceHash), DataDirSourceXdg);
+            return BuildDataDirResolution(BuildXdgDataDir(xdgDataHome, fullWorkspacePath), DataDirSourceXdg);
         }
 
         return BuildDataDirResolution(Path.Combine(fullWorkspacePath, ".cdidx"), DataDirSourceWorkspace);
@@ -71,8 +70,10 @@ public static class DbPathResolver
 
         if (!string.IsNullOrWhiteSpace(xdgDataHome))
         {
-            var workspaceHash = ComputeWorkspaceHash(fullWorkspacePath);
-            return BuildDataDirResolution(Path.Combine(xdgDataHome, "cdidx", workspaceHash), DataDirSourceXdg);
+            var ancestorXdgDataDir = TryResolveOutermostAncestorXdgDataDir(fullWorkspacePath, xdgDataHome);
+            if (ancestorXdgDataDir != null)
+                return BuildDataDirResolution(ancestorXdgDataDir, DataDirSourceXdg);
+            return BuildDataDirResolution(BuildXdgDataDir(xdgDataHome, fullWorkspacePath), DataDirSourceXdg);
         }
 
         var workspaceRootDataDir = TryResolveOutermostAncestorDataDir(fullWorkspacePath);
@@ -87,6 +88,9 @@ public static class DbPathResolver
         var fullDataDir = Path.GetFullPath(dataDir);
         return new DbPathResolution(Path.Combine(fullDataDir, "codeindex.db"), fullDataDir, source);
     }
+
+    private static string BuildXdgDataDir(string xdgDataHome, string workspacePath)
+        => Path.Combine(xdgDataHome, "cdidx", ComputeWorkspaceHash(workspacePath));
 
     private static string ComputeWorkspaceHash(string workspacePath)
     {
@@ -113,6 +117,31 @@ public static class DbPathResolver
             if (Directory.Exists(LongPath.EnsureWindowsPrefix(candidate)))
                 selected = candidate;
             current = current.Parent;
+        }
+
+        return selected;
+    }
+
+    private static string? TryResolveOutermostAncestorXdgDataDir(string workspacePath, string xdgDataHome)
+    {
+        string? current;
+        try
+        {
+            current = Path.GetFullPath(workspacePath);
+        }
+        catch
+        {
+            return null;
+        }
+
+        string? selected = null;
+        while (!string.IsNullOrWhiteSpace(current))
+        {
+            var candidate = BuildXdgDataDir(xdgDataHome, current);
+            if (Directory.Exists(LongPath.EnsureWindowsPrefix(candidate)) ||
+                File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(candidate, "codeindex.db"))))
+                selected = candidate;
+            current = Path.GetDirectoryName(current);
         }
 
         return selected;

@@ -77,6 +77,31 @@ public class DbPathResolverTests
     }
 
     [Fact]
+    public void ResolveDataDirForQuery_WithXdgPrefersAncestorWorkspaceDataDir()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_xdg_root_db");
+        var xdgDir = Path.Combine(Path.GetTempPath(), $"cdidx_xdg_dir_{Guid.NewGuid():N}");
+        try
+        {
+            var child = Path.Combine(projectRoot, "src", "App");
+            Directory.CreateDirectory(child);
+            var indexedRootResolution = DbPathResolver.ResolveDataDir(projectRoot, explicitDataDir: null, environmentDataDir: null, xdgDataHome: xdgDir);
+            Directory.CreateDirectory(indexedRootResolution.DataDir!);
+
+            var resolved = DbPathResolver.ResolveDataDirForQuery(child, explicitDataDir: null, environmentDataDir: null, xdgDataHome: xdgDir);
+
+            Assert.Equal(indexedRootResolution.DbPath, resolved.DbPath);
+            Assert.Equal(indexedRootResolution.DataDir, resolved.DataDir);
+            Assert.Equal(DbPathResolver.DataDirSourceXdg, resolved.DataDirSource);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(xdgDir);
+        }
+    }
+
+    [Fact]
     public void ResolveDataDirForQuery_PrefersOutermostAncestorCdidx()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_root_db");
