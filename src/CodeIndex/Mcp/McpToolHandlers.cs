@@ -306,6 +306,7 @@ public partial class McpServer
                 {
                     ["message"] = $"{propertyName} must be no longer than {MaxMcpArrayFilterStringLength} characters.",
                     ["invalid_count"] = 1,
+                    ["invalid_samples"] = new JsonArray { $"length {scalarText.Length}" },
                 };
             return null;
         }
@@ -1350,6 +1351,7 @@ public partial class McpServer
             structured["sqlGraphContractReady"] = status.SqlGraphContractReady;
             if (status.SqlGraphContractDegradedReason != null)
                 structured["sqlGraphContractDegradedReason"] = status.SqlGraphContractDegradedReason;
+            structured["mcp_session"] = BuildMcpSessionStatus();
             structured["mcp"] = new JsonObject
             {
                 ["limits"] = new JsonObject
@@ -1362,6 +1364,22 @@ public partial class McpServer
             };
             return CreateToolResult(id, "Database stats returned.", structured);
         });
+    }
+
+    private JsonObject BuildMcpSessionStatus()
+    {
+        var roots = new JsonArray();
+        foreach (var root in _clientRoots)
+            roots.Add(root?.DeepClone());
+
+        var session = new JsonObject
+        {
+            ["log_level"] = _mcpLogLevel,
+            ["roots"] = roots,
+        };
+        if (_clientCapabilities is not null)
+            session["client_capabilities"] = _clientCapabilities.DeepClone();
+        return session;
     }
 
     private static string BuildFoldBackfillCommand(string dbPath, bool dbPathExplicit)
