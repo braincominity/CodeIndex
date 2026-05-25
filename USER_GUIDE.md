@@ -2107,6 +2107,9 @@ CodeIndex は source-available / Fair Source-style software であり、OSI-appr
 ## 最初の検索を試す
 
 ```bash
+# Homebrew インストール（macOS/Linux）
+brew install widthdom/tap/codeindex
+
 # .NET 不要のワンライナーインストール（通常は数秒）
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 
@@ -2131,9 +2134,14 @@ cdidx search "handleRequest"
 ## シェル補完
 
 `cdidx --completions <bash|zsh|fish|powershell>` で補完スクリプトを生成できます。
+同じ生成機能は `cdidx completions <shell>` としても利用できます。
+対応 shell は Bash、Zsh、Fish、PowerShell です。
 生成されたスクリプトは subcommand、flag、よく使う flag 値を補完します。
 `--lang` は対応言語、`--kind` は symbol / reference kind を提示し、`--db`、
 `--path`、`--output` など path 系 option は shell の file completion を使います。
+
+利用中の shell の startup file または completion directory にスクリプトを
+インストールしてください。
 
 PowerShell では、`cdidx` のインストール後に生成された `Register-ArgumentCompleter`
 script を profile に追加してください:
