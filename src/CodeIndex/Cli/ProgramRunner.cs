@@ -184,6 +184,7 @@ internal static class ProgramRunner
             {
                 "search" => a => QueryCommandRunner.RunSearch(a, jsonOptions),
                 "definition" => a => QueryCommandRunner.RunDefinition(a, jsonOptions),
+                "goto" => a => QueryCommandRunner.RunGoto(a, jsonOptions),
                 "references" => a => QueryCommandRunner.RunReferences(a, jsonOptions),
                 "callers" => a => QueryCommandRunner.RunCallers(a, jsonOptions),
                 "callees" => a => QueryCommandRunner.RunCallees(a, jsonOptions),

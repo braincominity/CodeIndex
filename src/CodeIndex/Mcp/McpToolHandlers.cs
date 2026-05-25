@@ -856,6 +856,7 @@ public partial class McpServer
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
+        var lspCompatible = args?["lsp_compatible"]?.GetValue<bool>() ?? false;
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -870,6 +871,8 @@ public partial class McpServer
         {
             var results = reader.GetDefinitions(query, FetchLimitForEnvelope(limit), kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact);
             var truncated = TrimToRequestedLimit(results, limit);
+            if (lspCompatible)
+                QueryCommandRunner.AttachLspLocations(results);
             var exactSignal = reader.GetDefinitionExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, since);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact,
@@ -883,6 +886,7 @@ public partial class McpServer
                 ["kind"] = kind,
                 ["lang"] = lang,
                 ["includeBody"] = includeBody,
+                ["lspCompatible"] = lspCompatible,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["results"] = ToJsonArray(results)
@@ -913,6 +917,7 @@ public partial class McpServer
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var lspCompatible = args?["lsp_compatible"]?.GetValue<bool>() ?? false;
         var offset = ReadOffset(args);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
@@ -945,6 +950,8 @@ public partial class McpServer
             var total = truncated || offset > 0
                 ? reader.CountSearchReferences(query, int.MaxValue, lang, kind, pathPatterns, excludePaths, excludeTests, exact)
                 : results.Count;
+            if (lspCompatible)
+                QueryCommandRunner.AttachLspLocations(results);
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
@@ -963,6 +970,7 @@ public partial class McpServer
                 ["query"] = query,
                 ["kind"] = kind,
                 ["lang"] = lang,
+                ["lspCompatible"] = lspCompatible,
                 ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
