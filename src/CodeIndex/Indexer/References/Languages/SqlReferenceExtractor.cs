@@ -500,54 +500,12 @@ internal static class SqlReferenceExtractor
         Func<string, bool> shouldIgnoreName,
         Func<string, int, bool> shouldSuppressDefinitionCall)
     {
-        var cteBodySpans = FindCteBodySpans(statement);
-        HashSet<int>? usingSourceIndices = null;
-        foreach (Match match in MergeUsingSourceRegex.Matches(statement))
-        {
-            if (IsInsideDoubleQuotedRegion(statement, match.Index))
-                continue;
-            var nameGroup = match.Groups["name"];
-            if (nameGroup.Index < statementLineOffset)
-                continue;
-
-            (usingSourceIndices ??= []).Add(nameGroup.Index);
-        }
-
-        foreach (Match match in DeleteUsingSourceRegex.Matches(statement))
-        {
-            if (IsInsideDoubleQuotedRegion(statement, match.Index))
-                continue;
-
-            foreach (Capture capture in match.Groups["name"].Captures)
-            {
-                if (capture.Index < statementLineOffset)
-                    continue;
-
-                (usingSourceIndices ??= []).Add(capture.Index);
-            }
-        }
-
-        foreach (Match match in TopCallSuppressionRegex.Matches(statement))
-        {
-            var nameGroup = match.Groups["name"];
-            if (nameGroup.Index < statementLineOffset)
-                continue;
-
-            suppressedCallIndices.Add(nameGroup.Index + statementStart - lineOffset);
-        }
-
-        foreach (Match match in AccessMethodCallSuppressionRegex.Matches(statement))
-        {
-            if (IsInsideDoubleQuotedRegion(statement, match.Index))
-                continue;
-            var nameGroup = match.Groups["name"];
-            if (nameGroup.Index < statementLineOffset)
-                continue;
-            if (usingSourceIndices != null && usingSourceIndices.Contains(nameGroup.Index))
-                continue;
-
-            suppressedCallIndices.Add(nameGroup.Index + statementStart - lineOffset);
-        }
+        var cteBodySpans = PrepareStatementReferenceState(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            suppressedCallIndices);
 
         EmitWindowClauseReferences(
             statement,
@@ -710,6 +668,122 @@ internal static class SqlReferenceExtractor
             resolveContainerForCall,
             shouldIgnoreName);
 
+        EmitIndexTargetReferences(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName,
+            suppressedCallIndices);
+
+        EmitObjectLifecycleTargetReferences(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName,
+            suppressedCallIndices);
+
+        EmitAlterAndMaintenanceTargetReferences(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName,
+            suppressedCallIndices);
+    }
+
+    private static IReadOnlyList<CteBodySpan>? PrepareStatementReferenceState(
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        HashSet<int> suppressedCallIndices)
+    {
+        var cteBodySpans = FindCteBodySpans(statement);
+        HashSet<int>? usingSourceIndices = null;
+        foreach (Match match in MergeUsingSourceRegex.Matches(statement))
+        {
+            if (IsInsideDoubleQuotedRegion(statement, match.Index))
+                continue;
+            var nameGroup = match.Groups["name"];
+            if (nameGroup.Index < statementLineOffset)
+                continue;
+
+            (usingSourceIndices ??= []).Add(nameGroup.Index);
+        }
+
+        foreach (Match match in DeleteUsingSourceRegex.Matches(statement))
+        {
+            if (IsInsideDoubleQuotedRegion(statement, match.Index))
+                continue;
+
+            foreach (Capture capture in match.Groups["name"].Captures)
+            {
+                if (capture.Index < statementLineOffset)
+                    continue;
+
+                (usingSourceIndices ??= []).Add(capture.Index);
+            }
+        }
+
+        foreach (Match match in TopCallSuppressionRegex.Matches(statement))
+        {
+            var nameGroup = match.Groups["name"];
+            if (nameGroup.Index < statementLineOffset)
+                continue;
+
+            suppressedCallIndices.Add(nameGroup.Index + statementStart - lineOffset);
+        }
+
+        foreach (Match match in AccessMethodCallSuppressionRegex.Matches(statement))
+        {
+            if (IsInsideDoubleQuotedRegion(statement, match.Index))
+                continue;
+            var nameGroup = match.Groups["name"];
+            if (nameGroup.Index < statementLineOffset)
+                continue;
+            if (usingSourceIndices != null && usingSourceIndices.Contains(nameGroup.Index))
+                continue;
+
+            suppressedCallIndices.Add(nameGroup.Index + statementStart - lineOffset);
+        }
+
+        return cteBodySpans;
+    }
+
+    private static void EmitIndexTargetReferences(
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName,
+        HashSet<int> suppressedCallIndices)
+    {
         EmitMultiTargetReferences(
             CreateIndexOnTargetRegex.Matches(statement),
             statement,
@@ -854,7 +928,22 @@ internal static class SqlReferenceExtractor
             fileId,
             resolveContainerForCall,
             shouldIgnoreName);
+    }
 
+    private static void EmitObjectLifecycleTargetReferences(
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName,
+        HashSet<int> suppressedCallIndices)
+    {
         EmitMultiTargetReferences(
             CreateTriggerOnTargetRegex.Matches(statement),
             statement,
@@ -940,6 +1029,33 @@ internal static class SqlReferenceExtractor
             resolveContainerForCall,
             shouldIgnoreName);
 
+        EmitDropObjectTargetReferences(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+    }
+
+    private static void EmitDropObjectTargetReferences(
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName)
+    {
         EmitMultiTargetReferences(
             DropSynonymTargetRegex.Matches(statement),
             statement,
@@ -1163,7 +1279,205 @@ internal static class SqlReferenceExtractor
             fileId,
             resolveContainerForCall,
             shouldIgnoreName);
+    }
 
+    private static void EmitAlterAndMaintenanceTargetReferences(
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName,
+        HashSet<int> suppressedCallIndices)
+    {
+        EmitAlterObjectTargetReferences(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMaintenanceTargetReferences(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName,
+            suppressedCallIndices);
+    }
+
+    private static void EmitMaintenanceTargetReferences(
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName,
+        HashSet<int> suppressedCallIndices)
+    {
+        EmitMultiTargetReferences(
+            ObjectPermissionTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterAuthorizationObjectTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            AlterAuthorizationBareTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            UpdateStatisticsTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            CreateStatisticsOnTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName,
+            suppressedCallIndices);
+
+        EmitMultiTargetReferences(
+            DropStatisticsTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitTargetReferences(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            suppressedCallIndices,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            DropTableTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMultiTargetReferences(
+            TruncateTargetRegex.Matches(statement),
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+    }
+
+    private static void EmitAlterObjectTargetReferences(
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName)
+    {
         EmitMultiTargetReferences(
             AlterViewTargetRegex.Matches(statement),
             statement,
@@ -1348,133 +1662,6 @@ internal static class SqlReferenceExtractor
 
         EmitMultiTargetReferences(
             AlterTableSystemVersioningHistoryTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
-
-        EmitMultiTargetReferences(
-            ObjectPermissionTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
-
-        EmitMultiTargetReferences(
-            AlterAuthorizationObjectTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
-
-        EmitMultiTargetReferences(
-            AlterAuthorizationBareTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
-
-        EmitMultiTargetReferences(
-            UpdateStatisticsTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
-
-        EmitMultiTargetReferences(
-            CreateStatisticsOnTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName,
-            suppressedCallIndices);
-
-        EmitMultiTargetReferences(
-            DropStatisticsTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
-
-        EmitTargetReferences(
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            suppressedCallIndices,
-            resolveContainerForCall,
-            shouldIgnoreName);
-
-        EmitMultiTargetReferences(
-            DropTableTargetRegex.Matches(statement),
-            statement,
-            statementStart,
-            statementLineOffset,
-            lineOffset,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            resolveContainerForCall,
-            shouldIgnoreName);
-
-        EmitMultiTargetReferences(
-            TruncateTargetRegex.Matches(statement),
             statement,
             statementStart,
             statementLineOffset,
@@ -1953,6 +2140,59 @@ internal static class SqlReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForCall,
         Func<string, bool> shouldIgnoreName)
     {
+        EmitMergeOnColumnReferences(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMergeUpdateColumnReferences(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+
+        EmitMergeInsertColumnReferences(
+            statement,
+            statementStart,
+            statementLineOffset,
+            lineOffset,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            resolveContainerForCall,
+            shouldIgnoreName);
+    }
+
+    private static void EmitMergeOnColumnReferences(
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName)
+    {
         foreach (Match match in MergeOnClauseRegex.Matches(statement))
         {
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
@@ -1975,7 +2215,21 @@ internal static class SqlReferenceExtractor
                 shouldIgnoreName,
                 "join_condition_reference");
         }
+    }
 
+    private static void EmitMergeUpdateColumnReferences(
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName)
+    {
         foreach (Match match in MergeUpdateSetActionRegex.Matches(statement))
         {
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
@@ -2021,7 +2275,21 @@ internal static class SqlReferenceExtractor
                 shouldIgnoreName,
                 "column_reference");
         }
+    }
 
+    private static void EmitMergeInsertColumnReferences(
+        string statement,
+        int statementStart,
+        int statementLineOffset,
+        int lineOffset,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        Func<int, SymbolRecord?> resolveContainerForCall,
+        Func<string, bool> shouldIgnoreName)
+    {
         foreach (Match match in MergeInsertActionRegex.Matches(statement))
         {
             if (IsInsideDoubleQuotedRegion(statement, match.Index))
