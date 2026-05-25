@@ -929,6 +929,15 @@ cdidx report --output report.tgz --json
 | `--include-args` | | Keep literal `cwd=` and `args=` values in the log tail (opt-in; share only with trusted recipients). |
 | `--json` | | Print a stable summary envelope (`output_path`, `version`, `files`, `schema_tables`, `log_lines_included`, `log_included`, `db_included`, `db_path`) instead of the human-friendly output. |
 
+## Search query syntax
+
+Default `cdidx search` uses the literal-safe FTS5 path: each whitespace-separated
+query token is quoted as a phrase, and multiple tokens are combined with FTS5's
+implicit AND semantics. For example, `cdidx search foo bar` means "find chunks
+that contain both `foo` and `bar`"; it is equivalent to a raw FTS5 query that
+requires both terms. Use `--fts 'foo OR bar'` when either term is acceptable, or
+quote a phrase in raw FTS5 mode (`--fts '"foo bar"'`) when adjacency matters.
+
 ## Options
 
 | Option | Applies to | Description |
@@ -2801,6 +2810,16 @@ cdidx report --output report.tgz --json
 | `--no-log` | | ライフサイクルログを完全に省略します。 |
 | `--include-args` | | ログ末尾の `cwd=` / `args=` 値を伏字化せずそのまま含めます（信頼できる相手にだけ使用してください）。 |
 | `--json` | | 人間向け出力の代わりに、安定したサマリ JSON（`output_path` / `version` / `files` / `schema_tables` / `log_lines_included` / `log_included` / `db_included` / `db_path`）を出力します。 |
+
+## 検索クエリ構文
+
+既定の `cdidx search` は literal-safe な FTS5 経路を使います。空白で
+区切られた各 query token は phrase として引用され、複数 token は FTS5 の
+implicit AND として結合されます。たとえば `cdidx search foo bar` は
+「`foo` と `bar` の両方を含む chunk」を探す意味で、両方の term を要求する
+raw FTS5 query と同等です。どちらか一方でよい場合は `--fts 'foo OR bar'`、
+隣接 phrase を要求したい場合は raw FTS5 mode で引用します
+（`--fts '"foo bar"'`）。
 
 ## オプション一覧
 
