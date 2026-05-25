@@ -4566,8 +4566,7 @@ public static class QueryCommandRunner
                 default:
                     if (args[i].StartsWith('-'))
                     {
-                        if (allowNamedQuery && query == null)
-                            query = args[i];
+                        AddParseError($"Error: unsupported option: {args[i]}. Use `--` before a query literal that starts with `-`.");
                         break;
                     }
                     else if (query == null)
