@@ -419,6 +419,7 @@ public partial class DbReader
         var sqlGraphContractSignal = GetSqlGraphContractSignal(lang: null);
         var hotspotFamilySignal = GetHotspotFamilySignal(lang: null);
         var foldReadyReason = ResolveFoldReadyReason();
+        var foldReady = _foldReady && foldReadyReason == null;
 
         // Language breakdown / 言語別内訳
         // Scope the reader in an inner block so it releases its statement handle before
@@ -472,7 +473,7 @@ public partial class DbReader
             CSharpMetadataTargetDegradedReason = csharpMetadataTargetDegradedReason,
             SqlGraphContractReady = sqlGraphContractSignal.Ready,
             SqlGraphContractDegradedReason = sqlGraphContractSignal.DegradedReason,
-            FoldReady = _foldReady,
+            FoldReady = foldReady,
             FoldReadyReason = foldReadyReason,
             IndexWriterVersion = _indexWriterVersion,
             IndexNewerThanReader = _indexNewerThanReader,

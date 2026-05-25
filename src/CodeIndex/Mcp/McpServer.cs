@@ -136,9 +136,12 @@ public partial class McpServer : IDisposable
     // `startLine - before` が underflow、`endLine + after` が overflow し、`Math.Max/Min` で clamp
     // する前に slice 経路が破綻していたため、CLI の `--before` / `--after` 上限と揃える（#1528）。
     private const int MaxContextLines = 1000;
-    private const int MaxLineLength = 1_000_000; // 1 MB per JSON-RPC message / 1メッセージあたり最大1MB
+    internal const int MaxLineCharacterCount = 1_000_000;
+    internal const int MaxLineByteLength = 1_048_576;
+    internal const int MaxJsonDepth = 32;
+    internal const int MaxBatchRequestCount = 100;
     // Stdio buffer for the JSON-RPC loop. Sized to fit typical large MCP payloads (e.g. batch_query)
-    // in a single read so the StreamReader does not grow from its 1 KB default toward MaxLineLength.
+    // in a single read so the StreamReader does not grow from its 1 KB default toward MaxLineCharacterCount.
     // JSON-RPCループのstdioバッファ。大きめのMCPペイロードを1回の読み取りで吸収し、
     // StreamReaderのデフォルト1KBから繰り返し拡張されるのを避けるサイズ。
     private const int StdioBufferSize = 64 * 1024;
@@ -440,7 +443,7 @@ public partial class McpServer : IDisposable
                             ? frameToWrite => outOfBandTransport.WriteOutOfBandFrameAsync(frameToWrite, loopToken).GetAwaiter().GetResult()
                             : null;
                         BeginDeferredFrameLogs();
-                        response = ProcessFrame(frame);
+                        response = await ProcessFrameAsync(frame).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -520,7 +523,7 @@ public partial class McpServer : IDisposable
             if (IsCancellationFrame(frame))
             {
                 BeginDeferredFrameLogs();
-                var response = ProcessFrame(frame);
+                var response = await ProcessFrameAsync(frame).ConfigureAwait(false);
                 await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
                 try
                 {
@@ -557,7 +560,7 @@ public partial class McpServer : IDisposable
                             }
                         };
                         BeginDeferredFrameLogs();
-                        response = ProcessFrame(frame);
+                        response = await ProcessFrameAsync(frame).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -599,7 +602,7 @@ public partial class McpServer : IDisposable
     internal async Task ProcessLineAsync(string line, TextWriter writer)
     {
         BeginDeferredFrameLogs();
-        var response = ProcessFrame(line);
+        var response = await ProcessFrameAsync(line).ConfigureAwait(false);
         if (response != null)
         {
             try
@@ -659,18 +662,22 @@ public partial class McpServer : IDisposable
     /// <see cref="IMcpTransport"/> 実装が共有するトランスポート非依存の合流点 (issue #1558)。
     /// </summary>
     internal string? ProcessFrame(string line)
+        => ProcessFrameAsync(line).GetAwaiter().GetResult();
+
+    internal async Task<string?> ProcessFrameAsync(string line)
     {
         if (string.IsNullOrWhiteSpace(line))
             return null;
 
         // Reject oversized messages to prevent memory exhaustion
         // メモリ枯渇を防ぐため巨大メッセージを拒否
-        if (line.Length > MaxLineLength)
+        var byteLength = Encoding.UTF8.GetByteCount(line);
+        if (line.Length > MaxLineCharacterCount || byteLength > MaxLineByteLength)
         {
-            DeferFrameLog(BuildOversizedMessageLog(line.Length));
-            var errorResponse = CreateErrorResponse(null, -32700, "Message too large",
+            DeferFrameLog(BuildOversizedMessageLog(line.Length, byteLength));
+            var errorResponse = CreateErrorResponse(hasId: true, id: null, code: -32700, message: "Message too large",
                 category: McpErrorEnvelope.CategoryMessageTooLarge,
-                suggestion: $"JSON-RPC frame exceeds the {MaxLineLength} byte cap. Split the request into smaller calls or use `batch_query` with smaller slots.",
+                suggestion: $"JSON-RPC frame exceeds the {MaxLineCharacterCount} character or {MaxLineByteLength} byte cap. Split the request into smaller calls or use `batch_query` with smaller slots.",
                 retrySafe: false);
             return errorResponse.ToJsonString(_jsonOptions);
         }
@@ -681,23 +688,23 @@ public partial class McpServer : IDisposable
         IDisposable? frameCorrelationScope = null;
         try
         {
-            request = JsonNode.Parse(line);
+            request = JsonNode.Parse(line, documentOptions: new JsonDocumentOptions { MaxDepth = MaxJsonDepth });
             if (request == null)
                 return null;
 
             ExtractResponseId(request, out responseHasId, out responseId);
             if (responseHasId && CurrentCorrelationContext.Value is null)
                 frameCorrelationScope = BeginRequestCorrelation(responseId);
-            var response = HandleMessage(request);
+            var response = await HandleMessageAsync(request).ConfigureAwait(false);
             return response != null ? SerializeResponseOrFallback(response, responseHasId, responseId) : null;
         }
         catch (JsonException ex)
         {
             // Parse error / パースエラー
             DeferFrameLog(BuildJsonParseErrorLog(ex.Message));
-            var errorResponse = CreateErrorResponse(null, -32700, "Parse error",
+            var errorResponse = CreateErrorResponse(hasId: true, id: null, code: -32700, message: "Parse error",
                 category: McpErrorEnvelope.CategoryParseError,
-                suggestion: "Send valid JSON-RPC 2.0 framed as a single line of UTF-8 JSON.",
+                suggestion: $"Send valid JSON-RPC 2.0 framed as a single line of UTF-8 JSON with nesting depth <= {MaxJsonDepth}.",
                 retrySafe: false);
             return errorResponse.ToJsonString(_jsonOptions);
         }
@@ -864,7 +871,13 @@ public partial class McpServer : IDisposable
     /// JSON-RPCメッセージを適切なハンドラにルーティング。
     /// </summary>
     internal JsonNode? HandleMessage(JsonNode request)
+        => HandleMessageAsync(request).GetAwaiter().GetResult();
+
+    internal async Task<JsonNode?> HandleMessageAsync(JsonNode request)
     {
+        if (request is JsonArray batch)
+            return HandleBatchMessage(batch);
+
         if (request is not JsonObject obj)
             return CreateErrorResponse(hasId: false, id: null, code: -32600, message: "Invalid request: expected JSON object",
                 category: McpErrorEnvelope.CategoryInvalidRequest,
@@ -961,28 +974,82 @@ public partial class McpServer : IDisposable
                 retrySafe: false);
         }
 
-        return DispatchWithRequestCancellation(id, () => method switch
+        return await DispatchWithRequestCancellationAsync(id, () => method switch
         {
-            "initialize" => HandleInitialize(id, request["params"]),
-            "tools/list" => HandleToolsList(id),
-            "tools/call" => HandleToolsCall(id, request["params"]),
-            "resources/list" => HandleResourcesList(id, request["params"]),
-            "resources/read" => HandleResourcesRead(id, request["params"]),
-            "prompts/list" => HandlePromptsList(id),
-            "prompts/get" => HandlePromptsGet(id, request["params"]),
-            "ping" => CreateSuccessResponse(hasId, id, new JsonObject()),
-            _ => CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Method not found: {method}",
+            "initialize" => Task.FromResult<JsonNode>(HandleInitialize(id, request["params"])),
+            "tools/list" => Task.FromResult<JsonNode>(HandleToolsList(id)),
+            "tools/call" => HandleToolsCallAsync(id, request["params"]),
+            "resources/list" => Task.FromResult<JsonNode>(HandleResourcesList(id, request["params"])),
+            "resources/read" => Task.FromResult<JsonNode>(HandleResourcesRead(id, request["params"])),
+            "prompts/list" => Task.FromResult<JsonNode>(HandlePromptsList(id)),
+            "prompts/get" => Task.FromResult<JsonNode>(HandlePromptsGet(id, request["params"])),
+            "ping" => Task.FromResult<JsonNode>(CreateSuccessResponse(hasId, id, new JsonObject())),
+            _ => Task.FromResult<JsonNode>(CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Method not found: {method}",
                 category: McpErrorEnvelope.CategoryMethodNotFound,
                 suggestion: "Supported methods: initialize, tools/list, tools/call, resources/list, resources/read, prompts/list, prompts/get, ping, notifications/initialized, notifications/cancelled, notifications/shutdown.",
-                retrySafe: false),
-        });
+                retrySafe: false)),
+        }).ConfigureAwait(false);
+    }
+
+    private JsonNode? HandleBatchMessage(JsonArray batch)
+    {
+        if (batch.Count == 0)
+            return CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: empty batch",
+                category: McpErrorEnvelope.CategoryInvalidRequest,
+                suggestion: "JSON-RPC 2.0 batch requests must contain at least one request object.",
+                retrySafe: false);
+
+        if (batch.Count > MaxBatchRequestCount)
+            return CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: batch too large",
+                category: McpErrorEnvelope.CategoryInvalidRequest,
+                suggestion: $"JSON-RPC batch requests are limited to {MaxBatchRequestCount} items.",
+                retrySafe: false);
+
+        var responses = new JsonArray();
+        foreach (var item in batch)
+        {
+            JsonNode? response;
+            if (item is null)
+            {
+                response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: expected JSON object",
+                    category: McpErrorEnvelope.CategoryInvalidRequest,
+                    suggestion: "Each JSON-RPC batch item must be a request object.",
+                    retrySafe: false);
+            }
+            else if (item is JsonArray)
+            {
+                response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: nested batches are not supported",
+                    category: McpErrorEnvelope.CategoryInvalidRequest,
+                    suggestion: "JSON-RPC batch items must be request objects, not nested arrays.",
+                    retrySafe: false);
+            }
+            else if (item is not JsonObject)
+            {
+                response = CreateErrorResponse(hasId: true, id: null, code: -32600, message: "Invalid request: expected JSON object",
+                    category: McpErrorEnvelope.CategoryInvalidRequest,
+                    suggestion: "Each JSON-RPC batch item must be a request object.",
+                    retrySafe: false);
+            }
+            else
+            {
+                response = HandleMessage(item);
+            }
+
+            if (response != null)
+                responses.Add(response);
+        }
+
+        return responses.Count == 0 ? null : responses;
     }
 
     private JsonNode DispatchWithRequestCancellation(JsonNode? id, Func<JsonNode> action)
+        => DispatchWithRequestCancellationAsync(id, () => Task.FromResult(action())).GetAwaiter().GetResult();
+
+    private async Task<JsonNode> DispatchWithRequestCancellationAsync(JsonNode? id, Func<Task<JsonNode>> action)
     {
         var requestKey = SerializeRequestId(id);
         if (requestKey == null)
-            return action();
+            return await action().ConfigureAwait(false);
 
         using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(_currentRequestToken.Value, _shutdownCts.Token);
         if (!_activeRequests.TryAdd(requestKey, requestCts))
@@ -999,7 +1066,7 @@ public partial class McpServer : IDisposable
         {
             _currentRequestToken.Value = requestCts.Token;
             requestCts.Token.ThrowIfCancellationRequested();
-            return action();
+            return await action().ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (requestCts.IsCancellationRequested)
         {
@@ -1070,7 +1137,7 @@ public partial class McpServer : IDisposable
     {
         try
         {
-            var node = JsonNode.Parse(frame);
+            var node = JsonNode.Parse(frame, documentOptions: new JsonDocumentOptions { MaxDepth = MaxJsonDepth });
             if (node is not JsonObject obj)
                 return false;
             var method = obj["method"]?.GetValue<string>();
@@ -1628,6 +1695,9 @@ public partial class McpServer : IDisposable
     /// ツール呼び出しを実行。
     /// </summary>
     private JsonNode HandleToolsCall(JsonNode? id, JsonNode? callParams)
+        => HandleToolsCallAsync(id, callParams).GetAwaiter().GetResult();
+
+    private async Task<JsonNode> HandleToolsCallAsync(JsonNode? id, JsonNode? callParams)
     {
         var toolName = callParams?["name"]?.GetValue<string>();
         var args = callParams?["arguments"];
@@ -1710,7 +1780,6 @@ public partial class McpServer : IDisposable
                 else
                 {
                     response = toolName switch
-
                     {
                         "search" => ExecuteSearch(id, args),
                         "definition" => ExecuteDefinition(id, args),
@@ -1735,7 +1804,7 @@ public partial class McpServer : IDisposable
                         "ping" => ExecutePing(id),
                         "index" => ExecuteIndex(id, args, progressToken),
                         "backfill_fold" => ExecuteBackfillFold(id, progressToken),
-                        "suggest_improvement" => ExecuteSuggestImprovement(id, args),
+                        "suggest_improvement" => await ExecuteSuggestImprovementAsync(id, args).ConfigureAwait(false),
                         _ => CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown tool: {toolName}",
                             category: McpErrorEnvelope.CategoryToolUnknown,
                             suggestion: "Call tools/list to enumerate the available tool names for this server. Tool name match is case-sensitive.",
@@ -2037,8 +2106,8 @@ public partial class McpServer : IDisposable
         return null;
     }
 
-    internal static string BuildOversizedMessageLog(int lineLength) =>
-        $"[cdidx-mcp] Message too large ({lineLength} bytes), rejecting. Split the request into smaller JSON-RPC messages or shorter arguments, then retry.";
+    internal static string BuildOversizedMessageLog(int characterCount, int byteCount) =>
+        $"[cdidx-mcp] Message too large ({characterCount} chars / {byteCount} bytes), rejecting. Split the request into smaller JSON-RPC messages or shorter arguments, then retry.";
 
     internal static string BuildJsonParseErrorLog(string detail) =>
         $"[cdidx-mcp] JSON parse error: {detail}. Send one UTF-8 JSON-RPC object per line and retry.";

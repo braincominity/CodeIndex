@@ -12,6 +12,7 @@ public static class DegradationReasonCodes
     public const string StaleFoldKeyVersion = "stale_fold_key_version";
     public const string StaleFoldKeyFingerprint = "stale_fold_key_fingerprint";
     public const string FoldRowsNotRestamped = "fold_rows_not_restamped";
+    public const string FoldReadyBitSetButRowsIncomplete = "fold_ready_bit_set_but_rows_incomplete";
     public const string FoldReadyNotReady = "fold_ready=false";
     public const string SqlGraphContractNotReady = "sql_graph_contract_ready=false";
     public const string HotspotFamilyNotReady = "hotspot_family_ready=false";
@@ -32,6 +33,7 @@ public static class DegradationReasonCodes
         StaleFoldKeyVersion,
         StaleFoldKeyFingerprint,
         FoldRowsNotRestamped,
+        FoldReadyBitSetButRowsIncomplete,
         FoldReadyNotReady,
         SqlGraphContractNotReady,
         HotspotFamilyNotReady,
@@ -78,6 +80,7 @@ public static class DegradationReasonCodes
             StaleFoldKeyVersion => StaleFoldKeyVersion,
             StaleFoldKeyFingerprint => StaleFoldKeyFingerprint,
             FoldRowsNotRestamped => FoldRowsNotRestamped,
+            FoldReadyBitSetButRowsIncomplete => FoldReadyBitSetButRowsIncomplete,
             _ => FoldRowsNotRestamped
         };
 
@@ -102,6 +105,11 @@ public static class DegradationReasonCodes
             FoldRowsNotRestamped => new(
                 code,
                 "--exact falls back to ASCII COLLATE NOCASE because some folded-name rows were not restamped under the current runtime.",
+                "Run `cdidx backfill-fold` to restamp folded-name columns in place.",
+                "Run `cdidx index <projectPath> --rebuild` for a full rebuild."),
+            FoldReadyBitSetButRowsIncomplete => new(
+                code,
+                "--exact falls back to ASCII COLLATE NOCASE because the fold-ready bit is set but row-level folded-name verification found incomplete rows.",
                 "Run `cdidx backfill-fold` to restamp folded-name columns in place.",
                 "Run `cdidx index <projectPath> --rebuild` for a full rebuild."),
             FoldReadyNotReady => new(

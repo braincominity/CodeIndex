@@ -973,9 +973,11 @@ public class McpServerTests : IDisposable
     [Fact]
     public void BuildOversizedMessageLog_IsActionable()
     {
-        var message = McpServer.BuildOversizedMessageLog(1_234_567);
+        var message = McpServer.BuildOversizedMessageLog(1_234_567, 1_500_000);
 
         Assert.Contains("Message too large", message);
+        Assert.Contains("chars", message);
+        Assert.Contains("bytes", message);
         Assert.Contains("Split the request into smaller JSON-RPC messages", message);
         Assert.Contains("retry", message);
     }
@@ -5281,6 +5283,11 @@ public class McpServerTests : IDisposable
         Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["hotspot_family_ready"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["hotspotFamilyReady"]);
+        Assert.False(response["result"]!["structuredContent"]!["foldReady"]!.GetValue<bool>());
+        Assert.Equal(DegradationReasonCodes.MissingFoldBackfill, response["result"]!["structuredContent"]!["fold_ready_reason"]!.GetValue<string>());
+        Assert.Contains("--exact falls back", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
+        Assert.Equal("cdidx backfill-fold", response["result"]!["structuredContent"]!["recommended_action"]!.GetValue<string>());
+        Assert.Equal("cdidx index . --rebuild", response["result"]!["structuredContent"]!["alternative_action"]!.GetValue<string>());
     }
 
     [Fact]
@@ -9196,7 +9203,82 @@ public class McpServerTests : IDisposable
         var response = JsonNode.Parse(raw!)!;
         var error = response["error"]!;
         Assert.Equal(-32700, error["code"]!.GetValue<int>());
+        AssertJsonNullId(response);
         AssertEnvelope(error["data"], "parse_error", expectedRetrySafe: false);
+    }
+
+    [Fact]
+    public void ProcessFrame_OversizedUtf8Bytes_ReturnsParseErrorWithNullId()
+    {
+        var multibyte = new string('\u3042', (McpServer.MaxLineByteLength / 3) + 1);
+        var raw = _server.ProcessFrame("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"params\":{\"q\":\"" + multibyte + "\"}}");
+
+        var response = JsonNode.Parse(raw!)!;
+        Assert.Equal(-32700, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("message_too_large", response["error"]!["data"]!["category"]!.GetValue<string>());
+        AssertJsonNullId(response);
+    }
+
+    [Fact]
+    public void ProcessFrame_TooDeepJson_ReturnsParseErrorWithNullId()
+    {
+        var raw = _server.ProcessFrame(new string('[', McpServer.MaxJsonDepth + 2) + "0" + new string(']', McpServer.MaxJsonDepth + 2));
+
+        var response = JsonNode.Parse(raw!)!;
+        Assert.Equal(-32700, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("parse_error", response["error"]!["data"]!["category"]!.GetValue<string>());
+        AssertJsonNullId(response);
+    }
+
+    [Fact]
+    public void HandleMessage_BatchMixedRequests_ReturnsResponseArray()
+    {
+        var batch = JsonNode.Parse("""[{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":2,"method":"nope"}]""")!;
+
+        var response = _server.HandleMessage(batch)!.AsArray();
+
+        Assert.Equal(2, response.Count);
+        Assert.Equal(1, response[0]!["id"]!.GetValue<int>());
+        Assert.NotNull(response[0]!["result"]);
+        Assert.Equal(2, response[1]!["id"]!.GetValue<int>());
+        Assert.Equal(-32601, response[1]!["error"]!["code"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void HandleMessage_AllNotificationBatch_ReturnsNull()
+    {
+        var batch = JsonNode.Parse("""[{"jsonrpc":"2.0","method":"notifications/initialized"}]""")!;
+
+        Assert.Null(_server.HandleMessage(batch));
+    }
+
+    [Fact]
+    public void HandleMessage_EmptyBatch_ReturnsInvalidRequest()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse("[]")!)!;
+
+        Assert.Equal(-32600, response["error"]!["code"]!.GetValue<int>());
+        AssertJsonNullId(response);
+    }
+
+    [Fact]
+    public void HandleMessage_NestedBatchItem_ReturnsInvalidRequestInBatchResponse()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse("""[[{"jsonrpc":"2.0","id":1,"method":"ping"}]]""")!)!.AsArray();
+
+        Assert.Single(response);
+        Assert.Equal(-32600, response[0]!["error"]!["code"]!.GetValue<int>());
+        AssertJsonNullId(response[0]!);
+    }
+
+    [Fact]
+    public void HandleMessage_ScalarBatchItem_ReturnsInvalidRequestWithNullId()
+    {
+        var response = _server.HandleMessage(JsonNode.Parse("""[1]""")!)!.AsArray();
+
+        Assert.Single(response);
+        Assert.Equal(-32600, response[0]!["error"]!["code"]!.GetValue<int>());
+        AssertJsonNullId(response[0]!);
     }
 
     [Fact]
@@ -9217,6 +9299,13 @@ public class McpServerTests : IDisposable
         Assert.Equal("real suggestion", data["suggestion"]!.GetValue<string>());
         Assert.False(data["retry_safe"]!.GetValue<bool>());
         Assert.Equal("search", data["tool"]!.GetValue<string>());
+    }
+
+    private static void AssertJsonNullId(JsonNode node)
+    {
+        var obj = Assert.IsType<JsonObject>(node);
+        Assert.True(obj.ContainsKey("id"));
+        Assert.Null(obj["id"]);
     }
 
     private static void WriteOversizedAsciiFile(string path)
