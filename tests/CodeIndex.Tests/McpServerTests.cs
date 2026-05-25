@@ -4537,6 +4537,119 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Search_IncludesTruncatedAndTotalEnvelope()
+    {
+        InsertIndexedFile("src/search-a.cs", "csharp", "public class SearchA { public void Target() { } }");
+        InsertIndexedFile("src/search-b.cs", "csharp", "public class SearchB { public void Target() { } }");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Target","limit":1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.True(structured["truncated"]!.GetValue<bool>());
+        Assert.Null(structured["total"]);
+        Assert.Single(structured["results"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_References_IncludesTruncatedAndTotalEnvelope()
+    {
+        InsertIndexedFile(
+            "src/reference-envelope.cs",
+            "csharp",
+            """
+            public class CallerOne { public void Run(App app) { app.Run(); } }
+            public class CallerTwo { public void Run(App app) { app.Run(); } }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run","lang":"csharp","limit":1}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.True(structured["truncated"]!.GetValue<bool>());
+        Assert.True(structured["total"]!.GetValue<int>() >= 2);
+        Assert.Single(structured["results"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_References_CountOnly_OmitsRowsAndReturnsHistogram()
+    {
+        InsertIndexedFile(
+            "src/count-only.cs",
+            "csharp",
+            """
+            public class CountOnlyCaller { public void Run(App app) { app.Run(); app.Run(); } }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run","lang":"csharp","countOnly":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.True(structured["count_only"]!.GetValue<bool>());
+        Assert.True(structured["count"]!.GetValue<int>() >= 2);
+        Assert.Empty(structured["results"]!.AsArray());
+        Assert.NotEmpty(structured["top_files"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_CountOnly_OmitsCallerRows()
+    {
+        InsertIndexedFile(
+            "src/impact-count-only.cs",
+            "csharp",
+            """
+            public class ImpactCountOnlyCaller { public void Hit(App app) { app.Run(); } }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"Run","lang":"csharp","countOnly":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.True(structured["count_only"]!.GetValue<bool>());
+        Assert.Empty(structured["results"]!.AsArray());
+        Assert.NotNull(structured["top_files"]);
+    }
+
+    [Fact]
+    public void ToolsCall_ResponseOverByteLimit_ReturnsStructuredError()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_RESPONSE_MAX_BYTES");
+        Environment.SetEnvironmentVariable("CDIDX_MCP_RESPONSE_MAX_BYTES", "256");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32603, response["error"]!["code"]!.GetValue<int>());
+        Assert.Equal("response_too_large", response["error"]!["data"]!["reason"]!.GetValue<string>());
+        Assert.Equal(256, response["error"]!["data"]!["limit_bytes"]!.GetValue<int>());
+        Assert.True(response["error"]!["data"]!["actual_bytes"]!.GetValue<int>() > 256);
+    }
+
+    [Fact]
+    public async Task ProcessFrameAsync_BatchResponseOverByteLimit_ReturnsStructuredError()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_RESPONSE_MAX_BYTES");
+        Environment.SetEnvironmentVariable("CDIDX_MCP_RESPONSE_MAX_BYTES", "128");
+
+        var frame = "["
+            + string.Join(",", Enumerable.Range(1, 10).Select(id => $$"""{"jsonrpc":"2.0","id":{{id}},"method":"ping"}"""))
+            + "]";
+        var responseText = await _server.ProcessFrameAsync(frame);
+        using var response = JsonDocument.Parse(responseText!);
+        var root = response.RootElement;
+
+        Assert.Equal("2.0", root.GetProperty("jsonrpc").GetString());
+        var error = root.GetProperty("error");
+        Assert.Equal(-32603, error.GetProperty("code").GetInt32());
+        var data = error.GetProperty("data");
+        Assert.Equal("response_too_large", data.GetProperty("reason").GetString());
+        Assert.Equal(128, data.GetProperty("limit_bytes").GetInt32());
+        Assert.True(data.GetProperty("actual_bytes").GetInt32() > 128);
+    }
+
+    [Fact]
     public void ToolsCall_Search_AllowsFalseExactNameAlias()
     {
         InsertIndexedFile("src/search_false_alias.cs", "csharp", "void Run() { }\n");
