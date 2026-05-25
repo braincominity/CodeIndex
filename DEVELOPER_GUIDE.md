@@ -129,6 +129,60 @@ Query commands that accept path filters (`search`, `definition`, `references`, `
 
 Do not add mutable static caches, shared `StringBuilder` instances, reused `MatchCollection` enumerators, or singleton scanner state to extractor code. If a future extractor needs cross-call memoization, use an explicit thread-safe collection and add a targeted parallel regression test that proves deterministic output under concurrent calls.
 
+### Symbol Kind Taxonomy
+
+`symbols.kind`, `symbols.container_kind`, and `symbol_references.container_kind` use the public symbol kind taxonomy below. New extractors must register new kind values in `SymbolKindCatalog` before writing them so schema checks, writer validation, CLI filters, and downstream JSON consumers stay aligned.
+
+| Kind | Current producers / meaning | Graph behavior |
+|---|---|---|
+| `attribute` | Razor attributes and metadata-like declarations | Context/search symbol; not a call edge by itself |
+| `class` | Class declarations across object-oriented languages | Definition target and container |
+| `code` | Markdown fenced or structured code blocks | Search/outline symbol |
+| `constant` | Constant declarations where the language distinguishes them | Search/filter symbol |
+| `enum` | Enum declarations | Definition target and container |
+| `event` | Event declarations | Search/filter symbol |
+| `field` | Field declarations where distinct from properties | Search/filter symbol |
+| `function` | Functions, methods, constructors, delegates, tasks, and callable bindings that do not have a narrower kind | Primary callable definition; participates in callers/callees through reference rows |
+| `heading` | Markdown headings | Outline symbol |
+| `hook` | JavaScript/TypeScript React custom hook bindings | Callable-like search/filter symbol |
+| `implements` | Razor `@implements` directives | Context/search symbol |
+| `import` | Imports, using directives, aliases, and package includes | Search/filter symbol |
+| `interface` | Interface declarations | Definition target and container |
+| `lambda` | Named lambda/arrow bindings | Callable definition; participates in callers/callees through reference rows |
+| `layout` | Razor layout directives | Context/search symbol |
+| `method` | Languages or hooks that explicitly distinguish methods from functions | Callable definition; participates in callers/callees through reference rows |
+| `module` | Module declarations | Definition target and container |
+| `namespace` | Namespace declarations | Definition target and container |
+| `operator` | C# operator overload and conversion operator declarations | Callable definition; participates in callers/callees through reference rows |
+| `package` | Package declarations | Namespace-like context symbol |
+| `property` | Properties and property-like fields | Definition target; not treated as a call edge by itself |
+| `reference` | Secondary extracted symbolic references, such as HTML classes or metadata keys | Search/filter symbol |
+| `route` | Razor route directives | Context/search symbol |
+| `service` | Service declarations in IDL/protobuf-like languages | Definition target and container |
+| `struct` | Struct declarations | Definition target and container |
+| `test.method` | Test methods detected by test-aware extraction | Callable definition; participates in callers/callees through reference rows |
+| `type` | Type declarations where a narrower class/interface/struct/enum kind is not available | Definition target |
+| `variable` | Variable bindings | Search/filter symbol |
+
+`symbol_references.reference_kind` uses this separate reference taxonomy:
+
+| Reference kind | Meaning |
+|---|---|
+| `attribute` | Metadata/attribute usage |
+| `augmentation` | TypeScript declaration/interface merge edge |
+| `call` | Function, method, operator, macro, or command call |
+| `const_assertion` | TypeScript `as const` assertion edge |
+| `copy_from` | Dockerfile `COPY --from=<stage>` stage dependency |
+| `extends` | Inheritance or type-extension relationship |
+| `from` | Dockerfile `FROM <stage>` dependency |
+| `implement` | Interface implementation relationship |
+| `import` | Import/include/reference through a module system |
+| `instantiate` | Constructor or object creation |
+| `metadata` | Metadata-only reference |
+| `stage` | Build-stage relationship |
+| `type_reference` | Type annotation, generic constraint, or other type-position reference |
+| `use` | Generic usage relationship when no narrower reference kind applies |
+
 ### Status freshness age threshold
 
 `status --check` keeps the DB/worktree checksum comparison in `IndexFreshnessChecker`, but the user-facing age hint threshold is resolved in `QueryCommandRunner`: CLI `--stale-after <duration>` wins over `CDIDX_STALE_AFTER`, which wins over `.cdidxrc.json`'s `stale_after`, then the 24-hour default. Supported duration suffixes are `m`, `h`, and `d`. JSON output includes `stale_after_seconds` and `index_age_seconds` only for `--check`, so clients can confirm which threshold was applied without inferring it from text.
