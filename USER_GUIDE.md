@@ -425,6 +425,17 @@ or `cdidx . --json` refresh so stale paths are purged.
 
 ## Installation
 
+Choose the install channel based on runtime ownership and network shape:
+
+| Channel | Best fit | Prerequisites | Update path |
+|---|---|---|---|
+| `install.sh` | Self-contained installs, CI, containers, ARM64 hosts without managed .NET | Shell tools and release-asset network access | Re-run the installer, optionally with `vX.Y.Z` |
+| NuGet global tool | Workstations already using .NET global tools | .NET 8 SDK for install/update; .NET 8 runtime to run | `dotnet tool update -g cdidx` |
+| Build from source | Contributors and custom local builds | .NET 8 SDK | Pull source and rebuild |
+
+For a full comparison, package maintainer guidance, and planned channels such
+as winget, apt, rpm, Snap, and Flatpak, see [DISTRIBUTION.md](DISTRIBUTION.md).
+
 ### Option A: One-liner install (no .NET required)
 
 Works in containers, CI, and any Linux/macOS environment — no .NET SDK needed.
@@ -467,12 +478,45 @@ RUN export CDIDX_INSTALL_DIR=/usr/local/bin \
     && curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 
+#### Isolated networks and proxies
+
+Use `--doctor` before installing when a corporate proxy, egress allowlist, or
+GitHub mirror is involved:
+
+```bash
+bash ./install.sh --doctor
+HTTPS_PROXY=http://proxy.example:8080 bash ./install.sh --doctor v1.5.0
+```
+
+To point the installer at a mirror, set both release and API base URLs:
+
+```bash
+export CDIDX_GITHUB_BASE_URL=https://github.example.internal
+export CDIDX_GITHUB_API_BASE_URL=https://github.example.internal/api/v3
+curl -fsSL "$CDIDX_GITHUB_BASE_URL/Widthdom/CodeIndex/raw/main/install.sh" | bash
+```
+
+The local mirror self-test verifies the mirror code path without touching real
+release assets. It installs a mock `cdidx` into the selected install directory,
+so use an isolated directory unless you explicitly pass the overwrite guard:
+
+```bash
+export CDIDX_INSTALL_DIR="$(mktemp -d)"
+bash ./install.sh --self-test-local-mirror
+```
+
+If the default local self-test port is busy, set
+`CDIDX_LOCAL_MIRROR_PORT=18766`.
+
 ### Option B: NuGet Global Tool
 
-Requires the [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
-CodeIndex targets `net8.0`; .NET 8.x is the supported SDK/runtime line for the
-published tool, while the CI test suite also covers the test project on
-`net9.0`.
+Requires the [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+for `dotnet tool install` / `dotnet tool update`. CodeIndex targets `net8.0`;
+.NET 8.x is the supported runtime line for the published tool, while the CI
+test suite also covers the test project on `net9.0`. The NuGet package is
+framework-dependent rather than RID-specific or self-contained. On Apple
+Silicon, Linux ARM64, and Windows ARM64, prefer `install.sh` when the host does
+not already manage a .NET 8 runtime.
 
 ```bash
 dotnet tool install -g cdidx
@@ -2281,6 +2325,17 @@ freshness が曖昧になった場合は、stale paths を purge できるよう
 
 ## インストール
 
+runtime の管理方法とネットワーク条件に合わせて install channel を選んでください。
+
+| Channel | 向いている用途 | 前提条件 | 更新方法 |
+|---|---|---|---|
+| `install.sh` | self-contained install、CI、container、managed .NET が無い ARM64 host | shell tools と release asset へ到達できるネットワーク | installer を再実行。必要なら `vX.Y.Z` を指定 |
+| NuGet global tool | 既に .NET global tool を使う workstation | install/update には .NET 8 SDK、実行には .NET 8 runtime | `dotnet tool update -g cdidx` |
+| source build | contributor と custom local build | .NET 8 SDK | source を pull して rebuild |
+
+完全な比較、package maintainer guidance、winget / apt / rpm / Snap /
+Flatpak などの予定チャネルは [DISTRIBUTION.md](DISTRIBUTION.md) を参照してください。
+
 ### 方法A: ワンライナーインストール（.NET 不要）
 
 コンテナ、CI、Linux/macOS 環境で .NET SDK なしで使えます。
@@ -2323,12 +2378,46 @@ RUN export CDIDX_INSTALL_DIR=/usr/local/bin \
     && curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 
+#### 隔離ネットワークと proxy
+
+企業 proxy、egress allowlist、GitHub mirror が関係する環境では、install 前に
+`--doctor` で経路を確認してください。
+
+```bash
+bash ./install.sh --doctor
+HTTPS_PROXY=http://proxy.example:8080 bash ./install.sh --doctor v1.5.0
+```
+
+installer を mirror に向ける場合は、release host と API host の両方を設定します。
+
+```bash
+export CDIDX_GITHUB_BASE_URL=https://github.example.internal
+export CDIDX_GITHUB_API_BASE_URL=https://github.example.internal/api/v3
+curl -fsSL "$CDIDX_GITHUB_BASE_URL/Widthdom/CodeIndex/raw/main/install.sh" | bash
+```
+
+local mirror self-test は、実リリース資産に触れずに mirror 経路を検証します。
+選択した install directory に mock `cdidx` を配置するため、明示的に
+overwrite guard を渡す場合を除き、隔離ディレクトリを使ってください。
+
+```bash
+export CDIDX_INSTALL_DIR="$(mktemp -d)"
+bash ./install.sh --self-test-local-mirror
+```
+
+既定の local self-test port が埋まっている場合は
+`CDIDX_LOCAL_MIRROR_PORT=18766` を設定してください。
+
 ### 方法B: NuGet グローバルツール
 
+`dotnet tool install` / `dotnet tool update` には
 [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0) が必要です。
-CodeIndex は `net8.0` を対象にしており、公開ツールのサポート対象
-SDK/runtime 系列は .NET 8.x です。一方で、CI のテストスイートは
-テストプロジェクトを `net9.0` でも検証します。
+CodeIndex は `net8.0` を対象にしており、公開ツールのサポート対象 runtime
+系列は .NET 8.x です。一方で、CI のテストスイートはテストプロジェクトを
+`net9.0` でも検証します。NuGet package は framework-dependent であり、
+RID-specific / self-contained ではありません。Apple Silicon、Linux ARM64、
+Windows ARM64 で host 側が .NET 8 runtime を管理していない場合は、
+`install.sh` を優先してください。
 
 ```bash
 dotnet tool install -g cdidx

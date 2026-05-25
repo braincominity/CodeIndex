@@ -9,11 +9,17 @@
 #   bash ./install.sh --self-test-local-mirror [--self-test-allow-overwrite] [vX.Y.Z]
 #   bash ./install.sh --reinstall-real vX.Y.Z
 #   bash ./install.sh --doctor [vX.Y.Z]
+#   HTTPS_PROXY=http://proxy.example:8080 bash ./install.sh --doctor
+#   CDIDX_GITHUB_BASE_URL=https://github.example.internal \
+#     CDIDX_GITHUB_API_BASE_URL=https://github.example.internal/api/v3 \
+#     bash ./install.sh --doctor vX.Y.Z
 #
 # Optional env vars / 任意環境変数:
 #   CDIDX_GITHUB_BASE_URL       Release download base URL override
 #   CDIDX_GITHUB_API_BASE_URL   API base URL override for latest-release lookup
 #   CDIDX_LOCAL_MIRROR_PORT     Local self-test HTTP server port (default: 18765)
+#   HTTPS_PROXY / HTTP_PROXY    Proxy used by curl for release and API probes
+#   NO_PROXY                    Hosts that should bypass the proxy
 #
 # Self-test mock payload safety / セルフテスト mock 上書き防止:
 #   The --self-test-local-mirror path installs a **mock** cdidx that only
