@@ -76,7 +76,7 @@ internal sealed class RepoMapBuilder
     /// 深掘り前の把握に使うリポジトリ俯瞰情報を構築する。
     /// </summary>
     public RepoMapResult Build(int limit, string? lang, IReadOnlyList<string>? pathPatterns,
-        IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
+        IReadOnlyList<string>? excludePathPatterns, bool excludeTests, double minEntrypointConfidence,
         Func<(DateTime? IndexedAt, DateTime? LatestModified)> getFreshness)
     {
         // Query file stats first, then workspace freshness — preserves original
@@ -171,7 +171,7 @@ internal sealed class RepoMapBuilder
                 .Take(limit)
                 .Select(CreateUnscoredFileSummary)
                 .ToList(),
-            Entrypoints = GetEntrypoints(fileStats, limit, lang, pathPatterns, excludePathPatterns, excludeTests),
+            Entrypoints = GetEntrypoints(fileStats, limit, lang, pathPatterns, excludePathPatterns, excludeTests, minEntrypointConfidence),
             GraphTableAvailable = _hasReferencesTable,
         };
         txn.Commit();
@@ -272,7 +272,8 @@ internal sealed class RepoMapBuilder
     }
 
     private List<RepoEntrypointResult> GetEntrypoints(IReadOnlyList<RepoFileStat> fileStats, int limit,
-        string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+        string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
+        double minConfidence)
     {
         using var cmd = _conn.CreateCommand();
         var sql = @"
@@ -300,8 +301,8 @@ internal sealed class RepoMapBuilder
             var kind = reader.GetString(2);
             var name = reader.GetString(3);
             var line = reader.GetInt32(4);
-            var score = ScoreEntrypoint(path, candidateLang, kind, name);
-            if (score <= 0)
+            var match = ScoreEntrypoint(path, candidateLang, kind, name);
+            if (match.Score <= 0)
                 continue;
 
             results.Add(new RepoEntrypointResult
@@ -311,7 +312,10 @@ internal sealed class RepoMapBuilder
                 Kind = kind,
                 Name = name,
                 Line = line,
-                Score = score,
+                Score = match.Score,
+                MatchType = match.MatchType,
+                Confidence = match.Confidence,
+                HintRank = match.HintRank,
             });
         }
 
@@ -326,8 +330,8 @@ internal sealed class RepoMapBuilder
             if (filesWithEntrypoints.Contains(file.Path))
                 continue;
 
-            var score = ScoreEntrypointFileFallback(file.Path, file.Lang, file.SymbolCount, file.ReferenceCount);
-            if (score <= 0)
+            var match = ScoreEntrypointFileFallback(file.Path, file.Lang, file.SymbolCount, file.ReferenceCount);
+            if (match.Score <= 0)
                 continue;
 
             results.Add(new RepoEntrypointResult
@@ -337,12 +341,19 @@ internal sealed class RepoMapBuilder
                 Kind = "file",
                 Name = Path.GetFileName(file.Path),
                 Line = 1,
-                Score = score,
+                Score = match.Score,
+                MatchType = match.MatchType,
+                Confidence = match.Confidence,
+                HintRank = match.HintRank,
             });
         }
 
+        ApplyEntrypointAmbiguityPenalty(results);
         return results
+            .Where(result => result.Confidence >= minConfidence)
             .OrderByDescending(result => result.Score)
+            .ThenByDescending(result => result.Confidence)
+            .ThenBy(result => result.HintRank)
             .ThenBy(result => result.Path)
             .ThenBy(result => result.Line)
             .Take(limit)
@@ -425,21 +436,23 @@ internal sealed class RepoMapBuilder
         return path[..lastSlash];
     }
 
-    private static int ScoreEntrypoint(string path, string? lang, string kind, string name)
+    private static EntrypointScore ScoreEntrypoint(string path, string? lang, string kind, string name)
     {
         if (lang == null)
-            return 0;
+            return EntrypointScore.None;
 
         var score = 0;
-        if (EntrypointNameHints.TryGetValue(lang, out var names) && names.Any(candidate => string.Equals(candidate, name, StringComparison.OrdinalIgnoreCase)))
+        var nameRank = GetHintRank(EntrypointNameHints, lang, name);
+        if (nameRank > 0)
             score += 4;
 
         var fileName = Path.GetFileName(path);
-        if (EntrypointPathHints.TryGetValue(lang, out var fileHints) && fileHints.Any(candidate => string.Equals(candidate, fileName, StringComparison.OrdinalIgnoreCase)))
+        var pathRank = GetHintRank(EntrypointPathHints, lang, fileName);
+        if (pathRank > 0)
             score += 3;
 
         if (score == 0)
-            return 0;
+            return EntrypointScore.None;
 
         if (kind == "function")
             score += 1;
@@ -447,19 +460,34 @@ internal sealed class RepoMapBuilder
         if (kind == "class" && string.Equals(Path.GetFileNameWithoutExtension(fileName), name, StringComparison.OrdinalIgnoreCase))
             score += 1;
 
-        return score;
+        score += GetPathLocationBoost(path);
+        var matchType = pathRank > 0 && nameRank > 0
+            ? "path+name"
+            : pathRank > 0
+                ? "path"
+                : "name";
+        var hintRank = pathRank > 0 && nameRank > 0
+            ? Math.Min(pathRank, nameRank)
+            : Math.Max(pathRank, nameRank);
+        var confidence = pathRank > 0 && nameRank > 0
+            ? 0.85
+            : pathRank > 0
+                ? 0.65
+                : 0.5;
+
+        return new EntrypointScore(score, matchType, NormalizeConfidence(confidence + GetPathLocationConfidenceBoost(path)), hintRank);
     }
 
-    private static int ScoreEntrypointFileFallback(string path, string? lang, int symbolCount, int referenceCount)
+    private static EntrypointScore ScoreEntrypointFileFallback(string path, string? lang, int symbolCount, int referenceCount)
     {
         if (lang == null)
-            return 0;
+            return EntrypointScore.None;
 
         var fileName = Path.GetFileName(path);
-        if (!EntrypointPathHints.TryGetValue(lang, out var fileHints) ||
-            !fileHints.Any(candidate => string.Equals(candidate, fileName, StringComparison.OrdinalIgnoreCase)))
+        var pathRank = GetHintRank(EntrypointPathHints, lang, fileName);
+        if (pathRank <= 0)
         {
-            return 0;
+            return EntrypointScore.None;
         }
 
         var score = 2;
@@ -468,6 +496,70 @@ internal sealed class RepoMapBuilder
         if (referenceCount > 0)
             score += 1;
 
-        return score;
+        score += GetPathLocationBoost(path);
+        return new EntrypointScore(score, "path", NormalizeConfidence(0.4 + GetPathLocationConfidenceBoost(path)), pathRank);
+    }
+
+    private static int GetHintRank(IReadOnlyDictionary<string, string[]> hintsByLang, string lang, string candidate)
+    {
+        if (!hintsByLang.TryGetValue(lang, out var hints))
+            return 0;
+
+        for (var i = 0; i < hints.Length; i++)
+        {
+            if (string.Equals(hints[i], candidate, StringComparison.OrdinalIgnoreCase))
+                return i + 1;
+        }
+
+        return 0;
+    }
+
+    private static int GetPathLocationBoost(string path)
+    {
+        var slashCount = path.Count(ch => ch == '/');
+        if (slashCount == 0)
+            return 2;
+        if (path.StartsWith("src/", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("app/", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("cmd/", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("bin/", StringComparison.OrdinalIgnoreCase))
+            return 1;
+
+        return 0;
+    }
+
+    private static double GetPathLocationConfidenceBoost(string path)
+    {
+        var slashCount = path.Count(ch => ch == '/');
+        if (slashCount == 0)
+            return 0.1;
+        if (path.StartsWith("src/", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("app/", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("cmd/", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("bin/", StringComparison.OrdinalIgnoreCase))
+            return 0.05;
+
+        return 0;
+    }
+
+    private static void ApplyEntrypointAmbiguityPenalty(List<RepoEntrypointResult> results)
+    {
+        foreach (var group in results.GroupBy(result => $"{result.Lang ?? ""}\0{result.MatchType}\0{result.Name}", StringComparer.OrdinalIgnoreCase))
+        {
+            var count = group.Count();
+            if (count <= 1)
+                continue;
+
+            var penalty = Math.Min(0.3, 0.1 * (count - 1));
+            foreach (var result in group)
+                result.Confidence = NormalizeConfidence(Math.Max(0.2, result.Confidence - penalty));
+        }
+    }
+
+    private static double NormalizeConfidence(double confidence) => Math.Round(Math.Min(confidence, 1.0), 3);
+
+    private readonly record struct EntrypointScore(int Score, string MatchType, double Confidence, int HintRank)
+    {
+        public static EntrypointScore None { get; } = new(0, "", 0, 0);
     }
 }

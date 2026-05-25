@@ -12440,6 +12440,10 @@ public class DbReaderTests : IDisposable
         Assert.NotEmpty(map.SymbolRichFiles);
         Assert.NotEmpty(map.ReferenceRichFiles);
         Assert.Contains(map.Entrypoints, item => item.Name == "Main" && item.Path == "src/Program.cs");
+        var entrypoint = Assert.Single(map.Entrypoints, item => item.Name == "Main" && item.Path == "src/Program.cs");
+        Assert.Equal("path+name", entrypoint.MatchType);
+        Assert.True(entrypoint.Confidence >= 0.8);
+        Assert.Equal(1, entrypoint.HintRank);
     }
 
     [Fact]
@@ -12449,7 +12453,39 @@ public class DbReaderTests : IDisposable
 
         var map = _reader.GetRepoMap(limit: 5, pathPatterns: new[] { "src/Program.cs" });
 
-        Assert.Contains(map.Entrypoints, item => item.Kind == "file" && item.Name == "Program.cs" && item.Path == "src/Program.cs");
+        var entrypoint = Assert.Single(map.Entrypoints, item => item.Kind == "file" && item.Name == "Program.cs" && item.Path == "src/Program.cs");
+        Assert.Equal("path", entrypoint.MatchType);
+        Assert.True(entrypoint.Confidence >= 0.4);
+        Assert.Equal(1, entrypoint.HintRank);
+    }
+
+    [Fact]
+    public void GetRepoMap_MinEntrypointConfidenceFiltersWeakNameOnlyMatches()
+    {
+        InsertIndexedFile("src/services/service.py", "python", "def app():\n    return True\n");
+        InsertIndexedFile("src/main.py", "python", "def main():\n    return True\n");
+
+        var map = _reader.GetRepoMap(limit: 10, lang: "python", minEntrypointConfidence: 0.7);
+
+        Assert.Contains(map.Entrypoints, item => item.Path == "src/main.py" && item.Name == "main");
+        Assert.DoesNotContain(map.Entrypoints, item => item.Path == "src/services/service.py" && item.Name == "app");
+    }
+
+    [Fact]
+    public void GetRepoMap_RepeatedWeakEntrypointNamesReduceConfidence()
+    {
+        InsertIndexedFile("src/plugins/first.py", "python", "def app():\n    return True\n");
+        InsertIndexedFile("src/plugins/second.py", "python", "def app():\n    return True\n");
+
+        var map = _reader.GetRepoMap(limit: 10, lang: "python", pathPatterns: new[] { "plugins/" });
+
+        var entries = map.Entrypoints.Where(item => item.Name == "app").ToList();
+        Assert.Equal(2, entries.Count);
+        Assert.All(entries, entry =>
+        {
+            Assert.Equal("name", entry.MatchType);
+            Assert.True(entry.Confidence < 0.5);
+        });
     }
 
     [Theory]

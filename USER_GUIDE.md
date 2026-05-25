@@ -1480,6 +1480,8 @@ AI agents that query the database directly via SQL need the `sqlite3` CLI.
 
 Human-facing output formats file sizes with binary units (`KiB`, `MiB`, `GiB`, ...), so large repositories and `map` / `files` listings are easier to scan. Use `--bytes` on `files` or `map` when you need raw byte counts in the text output for shell pipelines. JSON output (`--json`) always keeps size fields as raw integer bytes for machine consumers.
 
+`map` entrypoint candidates include `match_type`, `confidence` (0.0..1.0), and `hint_rank` alongside the legacy `score`. `match_type` reports whether the candidate matched a conventional file path, a symbol name, or both; `hint_rank` is the 1-based order of the matched language hint. Confidence near `0.8` or higher means a path and symbol/name heuristic agree, around `0.5` means a single weak heuristic matched, and lower values are advisory candidates such as ambiguous repeated names or file-only fallbacks. Use `cdidx map --min-entrypoint-confidence <0.0..1.0>` to suppress weaker entrypoints in both human and JSON output.
+
 CLI JSON (`--json`) and MCP tool responses are both stable integration surfaces, but they are not identical wire envelopes. CLI commands keep CLI-oriented metadata such as `api_version` and command result fields, while MCP tools return JSON-RPC tool results with camelCase field names and may include MCP-specific metadata. Graph tools that group reference rows (`callers`, `callees`, and bundled `analyze_symbol` caller/callee rows) expose a backward-compatible scalar summary kind plus a sorted kind array and mixed-kind flag; CLI JSON uses `reference_kind` / `reference_kinds` / `has_mixed_reference_kinds`, while MCP uses `referenceKind` / `referenceKinds` / `hasMixedReferenceKinds`. Consumers that need every underlying kind should read the array for the surface they call and ignore unknown future fields. See [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#cli-json-and-mcp-response-compatibility) for the CLI/MCP compatibility table.
 
 ## AI Integration
@@ -3422,6 +3424,8 @@ AIエージェントがDBを直接SQL検索する場合、`sqlite3` CLIが必要
 ## 出力形式
 
 人間向けの出力では、ファイルサイズを2進単位（`KiB`、`MiB`、`GiB` など）で表示します。大きなリポジトリや `map` / `files` の一覧を読み取りやすくするためです。テキスト出力をシェルパイプラインで扱うなど、生のバイト数が必要な場合は `files` または `map` に `--bytes` を指定してください。JSON 出力（`--json`）では、機械処理向けに size フィールドを常に raw integer bytes のまま返します。
+
+`map` の entrypoint 候補は、従来の `score` に加えて `match_type`、`confidence`（0.0..1.0）、`hint_rank` を返します。`match_type` は候補が慣例的なファイルパス、シンボル名、またはその両方に一致したかを示し、`hint_rank` は一致した言語別 hint の 1-based 順位です。`0.8` 以上に近い confidence は path と symbol/name heuristic が一致したことを示し、`0.5` 前後は単一の弱い heuristic、さらに低い値は曖昧な重複名や file-only fallback のような参考候補です。弱い entrypoint を human / JSON 出力から除外するには `cdidx map --min-entrypoint-confidence <0.0..1.0>` を指定してください。
 
 CLI JSON（`--json`）と MCP tool response はどちらも安定した integration surface ですが、wire envelope は同一ではありません。CLI command は `api_version` や command result field など CLI 向けのメタデータを保持し、MCP tool は JSON-RPC tool result と camelCase field name、および MCP 固有のメタデータを返す場合があります。参照行をグループ化する graph tool（`callers`、`callees`、および bundled `analyze_symbol` の caller/callee 行）は、後方互換の scalar summary kind、ソート済み kind array、mixed-kind flag を返します。CLI JSON は `reference_kind` / `reference_kinds` / `has_mixed_reference_kinds`、MCP は `referenceKind` / `referenceKinds` / `hasMixedReferenceKinds` を使います。すべての underlying kind が必要な consumer は、呼び出した surface の array field を読み、将来追加される未知の field は無視してください。CLI/MCP compatibility table は [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#cli-json-and-mcp-response-compatibility) を参照してください。
 
