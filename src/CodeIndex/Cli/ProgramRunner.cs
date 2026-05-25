@@ -72,10 +72,18 @@ internal static class ProgramRunner
         using var metricsSession = MetricsSink.TryStart(metricsPath);
 
         TryConsumeDebugUnsafeFlag(ref args);
+        if (!TryConsumeStrictVersionFlag(ref args, out var strictVersion, out var strictVersionError))
+        {
+            CommandErrorWriter.Write(StripErrorPrefix(strictVersionError), "use `--strict-version` without a value.");
+            return CommandExitCodes.InvalidArgument;
+        }
         using var jsonAnsiScope = ConsoleUi.SuppressAnsiForJsonOutput(ContainsJsonOutputFlag(args));
 
         var commandStopwatch = Stopwatch.StartNew();
         var commandStartTimestamp = DateTimeOffset.UtcNow;
+        var versionPinExit = CheckWorkspaceVersionPin(appVersion, configStartDirectory ?? Environment.CurrentDirectory, strictVersion);
+        if (versionPinExit != CommandExitCodes.Success)
+            return versionPinExit;
 
         if (args.Length == 0 || args[0] is "--help" or "-h")
         {
@@ -641,6 +649,107 @@ internal static class ProgramRunner
             args = kept.ToArray();
         }
         return seen;
+    }
+
+    internal static bool TryConsumeStrictVersionFlag(ref string[] args, out bool strictVersion, out string error)
+    {
+        strictVersion = IsTruthyEnvironmentVariable("CDIDX_STRICT_VERSION");
+        error = string.Empty;
+        if (args.Length == 0)
+            return true;
+
+        var kept = new List<string>(args.Length);
+        var passthrough = false;
+        foreach (var arg in args)
+        {
+            if (passthrough)
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--")
+            {
+                passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--strict-version")
+            {
+                strictVersion = true;
+                continue;
+            }
+            if (arg.StartsWith("--strict-version=", StringComparison.Ordinal))
+            {
+                error = "Error: --strict-version does not accept a value.";
+                return false;
+            }
+            kept.Add(arg);
+        }
+
+        args = kept.ToArray();
+        return true;
+    }
+
+    private static int CheckWorkspaceVersionPin(string appVersion, string startDirectory, bool strictVersion)
+    {
+        var pinPath = FindWorkspaceVersionPin(startDirectory);
+        if (pinPath == null)
+            return CommandExitCodes.Success;
+
+        string required;
+        try
+        {
+            required = File.ReadLines(pinPath).FirstOrDefault(line => !string.IsNullOrWhiteSpace(line))?.Trim() ?? "";
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Warning: could not read .cdidx-version at {pinPath}: {ex.Message}");
+            return CommandExitCodes.Success;
+        }
+
+        if (string.IsNullOrWhiteSpace(required) || VersionsMatch(required, appVersion))
+            return CommandExitCodes.Success;
+
+        var message = $"workspace requires cdidx v{NormalizeVersion(required)}, but this binary is v{NormalizeVersion(appVersion)} ({pinPath}).";
+        if (!strictVersion)
+        {
+            Console.Error.WriteLine($"Warning: {message}");
+            return CommandExitCodes.Success;
+        }
+
+        Console.Error.WriteLine($"Error: {message}");
+        Console.Error.WriteLine("Hint: rerun without --strict-version to warn only, or install the pinned cdidx version for this workspace.");
+        return CommandExitCodes.ExUsage;
+    }
+
+    internal static string? FindWorkspaceVersionPin(string startDirectory)
+    {
+        var current = Path.GetFullPath(startDirectory);
+        if (File.Exists(current))
+            current = Path.GetDirectoryName(current) ?? current;
+
+        while (!string.IsNullOrWhiteSpace(current))
+        {
+            var candidate = Path.Combine(current, ".cdidx-version");
+            if (File.Exists(candidate))
+                return candidate;
+
+            var parent = Directory.GetParent(current);
+            if (parent == null)
+                return null;
+            current = parent.FullName;
+        }
+
+        return null;
+    }
+
+    private static bool VersionsMatch(string required, string actual)
+        => string.Equals(NormalizeVersion(required), NormalizeVersion(actual), StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeVersion(string value)
+    {
+        var trimmed = value.Trim();
+        return trimmed.StartsWith('v') || trimmed.StartsWith('V') ? trimmed[1..] : trimmed;
     }
 
     // Strip `--metrics <path>` / `--metrics=<path>` from the global args before subcommand

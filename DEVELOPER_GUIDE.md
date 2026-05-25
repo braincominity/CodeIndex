@@ -121,6 +121,14 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 
 `status --check` keeps the DB/worktree checksum comparison in `IndexFreshnessChecker`, but the user-facing age hint threshold is resolved in `QueryCommandRunner`: CLI `--stale-after <duration>` wins over `CDIDX_STALE_AFTER`, which wins over `.cdidxrc.json`'s `stale_after`, then the 24-hour default. Supported duration suffixes are `m`, `h`, and `d`. JSON output includes `stale_after_seconds` and `index_age_seconds` only for `--check`, so clients can confirm which threshold was applied without inferring it from text.
 
+### Workspace version pinning
+
+On startup, `cdidx` walks up from the current directory looking for `.cdidx-version`. The first non-empty line is treated as the required CLI version for that workspace. A mismatch prints a warning and continues by default; `--strict-version` or `CDIDX_STRICT_VERSION=1` turns the mismatch into exit code `64` (`EX_USAGE`). This check is advisory and does not rewrite the file. Use it to keep teams on the same binary when index contracts or query behavior differ between releases.
+
+### Release freshness and upgrade checks
+
+`cdidx --check-updates` and `cdidx status --check-updates` query the GitHub latest-release endpoint through `UpdateChecker`, using the same 24-hour cache and `CDIDX_DISABLE_UPDATE_CHECK=1` opt-out as the `--version` hint. `cdidx upgrade --check-only` reuses that check. `cdidx upgrade` is intentionally a thin wrapper around the signed release installer: it downloads `install.sh`, verifies the current binary directory is writable, sets `CDIDX_INSTALL_DIR` to that directory, and runs the installer for the latest release.
+
 ### Degradation reason codes
 
 Readiness degradation reason codes are centralized in `DegradationReasonCodes`. Add new codes there with human text, a recommended action, and an alternative action before emitting them from readers, CLI, or MCP payloads.
