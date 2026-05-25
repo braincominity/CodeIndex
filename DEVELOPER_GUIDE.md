@@ -1437,6 +1437,13 @@ frames cannot switch encodings, output is BOM-less UTF-8, 64 KiB buffer,
 `AutoFlush = true`). Malformed UTF-8 bytes
 raise a transport decode failure that the MCP loop maps to JSON-RPC `-32700`
 with an invalid-UTF-8 hint instead of silently replacing bytes with U+FFFD.
+JSON-RPC frames are also bounded before dispatch: at most 1,000,000 UTF-16
+characters, at most 1,048,576 UTF-8 bytes, and JSON nesting depth 32. Oversized,
+malformed, or too-deep frames return `-32700` with `id: null`; MCP `status`
+surfaces the active limits under `mcp.limits`. JSON-RPC batch arrays are
+supported up to 100 items: each item is dispatched through the same single-request
+path, notification-only batches produce no response, and empty or nested batches
+return `-32600`.
 
 `HttpMcpTransport` (also #1558) wraps `System.Net.HttpListener`:
 
