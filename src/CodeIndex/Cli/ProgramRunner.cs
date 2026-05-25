@@ -37,6 +37,12 @@ internal static class ProgramRunner
                 $"fix or remove `{CdidxConfigFile.FileName}`, or set `{CdidxConfigFile.DisableEnvVar}=1` to bypass it.");
         }
 
+        if (!TryConsumeGlobalLogFlags(ref args, out var globalLogError))
+        {
+            CommandErrorWriter.Write(StripErrorPrefix(globalLogError), "use --log-format <text|json>, --log-retain-count <N>, or --log-max-size-mb <N>.");
+            return CommandExitCodes.InvalidArgument;
+        }
+
         using var globalToolLog = GlobalToolLog.TryStart(args, appVersion);
         if (configResult.Loaded)
             GlobalToolLog.Info($"config_file_loaded path={configResult.Path}");
@@ -330,6 +336,86 @@ internal static class ProgramRunner
 
         args = kept.ToArray();
         return quiet;
+    }
+
+    internal static bool TryConsumeGlobalLogFlags(ref string[] args, out string error)
+    {
+        error = string.Empty;
+        var kept = new List<string>(args.Length);
+        var passthrough = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (passthrough)
+            {
+                kept.Add(arg);
+                continue;
+            }
+
+            if (arg == "--")
+            {
+                passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+
+            if (TryConsumeValueFlag(args, ref i, arg, "--log-format", out var format))
+            {
+                if (format is not ("text" or "json"))
+                {
+                    error = "--log-format must be `text` or `json`.";
+                    return false;
+                }
+                Environment.SetEnvironmentVariable(GlobalToolLog.LogFormatEnvironmentVariable, format);
+                continue;
+            }
+
+            if (TryConsumeValueFlag(args, ref i, arg, "--log-retain-count", out var retainCount))
+            {
+                if (!int.TryParse(retainCount, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed < 1)
+                {
+                    error = "--log-retain-count must be a positive integer.";
+                    return false;
+                }
+                Environment.SetEnvironmentVariable(GlobalToolLog.LogRetainEnvironmentVariable, parsed.ToString(CultureInfo.InvariantCulture));
+                continue;
+            }
+
+            if (TryConsumeValueFlag(args, ref i, arg, "--log-max-size-mb", out var maxSizeMb))
+            {
+                if (!int.TryParse(maxSizeMb, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) || parsed < 1)
+                {
+                    error = "--log-max-size-mb must be a positive integer.";
+                    return false;
+                }
+                Environment.SetEnvironmentVariable(GlobalToolLog.LogMaxSizeMbEnvironmentVariable, parsed.ToString(CultureInfo.InvariantCulture));
+                continue;
+            }
+
+            kept.Add(arg);
+        }
+
+        args = kept.ToArray();
+        return true;
+    }
+
+    private static bool TryConsumeValueFlag(string[] args, ref int index, string arg, string flag, out string value)
+    {
+        value = string.Empty;
+        if (arg.StartsWith(flag + "=", StringComparison.Ordinal))
+        {
+            value = arg[(flag.Length + 1)..].Trim();
+            return true;
+        }
+
+        if (arg != flag)
+            return false;
+
+        if (index + 1 >= args.Length)
+            return true;
+
+        value = args[++index].Trim();
+        return true;
     }
 
     private static bool IsTruthyEnvironmentVariable(string name)
