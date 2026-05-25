@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using CodeIndex.Cli;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
 using System.Text;
@@ -7,7 +8,10 @@ namespace CodeIndex.Database;
 
 /// <summary>
 /// Handles INSERT/UPSERT operations to the database with batch commits.
+/// Transaction scopes on a writer are serialized; nested scopes are supported on the
+/// owning thread and other threads wait until the active scope is disposed.
 /// バッチコミットによるINSERT/UPSERT処理を担当する。
+/// writer 上の transaction scope は直列化され、同一所有スレッドのネストのみ許可する。
 /// </summary>
 public class DbWriter
 {
@@ -20,12 +24,15 @@ public class DbWriter
     private readonly Action? _markWriteWork;
     internal static Action? FoldBackfillRowUpdatedForTesting { get; set; }
     internal static Action<string>? BatchRowSkipWarningForTesting { get; set; }
+    private readonly object _transactionStateLock = new();
+    private readonly SemaphoreSlim _transactionGate = new(1, 1);
     private const int BatchSize = 500;
     private const int MaxSqlVariables = 999;
     private const int SqliteConstraintErrorCode = 19;
     private int _rowSkipSavepointCounter;
     private long _batchRowsSkipped;
     private int _transactionDepth;
+    private int _transactionOwnerThreadId;
     // Outermost SqliteTransaction currently held open by this writer (null when no
     // transaction is active OR after the outermost transaction has been committed /
     // rolled back). Tracked so cached prepared commands can be re-pointed at the live
@@ -119,22 +126,66 @@ public class DbWriter
     /// </summary>
     public TransactionScope BeginTransaction()
     {
-        if (_transactionDepth == 0)
+        var ownsTransactionGate = EnterTransactionGate();
+        try
         {
-            _transactionDepth++;
-            var txn = _conn.BeginTransaction();
-            _activeTransaction = txn;
-            return new TransactionScope(txn, this);
+            if (_transactionDepth == 0)
+            {
+                var txn = _conn.BeginTransaction();
+                _transactionDepth = 1;
+                _activeTransaction = txn;
+                return new TransactionScope(txn, this, ownsTransactionGate);
+            }
+            else
+            {
+                // Nested: use SAVEPOINT instead of BEGIN TRANSACTION
+                // ネスト: BEGIN TRANSACTIONの代わりにSAVEPOINTを使用
+                var name = $"sp_{_transactionDepth}";
+                Execute($"SAVEPOINT {name}");
+                _transactionDepth++;
+                return new TransactionScope(name, _conn, this, ownsTransactionGate);
+            }
         }
-        else
+        catch
         {
-            // Nested: use SAVEPOINT instead of BEGIN TRANSACTION
-            // ネスト: BEGIN TRANSACTIONの代わりにSAVEPOINTを使用
-            var name = $"sp_{_transactionDepth}";
-            _transactionDepth++;
-            Execute($"SAVEPOINT {name}");
-            return new TransactionScope(name, _conn, this);
+            if (ownsTransactionGate)
+                ExitTransactionGate();
+            throw;
         }
+    }
+
+    private bool EnterTransactionGate()
+    {
+        while (true)
+        {
+            lock (_transactionStateLock)
+            {
+                if (_transactionDepth > 0 && _transactionOwnerThreadId == Environment.CurrentManagedThreadId)
+                    return false;
+            }
+
+            _transactionGate.Wait();
+            lock (_transactionStateLock)
+            {
+                if (_transactionDepth == 0)
+                {
+                    _transactionOwnerThreadId = Environment.CurrentManagedThreadId;
+                    return true;
+                }
+            }
+
+            _transactionGate.Release();
+            Thread.Yield();
+        }
+    }
+
+    private void ExitTransactionGate()
+    {
+        lock (_transactionStateLock)
+        {
+            _transactionOwnerThreadId = 0;
+        }
+        _transactionGate.Release();
     }
 
     /// <summary>
@@ -149,6 +200,7 @@ public class DbWriter
         private readonly string? _savepointName;
         private readonly SqliteConnection? _conn;
         private readonly DbWriter _writer;
+        private readonly bool _ownsTransactionGate;
         private const int StateActive = 0;
         private const int StateCommitting = 1;
         private const int StateCommitted = 2;
@@ -158,18 +210,20 @@ public class DbWriter
         private int _disposeStarted;
 
         // Real transaction / 実トランザクション
-        internal TransactionScope(SqliteTransaction transaction, DbWriter writer)
+        internal TransactionScope(SqliteTransaction transaction, DbWriter writer, bool ownsTransactionGate = false)
         {
             _transaction = transaction;
             _writer = writer;
+            _ownsTransactionGate = ownsTransactionGate;
         }
 
         // Savepoint / セーブポイント
-        internal TransactionScope(string savepointName, SqliteConnection conn, DbWriter writer)
+        internal TransactionScope(string savepointName, SqliteConnection conn, DbWriter writer, bool ownsTransactionGate = false)
         {
             _savepointName = savepointName;
             _conn = conn;
             _writer = writer;
+            _ownsTransactionGate = ownsTransactionGate;
         }
 
         public void Commit()
@@ -303,9 +357,10 @@ public class DbWriter
                             ExecuteSql($"ROLLBACK TO SAVEPOINT {_savepointName}");
                         Volatile.Write(ref _state, StateRolledBack);
                     }
-                    catch
+                    catch (Exception ex)
                     {
                         // Best effort during dispose / Dispose中はベストエフォート
+                        GlobalToolLog.Error($"transaction_scope_dispose_rollback_failed {GlobalToolLog.FormatExceptionChain(ex)}");
                         Volatile.Write(ref _state, StateRolledBack);
                     }
                     break;
@@ -313,20 +368,31 @@ public class DbWriter
             }
             finally
             {
-                _transaction?.Dispose();
-                if (_writer._transactionDepth > 0) _writer._transactionDepth--;
-                // Safety net: even if Commit/Rollback was bypassed (e.g. uncommitted scope
-                // disposed after an exception), make sure the outer-transaction reference is
-                // cleared before the next RentCommand sees it.
-                // 安全弁: Commit/Rollback を経由せず Dispose された場合でも active reference を解除。
-                if (_writer._transactionDepth == 0)
-                    _writer._activeTransaction = null;
+                try
+                {
+                    _transaction?.Dispose();
+                    if (_writer._transactionDepth > 0) _writer._transactionDepth--;
+                    // Safety net: even if Commit/Rollback was bypassed (e.g. uncommitted scope
+                    // disposed after an exception), make sure the outer-transaction reference is
+                    // cleared before the next RentCommand sees it.
+                    // 安全弁: Commit/Rollback を経由せず Dispose された場合でも active reference を解除。
+                    if (_writer._transactionDepth == 0)
+                        _writer._activeTransaction = null;
+                }
+                finally
+                {
+                    if (_ownsTransactionGate)
+                        _writer.ExitTransactionGate();
+                }
             }
         }
 
         private void ExecuteSql(string sql)
         {
-            using var cmd = _conn!.CreateCommand();
+            if (_conn is null)
+                throw new InvalidOperationException("Savepoint transaction scope is missing its SQLite connection.");
+
+            using var cmd = _conn.CreateCommand();
             cmd.CommandText = sql;
             cmd.ExecuteNonQuery();
             _writer._markWriteWork?.Invoke();
@@ -1692,61 +1758,70 @@ public class DbWriter
     /// <returns>True when the bit was actually stamped; false when re-verification failed.</returns>
     public bool MarkFoldReady(bool stampCurrentSymbolExtractorVersions = false)
     {
-        bool ownTransaction = !IsInTransaction();
-        if (ownTransaction)
-            Execute("BEGIN IMMEDIATE");
+        var ownsTransactionGate = EnterTransactionGate();
         try
         {
-            if (stampCurrentSymbolExtractorVersions)
+            bool ownTransaction = !IsInTransaction();
+            if (ownTransaction)
+                Execute("BEGIN IMMEDIATE");
+            try
+            {
+                if (stampCurrentSymbolExtractorVersions)
+                    StampSymbolExtractorVersions();
+
+                if (!AllFoldedColumnsBackfilledCore(
+                        requireCurrentSymbolExtractorVersions: false,
+                        requireCurrentFoldKeys: true))
+                {
+                    if (ownTransaction)
+                    {
+                        Execute("COMMIT");
+                        ownTransaction = false;
+                    }
+                    return false;
+                }
+
+                // Inline the SetReadyBit body. SetReadyBit opens its own BEGIN IMMEDIATE
+                // when not already in a DbWriter-tracked transaction, but our raw
+                // BEGIN IMMEDIATE above is not tracked in _transactionDepth, so a direct
+                // SetReadyBit call would attempt a nested BEGIN IMMEDIATE and fail.
+                // SetReadyBit は _transactionDepth ベースでしか外側 transaction を見ないため、
+                // 生 BEGIN IMMEDIATE 内では呼べない。内容を inline 展開する。
+                int current;
+                using (var read = _conn.CreateCommand())
+                {
+                    read.CommandText = "PRAGMA user_version";
+                    var raw = read.ExecuteScalar();
+                    current = raw is long l ? (int)l : (raw is int i ? i : 0);
+                }
+                int next = current | DbContext.FoldReadyFlag;
+                if (next != current)
+                    Execute($"PRAGMA user_version = {next}");
+
+                SetMeta("fold_key_version", NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                SetMeta("fold_key_fingerprint", NameFold.Fingerprint());
                 StampSymbolExtractorVersions();
 
-            if (!AllFoldedColumnsBackfilledCore(
-                    requireCurrentSymbolExtractorVersions: false,
-                    requireCurrentFoldKeys: true))
-            {
                 if (ownTransaction)
                 {
                     Execute("COMMIT");
                     ownTransaction = false;
                 }
-                return false;
+                return true;
             }
-
-            // Inline the SetReadyBit body. SetReadyBit opens its own BEGIN IMMEDIATE
-            // when not already in a DbWriter-tracked transaction, but our raw
-            // BEGIN IMMEDIATE above is not tracked in _transactionDepth, so a direct
-            // SetReadyBit call would attempt a nested BEGIN IMMEDIATE and fail.
-            // SetReadyBit は _transactionDepth ベースでしか外側 transaction を見ないため、
-            // 生 BEGIN IMMEDIATE 内では呼べない。内容を inline 展開する。
-            int current;
-            using (var read = _conn.CreateCommand())
+            catch (Exception)
             {
-                read.CommandText = "PRAGMA user_version";
-                var raw = read.ExecuteScalar();
-                current = raw is long l ? (int)l : (raw is int i ? i : 0);
+                if (ownTransaction)
+                {
+                    try { Execute("ROLLBACK"); } catch (SqliteException) { /* best effort */ }
+                }
+                throw;
             }
-            int next = current | DbContext.FoldReadyFlag;
-            if (next != current)
-                Execute($"PRAGMA user_version = {next}");
-
-            SetMeta("fold_key_version", NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            SetMeta("fold_key_fingerprint", NameFold.Fingerprint());
-            StampSymbolExtractorVersions();
-
-            if (ownTransaction)
-            {
-                Execute("COMMIT");
-                ownTransaction = false;
-            }
-            return true;
         }
-        catch (Exception)
+        finally
         {
-            if (ownTransaction)
-            {
-                try { Execute("ROLLBACK"); } catch (SqliteException) { /* best effort */ }
-            }
-            throw;
+            if (ownsTransactionGate)
+                ExitTransactionGate();
         }
     }
 
@@ -3164,39 +3239,48 @@ public class DbWriter
 
     private void SetReadyBit(int flag)
     {
-        // The ready bits share a single PRAGMA user_version word, so two parallel
-        // cdidx writers (e.g. CI + a local rebuild) can each read the same prior
-        // value, OR in their own flag, and the slower writer's PRAGMA write clobbers
-        // the faster writer's flag. Wrap the read-modify-write in BEGIN IMMEDIATE so
-        // SQLite's reserved write lock serialises it across processes (issue #1513).
-        bool ownTransaction = !IsInTransaction();
-        if (ownTransaction)
-            Execute("BEGIN IMMEDIATE");
+        var ownsTransactionGate = EnterTransactionGate();
         try
         {
-            int current;
-            using (var read = _conn.CreateCommand())
-            {
-                read.CommandText = "PRAGMA user_version";
-                var raw = read.ExecuteScalar();
-                current = raw is long l ? (int)l : (raw is int i ? i : 0);
-            }
-            int next = current | flag;
-            if (next != current)
-                Execute($"PRAGMA user_version = {next}");
+            // The ready bits share a single PRAGMA user_version word, so two parallel
+            // cdidx writers (e.g. CI + a local rebuild) can each read the same prior
+            // value, OR in their own flag, and the slower writer's PRAGMA write clobbers
+            // the faster writer's flag. Wrap the read-modify-write in BEGIN IMMEDIATE so
+            // SQLite's reserved write lock serialises it across processes (issue #1513).
+            bool ownTransaction = !IsInTransaction();
             if (ownTransaction)
+                Execute("BEGIN IMMEDIATE");
+            try
             {
-                Execute("COMMIT");
-                ownTransaction = false;
+                int current;
+                using (var read = _conn.CreateCommand())
+                {
+                    read.CommandText = "PRAGMA user_version";
+                    var raw = read.ExecuteScalar();
+                    current = raw is long l ? (int)l : (raw is int i ? i : 0);
+                }
+                int next = current | flag;
+                if (next != current)
+                    Execute($"PRAGMA user_version = {next}");
+                if (ownTransaction)
+                {
+                    Execute("COMMIT");
+                    ownTransaction = false;
+                }
+            }
+            catch (Exception)
+            {
+                if (ownTransaction)
+                {
+                    try { Execute("ROLLBACK"); } catch (SqliteException) { /* best effort */ }
+                }
+                throw;
             }
         }
-        catch (Exception)
+        finally
         {
-            if (ownTransaction)
-            {
-                try { Execute("ROLLBACK"); } catch (SqliteException) { /* best effort */ }
-            }
-            throw;
+            if (ownsTransactionGate)
+                ExitTransactionGate();
         }
     }
 

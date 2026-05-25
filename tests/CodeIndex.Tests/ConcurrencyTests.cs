@@ -522,6 +522,62 @@ public class ConcurrencyTests : IDisposable
             $"Sample: {string.Join(", ", lostFlagIterations.Take(3).Select(v => $"i={v.iteration} user_version={v.finalUserVersion}"))}");
     }
 
+    [Fact]
+    public async Task BeginTransaction_SharedWriterSerializesConcurrentScopes()
+    {
+        var writer = new DbWriter(_db.Connection);
+        using var start = new ManualResetEventSlim(false);
+        var errors = new ConcurrentBag<Exception>();
+
+        var tasks = Enumerable.Range(0, 8).Select(worker => Task.Run(() =>
+        {
+            start.Wait();
+            try
+            {
+                for (var i = 0; i < 20; i++)
+                {
+                    using var txn = writer.BeginTransaction();
+                    writer.UpsertFile(new FileRecord
+                    {
+                        Path = $"src/worker{worker}_{i}.cs",
+                        Lang = "csharp",
+                        Size = 10,
+                        Lines = 1,
+                        Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                        Checksum = $"{worker}_{i}",
+                    });
+                    txn.Commit();
+                }
+            }
+            catch (Exception ex)
+            {
+                errors.Add(ex);
+            }
+        })).ToArray();
+
+        start.Set();
+        await Task.WhenAll(tasks);
+
+        Assert.True(errors.IsEmpty, string.Join(Environment.NewLine, errors.Select(e => e.ToString())));
+    }
+
+    [Fact]
+    public async Task SetReadyBit_SharedWriterWaitsForActiveScope()
+    {
+        var writer = new DbWriter(_db.Connection);
+        using var txn = writer.BeginTransaction();
+
+        var markTask = Task.Run(() => writer.MarkGraphReady());
+        await Task.Delay(100);
+        Assert.False(markTask.IsCompleted);
+
+        txn.Commit();
+        txn.Dispose();
+        await markTask;
+
+        Assert.True((_db.GetUserVersion() & DbContext.GraphReadyFlag) != 0);
+    }
+
     private static List<ReferenceRecord> BuildReferenceBatch(long fileId, string label, int count)
     {
         var refs = new List<ReferenceRecord>(count);
