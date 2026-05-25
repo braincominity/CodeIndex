@@ -12443,6 +12443,44 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetRepoMap_KeepsSectionOrderingAndCountsAfterAggregateRefactor()
+    {
+        InsertIndexedFile("perfmap/api/large.md", "markdown", "one\ntwo\nthree\nfour");
+        InsertIndexedFile("perfmap/api/small.md", "markdown", "one");
+        InsertIndexedFile("perfmap/cli/medium.py", "python", "# note\n# note");
+
+        var map = _reader.GetRepoMap(limit: 3, pathPatterns: new[] { "perfmap/" });
+
+        Assert.Equal(3, map.FileCount);
+        Assert.Equal(7, map.TotalLines);
+        Assert.Collection(map.Languages,
+            language =>
+            {
+                Assert.Equal("markdown", language.Lang);
+                Assert.Equal(2, language.Files);
+                Assert.Equal(5, language.Lines);
+            },
+            language =>
+            {
+                Assert.Equal("python", language.Lang);
+                Assert.Equal(1, language.Files);
+                Assert.Equal(2, language.Lines);
+            });
+        Assert.Collection(map.Modules,
+            module =>
+            {
+                Assert.Equal("perfmap", module.Module);
+                Assert.Equal(3, module.Files);
+                Assert.Equal(7, module.Lines);
+            });
+        Assert.Equal(new[] { "perfmap/api/large.md", "perfmap/cli/medium.py", "perfmap/api/small.md" },
+            map.TopFiles.Select(file => file.Path).ToArray());
+        Assert.Equal(new[] { "perfmap/api/large.md", "perfmap/cli/medium.py", "perfmap/api/small.md" },
+            map.LargestFiles.Select(file => file.Path).ToArray());
+        Assert.All(map.LargestFiles, file => Assert.Null(file.Score));
+    }
+
+    [Fact]
     public void GetRepoMap_AddsFileFallbackEntrypointForTopLevelProgram()
     {
         InsertIndexedFile("src/Program.cs", "csharp", "var client = new ApiClient();\nConsole.WriteLine(client);\n");
