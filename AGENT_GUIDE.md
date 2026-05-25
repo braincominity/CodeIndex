@@ -18,6 +18,7 @@ For implementation tasks:
 ## Workflow Index
 
 Task-specific procedures live in `.codex/workflows/`. The directory is a shared workflow library for all coding agents, not only Codex.
+See `.codex/workflows/README.md` for the workflow directory map and rule-placement guidance.
 
 - issue fixing: `.codex/workflows/issue-fix.md`
 - changelog fragments: `.codex/workflows/changelog-fragment.md`
@@ -54,6 +55,12 @@ If the command exits `0` and reports `index_matches_workspace: true`, you may tr
 This rule applies to code search and repository understanding. It does not forbid Git commands, build tools, test runners, package managers, or small shell checks that are not being used to search implementation code. Enforcement of forbidden tools is provided separately by the Claude and Codex guard hooks.
 
 ## Tool-Specific Notes
+
+Command-search enforcement is tool-specific and adapter-driven:
+
+- Codex uses `.codex/hooks.json`, which invokes `.codex/hooks/bash_guard.py` and `.codex/hooks/permission_request_guard.py`.
+- Claude Code uses `.claude/settings.json`, which invokes `.claude/hooks/bash-guard.py`.
+- Both Bash guard adapters delegate shared command policy to `.agent_harness/command_guard_core.py`; update the shared core for common command policy and review both adapters only when tool-specific behavior changes.
 
 ### Claude Code
 
