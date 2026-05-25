@@ -567,7 +567,11 @@ public class ConcurrencyTests : IDisposable
         var writer = new DbWriter(_db.Connection);
         using var txn = writer.BeginTransaction();
 
-        var markTask = Task.Run(() => writer.MarkGraphReady());
+        Task markTask;
+        using (ExecutionContext.SuppressFlow())
+        {
+            markTask = Task.Run(() => writer.MarkGraphReady());
+        }
         await Task.Delay(100);
         Assert.False(markTask.IsCompleted);
 
@@ -576,6 +580,31 @@ public class ConcurrencyTests : IDisposable
         await markTask;
 
         Assert.True((_db.GetUserVersion() & DbContext.GraphReadyFlag) != 0);
+    }
+
+    [Fact]
+    public async Task BeginTransaction_NestedScopeAfterAwaitKeepsLogicalOwnership()
+    {
+        var writer = new DbWriter(_db.Connection);
+
+        using var outer = writer.BeginTransaction();
+        await Task.Yield();
+        using var nested = writer.BeginTransaction();
+
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "src/after_await.cs",
+            Lang = "csharp",
+            Size = 10,
+            Lines = 1,
+            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = "after-await",
+        });
+        nested.Commit();
+        outer.Commit();
+
+        var reader = new DbReader(_db.Connection);
+        Assert.Equal(1, reader.GetStatus().Files);
     }
 
     private static List<ReferenceRecord> BuildReferenceBatch(long fileId, string label, int count)

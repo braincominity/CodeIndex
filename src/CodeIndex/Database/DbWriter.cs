@@ -26,13 +26,14 @@ public class DbWriter
     internal static Action<string>? BatchRowSkipWarningForTesting { get; set; }
     private readonly object _transactionStateLock = new();
     private readonly SemaphoreSlim _transactionGate = new(1, 1);
+    private readonly AsyncLocal<Guid?> _currentTransactionGateToken = new();
     private const int BatchSize = 500;
     private const int MaxSqlVariables = 999;
     private const int SqliteConstraintErrorCode = 19;
     private int _rowSkipSavepointCounter;
     private long _batchRowsSkipped;
     private int _transactionDepth;
-    private int _transactionOwnerThreadId;
+    private Guid _transactionOwnerToken;
     // Outermost SqliteTransaction currently held open by this writer (null when no
     // transaction is active OR after the outermost transaction has been committed /
     // rolled back). Tracked so cached prepared commands can be re-pointed at the live
@@ -126,7 +127,7 @@ public class DbWriter
     /// </summary>
     public TransactionScope BeginTransaction()
     {
-        var ownsTransactionGate = EnterTransactionGate();
+        var gateLease = EnterTransactionGate();
         try
         {
             if (_transactionDepth == 0)
@@ -134,7 +135,7 @@ public class DbWriter
                 var txn = _conn.BeginTransaction();
                 _transactionDepth = 1;
                 _activeTransaction = txn;
-                return new TransactionScope(txn, this, ownsTransactionGate);
+                return new TransactionScope(txn, this, gateLease);
             }
             else
             {
@@ -143,25 +144,24 @@ public class DbWriter
                 var name = $"sp_{_transactionDepth}";
                 Execute($"SAVEPOINT {name}");
                 _transactionDepth++;
-                return new TransactionScope(name, _conn, this, ownsTransactionGate);
+                return new TransactionScope(name, _conn, this, gateLease);
             }
         }
         catch
         {
-            if (ownsTransactionGate)
-                ExitTransactionGate();
+            gateLease.Dispose();
             throw;
         }
     }
 
-    private bool EnterTransactionGate()
+    private TransactionGateLease EnterTransactionGate()
     {
         while (true)
         {
             lock (_transactionStateLock)
             {
-                if (_transactionDepth > 0 && _transactionOwnerThreadId == Environment.CurrentManagedThreadId)
-                    return false;
+                if (_transactionDepth > 0 && _transactionOwnerToken != Guid.Empty && _currentTransactionGateToken.Value == _transactionOwnerToken)
+                    return TransactionGateLease.None;
             }
 
             _transactionGate.Wait();
@@ -169,8 +169,11 @@ public class DbWriter
             {
                 if (_transactionDepth == 0)
                 {
-                    _transactionOwnerThreadId = Environment.CurrentManagedThreadId;
-                    return true;
+                    var previousToken = _currentTransactionGateToken.Value;
+                    var token = Guid.NewGuid();
+                    _transactionOwnerToken = token;
+                    _currentTransactionGateToken.Value = token;
+                    return new TransactionGateLease(this, token, previousToken);
                 }
             }
 
@@ -179,13 +182,37 @@ public class DbWriter
         }
     }
 
-    private void ExitTransactionGate()
+    private void ExitTransactionGate(Guid token, Guid? previousToken)
     {
         lock (_transactionStateLock)
         {
-            _transactionOwnerThreadId = 0;
+            if (_transactionOwnerToken == token)
+                _transactionOwnerToken = Guid.Empty;
         }
+        if (_currentTransactionGateToken.Value == token)
+            _currentTransactionGateToken.Value = previousToken;
         _transactionGate.Release();
+    }
+
+    internal readonly struct TransactionGateLease
+    {
+        public static readonly TransactionGateLease None = new(null, Guid.Empty, null);
+
+        private readonly DbWriter? _writer;
+        private readonly Guid _token;
+        private readonly Guid? _previousToken;
+
+        public TransactionGateLease(DbWriter? writer, Guid token, Guid? previousToken)
+        {
+            _writer = writer;
+            _token = token;
+            _previousToken = previousToken;
+        }
+
+        public void Dispose()
+        {
+            _writer?.ExitTransactionGate(_token, _previousToken);
+        }
     }
 
     /// <summary>
@@ -200,7 +227,7 @@ public class DbWriter
         private readonly string? _savepointName;
         private readonly SqliteConnection? _conn;
         private readonly DbWriter _writer;
-        private readonly bool _ownsTransactionGate;
+        private readonly TransactionGateLease _transactionGateLease;
         private const int StateActive = 0;
         private const int StateCommitting = 1;
         private const int StateCommitted = 2;
@@ -210,20 +237,30 @@ public class DbWriter
         private int _disposeStarted;
 
         // Real transaction / 実トランザクション
-        internal TransactionScope(SqliteTransaction transaction, DbWriter writer, bool ownsTransactionGate = false)
+        internal TransactionScope(SqliteTransaction transaction, DbWriter writer)
+            : this(transaction, writer, TransactionGateLease.None)
+        {
+        }
+
+        internal TransactionScope(SqliteTransaction transaction, DbWriter writer, TransactionGateLease transactionGateLease = default)
         {
             _transaction = transaction;
             _writer = writer;
-            _ownsTransactionGate = ownsTransactionGate;
+            _transactionGateLease = transactionGateLease;
         }
 
         // Savepoint / セーブポイント
-        internal TransactionScope(string savepointName, SqliteConnection conn, DbWriter writer, bool ownsTransactionGate = false)
+        internal TransactionScope(string savepointName, SqliteConnection conn, DbWriter writer)
+            : this(savepointName, conn, writer, TransactionGateLease.None)
+        {
+        }
+
+        internal TransactionScope(string savepointName, SqliteConnection conn, DbWriter writer, TransactionGateLease transactionGateLease = default)
         {
             _savepointName = savepointName;
             _conn = conn;
             _writer = writer;
-            _ownsTransactionGate = ownsTransactionGate;
+            _transactionGateLease = transactionGateLease;
         }
 
         public void Commit()
@@ -381,8 +418,7 @@ public class DbWriter
                 }
                 finally
                 {
-                    if (_ownsTransactionGate)
-                        _writer.ExitTransactionGate();
+                    _transactionGateLease.Dispose();
                 }
             }
         }
@@ -1766,7 +1802,7 @@ public class DbWriter
     /// <returns>True when the bit was actually stamped; false when re-verification failed.</returns>
     public bool MarkFoldReady(bool stampCurrentSymbolExtractorVersions = false)
     {
-        var ownsTransactionGate = EnterTransactionGate();
+        var gateLease = EnterTransactionGate();
         try
         {
             bool ownTransaction = !IsInTransaction();
@@ -1828,8 +1864,7 @@ public class DbWriter
         }
         finally
         {
-            if (ownsTransactionGate)
-                ExitTransactionGate();
+            gateLease.Dispose();
         }
     }
 
@@ -3252,7 +3287,7 @@ public class DbWriter
 
     private void SetReadyBit(int flag)
     {
-        var ownsTransactionGate = EnterTransactionGate();
+        var gateLease = EnterTransactionGate();
         try
         {
             // The ready bits share a single PRAGMA user_version word, so two parallel
@@ -3300,8 +3335,7 @@ public class DbWriter
         }
         finally
         {
-            if (ownsTransactionGate)
-                ExitTransactionGate();
+            gateLease.Dispose();
         }
     }
 

@@ -210,7 +210,7 @@ public class DatabaseTests : IDisposable
             scopeType,
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
             binder: null,
-            args: ["sp_missing_conn", null!, _writer, false],
+            args: ["sp_missing_conn", null!, _writer],
             culture: null)
             ?? throw new InvalidOperationException("TransactionScope instance was not created.");
 
