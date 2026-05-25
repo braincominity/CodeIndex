@@ -284,6 +284,24 @@ public class ProgramRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("/repo/src/CodeIndex/bin/Debug/net8.0/")]
+    [InlineData("/repo/src/CodeIndex/bin/Debug/net8.0/cdidx.dll")]
+    [InlineData("/repo/tests/CodeIndex.Tests/bin/Debug/net8.0/CodeIndex.Tests.dll")]
+    [InlineData(@"C:\repo\src\CodeIndex\bin\Debug\net8.0\cdidx.exe")]
+    [InlineData(@"C:/repo/src\CodeIndex/bin\Debug/net8.0/cdidx.exe")]
+    public void GlobalToolLog_DevelopmentExecutionDetection_RecognizesCanonicalAndMixedSeparators(string path)
+    {
+        Assert.True(GlobalToolLog.LooksLikeDevelopmentExecutionForTesting(path));
+    }
+
+    [Fact]
+    public void GlobalToolLog_DevelopmentExecutionDetection_DoesNotMatchPartialDirectoryNames()
+    {
+        Assert.False(GlobalToolLog.LooksLikeDevelopmentExecutionForTesting("/repo/not-src/CodeIndex/bin/Debug/net8.0/"));
+        Assert.False(GlobalToolLog.LooksLikeDevelopmentExecutionForTesting("/repo/src/CodeIndex.Binary/bin/Debug/net8.0/"));
+    }
+
     [Fact]
     public void Run_ForcedGlobalToolLogging_WritesLifecycleAndMirrorsStderr()
     {
