@@ -139,6 +139,52 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void PurgeStaleFiles_RemovesCrossFileReferencesToSymbolsDefinedOnlyByDeletedFiles()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("purge-stale-symbol-ref");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "target.py"), "# retained rename target");
+
+            var callerFileId = UpsertTestFile("src/caller.cs", checksum: "caller");
+            var staleTargetFileId = UpsertTestFile("src/target.cs", checksum: "target");
+            _ = UpsertTestFile("src/target.py", checksum: "target");
+            _writer.InsertSymbols([
+                new SymbolRecord
+                {
+                    FileId = staleTargetFileId,
+                    Kind = "function",
+                    Name = "DeletedTarget",
+                    Line = 1,
+                },
+            ]);
+            _writer.InsertReferences([
+                new ReferenceRecord
+                {
+                    FileId = callerFileId,
+                    SymbolName = "DeletedTarget",
+                    ReferenceKind = "call",
+                    Line = 1,
+                    Column = 1,
+                    Context = "DeletedTarget();",
+                },
+            ]);
+
+            var purged = _writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, "src/target.py");
+
+            Assert.Equal(1, purged);
+            using var cmd = _db.Connection.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE symbol_name = 'DeletedTarget'";
+            Assert.Equal(0L, (long)cmd.ExecuteScalar()!);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void OptimizeFts_ResetsIncrementalWriteCounterAndStampsTime()
     {
         Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());

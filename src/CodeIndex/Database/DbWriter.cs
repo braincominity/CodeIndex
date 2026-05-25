@@ -578,6 +578,8 @@ public class DbWriter
 
     private void DeleteFileIdBatch(IReadOnlyList<long> fileIds)
     {
+        DeleteCrossFileReferencesToSymbolsDefinedOnlyByFiles(fileIds);
+
         using var deleteCmd = _conn.CreateCommand();
         var parameters = new List<string>(fileIds.Count);
         for (var i = 0; i < fileIds.Count; i++)
@@ -588,6 +590,38 @@ public class DbWriter
         }
 
         deleteCmd.CommandText = $"DELETE FROM files WHERE id IN ({string.Join(", ", parameters)})";
+        deleteCmd.ExecuteNonQuery();
+    }
+
+    private void DeleteCrossFileReferencesToSymbolsDefinedOnlyByFiles(IReadOnlyList<long> fileIds)
+    {
+        using var deleteCmd = _conn.CreateCommand();
+        var parameters = new List<string>(fileIds.Count);
+        for (var i = 0; i < fileIds.Count; i++)
+        {
+            var parameterName = $"@id{i}";
+            parameters.Add(parameterName);
+            deleteCmd.Parameters.Add(parameterName, SqliteType.Integer).Value = fileIds[i];
+        }
+
+        var idList = string.Join(", ", parameters);
+        deleteCmd.CommandText = $@"
+            DELETE FROM symbol_references
+            WHERE file_id NOT IN ({idList})
+              AND symbol_name IS NOT NULL
+              AND symbol_name <> ''
+              AND EXISTS (
+                  SELECT 1
+                  FROM symbols deleted_symbols
+                  WHERE deleted_symbols.file_id IN ({idList})
+                    AND deleted_symbols.name = symbol_references.symbol_name
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM symbols retained_symbols
+                  WHERE retained_symbols.file_id NOT IN ({idList})
+                    AND retained_symbols.name = symbol_references.symbol_name
+              )";
         deleteCmd.ExecuteNonQuery();
     }
 
