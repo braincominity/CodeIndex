@@ -430,7 +430,7 @@ Choose the install channel based on runtime ownership and network shape:
 | Channel | Best fit | Prerequisites | Update path |
 |---|---|---|---|
 | `install.sh` | Self-contained installs, CI, containers, ARM64 hosts without managed .NET | Shell tools and release-asset network access | Re-run the installer, optionally with `vX.Y.Z` |
-| NuGet global tool | Workstations already using .NET global tools | .NET 8 SDK/runtime | `dotnet tool update -g cdidx` |
+| NuGet global tool | Workstations already using .NET global tools | .NET 8 SDK for install/update; .NET 8 runtime to run | `dotnet tool update -g cdidx` |
 | Build from source | Contributors and custom local builds | .NET 8 SDK | Pull source and rebuild |
 
 For a full comparison, package maintainer guidance, and planned channels such
@@ -510,12 +510,13 @@ If the default local self-test port is busy, set
 
 ### Option B: NuGet Global Tool
 
-Requires the [.NET 8.x SDK or runtime](https://dotnet.microsoft.com/download/dotnet/8.0).
-CodeIndex targets `net8.0`; .NET 8.x is the supported runtime line for the
-published tool, while the CI test suite also covers the test project on
-`net9.0`. The NuGet package is framework-dependent rather than RID-specific or
-self-contained. On Apple Silicon, Linux ARM64, and Windows ARM64, prefer
-`install.sh` when the host does not already manage a .NET 8 runtime.
+Requires the [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+for `dotnet tool install` / `dotnet tool update`. CodeIndex targets `net8.0`;
+.NET 8.x is the supported runtime line for the published tool, while the CI
+test suite also covers the test project on `net9.0`. The NuGet package is
+framework-dependent rather than RID-specific or self-contained. On Apple
+Silicon, Linux ARM64, and Windows ARM64, prefer `install.sh` when the host does
+not already manage a .NET 8 runtime.
 
 ```bash
 dotnet tool install -g cdidx
@@ -2329,7 +2330,7 @@ runtime の管理方法とネットワーク条件に合わせて install channe
 | Channel | 向いている用途 | 前提条件 | 更新方法 |
 |---|---|---|---|
 | `install.sh` | self-contained install、CI、container、managed .NET が無い ARM64 host | shell tools と release asset へ到達できるネットワーク | installer を再実行。必要なら `vX.Y.Z` を指定 |
-| NuGet global tool | 既に .NET global tool を使う workstation | .NET 8 SDK/runtime | `dotnet tool update -g cdidx` |
+| NuGet global tool | 既に .NET global tool を使う workstation | install/update には .NET 8 SDK、実行には .NET 8 runtime | `dotnet tool update -g cdidx` |
 | source build | contributor と custom local build | .NET 8 SDK | source を pull して rebuild |
 
 完全な比較、package maintainer guidance、winget / apt / rpm / Snap /
@@ -2409,13 +2410,14 @@ bash ./install.sh --self-test-local-mirror
 
 ### 方法B: NuGet グローバルツール
 
-[.NET 8.x SDK または runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
-が必要です。CodeIndex は `net8.0` を対象にしており、公開ツールの
-サポート対象 runtime 系列は .NET 8.x です。一方で、CI のテストスイートは
-テストプロジェクトを `net9.0` でも検証します。NuGet package は
-framework-dependent であり、RID-specific / self-contained ではありません。
-Apple Silicon、Linux ARM64、Windows ARM64 で host 側が .NET 8 runtime を
-管理していない場合は、`install.sh` を優先してください。
+`dotnet tool install` / `dotnet tool update` には
+[.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0) が必要です。
+CodeIndex は `net8.0` を対象にしており、公開ツールのサポート対象 runtime
+系列は .NET 8.x です。一方で、CI のテストスイートはテストプロジェクトを
+`net9.0` でも検証します。NuGet package は framework-dependent であり、
+RID-specific / self-contained ではありません。Apple Silicon、Linux ARM64、
+Windows ARM64 で host 側が .NET 8 runtime を管理していない場合は、
+`install.sh` を優先してください。
 
 ```bash
 dotnet tool install -g cdidx
