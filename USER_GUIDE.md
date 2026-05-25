@@ -944,6 +944,16 @@ phrases such as `"foo bar"`. Without `--fts`, those characters are treated as
 literal query content except for cdidx's documented literal-safe prefix
 shorthand.
 
+Search case behavior depends on the mode. Default search and raw `--fts` use
+SQLite FTS5's `unicode61` tokenizer, so ASCII case is folded and Latin
+diacritics are removed by the tokenizer. CJK text is mostly case-neutral, but
+matching still follows FTS5 token boundaries. Locale-specific Unicode cases are
+not a full collation: Turkish dotted/dotless I and German sharp-S versus `SS`
+should be checked with exact mode when identity matters. `--exact-substring`
+uses SQLite `instr()` and is case-sensitive byte-for-byte over the stored text.
+Symbol-name exactness is separate: `--exact-name` uses cdidx's documented NFKC +
+Unicode CaseFold path when the DB reports `fold_ready`.
+
 ## Options
 
 | Option | Applies to | Description |
@@ -2832,6 +2842,17 @@ raw FTS5 query と同等です。どちらか一方でよい場合は `--fts 'fo
 ような quoted phrase があります。`--fts` なしでは、cdidx が明示している
 literal-safe prefix shorthand を除き、これらの文字はリテラルな query 内容として
 扱われます。
+
+検索の大小文字の扱いは mode ごとに異なります。既定検索と raw `--fts` は
+SQLite FTS5 の `unicode61` tokenizer を使うため、ASCII の大小文字は畳み込まれ、
+ラテン文字の diacritic は tokenizer により除去されます。CJK は多くの場合
+大小文字の概念がありませんが、一致範囲は FTS5 token 境界に従います。Unicode の
+locale 固有ケースを完全な collation として扱うわけではないため、トルコ語の
+dotted/dotless I やドイツ語 sharp-S と `SS` の同一性が重要な場合は exact mode で
+確認してください。`--exact-substring` は SQLite `instr()` を使い、保存された本文に
+対して byte-for-byte に大文字小文字を区別します。symbol-name exactness は別経路で、
+`--exact-name` は DB が `fold_ready` のとき cdidx の NFKC + Unicode CaseFold 経路を
+使います。
 
 ## オプション一覧
 
