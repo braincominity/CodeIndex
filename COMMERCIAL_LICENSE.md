@@ -41,6 +41,10 @@ Allowed uses include:
 
 ## Requires a Separate Written Agreement
 
+The redistribution allowance above covers unmodified official releases only. A
+package, image, service, extension, or fork that is renamed or positioned as a
+substitute for CodeIndex falls under the competing-product boundary below.
+
 A separate written agreement with Widthdom is required if you make CodeIndex,
 a modified version of CodeIndex, or a derivative work of CodeIndex available
 to third parties as a commercial product or service whose primary or substantial

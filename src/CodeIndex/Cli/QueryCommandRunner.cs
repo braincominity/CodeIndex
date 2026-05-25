@@ -15,6 +15,9 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class QueryCommandRunner
 {
+    internal const string DefaultLimitEnvironmentVariable = "CDIDX_DEFAULT_LIMIT";
+    internal const string DefaultSnippetLinesEnvironmentVariable = "CDIDX_DEFAULT_SNIPPET_LINES";
+    internal const string DefaultMaxLineWidthEnvironmentVariable = "CDIDX_DEFAULT_MAX_LINE_WIDTH";
     internal const string StaleAfterEnvironmentVariable = "CDIDX_STALE_AFTER";
     internal static readonly TimeSpan DefaultStaleAfter = TimeSpan.FromHours(24);
     [ThreadStatic]
@@ -469,7 +472,12 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
+        var options = ParseArgs(
+            cmdArgs,
+            jsonDefault: false,
+            allowNamedQuery: true,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("definition", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("definition"), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "definition"))
@@ -1167,7 +1175,12 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
+        var options = ParseArgs(
+            cmdArgs,
+            jsonDefault: false,
+            allowNamedQuery: true,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("symbols", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("symbols"), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteInvalidKindFilterError(options, "symbols", KnownSymbolKindFilters))
@@ -1319,7 +1332,12 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
+        var options = ParseArgs(
+            cmdArgs,
+            jsonDefault: false,
+            allowNamedQuery: true,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("files", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("files"), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "files"))
@@ -1386,7 +1404,11 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        var options = ParseArgs(
+            cmdArgs,
+            jsonDefault: false,
+            validateDefaultLimit: false,
+            validateDefaultSnippetLines: false);
         if (TryWriteUnsupportedOptionError("excerpt", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("excerpt")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "excerpt"))
@@ -1507,7 +1529,11 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        var options = ParseArgs(preparedFindArgs, jsonDefault: false, allowNamedQuery: true);
+        var options = ParseArgs(
+            preparedFindArgs,
+            jsonDefault: false,
+            allowNamedQuery: true,
+            validateDefaultSnippetLines: false);
         if (options.ParseError != null)
         {
             Console.Error.WriteLine(options.ParseError);
@@ -1756,7 +1782,11 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        var options = ParseArgs(
+            cmdArgs,
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("map", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("map")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "map"))
@@ -1836,7 +1866,11 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
+        var options = ParseArgs(
+            cmdArgs,
+            jsonDefault: false,
+            allowNamedQuery: true,
+            validateDefaultSnippetLines: false);
         if (TryWriteUnsupportedOptionError("inspect", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("inspect"), options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "inspect"))
@@ -1960,7 +1994,12 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs[1..], jsonDefault: false);
+        var options = ParseArgs(
+            cmdArgs[1..],
+            jsonDefault: false,
+            validateDefaultLimit: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("outline", cmdArgs[1..], CliFlagSchema.GetAcceptedFlagNamesForCommand("outline")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "outline"))
@@ -2137,13 +2176,30 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false, allowStatusCheck: true);
+        var options = ParseArgs(
+            cmdArgs,
+            jsonDefault: false,
+            allowStatusCheck: true,
+            validateDefaultLimit: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("status", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("status")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "status"))
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("status", options))
             return CommandExitCodes.UsageError;
+        if (options.StatusConfig)
+        {
+            if (options.CheckWorkspace || options.StatusLogPath || options.StatusExplainField != null)
+            {
+                Console.Error.WriteLine("Error: status --config cannot be combined with --check, --log-path, or --explain.");
+                return CommandExitCodes.UsageError;
+            }
+
+            Console.WriteLine(BuildEffectiveConfigJson(options, cmdArgs, appVersion).ToJsonString(jsonOptions));
+            return CommandExitCodes.Success;
+        }
         if (options.StatusLogPath)
         {
             if (options.CheckWorkspace)
@@ -2219,6 +2275,7 @@ public static class QueryCommandRunner
             var updateResult = checkUpdates && appVersion != null
                 ? UpdateChecker.Check(appVersion)
                 : null;
+            status.UpdateCheck = updateResult;
 
             // Build one-line summary for AI orientation / AI向けの1行サマリーを構築
             var topLangs = status.Languages.OrderByDescending(kv => kv.Value).Take(3).Select(kv => kv.Key);
@@ -2388,9 +2445,90 @@ public static class QueryCommandRunner
         });
     }
 
+    private static JsonObject BuildEffectiveConfigJson(QueryCommandOptions options, string[] cmdArgs, string? appVersion)
+    {
+        JsonObject Entry<T>(T? value, string source) => new()
+        {
+            ["value"] = JsonSerializer.SerializeToNode(value),
+            ["source"] = source,
+        };
+        var staleAfterEnvValue = Environment.GetEnvironmentVariable(StaleAfterEnvironmentVariable);
+
+        var payload = new JsonObject
+        {
+            ["api_version"] = "1",
+            ["effective_config"] = new JsonObject
+            {
+                ["db_path"] = Entry(options.DbPath, ResolveDbPathConfigSource(options)),
+                ["data_dir"] = Entry(options.DataDir, options.DataDirSource ?? "flag"),
+                ["limit"] = Entry(options.Limit, ResolveNumericConfigSource(cmdArgs, "--limit", "--top", DefaultLimitEnvironmentVariable)),
+                ["snippet_lines"] = Entry(options.SnippetLines, ResolveNumericConfigSource(cmdArgs, "--snippet-lines", null, DefaultSnippetLinesEnvironmentVariable)),
+                ["max_line_width"] = Entry(options.MaxLineWidth, ResolveNumericConfigSource(cmdArgs, "--max-line-width", null, DefaultMaxLineWidthEnvironmentVariable)),
+                ["json"] = Entry(options.Json, HasOption(cmdArgs, "--json") ? "flag" : "default"),
+                ["stale_after"] = Entry(options.StaleAfter?.ToString() ?? staleAfterEnvValue, options.StaleAfter.HasValue ? "flag" : ResolveEnvSource(StaleAfterEnvironmentVariable)),
+                ["global_tool_log_dir"] = Entry(GlobalToolLog.ResolveLogDirectoryForStatus(), ResolveEnvSource("CDIDX_GLOBAL_TOOL_LOG_DIR")),
+                ["version"] = Entry(appVersion ?? ConsoleUi.LoadVersion(), "build"),
+            },
+        };
+        return payload;
+    }
+
+    private static string ResolveDbPathConfigSource(QueryCommandOptions options)
+    {
+        if (options.DbPathExplicit)
+            return "flag";
+        return options.DataDirSource switch
+        {
+            DbPathResolver.DataDirSourceFlag => "flag",
+            DbPathResolver.DataDirSourceEnv => $"env:{DbPathResolver.DataDirEnvironmentVariable}",
+            DbPathResolver.DataDirSourceXdg => "env:XDG_DATA_HOME",
+            DbPathResolver.DataDirSourceWorkspace => "workspace",
+            _ => "default",
+        };
+    }
+
+    private static string ResolveNumericConfigSource(string[] args, string primaryFlag, string? aliasFlag, string envName)
+    {
+        if (HasOption(args, primaryFlag) || (aliasFlag != null && HasOption(args, aliasFlag)))
+            return "flag";
+        if (Environment.GetEnvironmentVariable(envName) is null)
+            return "default";
+        var configSource = Environment.GetEnvironmentVariable(CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + envName);
+        if (!string.IsNullOrWhiteSpace(configSource))
+            return $"config:{configSource}";
+        return $"env:{envName}";
+    }
+
+    private static string ResolveEnvSource(string envName)
+    {
+        if (Environment.GetEnvironmentVariable(envName) is null)
+            return "default";
+        var configSource = Environment.GetEnvironmentVariable(CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + envName);
+        if (!string.IsNullOrWhiteSpace(configSource))
+            return $"config:{configSource}";
+        return $"env:{envName}";
+    }
+
+    private static bool HasOption(string[] args, string optionName)
+    {
+        foreach (var arg in args)
+        {
+            if (string.Equals(arg, optionName, StringComparison.Ordinal))
+                return true;
+            if (arg.StartsWith(optionName + "=", StringComparison.Ordinal))
+                return true;
+        }
+        return false;
+    }
+
     public static int RunVacuum(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        var options = ParseArgs(
+            cmdArgs,
+            jsonDefault: false,
+            validateDefaultLimit: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("vacuum", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("vacuum")))
             return CommandExitCodes.UsageError;
         var explicitDbPathError = BuildExplicitDbPathParseError(options);
@@ -2776,7 +2914,11 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        var options = ParseArgs(
+            cmdArgs,
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("deps", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("deps")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "deps"))
@@ -3001,7 +3143,11 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        var options = ParseArgs(
+            cmdArgs,
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("hotspots", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("hotspots")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "hotspots"))
@@ -3406,7 +3552,11 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        var options = ParseArgs(
+            cmdArgs,
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("unused", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("unused")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "unused"))
@@ -3674,7 +3824,12 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        var options = ParseArgs(
+            cmdArgs,
+            jsonDefault: false,
+            validateDefaultLimit: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("validate", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("validate")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "validate"))
@@ -3730,7 +3885,12 @@ public static class QueryCommandRunner
 
     public static int RunLanguages(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var options = ParseArgs(cmdArgs, jsonDefault: false);
+        var options = ParseArgs(
+            cmdArgs,
+            jsonDefault: false,
+            validateDefaultLimit: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
         if (TryWriteUnsupportedOptionError("languages", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("languages")))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "languages"))
@@ -3804,13 +3964,20 @@ public static class QueryCommandRunner
         return CommandExitCodes.Success;
     }
 
-    public static QueryCommandOptions ParseArgs(string[] args, bool jsonDefault, bool allowNamedQuery = false, bool allowStatusCheck = false)
+    public static QueryCommandOptions ParseArgs(
+        string[] args,
+        bool jsonDefault,
+        bool allowNamedQuery = false,
+        bool allowStatusCheck = false,
+        bool validateDefaultLimit = true,
+        bool validateDefaultSnippetLines = true,
+        bool validateDefaultMaxLineWidth = true)
     {
         string? dbPath = null;
         string? dataDir = null;
         bool? json = null;
         string jsonOutputFormat = JsonOutputFormatNdjson;
-        int limit = 20;
+        int limit = ResolveDefaultPositiveInt(DefaultLimitEnvironmentVariable, 20, "--limit", out var defaultLimitError);
         string? lang = null;
         string? kind = null;
         string? query = null;
@@ -3825,9 +3992,9 @@ public static class QueryCommandRunner
         int? focusLine = null;
         int? focusColumn = null;
         int focusLength = 1;
-        int snippetLines = SearchSnippetFormatter.DefaultSnippetLines;
+        int snippetLines = ResolveDefaultPositiveInt(DefaultSnippetLinesEnvironmentVariable, SearchSnippetFormatter.DefaultSnippetLines, "--snippet-lines", out var defaultSnippetLinesError);
         var snippetFocus = SearchSnippetFocusMode.Quality;
-        int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
+        int maxLineWidth = ResolveDefaultNonNegativeInt(DefaultMaxLineWidthEnvironmentVariable, LineWidthFormatter.DefaultMaxLineWidth, "--max-line-width", out var defaultMaxLineWidthError);
         bool contextAfterExplicit = false;
         var pathPatterns = new List<string>();
         var userPathPatterns = new List<string>();
@@ -3860,6 +4027,10 @@ public static class QueryCommandRunner
         int? slowQueryMs = null;
         string? statusExplainField = null;
         bool statusLogPath = false;
+        bool statusConfig = false;
+        bool limitExplicit = false;
+        bool snippetLinesExplicit = false;
+        bool maxLineWidthExplicit = false;
         var rankMode = ReferenceRankMode.Weighted;
         var extraNames = new List<string>();
         bool impactDeprecatedDepthUsed = false;
@@ -3997,6 +4168,7 @@ public static class QueryCommandRunner
                     {
                         WarnIfDuplicateSingleValueOption("--limit", limitValue!);
                         limit = parsedLimit;
+                        limitExplicit = true;
                     }
                     else
                         AddParseError(limitError!);
@@ -4222,6 +4394,16 @@ public static class QueryCommandRunner
                         AddParseError("Error: --log-path is not supported by this command.");
                     }
                     break;
+                case "--config":
+                    if (allowStatusCheck)
+                    {
+                        statusConfig = true;
+                    }
+                    else
+                    {
+                        AddParseError("Error: --config is only supported by status.");
+                    }
+                    break;
                 case "--path":
                     if (TryReadStringOptionValue(args, ref i, "--path", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var pathPattern, out var pathError))
                     {
@@ -4359,6 +4541,7 @@ public static class QueryCommandRunner
                     {
                         WarnIfDuplicateSingleValueOption("--snippet-lines", snippetLinesValue!);
                         snippetLines = parsedSnippetLines;
+                        snippetLinesExplicit = true;
                     }
                     else
                         AddParseError(snippetLinesError!);
@@ -4385,6 +4568,7 @@ public static class QueryCommandRunner
                     {
                         WarnIfDuplicateSingleValueOption("--max-line-width", maxLineWidthValue!);
                         maxLineWidth = parsedMaxLineWidth;
+                        maxLineWidthExplicit = true;
                     }
                     else
                         AddParseError(maxLineWidthError!);
@@ -4423,6 +4607,13 @@ public static class QueryCommandRunner
         }
 
         ValidateQueryPathOptionValues(userPathPatterns, excludePaths, AddParseError);
+
+        if (validateDefaultLimit && !limitExplicit && defaultLimitError != null)
+            AddParseError(defaultLimitError);
+        if (validateDefaultSnippetLines && !snippetLinesExplicit && defaultSnippetLinesError != null)
+            AddParseError(defaultSnippetLinesError);
+        if (validateDefaultMaxLineWidth && !maxLineWidthExplicit && defaultMaxLineWidthError != null)
+            AddParseError(defaultMaxLineWidthError);
 
         var dbResolution = DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, dbPath, dataDir);
 
@@ -4482,6 +4673,7 @@ public static class QueryCommandRunner
             SlowQueryMs = slowQueryMs,
             StatusExplainField = statusExplainField,
             StatusLogPath = statusLogPath,
+            StatusConfig = statusConfig,
             RankMode = rankMode,
             ExtraNames = extraNames,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
@@ -5117,6 +5309,8 @@ public static class QueryCommandRunner
 
     private static string? BuildExplicitDbPathParseError(QueryCommandOptions options)
     {
+        if (options.StatusConfig)
+            return null;
         if (!options.DbPathExplicit)
             return null;
         if (string.IsNullOrWhiteSpace(options.DbPath))
@@ -6643,6 +6837,44 @@ public static class QueryCommandRunner
         return sb.ToString();
     }
 
+    private static int ResolveDefaultPositiveInt(string environmentVariable, int fallback, string optionName, out string? error)
+    {
+        var raw = Environment.GetEnvironmentVariable(environmentVariable);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            error = null;
+            return fallback;
+        }
+
+        if (TryParsePositiveInt(raw, optionName, out var value, out var parseError))
+        {
+            error = null;
+            return value;
+        }
+
+        error = parseError!.Replace(optionName, environmentVariable, StringComparison.Ordinal);
+        return fallback;
+    }
+
+    private static int ResolveDefaultNonNegativeInt(string environmentVariable, int fallback, string optionName, out string? error)
+    {
+        var raw = Environment.GetEnvironmentVariable(environmentVariable);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            error = null;
+            return fallback;
+        }
+
+        if (TryParseNonNegativeInt(raw, optionName, out var value, out var parseError))
+        {
+            error = null;
+            return value;
+        }
+
+        error = parseError!.Replace(optionName, environmentVariable, StringComparison.Ordinal);
+        return fallback;
+    }
+
     private static bool TryParsePositiveInt(string rawValue, string optionName, out int value, out string? error)
     {
         if (string.Equals(optionName, "--max-line-width", StringComparison.Ordinal))
@@ -6956,6 +7188,7 @@ public sealed class QueryCommandOptions
     public int? SlowQueryMs { get; init; }
     public string? StatusExplainField { get; init; }
     public bool StatusLogPath { get; init; }
+    public bool StatusConfig { get; init; }
     public ReferenceRankMode RankMode { get; init; } = ReferenceRankMode.Weighted;
     public List<string> ExtraNames { get; init; } = [];
     public string? ParseError { get; init; }

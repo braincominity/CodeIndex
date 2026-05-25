@@ -2,7 +2,9 @@
 """
 Claude Code PreToolUse Bash guard for Widthdom/CodeIndex.
 
-Thin adapter around the shared CodeIndex guard core.
+Tool-specific adapter around the shared guard core in
+.agent_harness/command_guard_core.py. Codex uses the sibling adapter at
+.codex/hooks/bash_guard.py.
 """
 
 from __future__ import annotations

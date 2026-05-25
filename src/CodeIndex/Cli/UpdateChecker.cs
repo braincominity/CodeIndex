@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using CodeIndex.Models;
 
 namespace CodeIndex.Cli;
 
@@ -212,10 +213,3 @@ internal static class UpdateChecker
 
     private sealed record UpdateCheckCache(DateTimeOffset CheckedAt, string? LatestTag);
 }
-
-internal sealed record UpdateCheckResult(
-    string CurrentVersion,
-    string? LatestVersion,
-    bool UpdateAvailable,
-    bool FromCache,
-    string? Error);

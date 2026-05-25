@@ -4,6 +4,7 @@ using System.Text.Json.Serialization.Metadata;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Mcp;
+using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
