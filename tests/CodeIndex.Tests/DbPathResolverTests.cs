@@ -77,6 +77,48 @@ public class DbPathResolverTests
     }
 
     [Fact]
+    public void ResolveDataDirForQuery_PrefersOutermostAncestorCdidx()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_root_db");
+        try
+        {
+            var child = Path.Combine(projectRoot, "src", "App");
+            Directory.CreateDirectory(child);
+            Directory.CreateDirectory(Path.Combine(projectRoot, ".cdidx"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", ".cdidx"));
+
+            var resolved = DbPathResolver.ResolveDataDirForQuery(child, explicitDataDir: null, environmentDataDir: null, xdgDataHome: null);
+
+            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), resolved.DbPath);
+            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, resolved.DataDirSource);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ResolveDataDirForQuery_FallsBackToCurrentDirectoryWhenNoAncestorCdidxExists()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_no_root_db");
+        try
+        {
+            var child = Path.Combine(projectRoot, "src", "App");
+            Directory.CreateDirectory(child);
+
+            var resolved = DbPathResolver.ResolveDataDirForQuery(child, explicitDataDir: null, environmentDataDir: null, xdgDataHome: null);
+
+            Assert.Equal(Path.Combine(child, ".cdidx", "codeindex.db"), resolved.DbPath);
+            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, resolved.DataDirSource);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjectRootForQuery_UsesParentOfCdidxDirectory()
     {
         var projectPath = Path.Combine(Path.DirectorySeparatorChar.ToString(), "tmp", "sample-project");

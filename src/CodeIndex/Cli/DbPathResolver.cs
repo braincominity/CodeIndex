@@ -39,7 +39,7 @@ public static class DbPathResolver
         if (!string.IsNullOrWhiteSpace(explicitDbPath))
             return new DbPathResolution(explicitDbPath, null, null);
 
-        return ResolveDataDir(workspacePath, explicitDataDir, Environment.GetEnvironmentVariable(DataDirEnvironmentVariable), Environment.GetEnvironmentVariable("XDG_DATA_HOME"));
+        return ResolveDataDirForQuery(workspacePath, explicitDataDir, Environment.GetEnvironmentVariable(DataDirEnvironmentVariable), Environment.GetEnvironmentVariable("XDG_DATA_HOME"));
     }
 
     internal static DbPathResolution ResolveDataDir(string workspacePath, string? explicitDataDir, string? environmentDataDir, string? xdgDataHome)
@@ -60,6 +60,28 @@ public static class DbPathResolver
         return BuildDataDirResolution(Path.Combine(fullWorkspacePath, ".cdidx"), DataDirSourceWorkspace);
     }
 
+    internal static DbPathResolution ResolveDataDirForQuery(string workspacePath, string? explicitDataDir, string? environmentDataDir, string? xdgDataHome)
+    {
+        var fullWorkspacePath = Path.GetFullPath(workspacePath);
+        if (!string.IsNullOrWhiteSpace(explicitDataDir))
+            return BuildDataDirResolution(explicitDataDir, DataDirSourceFlag);
+
+        if (!string.IsNullOrWhiteSpace(environmentDataDir))
+            return BuildDataDirResolution(environmentDataDir, DataDirSourceEnv);
+
+        if (!string.IsNullOrWhiteSpace(xdgDataHome))
+        {
+            var workspaceHash = ComputeWorkspaceHash(fullWorkspacePath);
+            return BuildDataDirResolution(Path.Combine(xdgDataHome, "cdidx", workspaceHash), DataDirSourceXdg);
+        }
+
+        var workspaceRootDataDir = TryResolveOutermostAncestorDataDir(fullWorkspacePath);
+        if (workspaceRootDataDir != null)
+            return BuildDataDirResolution(workspaceRootDataDir, DataDirSourceWorkspace);
+
+        return BuildDataDirResolution(Path.Combine(fullWorkspacePath, ".cdidx"), DataDirSourceWorkspace);
+    }
+
     private static DbPathResolution BuildDataDirResolution(string dataDir, string source)
     {
         var fullDataDir = Path.GetFullPath(dataDir);
@@ -70,6 +92,30 @@ public static class DbPathResolver
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(workspacePath)));
         return Convert.ToHexString(bytes, 0, 8).ToLowerInvariant();
+    }
+
+    private static string? TryResolveOutermostAncestorDataDir(string workspacePath)
+    {
+        DirectoryInfo? current;
+        try
+        {
+            current = new DirectoryInfo(Path.GetFullPath(workspacePath));
+        }
+        catch
+        {
+            return null;
+        }
+
+        string? selected = null;
+        while (current is not null)
+        {
+            var candidate = Path.Combine(current.FullName, ".cdidx");
+            if (Directory.Exists(LongPath.EnsureWindowsPrefix(candidate)))
+                selected = candidate;
+            current = current.Parent;
+        }
+
+        return selected;
     }
 
     /// <summary>
