@@ -56,6 +56,15 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void ComputeHash_UsesExternallyVisibleScrubbedDescription()
+    {
+        var hash1 = SuggestionStore.ComputeHash("other", null, "Code sample `secret()` is missing");
+        var hash2 = SuggestionStore.ComputeHash("other", null, "Code sample `otherSecret()` is missing");
+
+        Assert.Equal(hash1, hash2);
+    }
+
+    [Fact]
     public void ComputeHash_NullLanguage_TreatedAsEmpty()
     {
         var hash1 = SuggestionStore.ComputeHash("other", null, "desc");

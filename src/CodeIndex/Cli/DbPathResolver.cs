@@ -109,7 +109,7 @@ public static class DbPathResolver
         if (string.IsNullOrWhiteSpace(filePath))
             return filePath;
 
-        var normalizedFilePath = FileIndexer.NormalizePathSeparators(filePath);
+        var normalizedFilePath = FileIndexer.NormalizeIndexPath(filePath);
         if (!Path.IsPathRooted(filePath))
             return normalizedFilePath;
 
@@ -122,7 +122,7 @@ public static class DbPathResolver
         if (!IsUnderDirectory(fullProjectRoot, fullFilePath))
             return normalizedFilePath;
 
-        return FileIndexer.NormalizePathSeparators(Path.GetRelativePath(fullProjectRoot, fullFilePath));
+        return FileIndexer.NormalizeIndexPath(Path.GetRelativePath(fullProjectRoot, fullFilePath));
     }
 
     /// <summary>
