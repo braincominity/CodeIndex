@@ -117,6 +117,54 @@ public class McpServerTests : IDisposable
         writer.MarkCSharpSymbolNameContractReady();
     }
 
+    [Fact]
+    public void ToolsCall_Callers_TruncatedResponseIncludesNextOffsetAndPages()
+    {
+        InsertIndexedFile(
+            "src/paged-callers.cs",
+            "csharp",
+            """
+            class PagedCallers {
+                void Alpha() { Target(); }
+                void Beta() { Target(); }
+                void Gamma() { Target(); }
+                void Target() { }
+            }
+            """);
+
+        var firstRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Target","lang":"csharp","exactName":true,"path":"src/paged-callers.cs","limit":2}}}""")!;
+        var firstResponse = _server.HandleMessage(firstRequest)!;
+        var first = firstResponse["result"]!["structuredContent"]!;
+
+        Assert.Equal(2, first["count"]!.GetValue<int>());
+        Assert.True(first["truncated"]!.GetValue<bool>());
+        Assert.True(first["more_available"]!.GetValue<bool>());
+        Assert.Equal(2, first["next_offset"]!.GetValue<int>());
+        var firstNames = first["results"]!.AsArray()
+            .Select(row => row!["callerName"]!.GetValue<string>())
+            .ToArray();
+
+        var secondRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Target","lang":"csharp","exactName":true,"path":"src/paged-callers.cs","limit":2,"offset":2}}}""")!;
+        var secondResponse = _server.HandleMessage(secondRequest)!;
+        var second = secondResponse["result"]!["structuredContent"]!;
+
+        Assert.Equal(2, second["offset"]!.GetValue<int>());
+        Assert.False(second["truncated"]!.GetValue<bool>());
+        Assert.False(second["more_available"]!.GetValue<bool>());
+        Assert.Null(second["next_offset"]);
+        var secondNames = second["results"]!.AsArray()
+            .Select(row => row!["callerName"]!.GetValue<string>())
+            .ToArray();
+
+        var allNames = firstNames.Concat(secondNames).ToArray();
+        Assert.Equal(allNames.Distinct().Count(), allNames.Length);
+        Assert.Contains("Alpha", allNames);
+        Assert.Contains("Beta", allNames);
+        Assert.Contains("Gamma", allNames);
+    }
+
     // --- Protocol tests / プロトコルテスト ---
 
     [Fact]
