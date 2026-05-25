@@ -1639,6 +1639,7 @@ public partial class McpServer
                 ["request_index"] = requestIndex,
                 ["tool"] = toolName,
                 ["ok"] = false,
+                ["correlation_id"] = CurrentCorrelationContext.Value?.CorrelationId,
                 ["args_summary"] = BuildArgsSummary(toolArgs),
                 ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                 ["error"] = errorMessage,
@@ -1685,6 +1686,7 @@ public partial class McpServer
                 ["request_index"] = requestIndex,
                 ["tool"] = toolName,
                 ["ok"] = false,
+                ["correlation_id"] = CurrentCorrelationContext.Value?.CorrelationId,
                 ["args_summary"] = BuildArgsSummary(toolArgs),
                 ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                 ["error"] = $"Rate limit exceeded for tool '{toolName}' (retry after {retryAfterMs} ms).",
@@ -1700,6 +1702,7 @@ public partial class McpServer
 
         for (var requestIndex = 0; requestIndex < queries.Count; requestIndex++)
         {
+            using var slotCorrelation = BeginChildCorrelation(requestIndex + 1);
             var q = queries[requestIndex];
             var queryObject = q as JsonObject;
             var toolName = queryObject?["tool"] is JsonValue toolValue && toolValue.TryGetValue<string>(out var parsedToolName)
@@ -1874,6 +1877,7 @@ public partial class McpServer
                     ["request_index"] = requestIndex,
                     ["tool"] = toolName,
                     ["ok"] = true,
+                    ["correlation_id"] = CurrentCorrelationContext.Value?.CorrelationId,
                     ["args_summary"] = BuildArgsSummary(toolArgs),
                     ["elapsed_ms"] = slotStopwatch.ElapsedMilliseconds,
                     ["result"] = structured?.DeepClone(),
