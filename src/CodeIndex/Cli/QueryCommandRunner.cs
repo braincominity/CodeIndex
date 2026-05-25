@@ -2140,6 +2140,17 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("status", options))
             return CommandExitCodes.UsageError;
+        if (options.StatusConfig)
+        {
+            if (options.CheckWorkspace || options.StatusLogPath || options.StatusExplainField != null)
+            {
+                Console.Error.WriteLine("Error: status --config cannot be combined with --check, --log-path, or --explain.");
+                return CommandExitCodes.UsageError;
+            }
+
+            Console.WriteLine(BuildEffectiveConfigJson(options, cmdArgs, appVersion).ToJsonString(jsonOptions));
+            return CommandExitCodes.Success;
+        }
         if (options.StatusLogPath)
         {
             if (options.CheckWorkspace)
@@ -2377,6 +2388,69 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             return GetStatusCheckExitCode(checkFailures);
         });
+    }
+
+    private static JsonObject BuildEffectiveConfigJson(QueryCommandOptions options, string[] cmdArgs, string? appVersion)
+    {
+        JsonObject Entry<T>(T? value, string source) => new()
+        {
+            ["value"] = JsonSerializer.SerializeToNode(value),
+            ["source"] = source,
+        };
+
+        var payload = new JsonObject
+        {
+            ["api_version"] = "1",
+            ["effective_config"] = new JsonObject
+            {
+                ["db_path"] = Entry(options.DbPath, ResolveDbPathConfigSource(options)),
+                ["data_dir"] = Entry(options.DataDir, options.DataDirSource ?? "flag"),
+                ["limit"] = Entry(options.Limit, ResolveNumericConfigSource(cmdArgs, "--limit", "--top", DefaultLimitEnvironmentVariable)),
+                ["snippet_lines"] = Entry(options.SnippetLines, ResolveNumericConfigSource(cmdArgs, "--snippet-lines", null, DefaultSnippetLinesEnvironmentVariable)),
+                ["max_line_width"] = Entry(options.MaxLineWidth, ResolveNumericConfigSource(cmdArgs, "--max-line-width", null, DefaultMaxLineWidthEnvironmentVariable)),
+                ["json"] = Entry(options.Json, HasOption(cmdArgs, "--json") ? "flag" : "default"),
+                ["stale_after"] = Entry(options.StaleAfter?.ToString(), options.StaleAfter.HasValue ? "flag" : Environment.GetEnvironmentVariable(StaleAfterEnvironmentVariable) is null ? "default" : $"env:{StaleAfterEnvironmentVariable}"),
+                ["global_tool_log_dir"] = Entry(GlobalToolLog.ResolveLogDirectoryForStatus(), ResolveEnvSource("CDIDX_GLOBAL_TOOL_LOG_DIR")),
+                ["version"] = Entry(appVersion ?? ConsoleUi.LoadVersion(), "build"),
+            },
+        };
+        return payload;
+    }
+
+    private static string ResolveDbPathConfigSource(QueryCommandOptions options)
+    {
+        if (options.DbPathExplicit)
+            return "flag";
+        return options.DataDirSource switch
+        {
+            DbPathResolver.DataDirSourceFlag => "flag",
+            DbPathResolver.DataDirSourceEnv => $"env:{DbPathResolver.DataDirEnvironmentVariable}",
+            DbPathResolver.DataDirSourceXdg => "env:XDG_DATA_HOME",
+            DbPathResolver.DataDirSourceWorkspace => "workspace",
+            _ => "default",
+        };
+    }
+
+    private static string ResolveNumericConfigSource(string[] args, string primaryFlag, string? aliasFlag, string envName)
+    {
+        if (HasOption(args, primaryFlag) || (aliasFlag != null && HasOption(args, aliasFlag)))
+            return "flag";
+        return Environment.GetEnvironmentVariable(envName) is null ? "default" : $"env:{envName}";
+    }
+
+    private static string ResolveEnvSource(string envName) =>
+        Environment.GetEnvironmentVariable(envName) is null ? "default" : $"env:{envName}";
+
+    private static bool HasOption(string[] args, string optionName)
+    {
+        foreach (var arg in args)
+        {
+            if (string.Equals(arg, optionName, StringComparison.Ordinal))
+                return true;
+            if (arg.StartsWith(optionName + "=", StringComparison.Ordinal))
+                return true;
+        }
+        return false;
     }
 
     public static int RunVacuum(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -3851,6 +3925,7 @@ public static class QueryCommandRunner
         int? slowQueryMs = null;
         string? statusExplainField = null;
         bool statusLogPath = false;
+        bool statusConfig = false;
         var rankMode = ReferenceRankMode.Weighted;
         var extraNames = new List<string>();
         bool impactDeprecatedDepthUsed = false;
@@ -4220,6 +4295,16 @@ public static class QueryCommandRunner
                         AddParseError("Error: --log-path is not supported by this command.");
                     }
                     break;
+                case "--config":
+                    if (allowStatusCheck)
+                    {
+                        statusConfig = true;
+                    }
+                    else
+                    {
+                        AddParseError("Error: --config is only supported by status.");
+                    }
+                    break;
                 case "--path":
                     if (TryReadStringOptionValue(args, ref i, "--path", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var pathPattern, out var pathError))
                     {
@@ -4480,6 +4565,7 @@ public static class QueryCommandRunner
             SlowQueryMs = slowQueryMs,
             StatusExplainField = statusExplainField,
             StatusLogPath = statusLogPath,
+            StatusConfig = statusConfig,
             RankMode = rankMode,
             ExtraNames = extraNames,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
@@ -5106,6 +5192,8 @@ public static class QueryCommandRunner
 
     private static string? BuildExplicitDbPathParseError(QueryCommandOptions options)
     {
+        if (options.StatusConfig)
+            return null;
         if (!options.DbPathExplicit)
             return null;
         if (string.IsNullOrWhiteSpace(options.DbPath))
@@ -6983,6 +7071,7 @@ public sealed class QueryCommandOptions
     public int? SlowQueryMs { get; init; }
     public string? StatusExplainField { get; init; }
     public bool StatusLogPath { get; init; }
+    public bool StatusConfig { get; init; }
     public ReferenceRankMode RankMode { get; init; } = ReferenceRankMode.Weighted;
     public List<string> ExtraNames { get; init; } = [];
     public string? ParseError { get; init; }

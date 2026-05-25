@@ -241,6 +241,7 @@ internal static class CliFlagSchema
             new() { Name = "--group-by", ValuePlaceholder = "<symbol|file|statement>", Description = "Hotspots: choose grouping unit", Commands = Set("hotspots") },
             new() { Name = "--group-by-name", Description = "Hotspots: collapse same-name rows across files", Commands = Set("hotspots") },
             new() { Name = "--check", Description = "Verify status freshness/readiness", Commands = Set("status") },
+            new() { Name = "--config", Description = "Print effective configuration with source attribution", Commands = Set("status") },
             new() { Name = "--stale-after", ValuePlaceholder = "<duration>", Description = "Status: freshness age threshold (e.g. 30m, 2h, 7d)", Commands = Set("status") },
             new() { Name = "--explain", ValuePlaceholder = "<field>", Description = "Explain one status readiness field", Commands = Set("status") },
             new() { Name = "--log-path", Description = "Print the active persistent log directory", Commands = Set("status") },

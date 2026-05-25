@@ -204,6 +204,29 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatusConfig_PrintsEffectiveConfigWithoutOpeningDb()
+    {
+        using var env = EnvironmentVariableScope.Capture(QueryCommandRunner.DefaultLimitEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "33");
+        var missingDb = Path.Combine(Path.GetTempPath(), $"cdidx_missing_{Guid.NewGuid():N}.db");
+        var parsed = QueryCommandRunner.ParseArgs(["--config", "--db", missingDb, "--json"], jsonDefault: false, allowStatusCheck: true);
+        Assert.True(parsed.StatusConfig);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--config", "--db", missingDb, "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var effective = document.RootElement.GetProperty("effective_config");
+        Assert.Equal(missingDb, effective.GetProperty("db_path").GetProperty("value").GetString());
+        Assert.Equal("flag", effective.GetProperty("db_path").GetProperty("source").GetString());
+        Assert.Equal(33, effective.GetProperty("limit").GetProperty("value").GetInt32());
+        Assert.Equal($"env:{QueryCommandRunner.DefaultLimitEnvironmentVariable}", effective.GetProperty("limit").GetProperty("source").GetString());
+    }
+
+    [Fact]
     public void RunStatusJson_ReportsSqlitePageMetrics_Issue1631()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_page_metrics");
