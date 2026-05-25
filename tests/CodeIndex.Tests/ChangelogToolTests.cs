@@ -158,6 +158,36 @@ public sealed class ChangelogToolTests
     }
 
     [Fact]
+    public void CheckFragmentsRejectsNonIssueFragmentWithNullIssues()
+    {
+        using var scope = new TestRepositoryScope();
+        scope.WriteFile("CHANGELOG.md", SampleChangelog);
+        scope.WriteFile("version.json", """
+            {
+              "version": "1.16.0"
+            }
+            """);
+        scope.WriteFile("changelog.d/unreleased/+bad.docs.md", """
+            ---
+            category: docs
+            issues: null
+            ---
+
+            ## English
+
+            - **Bad fragment** — invalid issues field.
+
+            ## 日本語
+
+            - **Bad fragment** — invalid issues field.
+            """);
+
+        var tool = new ChangelogTool(scope.Root);
+        var ex = Assert.Throws<ChangelogException>(() => tool.CheckFragments());
+        Assert.Contains("invalid issue number 'null'", ex.Message);
+    }
+
+    [Fact]
     public void CheckFragmentsRejectsMissingJapaneseSection()
     {
         using var scope = new TestRepositoryScope();

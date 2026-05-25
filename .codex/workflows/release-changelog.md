@@ -40,6 +40,15 @@ version. The NuGet publish job validates that the pushed `v*` tag exactly
 matches `version.json` before packing, so do not tag a release from a commit
 where `version.json` still contains the previous version.
 
+Fragment validation can also be run independently:
+
+```bash
+dotnet run --project tools/CodeIndex.Changelog -- check
+```
+
+Run this before committing release-preparation changes if you edited or
+received new fragments after the last `prepare` run.
+
 ## Compare-link footer
 
 For a release from `1.16.0` to `1.17.0`, the footer must change from:
