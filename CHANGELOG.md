@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.26.1] - 2026-05-26
+
 #### Fixed
 
 - **Windows release ZIP archives now preserve nested license paths** — The release workflow now writes Windows ZIP entries with explicit relative paths, so `LICENSES/*.txt` files stay under `LICENSES/` and archive member validation no longer fails after packaging.
@@ -2944,6 +2946,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.26.1] - 2026-05-26
+
 #### 修正
 
 - **Windows リリース ZIP が入れ子のライセンスパスを保持するようになりました** — リリース workflow は Windows ZIP entry を明示的な相対パスで書き込むようになり、`LICENSES/*.txt` が `LICENSES/` 配下に残るため、packaging 後の archive member 検証が失敗しなくなりました。
@@ -5866,7 +5870,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.26.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.26.1...HEAD
+[1.26.1]: https://github.com/Widthdom/CodeIndex/compare/v1.26.0...v1.26.1
 [1.26.0]: https://github.com/Widthdom/CodeIndex/compare/v1.25.1...v1.26.0
 [1.25.1]: https://github.com/Widthdom/CodeIndex/compare/v1.25.0...v1.25.1
 [1.25.0]: https://github.com/Widthdom/CodeIndex/compare/v1.24.5...v1.25.0
