@@ -804,7 +804,7 @@ jobs:
 
             def install
               bin.install "cdidx"
-              prefix.install "version.json"
+              bin.install "version.json"
               prefix.install "LICENSE", "COMMERCIAL_LICENSE.md", "INTEGRATION_POLICY.md", "TRADEMARKS.md"
               prefix.install "LICENSES" if File.directory?("LICENSES")
             end
