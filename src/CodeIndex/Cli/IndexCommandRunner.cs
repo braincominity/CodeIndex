@@ -2908,7 +2908,8 @@ public static class IndexCommandRunner
         TimeSpan timeout,
         long lastProgressTimestamp,
         string? currentFile,
-        ConcurrentDictionary<int, string> activeExtractionPhases)
+        ConcurrentDictionary<int, string> activeExtractionPhases,
+        Action cancelStalledWork)
     {
         if (!TryGetFullScanExtractionStallPath(
                 filesProcessed,
@@ -2922,6 +2923,7 @@ public static class IndexCommandRunner
             return;
         }
 
+        cancelStalledWork();
         throw new IndexExtractionStalledException(filesProcessed, filesTotal, timeout, activePath);
     }
 
@@ -2938,8 +2940,10 @@ public static class IndexCommandRunner
         if (timeout <= TimeSpan.Zero)
             return SymbolExtractor.Extract(fileId, lang, content, filePath, projectRoot, cancellationToken);
 
+        using var extractionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var extractionToken = extractionCts.Token;
         var task = Task.Run(
-            () => SymbolExtractor.Extract(fileId, lang, content, filePath, projectRoot, cancellationToken),
+            () => SymbolExtractor.Extract(fileId, lang, content, filePath, projectRoot, extractionToken),
             CancellationToken.None);
         try
         {
@@ -2953,6 +2957,18 @@ public static class IndexCommandRunner
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
+        }
+
+        extractionCts.Cancel();
+        try
+        {
+            task.Wait(TimeSpan.FromSeconds(1));
+        }
+        catch (AggregateException ex) when (ex.InnerExceptions.All(inner => inner is OperationCanceledException or TaskCanceledException))
+        {
+        }
+        catch (OperationCanceledException)
+        {
         }
 
         throw new IndexExtractionStalledException(0, null, timeout, phasePath);
@@ -3644,13 +3660,15 @@ public static class IndexCommandRunner
             }
 
             using var extractionResults = new BlockingCollection<FullScanFileWorkItem>(Math.Max(1, extractionParallelism * 4));
+            using var extractionStallCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var extractionCancellationToken = extractionStallCts.Token;
             var nextFileIndex = -1;
             var workers = Enumerable.Range(0, extractionParallelism)
                 .Select(workerIndex => Task.Factory.StartNew(() =>
                 {
                     while (true)
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
+                        extractionCancellationToken.ThrowIfCancellationRequested();
                         var fileIndex = Interlocked.Increment(ref nextFileIndex);
                         if (fileIndex >= files.Count)
                             break;
@@ -3660,7 +3678,7 @@ public static class IndexCommandRunner
                         {
                             var relativeFilePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, filePath));
                             activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(relativeFilePath, "reading");
-                            var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(filePath, cancellationToken);
+                            var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(filePath, extractionCancellationToken);
                             IReadOnlyList<ChunkRecord>? chunks = null;
                             IReadOnlyList<SymbolRecord>? symbols = null;
                             IReadOnlyList<ReferenceRecord>? references = null;
@@ -3677,7 +3695,7 @@ public static class IndexCommandRunner
                                     filePath,
                                     Path.GetFullPath(options.ProjectPath!),
                                     activeJsonExtractionPhases[workerIndex],
-                                    cancellationToken);
+                                    extractionCancellationToken);
                                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "references");
                                 references = ReferenceExtractor.Extract(
@@ -3687,21 +3705,21 @@ public static class IndexCommandRunner
                                     symbols,
                                     record.Path,
                                     record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                                    cancellationToken);
+                                    extractionCancellationToken);
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
                                 issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
                             }
                             extractionResults.Add(
                                 FullScanFileWorkItem.Success(filePath, record, content, rawBytes, warning, chunks, symbols, references, issues),
-                                cancellationToken);
+                                extractionCancellationToken);
                         }
-                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                        catch (OperationCanceledException) when (extractionCancellationToken.IsCancellationRequested)
                         {
                             throw;
                         }
                         catch (FileIndexer.BinaryFileSkippedException ex)
                         {
-                            extractionResults.Add(FullScanFileWorkItem.Skipped(filePath, ex.Message), cancellationToken);
+                            extractionResults.Add(FullScanFileWorkItem.Skipped(filePath, ex.Message), extractionCancellationToken);
                         }
                         catch (FileIndexer.FileTooLargeSkippedException ex)
                         {
@@ -3715,18 +3733,18 @@ public static class IndexCommandRunner
                             };
                             extractionResults.Add(
                                 FullScanFileWorkItem.Success(filePath, record, string.Empty, [], ex.Message, [], [], [], [issue]),
-                                cancellationToken);
+                                extractionCancellationToken);
                         }
                         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
                         {
                             var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, filePath));
                             extractionResults.Add(
                                 FullScanFileWorkItem.Skipped(filePath, $"{relativePath}: skipped because it was deleted during indexing."),
-                                cancellationToken);
+                                extractionCancellationToken);
                         }
                         catch (Exception ex)
                         {
-                            extractionResults.Add(FullScanFileWorkItem.Failure(filePath, ex), cancellationToken);
+                            extractionResults.Add(FullScanFileWorkItem.Failure(filePath, ex), extractionCancellationToken);
                         }
                         finally
                         {
@@ -3758,7 +3776,8 @@ public static class IndexCommandRunner
                         extractionStallTimeout,
                         lastExtractionProgressAt,
                         currentJsonIndexFile,
-                        activeJsonExtractionPhases);
+                        activeJsonExtractionPhases,
+                        extractionStallCts.Cancel);
                     continue;
                 }
 
