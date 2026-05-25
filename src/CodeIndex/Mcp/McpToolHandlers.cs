@@ -1337,6 +1337,12 @@ public partial class McpServer
                     .ToList();
             }
             status.Version = _version;
+            if (!status.FoldReady)
+            {
+                status.DegradedReason = DegradationReasonCodes.BuildFoldNotReadyExplanation(status.FoldReadyReason);
+                status.RecommendedAction = BuildFoldBackfillCommand(_dbPath, _dbPathExplicit);
+                status.AlternativeAction = BuildFoldRebuildRepairCommand(status.ProjectRoot, _dbPath, _dbPathExplicit);
+            }
             var structured = JsonSerializer.SerializeToNode(status, _jsonOptions)!.AsObject();
             structured["hotspotFamilyReady"] = status.HotspotFamilyReady;
             if (status.HotspotFamilyDegradedReason != null)
@@ -1346,6 +1352,45 @@ public partial class McpServer
                 structured["sqlGraphContractDegradedReason"] = status.SqlGraphContractDegradedReason;
             return CreateToolResult(id, "Database stats returned.", structured);
         });
+    }
+
+    private static string BuildFoldBackfillCommand(string dbPath, bool dbPathExplicit)
+    {
+        if (!dbPathExplicit)
+            return "cdidx backfill-fold";
+
+        return $"cdidx backfill-fold --db {QuoteCommandArgument(ResolveWritableDbPathOrPlaceholder(dbPath))}";
+    }
+
+    private static string BuildFoldRebuildRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit)
+    {
+        if (!dbPathExplicit)
+            return "cdidx index . --rebuild";
+
+        var resolvedDbPath = ResolveWritableDbPathOrPlaceholder(dbPath);
+        var targetProject = string.IsNullOrWhiteSpace(projectRoot)
+            ? "<projectPath>"
+            : QuoteCommandArgument(projectRoot);
+        return $"cdidx index {targetProject} --db {QuoteCommandArgument(resolvedDbPath)} --rebuild";
+    }
+
+    private static string ResolveWritableDbPathOrPlaceholder(string dbPath)
+        => DbPathResolver.TryResolveWritableMutationDbPath(dbPath, out var writableDbPath)
+            ? writableDbPath
+            : "<writable-db-path>";
+
+    private static string QuoteCommandArgument(string value)
+    {
+        if (value.Length >= 2 && value[0] == '<' && value[^1] == '>')
+            return value;
+
+        var fullPath = DbPathResolver.NormalizeDbPath(value);
+        if (!fullPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            fullPath = Path.GetFullPath(fullPath);
+
+        return fullPath.IndexOfAny([' ', '\t', '"']) >= 0
+            ? $"\"{fullPath.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
+            : fullPath;
     }
 
     private JsonNode ExecuteOutline(JsonNode? id, JsonNode? args)
