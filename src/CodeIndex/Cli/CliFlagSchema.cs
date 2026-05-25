@@ -54,7 +54,7 @@ internal static class CliFlagSchema
     [
         "index", "backfill-fold", "optimize", "search", "definition", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license", "upgrade",
     ];
 
     // Commands that accept the `--` end-of-options marker so a user can pass a literal
@@ -244,6 +244,10 @@ internal static class CliFlagSchema
             new() { Name = "--stale-after", ValuePlaceholder = "<duration>", Description = "Status: freshness age threshold (e.g. 30m, 2h, 7d)", Commands = Set("status") },
             new() { Name = "--explain", ValuePlaceholder = "<field>", Description = "Explain one status readiness field", Commands = Set("status") },
             new() { Name = "--log-path", Description = "Print the active persistent log directory", Commands = Set("status") },
+            new() { Name = "--check-updates", Description = "Check whether a newer cdidx release is available", Commands = Set("status", "upgrade") },
+            new() { Name = "--check-only", Description = "Upgrade: only report whether an upgrade is available", Commands = Set("upgrade") },
+            new() { Name = "--channel", ValuePlaceholder = "<stable|beta>", Description = "Upgrade channel selector (reserved)", Commands = Set("upgrade") },
+            new() { Name = "--prerelease", Description = "Upgrade: include prerelease versions (reserved)", Commands = Set("upgrade") },
             new() { Name = "--integrity-check", Description = "Run PRAGMA integrity_check on the database", Commands = Set("db") },
             new() { Name = "--rebuild", Description = "Delete existing DB and rebuild from scratch", Commands = Set("index") },
             new() { Name = "--optimize", Description = "Optimize the existing FTS5 table without scanning files", Commands = Set("index") },

@@ -18,6 +18,52 @@ internal static class UpdateChecker
             DateTimeOffset.UtcNow,
             FetchLatestReleaseTagAsync);
 
+    internal static UpdateCheckResult Check(string currentVersion)
+        => Check(
+            currentVersion,
+            ResolveDefaultCachePath(),
+            DateTimeOffset.UtcNow,
+            FetchLatestReleaseTagAsync);
+
+    internal static UpdateCheckResult Check(
+        string currentVersion,
+        string cachePath,
+        DateTimeOffset now,
+        Func<CancellationToken, Task<string?>> fetchLatestReleaseTagAsync)
+    {
+        if (IsDisabled())
+            return new UpdateCheckResult(currentVersion, null, false, false, "disabled");
+
+        var cache = ReadCache(cachePath);
+        var fromCache = cache is not null && now - cache.CheckedAt < CacheTtl;
+        string? latestTag = fromCache ? cache!.LatestTag : null;
+        string? error = null;
+
+        if (!fromCache)
+        {
+            try
+            {
+                latestTag = fetchLatestReleaseTagAsync(CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+            }
+            catch (Exception ex)
+            {
+                latestTag = cache?.LatestTag;
+                error = ex.GetType().Name;
+            }
+
+            TryWriteCache(cachePath, new UpdateCheckCache(now, latestTag));
+        }
+
+        return new UpdateCheckResult(
+            currentVersion,
+            latestTag,
+            IsNewerRelease(latestTag, currentVersion),
+            fromCache,
+            error);
+    }
+
     internal static string? GetNewerReleaseHint(
         string currentVersion,
         string cachePath,
@@ -166,3 +212,10 @@ internal static class UpdateChecker
 
     private sealed record UpdateCheckCache(DateTimeOffset CheckedAt, string? LatestTag);
 }
+
+internal sealed record UpdateCheckResult(
+    string CurrentVersion,
+    string? LatestVersion,
+    bool UpdateAvailable,
+    bool FromCache,
+    string? Error);

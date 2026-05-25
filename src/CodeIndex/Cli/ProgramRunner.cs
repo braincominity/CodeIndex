@@ -102,6 +102,14 @@ internal static class ProgramRunner
             return versionExitCode;
         }
 
+        if (args[0] == "--check-updates")
+        {
+            var updateExitCode = RunCheckUpdates(args[1..], jsonOptions, appVersion);
+            GlobalToolLog.Info($"command_complete exit_code={updateExitCode} check_updates=true");
+            EmitCommandMetric("check-updates", args, commandStartTimestamp, commandStopwatch, updateExitCode);
+            return updateExitCode;
+        }
+
         if (args[0] is "--license" or "license")
         {
             if (args[0] == "license" && args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
@@ -213,6 +221,7 @@ internal static class ProgramRunner
             {
                 exitCode = commandName switch
                 {
+                    "upgrade" => RunUpgrade(subArgs, jsonOptions, appVersion),
                     "index" => IndexCommandRunner.Run(subArgs, jsonOptions),
                     "diff" => DiffCommandRunner.Run(subArgs, jsonOptions),
                     "hooks" => HookCommandRunner.Run(subArgs, jsonOptions),
@@ -1595,6 +1604,146 @@ internal static class ProgramRunner
 
     internal readonly record struct AuditLogOptions(string? Path, long MaxBytes, bool IncludeValues);
 
+    internal static int RunCheckUpdates(string[] cmdArgs, JsonSerializerOptions jsonOptions, string appVersion)
+    {
+        var wantsJson = false;
+        foreach (var arg in cmdArgs)
+        {
+            if (arg == "--json")
+            {
+                wantsJson = true;
+                continue;
+            }
+            Console.Error.WriteLine($"Error: --check-updates does not accept '{arg}'.");
+            Console.Error.WriteLine("Hint: use `cdidx --check-updates` or `cdidx --check-updates --json`.");
+            return CommandExitCodes.UsageError;
+        }
+
+        var result = UpdateChecker.Check(appVersion);
+        if (wantsJson)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(result, jsonOptions));
+            return CommandExitCodes.Success;
+        }
+
+        if (result.UpdateAvailable && result.LatestVersion != null)
+            Console.WriteLine($"A newer cdidx release is available: {result.LatestVersion} (current: {result.CurrentVersion}).");
+        else if (result.Error != null)
+            Console.WriteLine($"Could not check for updates; using cached release metadata if available (current: {result.CurrentVersion}).");
+        else
+            Console.WriteLine($"cdidx is up to date (current: {result.CurrentVersion}).");
+        return CommandExitCodes.Success;
+    }
+
+    internal static int RunUpgrade(string[] cmdArgs, JsonSerializerOptions jsonOptions, string appVersion)
+    {
+        var checkOnly = false;
+        var wantsJson = false;
+        foreach (var arg in cmdArgs)
+        {
+            if (arg == "--check-only")
+            {
+                checkOnly = true;
+                continue;
+            }
+            if (arg == "--json")
+            {
+                wantsJson = true;
+                continue;
+            }
+            if (arg is "--channel" or "--prerelease" || arg.StartsWith("--channel=", StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine("Error: upgrade channels and prerelease upgrades are not supported yet.");
+                Console.Error.WriteLine("Hint: rerun `install.sh` with an explicit release tag if you need a non-latest version.");
+                return CommandExitCodes.UsageError;
+            }
+            Console.Error.WriteLine($"Error: upgrade does not accept '{arg}'.");
+            Console.Error.WriteLine("Hint: use `cdidx upgrade` or `cdidx upgrade --check-only`.");
+            return CommandExitCodes.UsageError;
+        }
+
+        var result = UpdateChecker.Check(appVersion);
+        if (checkOnly || !result.UpdateAvailable || result.LatestVersion == null)
+        {
+            if (wantsJson)
+                Console.WriteLine(JsonSerializer.Serialize(result, jsonOptions));
+            else if (result.UpdateAvailable && result.LatestVersion != null)
+                Console.WriteLine($"A newer cdidx release is available: {result.LatestVersion} (current: {result.CurrentVersion}).");
+            else
+                Console.WriteLine($"cdidx is up to date (current: {result.CurrentVersion}).");
+            return CommandExitCodes.Success;
+        }
+
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+        {
+            Console.Error.WriteLine("Error: cdidx upgrade currently requires a POSIX shell installer on Linux or macOS.");
+            Console.Error.WriteLine("Hint: download the latest release asset manually, or rerun install.sh from a shell environment.");
+            return CommandExitCodes.FeatureUnavailable;
+        }
+
+        var installDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!CanWriteDirectory(installDir))
+        {
+            Console.Error.WriteLine($"Error: install directory is not writable: {installDir}");
+            Console.Error.WriteLine("Hint: rerun with permissions that can write this directory, or reinstall cdidx into a per-user directory.");
+            return CommandExitCodes.UsageError;
+        }
+
+        var scriptPath = Path.Combine(Path.GetTempPath(), $"cdidx-install-{Guid.NewGuid():N}.sh");
+        try
+        {
+            using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(20) })
+            {
+                var script = client.GetStringAsync("https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh")
+                    .GetAwaiter()
+                    .GetResult();
+                File.WriteAllText(scriptPath, script);
+            }
+
+            var startInfo = new ProcessStartInfo("bash", $"{QuoteShellArg(scriptPath)} {QuoteShellArg(result.LatestVersion)}")
+            {
+                UseShellExecute = false,
+            };
+            startInfo.Environment["CDIDX_INSTALL_DIR"] = installDir;
+            var process = Process.Start(startInfo);
+            if (process == null)
+            {
+                Console.Error.WriteLine("Error: failed to start install.sh for upgrade.");
+                return CommandExitCodes.DatabaseError;
+            }
+            process.WaitForExit();
+            return process.ExitCode;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Error: upgrade failed before install.sh completed ({ex.GetType().Name}: {ex.Message}).");
+            Console.Error.WriteLine("Hint: rerun `install.sh` manually for the desired release.");
+            return CommandExitCodes.DatabaseError;
+        }
+        finally
+        {
+            try { File.Delete(scriptPath); } catch { }
+        }
+    }
+
+    private static bool CanWriteDirectory(string directory)
+    {
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var probe = Path.Combine(directory, $".cdidx-write-test-{Guid.NewGuid():N}");
+            File.WriteAllText(probe, "");
+            File.Delete(probe);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string QuoteShellArg(string value)
+        => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
 
     // `--version` is now build-aware so dev builds from main are not
     // indistinguishable from tagged releases in bug reports (#1550). Human

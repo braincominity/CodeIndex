@@ -80,7 +80,7 @@ public static class ConsoleUi
         ("map", "cdidx map [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes]"),
         ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]"),
         ("outline", "cdidx outline <path> [--db <path>] [--json] [--verbose]"),
-        ("status", "cdidx status [--db <path>] [--json] [--verbose] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--stale-after <duration>] [--explain <field>] [--log-path]"),
+        ("status", "cdidx status [--db <path>] [--json] [--verbose] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--stale-after <duration>] [--explain <field>] [--log-path] [--check-updates]"),
         ("db", "cdidx db --integrity-check [--db <path>] [--json]"),
         ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n>]"),
         ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n>] [--no-log] [--include-args]"),
@@ -95,6 +95,7 @@ public static class ConsoleUi
         ("mcp", "cdidx mcp [--db <path>]"),
         ("completions", "cdidx completions <shell>"),
         ("--completions", "cdidx --completions <shell>"),
+        ("upgrade", "cdidx upgrade [--check-only]"),
         ("license", "cdidx license"),
     ];
 
@@ -659,6 +660,7 @@ public static class ConsoleUi
         Console.WriteLine("  inspect <query>            Bundle definition, graph, and nearby symbol context");
         Console.WriteLine("  outline <path>             Show a file outline ordered by line, start column, kind, and name");
         Console.WriteLine("  status                     Show database statistics; add --check for freshness, --explain <field> for readiness, or --log-path for logs");
+        Console.WriteLine("  upgrade                    Check for and install the latest release via install.sh");
         Console.WriteLine("  db --integrity-check       Run SQLite `PRAGMA integrity_check` and report findings");
         Console.WriteLine("  diff <db1> <db2>           Compare two index databases; exit 0 identical, 1 drift, 2 schema mismatch, 3 unreadable");
         Console.WriteLine("  report --output <path>     Build a redacted crash-repro tarball (.tgz) for bug reports");
@@ -1030,7 +1032,7 @@ public static class ConsoleUi
     [
         "index", "backfill-fold", "optimize", "search", "definition", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "batch", "mcp", "completions", "db", "vacuum", "report", "license", "upgrade",
     ];
 
     /// <summary>
