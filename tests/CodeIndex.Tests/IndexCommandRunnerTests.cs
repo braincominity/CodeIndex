@@ -91,6 +91,39 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FilesMode_WhenSymbolExtractionStalls_ReportsStallInsteadOfInterrupt()
+    {
+        var priorTimeout = IndexCommandRunner.IndexExtractionStallTimeoutForTesting;
+        IndexCommandRunner.IndexExtractionStallTimeoutForTesting = () => TimeSpan.FromMilliseconds(1);
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var source = Path.Combine(
+                GetRepositoryRoot(),
+                "src",
+                "CodeIndex",
+                "Indexer",
+                "Symbols",
+                "SymbolExtractor.JavaScriptTypeScriptSupport.cs");
+            File.Copy(source, Path.Combine(projectRoot, "slow.cs"));
+
+            var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_symbol_timeout_{Guid.NewGuid():N}.db");
+            var (exitCode, json, stderr) = RunAndCaptureJsonWithStderr([projectRoot, "--files", "slow.cs", "--db", dbPath, "--json", "--force"]);
+
+            Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+            Assert.Equal(CommandErrorCodes.IndexExtractionStalled, json.GetProperty("error_code").GetString());
+            Assert.Contains("Index extraction made no progress", json.GetProperty("message").GetString());
+            Assert.DoesNotContain(CommandErrorCodes.Interrupted, stderr);
+        }
+        finally
+        {
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting = priorTimeout;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void GetJsonIndexHeartbeatPath_UsesWorkerPhaseWhenMainThreadIsIdle()
     {
         var message = IndexCommandRunner.GetJsonIndexHeartbeatPath(

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 
@@ -13,6 +14,9 @@ namespace CodeIndex.Cli;
 internal static class GlobalToolLog
 {
     private const int RetainedLogFileCount = 30;
+    internal const string LogFormatEnvironmentVariable = "CDIDX_LOG_FORMAT";
+    internal const string LogRetainEnvironmentVariable = "CDIDX_LOG_RETAIN";
+    internal const string LogMaxSizeMbEnvironmentVariable = "CDIDX_LOG_MAX_SIZE_MB";
     private const string RedactedValue = "<redacted>";
     private static readonly AsyncLocal<Session?> CurrentSession = new();
     private static readonly Regex SensitiveAssignmentPattern = new(
@@ -38,15 +42,16 @@ internal static class GlobalToolLog
             var logDirectory = ResolveLogDirectory();
             Directory.CreateDirectory(logDirectory);
             HardenLogFiles(logDirectory);
-            var logPath = Path.Combine(logDirectory, $"stderr-{DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}.log");
+            var options = LogOptions.FromEnvironment();
+            var logPath = ResolveLogPath(logDirectory, options);
             var writer = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), new UTF8Encoding(false))
             {
                 AutoFlush = true,
             };
             SetLogFilePermissions(logPath);
-            PruneOldLogs(logDirectory);
+            PruneOldLogs(logDirectory, options.RetainCount);
 
-            var session = new Session(writer, logPath);
+            var session = new Session(writer, logPath, options.Format);
             CurrentSession.Value = session;
             session.AttachErrorMirror();
             session.Write("INFO", $"session_start pid={Environment.ProcessId} version={appVersion}");
@@ -303,14 +308,32 @@ internal static class GlobalToolLog
         return string.IsNullOrWhiteSpace(home) ? original : home;
     }
 
-    private static void PruneOldLogs(string logDirectory)
+    private static string ResolveLogPath(string logDirectory, LogOptions options)
+    {
+        var date = DateTime.UtcNow.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture);
+        if (options.MaxSizeBytes <= 0)
+            return Path.Combine(logDirectory, $"stderr-{date}.log");
+
+        for (var index = 0; index < 10_000; index++)
+        {
+            var suffix = index == 0 ? "" : $"-{index}";
+            var candidate = Path.Combine(logDirectory, $"stderr-{date}{suffix}.log");
+            if (!File.Exists(candidate) || new FileInfo(candidate).Length < options.MaxSizeBytes)
+                return candidate;
+        }
+
+        return Path.Combine(logDirectory, $"stderr-{date}-{Guid.NewGuid():N}.log");
+    }
+
+    private static void PruneOldLogs(string logDirectory, int retainedLogFileCount)
     {
         try
         {
             var oldLogs = new DirectoryInfo(logDirectory)
                 .EnumerateFiles("stderr-*.log", SearchOption.TopDirectoryOnly)
-                .OrderByDescending(file => file.Name, StringComparer.Ordinal)
-                .Skip(RetainedLogFileCount)
+                .OrderByDescending(file => file.LastWriteTimeUtc)
+                .ThenByDescending(file => file.Name, StringComparer.Ordinal)
+                .Skip(retainedLogFileCount)
                 .ToList();
 
             foreach (var file in oldLogs)
@@ -438,13 +461,15 @@ internal static class GlobalToolLog
     {
         private readonly object _gate = new();
         private readonly StreamWriter _writer;
+        private readonly string _format;
         private TextWriter? _originalError;
         private TextWriter? _teeError;
         private bool _disposed;
 
-        public Session(StreamWriter writer, string logPath)
+        public Session(StreamWriter writer, string logPath, string format)
         {
             _writer = writer;
+            _format = format;
             LogPath = logPath;
         }
 
@@ -472,9 +497,21 @@ internal static class GlobalToolLog
 
                 try
                 {
-                    _writer.WriteLine(string.Create(
-                        CultureInfo.InvariantCulture,
-                        $"{DateTimeOffset.UtcNow:yyyy-MM-ddTHH:mm:ss.fffZ} [{level}] {message}"));
+                    if (string.Equals(_format, "json", StringComparison.Ordinal))
+                    {
+                        _writer.WriteLine(JsonSerializer.Serialize(new Dictionary<string, string>
+                        {
+                            ["ts"] = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+                            ["level"] = level,
+                            ["msg"] = message,
+                        }));
+                    }
+                    else
+                    {
+                        _writer.WriteLine(string.Create(
+                            CultureInfo.InvariantCulture,
+                            $"{DateTimeOffset.UtcNow:yyyy-MM-ddTHH:mm:ss.fffZ} [{level}] {message}"));
+                    }
                     _writer.Flush();
                 }
                 catch (Exception ex) when (ex is IOException or ObjectDisposedException)
@@ -505,6 +542,26 @@ internal static class GlobalToolLog
                 CurrentSession.Value = null;
                 _writer.Dispose();
             }
+        }
+    }
+
+    internal sealed record LogOptions(string Format, int RetainCount, long MaxSizeBytes)
+    {
+        public static LogOptions FromEnvironment()
+        {
+            var format = Environment.GetEnvironmentVariable(LogFormatEnvironmentVariable)?.Trim().ToLowerInvariant();
+            if (format is not "json")
+                format = "text";
+
+            var retainCount = RetainedLogFileCount;
+            if (int.TryParse(Environment.GetEnvironmentVariable(LogRetainEnvironmentVariable), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedRetain))
+                retainCount = Math.Clamp(parsedRetain, 1, 10_000);
+
+            long maxSizeBytes = 0;
+            if (int.TryParse(Environment.GetEnvironmentVariable(LogMaxSizeMbEnvironmentVariable), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedMb) && parsedMb > 0)
+                maxSizeBytes = parsedMb * 1024L * 1024L;
+
+            return new LogOptions(format, retainCount, maxSizeBytes);
         }
     }
 

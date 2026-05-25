@@ -21,12 +21,21 @@
       "truncated_char_counts": [],
       "terms": [
         "Add"
+      ],
+      "term_occurrences": [
+        {
+          "term": "Add",
+          "line": 5,
+          "column": 23,
+          "length": 3
+        }
       ]
     }
   ],
   "context_before": 4,
   "context_after": 2,
   "truncated_line_count": 0,
+  "dropped_match_line_count": 0,
   "truncation_context": {
     "line_count": 0,
     "char_counts": [],
