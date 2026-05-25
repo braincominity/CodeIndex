@@ -425,6 +425,17 @@ or `cdidx . --json` refresh so stale paths are purged.
 
 ## Installation
 
+Choose the install channel based on runtime ownership and network shape:
+
+| Channel | Best fit | Prerequisites | Update path |
+|---|---|---|---|
+| `install.sh` | Self-contained installs, CI, containers, ARM64 hosts without managed .NET | Shell tools and release-asset network access | Re-run the installer, optionally with `vX.Y.Z` |
+| NuGet global tool | Workstations already using .NET global tools | .NET 8 SDK/runtime | `dotnet tool update -g cdidx` |
+| Build from source | Contributors and custom local builds | .NET 8 SDK | Pull source and rebuild |
+
+For a full comparison, package maintainer guidance, and planned channels such
+as winget, apt, rpm, Snap, and Flatpak, see [DISTRIBUTION.md](DISTRIBUTION.md).
+
 ### Option A: One-liner install (no .NET required)
 
 Works in containers, CI, and any Linux/macOS environment — no .NET SDK needed.

@@ -78,6 +78,15 @@ Output controls:
 Use `cdidx` when a repository will be searched repeatedly from terminals,
 scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 
+Install choice and network notes:
+
+| Need | Use |
+|---|---|
+| Self-contained binary with no .NET runtime | `install.sh` |
+| .NET global tool workflow | `dotnet tool install -g cdidx` with .NET 8 installed |
+
+See [DISTRIBUTION.md](DISTRIBUTION.md) for the full channel matrix.
+
 ### Shell Completion
 
 Generate completion scripts with `cdidx --completions <bash|zsh|fish|powershell>`.
@@ -138,6 +147,7 @@ version 2.
 | Document | Contents |
 |---|---|
 | [User Guide](USER_GUIDE.md) | Detailed installation, command examples, options, supported languages, MCP setup, and troubleshooting. |
+| [Distribution Channels](DISTRIBUTION.md) | Install channel comparison, update paths, platform support, and package maintainer policy. |
 | [Cloud Bootstrap](CLOUD_BOOTSTRAP_PROMPT.md) | Install guidance for restricted cloud agent sessions. |
 | [Platform Support](docs/platform-support.md) | Official release asset RIDs, unsupported platforms, and source-build alternatives. |
 | [Developer Guide](DEVELOPER_GUIDE.md) | Architecture, implementation notes, release workflow, and the [`reference_kind` filtering matrix](DEVELOPER_GUIDE.md#reference-kind-filtering-matrix) for `callers` / `impact` / `deps` count reconciliation. |
