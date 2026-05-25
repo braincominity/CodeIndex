@@ -11,6 +11,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.26.2] - 2026-05-26
+
+#### Added
+
+- **MCP definition and references can include LSP locations (#1743)** — `lsp_compatible: true` now adds `file://` `uri` and LSP `range` fields to definition and reference results without changing the default MCP shape.
+- **Query commands gained editor and CI output formats (#1747)** — `definition`, `references`, `search`, `find`, and `validate` now accept `--format lsp`, `--format qf`, and `--format sarif` for LSP Location arrays, Vim quickfix lines, and SARIF 2.1.0 output.
+- **Added `cdidx goto` for IDE jump targets (#1749)** — `goto <symbol>` returns one unambiguous LSP `Location`, and `goto --all <symbol>` returns all matching definition locations.
+
+#### Fixed
+
+- **Chunk search now ranks symbol-structured matches ahead of generic text (#1958, #1975, #1977, #2000)** — search boosts now prefer chunks that overlap exact/prefix symbol definitions, structured symbol-name/signature hits, higher-value symbol kinds, and shallower scope roots before falling back to BM25 and stable tie-breakers.
+
+#### Documentation
+
+- **AI agent commits now avoid local signing prompts** — `AGENT_GUIDE.md` now tells AI agents to use `git commit --no-gpg-sign` so local signing-key passphrases do not block agent-driven commits.
+
+#### Internal
+
+- **Split IndexCommandRunner internals without behavior changes** — moved index option validation, watch conflict handling, rebuild conflict handling, rebuild confirmation, dry-run execution, dry-run candidate resolution, index argument parsing, maintenance command runners, maintenance argument parsing, update-mode indexing, and full-scan indexing out of the oversized index command runner, with dry-run, parse, validation, maintenance, update, and full-scan code now isolated in partial files.
+- **Split ReferenceExtractor internals without behavior changes** — moved shared extraction state and the core extraction loop into dedicated partial files and extracted PHP line preamble plus core setup helper construction from the oversized core loop.
+- **Split SQL statement reference internals without behavior changes** — moved SQL regex patterns, per-statement CTE/call-suppression setup plus create-index, alter/drop-index, object lifecycle, drop-object, alter-object, maintenance target emission, and MERGE action column emission into focused helpers outside the oversized SQL reference emission method, and split SQL extractor state into partial files.
+- **Split SymbolExtractor internals without behavior changes** — moved extraction input preparation, early exits, normalization, plugin dispatch, and Dockerfile symbol helpers out of the oversized symbol extractor.
+
 ### [1.26.1] - 2026-05-26
 
 #### Fixed
@@ -2946,6 +2969,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.26.2] - 2026-05-26
+
+#### 追加
+
+- **MCP の definition / references が LSP location を含められるようになりました (#1743)** — `lsp_compatible: true` により、既定の MCP 形状を変えずに definition / reference 結果へ `file://` の `uri` と LSP `range` を追加できます。
+- **query コマンドに editor / CI 向け出力形式を追加しました (#1747)** — `definition`、`references`、`search`、`find`、`validate` が `--format lsp`、`--format qf`、`--format sarif` を受け付け、LSP Location 配列、Vim quickfix 行、SARIF 2.1.0 を出力できます。
+- **IDE の jump target 向けに `cdidx goto` を追加しました (#1749)** — `goto <symbol>` は曖昧でない単一定義を LSP `Location` として返し、`goto --all <symbol>` は一致する全 definition location を返します。
+
+#### 修正
+
+- **チャンク検索で構造化されたシンボル一致を汎用テキストより優先するようになりました (#1958, #1975, #1977, #2000)** — 検索の boost は exact/prefix シンボル定義と重なるチャンク、シンボル名・シグネチャ上の一致、高価値のシンボル kind、浅い scope root を BM25 と安定 tie-breaker より前に優先します。
+
+#### ドキュメント
+
+- **AI agent のコミットがローカル署名プロンプトを避けるようになりました** — `AGENT_GUIDE.md` で AI agent に `git commit --no-gpg-sign` を使うよう明記し、ローカル署名鍵のパスフレーズで agent-driven commit が停止しないようにしました。
+
+#### 内部変更
+
+- **IndexCommandRunner の内部構造を挙動変更なしで分割しました** — 巨大な index command runner から index option validation、watch conflict handling、rebuild conflict handling、rebuild confirmation、dry-run execution、dry-run candidate resolution、index argument parsing、maintenance command runner、maintenance argument parsing、update-mode indexing、full-scan indexing を切り出し、dry-run / parse / validation / maintenance / update / full-scan code を partial file に分離しました。
+- **ReferenceExtractor の内部構造を挙動変更なしで分割しました** — 共有抽出状態と core extraction loop を専用 partial ファイルへ移し、巨大な core ループから PHP 行前処理の参照 emit と core setup helper 構築を抽出しました。
+- **SQL statement 参照内部処理を挙動変更なしで分割しました** — SQL regex pattern、巨大な SQL 参照 emit メソッドから statement ごとの CTE / call suppression 準備と、create-index / alter/drop-index / object lifecycle / drop-object / alter-object / maintenance target emit / MERGE action column emit を focused helper へ切り出し、SQL extractor state を partial file に分離しました。
+- **SymbolExtractor の内部構造を挙動変更なしで分割しました** — 巨大な symbol extractor から入力準備、早期 return、正規化、plugin dispatch、Dockerfile symbol helper を切り出しました。
+
 ### [1.26.1] - 2026-05-26
 
 #### 修正
@@ -5870,7 +5916,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.26.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.26.2...HEAD
+[1.26.2]: https://github.com/Widthdom/CodeIndex/compare/v1.26.1...v1.26.2
 [1.26.1]: https://github.com/Widthdom/CodeIndex/compare/v1.26.0...v1.26.1
 [1.26.0]: https://github.com/Widthdom/CodeIndex/compare/v1.25.1...v1.26.0
 [1.25.1]: https://github.com/Widthdom/CodeIndex/compare/v1.25.0...v1.25.1
