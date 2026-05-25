@@ -186,6 +186,44 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_ScopesNumericDefaultValidationByOption()
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            QueryCommandRunner.DefaultLimitEnvironmentVariable,
+            QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable,
+            QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable);
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultLimitEnvironmentVariable, "0");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, "0");
+        Environment.SetEnvironmentVariable(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, "-1");
+
+        var limitOnly = QueryCommandRunner.ParseArgs(
+            [],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+        Assert.Contains(QueryCommandRunner.DefaultLimitEnvironmentVariable, limitOnly.ParseError);
+        Assert.DoesNotContain(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, limitOnly.ParseError);
+        Assert.DoesNotContain(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, limitOnly.ParseError);
+
+        var maxLineWidthOnly = QueryCommandRunner.ParseArgs(
+            [],
+            jsonDefault: false,
+            validateDefaultLimit: false,
+            validateDefaultSnippetLines: false);
+        Assert.Contains(QueryCommandRunner.DefaultMaxLineWidthEnvironmentVariable, maxLineWidthOnly.ParseError);
+        Assert.DoesNotContain(QueryCommandRunner.DefaultLimitEnvironmentVariable, maxLineWidthOnly.ParseError);
+        Assert.DoesNotContain(QueryCommandRunner.DefaultSnippetLinesEnvironmentVariable, maxLineWidthOnly.ParseError);
+
+        var none = QueryCommandRunner.ParseArgs(
+            [],
+            jsonDefault: false,
+            validateDefaultLimit: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+        Assert.Null(none.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_ProjectFilterExpandsSolutionProjectToPathGlob_Issue1707()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_filter");
