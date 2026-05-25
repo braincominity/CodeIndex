@@ -1661,6 +1661,8 @@ public static class IndexCommandRunner
             }
         }
 
+        var extractionTimeout = ResolveIndexExtractionTimeout();
+
         void StartUpdateSpinnerIfNeeded()
         {
             if (!interactiveUpdateSpinner || updateCts != null)
@@ -2112,7 +2114,17 @@ public static class IndexCommandRunner
                 var chunks = ChunkSplitter.Split(fileId, content);
                 writer.InsertChunks(chunks);
                 currentUpdatePath = FormatIndexPhasePath(relPath, "symbols");
-                var symbols = SymbolExtractor.Extract(fileId, record.Lang, content, absPath, Path.GetFullPath(options.ProjectPath!), cancellationToken);
+                var symbolsCompleted = TryExtractSymbolsWithinTimeout(
+                    fileId,
+                    record,
+                    content,
+                    absPath,
+                    options.ProjectPath!,
+                    cancellationToken,
+                    extractionTimeout,
+                    options.DurationFormat,
+                    out var symbols,
+                    out var symbolTimeoutWarning);
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
                 var fileContext = new FileContext(projectRoot, record.Path, absPath, record.Lang);
                 postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
@@ -2120,16 +2132,29 @@ public static class IndexCommandRunner
                 FileIndexer.ValidateSymbolLineRanges(record, symbols);
                 writer.InsertSymbols(symbols);
                 currentUpdatePath = FormatIndexPhasePath(relPath, "references");
-                var references = ReferenceExtractor.Extract(
-                    fileId,
-                    record.Lang,
-                    content,
-                    symbols,
-                    record.Path,
-                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                    cancellationToken);
+                List<ReferenceRecord> references = symbolsCompleted
+                    ? ReferenceExtractor.Extract(
+                        fileId,
+                        record.Lang,
+                        content,
+                        symbols,
+                        record.Path,
+                        record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                        cancellationToken)
+                    : [];
                 postExtractionHooks.OnReferencesExtracted(fileContext, references);
                 writer.InsertReferences(references);
+                if (symbolTimeoutWarning != null)
+                {
+                    warnings++;
+                    warningList.Add(new CliJsonMessage(record.Path, symbolTimeoutWarning));
+                    if (!options.Json && !options.Quiet)
+                    {
+                        PauseUpdateSpinnerForConsoleWrite();
+                        ConsoleUi.PrintWarning(symbolTimeoutWarning);
+                        ResumeUpdateSpinnerAfterConsoleWrite();
+                    }
+                }
                 // Validate content for encoding issues / エンコーディング問題を検証
                 currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
@@ -3555,19 +3580,34 @@ public static class IndexCommandRunner
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "chunking");
                                 chunks = ChunkSplitter.Split(0, content);
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "symbols");
-                                symbols = SymbolExtractor.Extract(0, record.Lang, content, filePath, Path.GetFullPath(options.ProjectPath!), cancellationToken);
+                                var symbolsCompleted = TryExtractSymbolsWithinTimeout(
+                                    0,
+                                    record,
+                                    content,
+                                    filePath,
+                                    options.ProjectPath!,
+                                    cancellationToken,
+                                    ResolveIndexExtractionTimeout(),
+                                    options.DurationFormat,
+                                    out var extractedSymbols,
+                                    out var symbolTimeoutWarning);
+                                symbols = extractedSymbols;
                                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "references");
-                                references = ReferenceExtractor.Extract(
-                                    0,
-                                    record.Lang,
-                                    content,
-                                    symbols,
-                                    record.Path,
-                                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                                    cancellationToken);
+                                references = symbolsCompleted
+                                    ? ReferenceExtractor.Extract(
+                                        0,
+                                        record.Lang,
+                                        content,
+                                        symbols,
+                                        record.Path,
+                                        record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                                        cancellationToken)
+                                    : [];
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "validating");
                                 issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+                                if (symbolTimeoutWarning != null)
+                                    warning = string.IsNullOrWhiteSpace(warning) ? symbolTimeoutWarning : $"{warning} {symbolTimeoutWarning}";
                             }
                             extractionResults.Add(
                                 FullScanFileWorkItem.Success(filePath, record, content, rawBytes, warning, chunks, symbols, references, issues),
@@ -4710,6 +4750,54 @@ public static class IndexCommandRunner
         {
             return null;
         }
+    }
+
+    private static bool TryExtractSymbolsWithinTimeout(
+        long fileId,
+        FileRecord record,
+        string content,
+        string absolutePath,
+        string projectPath,
+        CancellationToken cancellationToken,
+        TimeSpan extractionTimeout,
+        DurationOutputFormat durationFormat,
+        out List<SymbolRecord> symbols,
+        out string? timeoutWarning)
+    {
+        timeoutWarning = null;
+        var extractionTask = Task.Run(
+            () => SymbolExtractor.Extract(fileId, record.Lang, content, absolutePath, Path.GetFullPath(projectPath), cancellationToken),
+            CancellationToken.None);
+
+        try
+        {
+            if (extractionTask.Wait(extractionTimeout, cancellationToken))
+            {
+                symbols = extractionTask.GetAwaiter().GetResult();
+                return true;
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+
+        timeoutWarning = $"{record.Path}: symbol extraction exceeded {ConsoleUi.FormatDuration(extractionTimeout, durationFormat)}; indexed file without symbols or references.";
+        symbols = [];
+        return false;
+    }
+
+    private static TimeSpan ResolveIndexExtractionTimeout()
+    {
+        const int defaultTimeoutMilliseconds = 30000;
+        var raw = Environment.GetEnvironmentVariable("CDIDX_INDEX_EXTRACTION_TIMEOUT_MS");
+        if (string.IsNullOrWhiteSpace(raw))
+            return TimeSpan.FromMilliseconds(defaultTimeoutMilliseconds);
+
+        return int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var milliseconds)
+            && milliseconds > 0
+                ? TimeSpan.FromMilliseconds(milliseconds)
+                : TimeSpan.FromMilliseconds(defaultTimeoutMilliseconds);
     }
 
     private sealed record CSharpStaticInterfaceWorkspaceSymbols(

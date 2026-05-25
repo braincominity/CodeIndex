@@ -70,6 +70,39 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FilesMode_WhenSymbolExtractionTimesOut_CompletesWithWarning()
+    {
+        using var environment = EnvironmentVariableScope.Capture("CDIDX_INDEX_EXTRACTION_TIMEOUT_MS");
+        environment.Set("CDIDX_INDEX_EXTRACTION_TIMEOUT_MS", "1");
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var source = Path.Combine(
+                GetRepositoryRoot(),
+                "src",
+                "CodeIndex",
+                "Indexer",
+                "Symbols",
+                "SymbolExtractor.JavaScriptTypeScriptSupport.cs");
+            File.Copy(source, Path.Combine(projectRoot, "slow.cs"));
+
+            var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_symbol_timeout_{Guid.NewGuid():N}.db");
+            var (exitCode, json, stderr) = RunAndCaptureJsonWithStderr([projectRoot, "--files", "slow.cs", "--db", dbPath, "--json", "--force"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Contains("symbol extraction exceeded", json.GetProperty("warnings")[0].GetProperty("message").GetString());
+            Assert.DoesNotContain(CommandErrorCodes.Interrupted, stderr);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void GetJsonIndexHeartbeatPath_UsesWorkerPhaseWhenMainThreadIsIdle()
     {
         var message = IndexCommandRunner.GetJsonIndexHeartbeatPath(
