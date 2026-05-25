@@ -164,8 +164,9 @@ public static class SearchSnippetFormatter
 
             var absoluteLine = absoluteStartLine + i;
             matchLines.Add(absoluteLine);
-            var occurrenceLine = normalizeCSharpVerbatimNames && normalizedLines != null ? normalizedLines[i] : originalLine;
-            var termOccurrences = GetMatchedTermOccurrences(occurrenceLine, absoluteLine, normalizedQuery, tokens, caseSensitive);
+            var termOccurrences = normalizeCSharpVerbatimNames && normalizedLines != null && rawIndexMaps != null
+                ? GetMatchedTermOccurrences(normalizedLines[i], absoluteLine, normalizedQuery, tokens, caseSensitive, originalLine, rawIndexMaps[i])
+                : GetMatchedTermOccurrences(originalLine, absoluteLine, normalizedQuery, tokens, caseSensitive);
             highlights.Add(new SearchHighlight
             {
                 Line = absoluteLine,
@@ -173,7 +174,7 @@ public static class SearchSnippetFormatter
                 OriginalLineLength = originalLine.Length,
                 Truncated = clamped.Truncated,
                 TruncatedCharCounts = clamped.Truncated ? [clamped.TruncatedCharCount] : [],
-                Terms = GetDistinctTerms(termOccurrences),
+                Terms = GetMatchedTerms(normalizeCSharpVerbatimNames && normalizedLines != null ? normalizedLines[i] : originalLine, normalizedQuery, tokens, caseSensitive),
                 TermOccurrences = termOccurrences,
             });
         }
@@ -398,20 +399,20 @@ public static class SearchSnippetFormatter
         return matches;
     }
 
-    private static List<SearchTermOccurrence> GetMatchedTermOccurrences(string line, int absoluteLine, string query, string[] tokens, bool caseSensitive = false)
+    private static List<SearchTermOccurrence> GetMatchedTermOccurrences(string line, int absoluteLine, string query, string[] tokens, bool caseSensitive = false, string? rawLine = null, int[]? rawIndexMap = null)
     {
         var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         var occurrences = new List<SearchTermOccurrence>();
         if (!string.IsNullOrWhiteSpace(query))
-            AddTermOccurrences(occurrences, line, absoluteLine, query, comparison);
+            AddTermOccurrences(occurrences, line, absoluteLine, query, comparison, rawLine, rawIndexMap);
 
         foreach (var token in tokens)
-            AddTermOccurrences(occurrences, line, absoluteLine, token, comparison);
+            AddTermOccurrences(occurrences, line, absoluteLine, token, comparison, rawLine, rawIndexMap);
 
         return occurrences;
     }
 
-    private static void AddTermOccurrences(List<SearchTermOccurrence> occurrences, string line, int absoluteLine, string term, StringComparison comparison)
+    private static void AddTermOccurrences(List<SearchTermOccurrence> occurrences, string line, int absoluteLine, string term, StringComparison comparison, string? rawLine, int[]? rawIndexMap)
     {
         if (string.IsNullOrEmpty(term))
             return;
@@ -419,31 +420,47 @@ public static class SearchSnippetFormatter
         var index = 0;
         while ((index = line.IndexOf(term, index, comparison)) >= 0)
         {
+            var occurrenceColumn = index + 1;
+            var occurrenceLength = term.Length;
+            var occurrenceTerm = line.Substring(index, term.Length);
+            if (rawLine != null && rawIndexMap != null && TryReconstructRawSpan(rawIndexMap, index, term.Length, out var rawColumn, out var rawLength))
+            {
+                occurrenceColumn = rawColumn;
+                occurrenceLength = rawLength;
+                occurrenceTerm = rawLine.Substring(rawColumn - 1, rawLength);
+            }
+
             if (!occurrences.Any(occurrence =>
                     occurrence.Line == absoluteLine &&
-                    occurrence.Column == index + 1 &&
-                    occurrence.Length == term.Length &&
-                    string.Equals(occurrence.Term, line.Substring(index, term.Length), StringComparison.OrdinalIgnoreCase)))
+                    occurrence.Column == occurrenceColumn &&
+                    occurrence.Length == occurrenceLength &&
+                    string.Equals(occurrence.Term, occurrenceTerm, StringComparison.OrdinalIgnoreCase)))
             {
                 occurrences.Add(new SearchTermOccurrence
                 {
-                    Term = line.Substring(index, term.Length),
+                    Term = occurrenceTerm,
                     Line = absoluteLine,
-                    Column = index + 1,
-                    Length = term.Length,
+                    Column = occurrenceColumn,
+                    Length = occurrenceLength,
                 });
             }
             index += Math.Max(1, term.Length);
         }
     }
 
-    private static List<string> GetDistinctTerms(List<SearchTermOccurrence> occurrences)
+    private static List<string> GetMatchedTerms(string line, string query, string[] tokens, bool caseSensitive = false)
     {
+        var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         var terms = new List<string>();
-        foreach (var occurrence in occurrences)
+        if (!string.IsNullOrWhiteSpace(query) && line.Contains(query, comparison))
+            terms.Add(query);
+
+        foreach (var token in tokens)
         {
-            if (!terms.Contains(occurrence.Term, StringComparer.OrdinalIgnoreCase))
-                terms.Add(occurrence.Term);
+            if (terms.Contains(token, StringComparer.OrdinalIgnoreCase))
+                continue;
+            if (line.Contains(token, comparison))
+                terms.Add(token);
         }
 
         return terms;

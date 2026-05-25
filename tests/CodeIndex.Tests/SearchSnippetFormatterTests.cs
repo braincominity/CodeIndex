@@ -126,6 +126,11 @@ public class SearchSnippetFormatterTests
         Assert.Equal([2], excerpt.MatchLines);
         Assert.Single(excerpt.Highlights);
         Assert.Contains("Foo.Bar", excerpt.Highlights[0].Terms);
+        var occurrence = Assert.Single(excerpt.Highlights[0].TermOccurrences);
+        Assert.Equal("Foo.@Bar", occurrence.Term);
+        Assert.Equal(2, occurrence.Line);
+        Assert.Equal(8, occurrence.Column);
+        Assert.Equal(8, occurrence.Length);
         Assert.Contains("using @Foo.@Bar;", excerpt.Lines);
     }
 
