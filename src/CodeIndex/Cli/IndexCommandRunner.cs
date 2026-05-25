@@ -164,7 +164,7 @@ public static class IndexCommandRunner
                 jsonOptions,
                 options.ParseError,
                 CommandExitCodes.UsageError,
-                "Rerun `cdidx index <projectPath> --commits <commit-id> [commit-id ...]` with 7-40 hex commit object IDs.",
+                "Run `cdidx index --help` to see supported options.",
                 CommandErrorCodes.UsageError);
         }
 
@@ -804,14 +804,14 @@ public static class IndexCommandRunner
 
 
     // Index-mode flag names recognized by `ParseArgs`. Kept in sync with the switch above
-    // so `Warning: unknown option ...` can suggest the closest accepted flag (#1582). Easter-egg
+    // so unknown option errors can suggest the closest accepted flag (#1582). Easter-egg
     // and random-spinner flags are excluded since they are intentionally undiscoverable.
-    // `ParseArgs` の switch と同期した index 系の受理フラグ一覧。`unknown option` 警告で
+    // `ParseArgs` の switch と同期した index 系の受理フラグ一覧。`unknown option` error で
     // 最も近い受理フラグを did-you-mean 提案するのに用いる (#1582)。
     // easter egg や random-spinner は意図的に未公開なので除外する。
     private static readonly string[] AcceptedIndexFlags =
     [
-        "--db", "--rebuild", "--verbose", "--json", "--dry-run", "--force",
+        "--db", "--data-dir", "--rebuild", "--verbose", "--json", "--dry-run", "--force",
         "--yes", "--watch", "--debounce", "--duration-format", "--max-file-bytes",
         "--parallelism",
         "--commits", "--changed-between", "--files", "--solution", "--project",
@@ -858,12 +858,13 @@ public static class IndexCommandRunner
         };
     }
 
-    private static void WriteUnknownIndexOptionSuggestion(string token)
+    private static string BuildUnknownIndexOptionError(string token)
     {
         var name = TrimInlineValue(token);
         var suggestion = ConsoleUi.FindClosestMatch(name, AcceptedIndexFlags);
-        if (suggestion != null)
-            Console.Error.WriteLine($"Did you mean: {suggestion}?");
+        return suggestion == null
+            ? $"unknown option '{token}'"
+            : $"unknown option '{token}'\nDid you mean: {suggestion}?";
     }
 
     private static void WriteUnknownBackfillFoldOptionSuggestion(string token)
@@ -1106,8 +1107,7 @@ public static class IndexCommandRunner
                 default:
                     if (args[i].StartsWith('-'))
                     {
-                        Console.Error.WriteLine($"Warning: unknown option '{args[i]}' (ignored) / 不明なオプション '{args[i]}'（無視されます）");
-                        WriteUnknownIndexOptionSuggestion(args[i]);
+                        parseError ??= BuildUnknownIndexOptionError(args[i]);
                     }
                     else
                         projectPath = args[i];
