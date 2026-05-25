@@ -286,6 +286,21 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_InitializeEmitsInitializedNotificationAfterResponseOnlyOnce()
+    {
+        var transport = new QueueMcpTransport(
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"test-client","version":"1.0"}}}""",
+            """{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"clientInfo":{"name":"test-client","version":"1.0"}}}""");
+
+        await _server.RunAsync(transport, CancellationToken.None);
+
+        Assert.Equal(3, transport.WrittenFrames.Count);
+        Assert.Equal(1, JsonNode.Parse(transport.WrittenFrames[0])!["id"]!.GetValue<int>());
+        Assert.Equal("notifications/initialized", JsonNode.Parse(transport.WrittenFrames[1])!["method"]!.GetValue<string>());
+        Assert.Equal(2, JsonNode.Parse(transport.WrittenFrames[2])!["id"]!.GetValue<int>());
+    }
+
+    [Fact]
     public void Initialize_AdvertisesResourcesAndPrompts()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""")!;
@@ -303,7 +318,7 @@ public class McpServerTests : IDisposable
     [Fact]
     public void Initialize_CapturesClientCapabilitiesAndRootsForSessionStatus()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{"experimental":{"progress":true}},"rootUri":"file:///workspace","roots":[{"uri":"file:///workspace/src"}]}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"codex","version":"5.0"},"capabilities":{"experimental":{"progress":true}},"rootUri":"file:///workspace","roots":[{"uri":"file:///workspace/src"}]}}""")!;
         _server.HandleMessage(request);
 
         Assert.True(_server.ClientCapabilitiesForTests!["experimental"]!["progress"]!.GetValue<bool>());
@@ -314,6 +329,8 @@ public class McpServerTests : IDisposable
         var session = response["result"]!["structuredContent"]!["mcp_session"]!;
 
         Assert.True(session["client_capabilities"]!["experimental"]!["progress"]!.GetValue<bool>());
+        Assert.Equal("codex", session["client_info"]!["name"]!.GetValue<string>());
+        Assert.Equal("5.0", session["client_info"]!["version"]!.GetValue<string>());
         Assert.Equal("file:///workspace", session["roots"]!.AsArray()[0]!.GetValue<string>());
         Assert.Equal("info", session["log_level"]!.GetValue<string>());
     }
@@ -9827,6 +9844,38 @@ public class McpServerTests : IDisposable
             Disposed = true;
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class QueueMcpTransport : IMcpTransport, IOutOfBandMcpTransport
+    {
+        private readonly Queue<string> _frames;
+
+        public QueueMcpTransport(params string[] frames)
+        {
+            _frames = new Queue<string>(frames);
+        }
+
+        public string Name => "memory";
+        public string Endpoint => "memory://test";
+        public List<string> WrittenFrames { get; } = [];
+
+        public Task<string?> ReadFrameAsync(CancellationToken cancellationToken)
+            => Task.FromResult(_frames.Count == 0 ? null : _frames.Dequeue());
+
+        public Task WriteFrameAsync(string? frame, CancellationToken cancellationToken)
+        {
+            if (frame is not null)
+                WrittenFrames.Add(frame);
+            return Task.CompletedTask;
+        }
+
+        public Task WriteOutOfBandFrameAsync(string frame, CancellationToken cancellationToken)
+        {
+            WrittenFrames.Add(frame);
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     // The shutdown helper is the heart of the #1573 fix: cancelling the CTS through Console.CancelKeyPress

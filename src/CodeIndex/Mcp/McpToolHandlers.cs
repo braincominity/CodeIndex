@@ -1541,6 +1541,15 @@ public partial class McpServer
             ["log_level"] = _mcpLogLevel,
             ["roots"] = roots,
         };
+        if (_clientName is not null || _clientVersion is not null)
+        {
+            var clientInfo = new JsonObject();
+            if (_clientName is not null)
+                clientInfo["name"] = _clientName;
+            if (_clientVersion is not null)
+                clientInfo["version"] = _clientVersion;
+            session["client_info"] = clientInfo;
+        }
         if (_clientCapabilities is not null)
             session["client_capabilities"] = _clientCapabilities.DeepClone();
         return session;
