@@ -963,27 +963,8 @@ public static partial class ReferenceExtractor
         // `[...]` の引数中に現れる enum / 修飾定数（`ConverterStrategy.AllowNumbers` など）が
         // no-arg attribute として誤分類されないよう、no-arg 属性用ゲートに使う。
         var csharpAttrTopLevelRanges = csharpAttrTables.Item2;
-        var definitionNamesComparer = language == "sql"
-            ? StringComparer.OrdinalIgnoreCase
-            : StringComparer.Ordinal;
-        var definitionNamesByLine = symbols
-            .GroupBy(symbol => symbol.Line)
-            .ToDictionary(
-                group => group.Key,
-                group =>
-                {
-                    var names = new HashSet<string>(definitionNamesComparer);
-                    foreach (var symbol in group)
-                    {
-                        names.Add(symbol.Name);
-                        if (language == "sql")
-                        {
-                            SqlReferenceExtractor.AddDefinitionNameAliases(names, symbol);
-                        }
-                    }
-
-                    return names;
-                });
+        var definitionNamesComparer = GetDefinitionNamesComparer(language);
+        var definitionNamesByLine = BuildDefinitionNamesByLine(language, symbols);
         var fileDefinitionNames = isRazorFile
             ? new HashSet<string>(symbols.Select(symbol => symbol.Name), StringComparer.Ordinal)
             : null;
@@ -1006,21 +987,9 @@ public static partial class ReferenceExtractor
         // enclosing class (see issue #233).
         // 式本体・ブロック本体のプロパティアクセサ内の呼び出しを、外側のクラスではなく
         // プロパティ自身に帰属させる (issue #233 参照)。
-        var containerCandidates = symbols
-            .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null &&
-                              (IsFunctionLikeSymbolKind(symbol.Kind) || symbol.Kind == "hook" || symbol.Kind == "class"
-                               || symbol.Kind == "struct" || symbol.Kind == "namespace"
-                               || symbol.Kind == "object" || symbol.Kind == "property" || symbol.Kind == "class_hook"))
-            .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
-            .ToList();
+        var containerCandidates = BuildReferenceContainerCandidates(symbols);
         var containerResolver = new InnermostContainerResolver(containerCandidates);
-        var csharpXmlDocAttachmentScopeCandidates = language == "csharp"
-            ? symbols
-                .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null
-                                 && symbol.Kind is "class" or "struct" or "interface" or "enum" or "namespace")
-                .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
-                .ToList()
-            : null;
+        var csharpXmlDocAttachmentScopeCandidates = BuildCSharpXmlDocAttachmentScopeCandidates(language, symbols);
         // Enclosing-type candidates for constructor-chain rewrites (class/struct/record; namespace excluded).
         // Ordered innermost-first via ascending body range. Java enums can declare constructors and
         // chain via `this(...)` so `enum` is included; C# enums cannot declare constructors, and
@@ -1028,11 +997,7 @@ public static partial class ReferenceExtractor
         // コンストラクタ連鎖の呼び先解決で使う外側の型候補（class/struct/record/enum。namespace は含めない）。
         // 内側優先で昇順にソート。Java の enum は `this(...)` 連鎖を持てるため `enum` も含める。
         // C# の enum はコンストラクタ自体を持てず `CSharpCtorChainRegex` が一致しないので副作用は無い。
-        var enclosingTypeCandidates = symbols
-            .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null &&
-                             (symbol.Kind == "class" || symbol.Kind == "struct" || symbol.Kind == "interface" || symbol.Kind == "enum"))
-            .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
-            .ToList();
+        var enclosingTypeCandidates = BuildEnclosingTypeCandidates(symbols);
         var rustEnumCandidates = language == "rust"
             ? symbols
                 .Where(symbol => symbol.Kind == "enum" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
@@ -1042,12 +1007,7 @@ public static partial class ReferenceExtractor
         var pythonDefinitionContainersByLineAndKind = language == "python"
             ? BuildPythonDefinitionContainersByLineAndKind(symbols)
             : null;
-        var swiftPropertyDefinitionsByLine = language == "swift"
-            ? symbols
-                .Where(symbol => symbol.Kind == "property")
-                .GroupBy(symbol => symbol.Line)
-                .ToDictionary(group => group.Key, group => group.OrderByDescending(symbol => symbol.StartColumn ?? 0).ToArray())
-            : null;
+        var swiftPropertyDefinitionsByLine = BuildSwiftPropertyDefinitionsByLine(language, symbols);
 
         // Synthetic function-kind container for C# primary-ctor declarations with a base
         // primary-ctor call such as `record Child(int x) : Parent(x)` or C# 12 `class Child(int x) : Parent(x)`.
@@ -3168,6 +3128,74 @@ public static partial class ReferenceExtractor
         MarkMutualRecursionReferences(references);
         return references;
     }
+
+    private static Dictionary<int, HashSet<string>> BuildDefinitionNamesByLine(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        var definitionNamesComparer = GetDefinitionNamesComparer(language);
+
+        return symbols
+            .GroupBy(symbol => symbol.Line)
+            .ToDictionary(
+                group => group.Key,
+                group =>
+                {
+                    var names = new HashSet<string>(definitionNamesComparer);
+                    foreach (var symbol in group)
+                    {
+                        names.Add(symbol.Name);
+                        if (language == "sql")
+                        {
+                            SqlReferenceExtractor.AddDefinitionNameAliases(names, symbol);
+                        }
+                    }
+
+                    return names;
+                });
+    }
+
+    private static StringComparer GetDefinitionNamesComparer(string language)
+        => language == "sql"
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+
+    private static List<SymbolRecord> BuildReferenceContainerCandidates(IReadOnlyList<SymbolRecord> symbols)
+        => symbols
+            .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null &&
+                              (IsFunctionLikeSymbolKind(symbol.Kind) || symbol.Kind == "hook" || symbol.Kind == "class"
+                               || symbol.Kind == "struct" || symbol.Kind == "namespace"
+                               || symbol.Kind == "object" || symbol.Kind == "property" || symbol.Kind == "class_hook"))
+            .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
+            .ToList();
+
+    private static List<SymbolRecord>? BuildCSharpXmlDocAttachmentScopeCandidates(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols)
+        => language == "csharp"
+            ? symbols
+                .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null
+                                 && symbol.Kind is "class" or "struct" or "interface" or "enum" or "namespace")
+                .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
+                .ToList()
+            : null;
+
+    private static List<SymbolRecord> BuildEnclosingTypeCandidates(IReadOnlyList<SymbolRecord> symbols)
+        => symbols
+            .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null &&
+                             (symbol.Kind == "class" || symbol.Kind == "struct" || symbol.Kind == "interface" || symbol.Kind == "enum"))
+            .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
+            .ToList();
+
+    private static Dictionary<int, SymbolRecord[]>? BuildSwiftPropertyDefinitionsByLine(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols)
+        => language == "swift"
+            ? symbols
+                .Where(symbol => symbol.Kind == "property")
+                .GroupBy(symbol => symbol.Line)
+                .ToDictionary(group => group.Key, group => group.OrderByDescending(symbol => symbol.StartColumn ?? 0).ToArray())
+            : null;
 
     private static void EmitPhpLinePreambleReferences(
         string originalLine,
