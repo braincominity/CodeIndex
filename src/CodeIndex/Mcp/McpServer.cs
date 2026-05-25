@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -83,6 +84,8 @@ public partial class McpServer : IDisposable
     // ツール呼び出し監査ログ (#1562)。`--audit-log` 未指定時は null。AuditLogSink のライフサイクル
     // (ファイルハンドル / rotation) は ProgramRunner 側で所有する。
     private readonly AuditLogSink? _auditLog;
+    private readonly TimeSpan _requestTimeout;
+    private readonly SemaphoreSlim _textWriterGate = new(1, 1);
     // `initialize.clientInfo` echoed into every audit record so the trail can answer
     // "which client issued this call?" without a second log source. Updated on every
     // `initialize` so a single-session reconnection picks up the new caller identity.
@@ -149,6 +152,8 @@ public partial class McpServer : IDisposable
     // tool calls wedge the SQLite reader lock or balloon memory (#1567).
     // 同時 in-flight ツール呼び出し数の既定上限 (#1567)。
     internal const int DefaultMaxConcurrency = 8;
+    internal static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(60);
+    internal static readonly TimeSpan DefaultEofDrainTimeout = TimeSpan.FromSeconds(5);
 
     public McpServer(string dbPath, string version, bool dbPathExplicit = false)
         : this(dbPath, version, dbPathExplicit, null, null, null, null, DefaultMaxConcurrency)
@@ -231,6 +236,7 @@ public partial class McpServer : IDisposable
         RateLimiter = new RateLimiter(RateLimiterOptions.FromEnvironment());
         _concurrencyGate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
         MaxConcurrency = maxConcurrency;
+        _requestTimeout = DefaultRequestTimeout;
     }
 
     /// <summary>
@@ -271,6 +277,7 @@ public partial class McpServer : IDisposable
     internal string CurrentSessionId => _sessionId;
 
     internal Action<JsonNode?>? RequestRegisteredForTests { get; set; }
+    internal Func<CancellationToken, Task>? RequestDelayForTests { get; set; }
 
     /// <summary>
     /// Cap configured for concurrent in-flight tool calls (#1567). Surfaced for tests so
@@ -278,6 +285,14 @@ public partial class McpServer : IDisposable
     /// 現在設定されている in-flight ツール呼び出し上限 (#1567)。テスト向けに公開。
     /// </summary>
     internal int MaxConcurrency { get; }
+
+    internal TimeSpan RequestTimeout
+    {
+        get => _requestTimeout;
+        init => _requestTimeout = value <= TimeSpan.Zero
+            ? throw new ArgumentOutOfRangeException(nameof(value), value, "MCP request timeout must be greater than zero.")
+            : value;
+    }
 
     /// <summary>
     /// Run the MCP server loop on the default stdio transport. Kept as a thin wrapper around
@@ -992,14 +1007,20 @@ public partial class McpServer : IDisposable
         RequestRegisteredForTests?.Invoke(id);
 
         var previousToken = _currentRequestToken.Value;
+        var stopwatch = Stopwatch.StartNew();
         try
         {
             _currentRequestToken.Value = requestCts.Token;
+            requestCts.CancelAfter(_requestTimeout);
             requestCts.Token.ThrowIfCancellationRequested();
+            if (RequestDelayForTests is { } delay)
+                await delay(requestCts.Token).ConfigureAwait(false);
             return await action().ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (requestCts.IsCancellationRequested)
         {
+            if (!previousToken.IsCancellationRequested && !_shutdownCts.IsCancellationRequested && stopwatch.Elapsed >= _requestTimeout)
+                return CreateRequestTimeoutResponse(id, stopwatch.Elapsed);
             return CreateCancelledResponse(id);
         }
         finally
@@ -1008,6 +1029,17 @@ public partial class McpServer : IDisposable
             _activeRequests.TryRemove(requestKey, out _);
         }
     }
+
+    private static JsonObject CreateRequestTimeoutResponse(JsonNode? id, TimeSpan elapsed)
+        => CreateErrorResponse(hasId: true, id: id, code: -32603, message: "Request timed out",
+            category: McpErrorEnvelope.CategoryInternalError,
+            suggestion: "Retry with a narrower query, refresh the index if it is degraded, or increase the MCP request timeout before retrying.",
+            retrySafe: true,
+            extraData: new JsonObject
+            {
+                ["reason"] = "timeout",
+                ["elapsed_ms"] = (long)Math.Ceiling(elapsed.TotalMilliseconds),
+            });
 
     private void TryCancelRequest(JsonNode? cancelParams)
     {
