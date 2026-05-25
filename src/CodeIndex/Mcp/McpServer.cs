@@ -61,7 +61,7 @@ public partial class McpServer : IDisposable
     private readonly AsyncLocal<CancellationToken> _currentRequestToken = new();
     private readonly AsyncLocal<Action<string>?> _currentOutOfBandFrameWriter = new();
     private readonly AsyncLocal<List<Action>?> _deferredFrameLogs = new();
-    private bool _running = true;
+    private volatile bool _running = true;
     // Per-session DbContext reused across MCP tool calls. Holding the connection open
     // avoids reopening SQLite, reapplying pragmas, and re-registering every SQL function
     // on each invocation (issue #1494).
