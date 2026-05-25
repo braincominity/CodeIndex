@@ -2324,6 +2324,17 @@ freshness が曖昧になった場合は、stale paths を purge できるよう
 
 ## インストール
 
+runtime の管理方法とネットワーク条件に合わせて install channel を選んでください。
+
+| Channel | 向いている用途 | 前提条件 | 更新方法 |
+|---|---|---|---|
+| `install.sh` | self-contained install、CI、container、managed .NET が無い ARM64 host | shell tools と release asset へ到達できるネットワーク | installer を再実行。必要なら `vX.Y.Z` を指定 |
+| NuGet global tool | 既に .NET global tool を使う workstation | .NET 8 SDK/runtime | `dotnet tool update -g cdidx` |
+| source build | contributor と custom local build | .NET 8 SDK | source を pull して rebuild |
+
+完全な比較、package maintainer guidance、winget / apt / rpm / Snap /
+Flatpak などの予定チャネルは [DISTRIBUTION.md](DISTRIBUTION.md) を参照してください。
+
 ### 方法A: ワンライナーインストール（.NET 不要）
 
 コンテナ、CI、Linux/macOS 環境で .NET SDK なしで使えます。
