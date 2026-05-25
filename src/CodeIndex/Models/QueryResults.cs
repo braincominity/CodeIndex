@@ -786,6 +786,9 @@ public class RepoEntrypointResult
     public string Name { get; set; } = string.Empty;
     public int Line { get; set; }
     public int Score { get; set; }
+    public string MatchType { get; set; } = string.Empty;
+    public double Confidence { get; set; }
+    public int HintRank { get; set; }
 }
 
 public class SymbolAnalysisResult

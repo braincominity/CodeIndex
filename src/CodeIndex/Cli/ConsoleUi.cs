@@ -77,7 +77,7 @@ public static class ConsoleUi
         ("files", "cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]"),
         ("find", "cdidx find <query> --path <glob> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]"),
         ("excerpt", "cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--verbose]"),
-        ("map", "cdidx map [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes]"),
+        ("map", "cdidx map [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes] [--min-entrypoint-confidence <0.0..1.0>]"),
         ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]"),
         ("outline", "cdidx outline <path> [--db <path>] [--json] [--verbose]"),
         ("status", "cdidx status [--db <path>] [--json] [--verbose] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--stale-after <duration>] [--explain <field>] [--log-path] [--config] [--check-updates]"),
@@ -753,6 +753,7 @@ public static class ConsoleUi
         Console.WriteLine("  --since <datetime>         Filter to files modified since this timestamp (ISO 8601)");
         Console.WriteLine("  --no-dedup                 search only: return every raw overlapping chunk hit (debug/density)");
         Console.WriteLine("  --bytes                    Show raw byte counts in human output for files/map instead of binary units; JSON always keeps raw integer bytes");
+        Console.WriteLine("  --min-entrypoint-confidence <n>  map only: omit entrypoint candidates below this 0.0..1.0 confidence");
         WriteHelpLine("  --max-hops <n>             Max BFS hops for impact analysis, inclusive (default: 5; --max-hops 2 returns callers at hop 1 and 2; --max-hops 0 resolves the symbol without traversing callers)");
         Console.WriteLine("  --depth <n>                Deprecated alias for --max-hops");
         Console.WriteLine("  --reverse                  Reverse direction for deps (show dependents)");
