@@ -2377,6 +2377,36 @@ RUN export CDIDX_INSTALL_DIR=/usr/local/bin \
     && curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 ```
 
+#### 隔離ネットワークと proxy
+
+企業 proxy、egress allowlist、GitHub mirror が関係する環境では、install 前に
+`--doctor` で経路を確認してください。
+
+```bash
+bash ./install.sh --doctor
+HTTPS_PROXY=http://proxy.example:8080 bash ./install.sh --doctor v1.5.0
+```
+
+installer を mirror に向ける場合は、release host と API host の両方を設定します。
+
+```bash
+export CDIDX_GITHUB_BASE_URL=https://github.example.internal
+export CDIDX_GITHUB_API_BASE_URL=https://github.example.internal/api/v3
+curl -fsSL "$CDIDX_GITHUB_BASE_URL/Widthdom/CodeIndex/raw/main/install.sh" | bash
+```
+
+local mirror self-test は、実リリース資産に触れずに mirror 経路を検証します。
+選択した install directory に mock `cdidx` を配置するため、明示的に
+overwrite guard を渡す場合を除き、隔離ディレクトリを使ってください。
+
+```bash
+export CDIDX_INSTALL_DIR="$(mktemp -d)"
+bash ./install.sh --self-test-local-mirror
+```
+
+既定の local self-test port が埋まっている場合は
+`CDIDX_LOCAL_MIRROR_PORT=18766` を設定してください。
+
 ### 方法B: NuGet グローバルツール
 
 [.NET 8.x SDK](https://dotnet.microsoft.com/download/dotnet/8.0) が必要です。
