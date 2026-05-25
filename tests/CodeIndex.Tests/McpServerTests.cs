@@ -8446,7 +8446,7 @@ public class McpServerTests : IDisposable
         {
             RequestTimeout = TimeSpan.FromMilliseconds(20),
         };
-        server.RequestDelayForTests = token => Task.Delay(TimeSpan.FromSeconds(5), token);
+        server.RequestDelayForTests = _ => Task.Delay(TimeSpan.FromSeconds(5));
 
         var responseText = await server.ProcessFrameAsync(
             """{"jsonrpc":"2.0","id":123,"method":"tools/call","params":{"name":"status"}}""");

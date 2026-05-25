@@ -1049,7 +1049,16 @@ public partial class McpServer : IDisposable
             requestCts.Token.ThrowIfCancellationRequested();
             if (RequestDelayForTests is { } delay)
                 await delay(requestCts.Token).ConfigureAwait(false);
-            return await action().ConfigureAwait(false);
+            var actionTask = action();
+            var completed = await Task.WhenAny(actionTask, Task.Delay(_requestTimeout)).ConfigureAwait(false);
+            if (completed != actionTask)
+            {
+                try { requestCts.Cancel(); }
+                catch (ObjectDisposedException) { /* completed while timeout cancellation was being delivered. */ }
+                return CreateRequestTimeoutResponse(id, stopwatch.Elapsed);
+            }
+
+            return await actionTask.ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (requestCts.IsCancellationRequested)
         {
