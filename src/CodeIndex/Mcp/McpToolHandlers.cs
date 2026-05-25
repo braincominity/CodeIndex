@@ -169,6 +169,19 @@ public partial class McpServer
     /// </summary>
     private static int ClampLimit(int limit) => Math.Clamp(limit, 1, MaxLimit);
 
+    private static bool AddLimitMetadata<T>(JsonObject payload, List<T> results, int limit, int offset)
+    {
+        var truncated = results.Count > limit;
+        if (truncated)
+            results.RemoveRange(limit, results.Count - limit);
+
+        payload["offset"] = offset;
+        payload["count"] = results.Count;
+        payload["truncated"] = truncated;
+        payload["more_available"] = truncated;
+        return truncated;
+    }
+
     /// <summary>
     /// Return true when the requested reference kind is NOT a call-graph kind (i.e. metadata
     /// `attribute` / `annotation`, compile-time `type_reference`, or structural `import`) —
@@ -573,6 +586,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, QueryLimits.FormatQueryTooLongError());
 
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        const int offset = 0;
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var snippetLines = SearchSnippetFormatter.ClampSnippetLines(args?["snippetLines"]?.GetValue<int>() ?? SearchSnippetFormatter.DefaultSnippetLines);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
@@ -599,7 +613,7 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.Search(query, limit, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix);
+            var results = reader.Search(query, limit + 1, lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix);
             if (results.Count == 0)
             {
                 var payload = new JsonObject
@@ -610,7 +624,10 @@ public partial class McpServer
                     ["maxLineWidth"] = maxLineWidth,
                     ["path"] = PathEcho(pathPatterns),
                     ["excludeTests"] = excludeTests,
+                    ["offset"] = offset,
                     ["count"] = 0,
+                    ["truncated"] = false,
+                    ["more_available"] = false,
                     ["results"] = new JsonArray()
                 };
                 AddFreshnessHint(payload, reader);
@@ -625,9 +642,10 @@ public partial class McpServer
                 ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
-                ["count"] = results.Count,
                 ["results"] = ToJsonArray(results, result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines, exact, maxLineWidth))
             };
+            AddLimitMetadata(structured, results, limit, offset);
+            structured["results"] = ToJsonArray(results, result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines, exact, maxLineWidth));
             // Include top file paths in summary for quick AI orientation
             // AIが素早く位置把握できるよう、サマリにトップファイルパスを含める
             var topPaths = results.Select(r => r.Path).Distinct().Take(3);
@@ -815,6 +833,7 @@ public partial class McpServer
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        const int offset = 0;
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var pathPatterns = ReadScopedPathList(args);
@@ -825,7 +844,7 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.SearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
+            var results = reader.SearchReferences(query, limit + 1, lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
@@ -850,9 +869,10 @@ public partial class McpServer
                 ["graphLanguage"] = graphSupport.GraphLanguage,
                 ["graphSupported"] = graphSupport.GraphSupported,
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
-                ["count"] = results.Count,
                 ["results"] = ToJsonArray(results)
             };
+            AddLimitMetadata(payload, results, limit, offset);
+            payload["results"] = ToJsonArray(results);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
@@ -881,6 +901,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, BuildNonCallGraphKindRejectionMessage("callers", kind!));
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        const int offset = 0;
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -891,7 +912,7 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
+            var results = reader.GetCallers(query, limit + 1, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
@@ -916,9 +937,10 @@ public partial class McpServer
                 ["graphLanguage"] = graphSupport.GraphLanguage,
                 ["graphSupported"] = graphSupport.GraphSupported,
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
-                ["count"] = results.Count,
                 ["results"] = ToJsonArray(results)
             };
+            AddLimitMetadata(payload, results, limit, offset);
+            payload["results"] = ToJsonArray(results);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
@@ -947,6 +969,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, BuildNonCallGraphKindRejectionMessage("callees", kind!));
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        const int offset = 0;
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -957,7 +980,7 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
+            var results = reader.GetCallees(query, limit + 1, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rankMode: rankMode);
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
@@ -982,9 +1005,10 @@ public partial class McpServer
                 ["graphLanguage"] = graphSupport.GraphLanguage,
                 ["graphSupported"] = graphSupport.GraphSupported,
                 ["graphSupportReason"] = graphSupport.GraphSupportReason,
-                ["count"] = results.Count,
                 ["results"] = ToJsonArray(results)
             };
+            AddLimitMetadata(payload, results, limit, offset);
+            payload["results"] = ToJsonArray(results);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);

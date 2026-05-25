@@ -1686,6 +1686,8 @@ cdidx includes a built-in **MCP (Model Context Protocol) server**. MCP is a stan
 
 Tool results include structured JSON in `structuredContent` plus a short text summary in `content`, so AI tools can parse typed data without scraping large text blocks.
 
+Capped MCP result tools report `truncated` and `more_available` in `structuredContent` when more rows exist than the requested `limit`, so clients can avoid treating a capped page as exhaustive.
+
 ```mermaid
 flowchart LR
     tools["Claude Code<br/>Cursor<br/>Windsurf"]
@@ -3655,6 +3657,8 @@ ref が分からない場合は `cdidx ./myproject --json` を使い、`cdidx st
 cdidxには**MCP（Model Context Protocol）サーバー**が組み込まれています。MCPは、AIコーディングツールが外部プログラムと通信するための標準プロトコルです。`cdidx mcp` を実行すると、cdidxがstdin/stdoutで待機し、AIツールからの検索リクエストをJSONで受け取り、構築済みインデックスから即座に結果を返します。
 
 ツール結果は `structuredContent` に構造化JSON、`content` に短い要約テキストを返すため、AIツールは巨大なテキストをパースせずに型付きデータを扱えます。
+
+上限付きの MCP result tool は、要求した `limit` より多くの行がある場合に `structuredContent` へ `truncated` と `more_available` を返します。これにより、クライアントは上限で切られたページを網羅的な結果として扱わずに済みます。
 
 ```mermaid
 flowchart LR

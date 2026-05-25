@@ -117,6 +117,37 @@ public class McpServerTests : IDisposable
         writer.MarkCSharpSymbolNameContractReady();
     }
 
+    [Fact]
+    public void ToolsCall_Callers_LimitHitReportsTruncated()
+    {
+        InsertIndexedFile(
+            "src/paged-callers.cs",
+            "csharp",
+            """
+            class PagedCallers {
+                void Alpha() { Target(); }
+                void Beta() { Target(); }
+                void Gamma() { Target(); }
+                void Target() { }
+            }
+            """);
+
+        var firstRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Target","lang":"csharp","exactName":true,"path":"src/paged-callers.cs","limit":2}}}""")!;
+        var firstResponse = _server.HandleMessage(firstRequest)!;
+        var first = firstResponse["result"]!["structuredContent"]!;
+
+        Assert.Equal(2, first["count"]!.GetValue<int>());
+        Assert.True(first["truncated"]!.GetValue<bool>());
+        Assert.True(first["more_available"]!.GetValue<bool>());
+        Assert.Null(first["next_offset"]);
+        var firstNames = first["results"]!.AsArray()
+            .Select(row => row!["callerName"]!.GetValue<string>())
+            .ToArray();
+
+        Assert.Equal(firstNames.Distinct().Count(), firstNames.Length);
+    }
+
     // --- Protocol tests / プロトコルテスト ---
 
     [Fact]
