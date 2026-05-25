@@ -224,75 +224,19 @@ public partial class DbReader
     // バケット順位は LEFT JOIN 結果の NULL 判定だけで決まり、`f.id` ごとの再評価は不要。
     internal const string ExactSymbolMatchOrder = @"
         CASE
-            WHEN EXISTS (
-                SELECT 1
-                FROM symbols sx
-                WHERE sx.file_id = f.id
-                  AND sx.name = @rankingQuery COLLATE NOCASE
-                  AND COALESCE(sx.start_line, sx.line) <= c.end_line
-                  AND COALESCE(sx.end_line, sx.line) >= c.start_line
-            ) THEN 0
+            WHEN exact_symbol_chunk_match.chunk_id IS NOT NULL THEN 0
             WHEN exact_symbol_match.file_id IS NOT NULL THEN 1
             ELSE 2
         END";
     internal const string PrefixSymbolMatchOrder = @"
         CASE
-            WHEN EXISTS (
-                SELECT 1
-                FROM symbols sx
-                WHERE sx.file_id = f.id
-                  AND sx.name LIKE @rankingQueryPrefix ESCAPE '\' COLLATE NOCASE
-                  AND COALESCE(sx.start_line, sx.line) <= c.end_line
-                  AND COALESCE(sx.end_line, sx.line) >= c.start_line
-            ) THEN 0
+            WHEN prefix_symbol_chunk_match.chunk_id IS NOT NULL THEN 0
             WHEN prefix_symbol_match.file_id IS NOT NULL THEN 1
             ELSE 2
         END";
-    internal const string ChunkSymbolKindOrder = @"
-        COALESCE((
-            SELECT MIN(
-                CASE lower(COALESCE(sx.kind, ''))
-                    WHEN 'class' THEN 0
-                    WHEN 'interface' THEN 0
-                    WHEN 'struct' THEN 0
-                    WHEN 'enum' THEN 0
-                    WHEN 'function' THEN 1
-                    WHEN 'method' THEN 1
-                    WHEN 'test.method' THEN 1
-                    WHEN 'property' THEN 2
-                    WHEN 'field' THEN 2
-                    WHEN 'import' THEN 4
-                    WHEN 'reference' THEN 4
-                    ELSE 3
-                END)
-            FROM symbols sx
-            WHERE sx.file_id = f.id
-              AND COALESCE(sx.start_line, sx.line) <= c.end_line
-              AND COALESCE(sx.end_line, sx.line) >= c.start_line
-        ), 5)";
-    internal const string ChunkStructuredFieldOrder = @"
-        CASE
-            WHEN EXISTS (
-                SELECT 1
-                FROM symbols sx
-                WHERE sx.file_id = f.id
-                  AND COALESCE(sx.start_line, sx.line) <= c.end_line
-                  AND COALESCE(sx.end_line, sx.line) >= c.start_line
-                  AND (
-                      instr(lower(COALESCE(sx.name, '')), lower(@rankingQuery)) > 0 OR
-                      instr(lower(COALESCE(sx.signature, '')), lower(@rankingQuery)) > 0
-                  )
-            ) THEN 0
-            ELSE 1
-        END";
-    internal const string ChunkSymbolDepthOrder = @"
-        COALESCE((
-            SELECT MIN(sql_segment_count(COALESCE(NULLIF(sx.container_qualified_name, ''), NULLIF(sx.container_name, ''), sx.name)))
-            FROM symbols sx
-            WHERE sx.file_id = f.id
-              AND COALESCE(sx.start_line, sx.line) <= c.end_line
-              AND COALESCE(sx.end_line, sx.line) >= c.start_line
-        ), 999)";
+    internal const string ChunkSymbolKindOrder = "COALESCE(chunk_symbol_rank.kind_order, 5)";
+    internal const string ChunkStructuredFieldOrder = "COALESCE(chunk_symbol_rank.structured_field_order, 1)";
+    internal const string ChunkSymbolDepthOrder = "COALESCE(chunk_symbol_rank.depth_order, 999)";
 
     // Derived-table joins that supply the per-file match and visibility buckets referenced by
     // search ranking. GROUP BY keeps the symbol predicates out of the outer per-hit scan while
@@ -323,7 +267,55 @@ public partial class DbReader
             FROM symbols s_prefix
             WHERE name LIKE @rankingQueryPrefix ESCAPE '\' COLLATE NOCASE
             GROUP BY file_id
-        ) AS prefix_symbol_match ON prefix_symbol_match.file_id = f.id";
+        ) AS prefix_symbol_match ON prefix_symbol_match.file_id = f.id
+        LEFT JOIN (
+            SELECT c_exact.id AS chunk_id
+            FROM chunks c_exact
+            JOIN symbols s_exact_chunk ON s_exact_chunk.file_id = c_exact.file_id
+                AND COALESCE(s_exact_chunk.start_line, s_exact_chunk.line) <= c_exact.end_line
+                AND COALESCE(s_exact_chunk.end_line, s_exact_chunk.line) >= c_exact.start_line
+            WHERE s_exact_chunk.name = @rankingQuery COLLATE NOCASE
+            GROUP BY c_exact.id
+        ) AS exact_symbol_chunk_match ON exact_symbol_chunk_match.chunk_id = c.id
+        LEFT JOIN (
+            SELECT c_prefix.id AS chunk_id
+            FROM chunks c_prefix
+            JOIN symbols s_prefix_chunk ON s_prefix_chunk.file_id = c_prefix.file_id
+                AND COALESCE(s_prefix_chunk.start_line, s_prefix_chunk.line) <= c_prefix.end_line
+                AND COALESCE(s_prefix_chunk.end_line, s_prefix_chunk.line) >= c_prefix.start_line
+            WHERE s_prefix_chunk.name LIKE @rankingQueryPrefix ESCAPE '\' COLLATE NOCASE
+            GROUP BY c_prefix.id
+        ) AS prefix_symbol_chunk_match ON prefix_symbol_chunk_match.chunk_id = c.id
+        LEFT JOIN (
+            SELECT
+                c_rank.id AS chunk_id,
+                MIN(CASE
+                    WHEN instr(lower(COALESCE(s_rank.name, '')), lower(@rankingQuery)) > 0 OR
+                         instr(lower(COALESCE(s_rank.signature, '')), lower(@rankingQuery)) > 0
+                    THEN 0
+                    ELSE 1
+                END) AS structured_field_order,
+                MIN(CASE lower(COALESCE(s_rank.kind, ''))
+                    WHEN 'class' THEN 0
+                    WHEN 'interface' THEN 0
+                    WHEN 'struct' THEN 0
+                    WHEN 'enum' THEN 0
+                    WHEN 'function' THEN 1
+                    WHEN 'method' THEN 1
+                    WHEN 'test.method' THEN 1
+                    WHEN 'property' THEN 2
+                    WHEN 'field' THEN 2
+                    WHEN 'import' THEN 4
+                    WHEN 'reference' THEN 4
+                    ELSE 3
+                END) AS kind_order,
+                MIN(sql_segment_count(COALESCE(NULLIF(s_rank.container_qualified_name, ''), NULLIF(s_rank.container_name, ''), s_rank.name))) AS depth_order
+            FROM chunks c_rank
+            JOIN symbols s_rank ON s_rank.file_id = c_rank.file_id
+                AND COALESCE(s_rank.start_line, s_rank.line) <= c_rank.end_line
+                AND COALESCE(s_rank.end_line, s_rank.line) >= c_rank.start_line
+            GROUP BY c_rank.id
+        ) AS chunk_symbol_rank ON chunk_symbol_rank.chunk_id = c.id";
         }
     }
     private const string PathTextMatchOrder = @"
