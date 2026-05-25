@@ -16,39 +16,6 @@ public static partial class ReferenceExtractor
     // lookup tables are initialized once and then read concurrently; language-specific state
     // must be created per extraction call (for example via CreateState helpers) rather than
     // stored in mutable static fields.
-    internal readonly record struct CSharpMultiLineTypePatternState(
-        bool WaitingForHead,
-        string? PendingTypeExpression,
-        int PendingTypeIndex,
-        int PendingTypeLineNumber,
-        string? PendingContext,
-        SymbolRecord? PendingContainer);
-    internal sealed class CSharpWhereConstraintState
-    {
-        public bool Active { get; set; }
-        public HashSet<string> HeaderGenericParameterNames { get; } = new(StringComparer.Ordinal);
-        public HashSet<string> IgnoredSegments { get; } = new(StringComparer.Ordinal);
-        public bool CollectingHeaderGenericParameters { get; set; }
-        public int HeaderGenericParameterDepth { get; set; }
-        public string HeaderGenericParameterText { get; set; } = string.Empty;
-    }
-    private static readonly string[] BuiltInLanguages =
-    [
-        "python", "javascript", "typescript", "csharp", "go", "rust",
-        "java", "kotlin", "ruby", "perl", "c", "cpp", "php", "swift",
-        "dart", "scala", "elixir", "lua", "commonlisp", "racket", "vb", "fsharp", "sql", "cobol", "batch",
-        "assembly",
-        "r", "powershell", "shell", "haskell",
-        "gradle", "terraform", "protobuf", "dockerfile", "makefile",
-        "zig", "css", "fortran", "pascal", "objc", "smalltalk"
-    ];
-    private static readonly IReadOnlyDictionary<string, IReferenceExtractor> Extractors =
-        BuiltInLanguages.ToDictionary(
-            static language => language,
-            static language => (IReferenceExtractor)new BuiltInReferenceExtractor(language),
-            StringComparer.Ordinal);
-
-
     private static readonly HashSet<string> SharedIgnoredCallNames = new(StringComparer.Ordinal)
     {
         // Control flow / 制御フロー
@@ -1195,9 +1162,6 @@ public static partial class ReferenceExtractor
                 return phpLineContainer;
             }
 
-            SymbolRecord? GetPhpDocblockContainer()
-                => phpInDocblock ? phpDocblockContainer : GetPhpLineContainer();
-
             if (language == "csharp"
                 && !(csharpLinesInsideMultilineStringContent?[i] ?? false)
                 && TryGetCSharpXmlDocCommentSpan(
@@ -1314,230 +1278,18 @@ public static partial class ReferenceExtractor
                 }
             }
 
-            if (language == "php" && originalLine.Contains("#[", StringComparison.Ordinal))
+            if (language == "php")
             {
-                var attributeContext = originalLine.Trim();
-                if (attributeContext.Length > 0)
-                {
-                    PhpReferenceExtractor.EmitAttributeReferences(
-                        originalLine,
-                        references,
-                        seen,
-                        fileId,
-                        attributeContext,
-                        lineNumber,
-                        GetPhpLineContainer());
-                }
-            }
-
-            if (language == "php"
-                && originalLine.IndexOf("/**", StringComparison.Ordinal) >= 0)
-            {
-                phpInDocblock = true;
-                phpDocblockContainer = GetPhpLineContainer();
-                phpDocblockPropertyNames = new HashSet<string>(StringComparer.Ordinal);
-            }
-
-            if (language == "php" && originalLine.Contains("param", StringComparison.OrdinalIgnoreCase))
-            {
-                var docblockContext = originalLine.Trim();
-                if (docblockContext.Length > 0)
-                {
-                    PhpReferenceExtractor.EmitDocblockParamTypeReferences(
-                        originalLine,
-                        references,
-                        seen,
-                        fileId,
-                        docblockContext,
-                        lineNumber,
-                        GetPhpDocblockContainer());
-                }
-            }
-
-            if (language == "php" && originalLine.Contains("return", StringComparison.OrdinalIgnoreCase))
-            {
-                var docblockContext = originalLine.Trim();
-                if (docblockContext.Length > 0)
-                {
-                    PhpReferenceExtractor.EmitDocblockReturnTypeReferences(
-                        originalLine,
-                        references,
-                        seen,
-                        fileId,
-                        docblockContext,
-                        lineNumber,
-                        GetPhpDocblockContainer());
-                }
-            }
-
-            if (language == "php" && originalLine.Contains("var", StringComparison.OrdinalIgnoreCase))
-            {
-                var docblockContext = originalLine.Trim();
-                if (docblockContext.Length > 0)
-                {
-                    PhpReferenceExtractor.EmitDocblockVarTypeReferences(
-                        originalLine,
-                        references,
-                        seen,
-                        fileId,
-                        docblockContext,
-                        lineNumber,
-                        GetPhpDocblockContainer());
-                }
-            }
-
-            if (language == "php" && originalLine.Contains("@throws", StringComparison.OrdinalIgnoreCase))
-            {
-                var docblockContext = originalLine.Trim();
-                if (docblockContext.Length > 0)
-                {
-                    PhpReferenceExtractor.EmitDocblockThrowsTypeReferences(
-                        originalLine,
-                        references,
-                        seen,
-                        fileId,
-                        docblockContext,
-                        lineNumber,
-                        GetPhpDocblockContainer());
-                }
-            }
-
-            if (language == "php" && originalLine.Contains("extends", StringComparison.OrdinalIgnoreCase))
-            {
-                var docblockContext = originalLine.Trim();
-                if (docblockContext.Length > 0)
-                {
-                    PhpReferenceExtractor.EmitDocblockExtendsTypeReferences(
-                        originalLine,
-                        references,
-                        seen,
-                        fileId,
-                        docblockContext,
-                        lineNumber,
-                        GetPhpDocblockContainer());
-                }
-            }
-
-            if (language == "php" && originalLine.Contains("implements", StringComparison.OrdinalIgnoreCase))
-            {
-                var docblockContext = originalLine.Trim();
-                if (docblockContext.Length > 0)
-                {
-                    PhpReferenceExtractor.EmitDocblockImplementsTypeReferences(
-                        originalLine,
-                        references,
-                        seen,
-                        fileId,
-                        docblockContext,
-                        lineNumber,
-                        GetPhpDocblockContainer());
-                }
-            }
-
-            if (language == "php" && originalLine.Contains("@mixin", StringComparison.OrdinalIgnoreCase))
-            {
-                var docblockContext = originalLine.Trim();
-                if (docblockContext.Length > 0)
-                {
-                    PhpReferenceExtractor.EmitDocblockMixinTypeReferences(
-                        originalLine,
-                        references,
-                        seen,
-                        fileId,
-                        docblockContext,
-                        lineNumber,
-                        GetPhpDocblockContainer());
-                }
-            }
-
-            if (language == "php" && originalLine.Contains("property", StringComparison.OrdinalIgnoreCase))
-            {
-                var docblockContext = originalLine.Trim();
-                if (docblockContext.Length > 0)
-                {
-                    PhpReferenceExtractor.EmitDocblockPropertyTypeReferences(
-                        originalLine,
-                        references,
-                        seen,
-                        fileId,
-                        docblockContext,
-                        lineNumber,
-                        GetPhpDocblockContainer(),
-                        phpDocblockPropertyNames);
-                }
-            }
-
-            if (language == "php" && originalLine.Contains("@method", StringComparison.OrdinalIgnoreCase))
-            {
-                var docblockContext = originalLine.Trim();
-                if (docblockContext.Length > 0)
-                {
-                    PhpReferenceExtractor.EmitDocblockMethodReturnTypeReferences(
-                        originalLine,
-                        references,
-                        seen,
-                        fileId,
-                        docblockContext,
-                        lineNumber,
-                        GetPhpDocblockContainer());
-                    PhpReferenceExtractor.EmitDocblockMethodParameterTypeReferences(
-                        originalLine,
-                        references,
-                        seen,
-                        fileId,
-                        docblockContext,
-                        lineNumber,
-                        GetPhpDocblockContainer());
-                }
-            }
-
-            if (language == "php" && originalLine.Contains("@template", StringComparison.OrdinalIgnoreCase))
-            {
-                var docblockContext = originalLine.Trim();
-                if (docblockContext.Length > 0)
-                {
-                    PhpReferenceExtractor.EmitDocblockTemplateBoundTypeReferences(
-                        originalLine,
-                        references,
-                        seen,
-                        fileId,
-                        docblockContext,
-                        lineNumber,
-                        GetPhpDocblockContainer());
-                }
-            }
-
-            if (language == "php" && originalLine.Contains("type", StringComparison.OrdinalIgnoreCase))
-            {
-                var docblockContext = originalLine.Trim();
-                if (docblockContext.Length > 0)
-                {
-                    PhpReferenceExtractor.EmitDocblockTypeAliasTargetReferences(
-                        originalLine,
-                        references,
-                        seen,
-                        fileId,
-                        docblockContext,
-                        lineNumber,
-                        GetPhpDocblockContainer());
-                    PhpReferenceExtractor.EmitDocblockImportTypeSourceReferences(
-                        originalLine,
-                        references,
-                        seen,
-                        fileId,
-                        docblockContext,
-                        lineNumber,
-                        GetPhpDocblockContainer());
-                }
-            }
-
-            if (language == "php"
-                && phpInDocblock
-                && originalLine.IndexOf("*/", StringComparison.Ordinal) >= 0)
-            {
-                phpInDocblock = false;
-                phpDocblockContainer = null;
-                phpDocblockPropertyNames = null;
+                EmitPhpLinePreambleReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    lineNumber,
+                    GetPhpLineContainer,
+                    ref phpInDocblock,
+                    ref phpDocblockContainer,
+                    ref phpDocblockPropertyNames);
             }
 
             if (string.IsNullOrWhiteSpace(preparedLine))
@@ -3416,6 +3168,207 @@ public static partial class ReferenceExtractor
         MarkMutualRecursionReferences(references);
         return references;
     }
+
+    private static void EmitPhpLinePreambleReferences(
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        int lineNumber,
+        Func<SymbolRecord?> getLineContainer,
+        ref bool inDocblock,
+        ref SymbolRecord? docblockContainer,
+        ref HashSet<string>? docblockPropertyNames)
+    {
+        if (originalLine.Contains("#[", StringComparison.Ordinal))
+        {
+            var attributeContext = originalLine.Trim();
+            if (attributeContext.Length > 0)
+            {
+                PhpReferenceExtractor.EmitAttributeReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    attributeContext,
+                    lineNumber,
+                    getLineContainer());
+            }
+        }
+
+        if (originalLine.IndexOf("/**", StringComparison.Ordinal) >= 0)
+        {
+            inDocblock = true;
+            docblockContainer = getLineContainer();
+            docblockPropertyNames = new HashSet<string>(StringComparer.Ordinal);
+        }
+
+        var docblockContext = originalLine.Trim();
+        if (docblockContext.Length > 0)
+        {
+            if (originalLine.Contains("param", StringComparison.OrdinalIgnoreCase))
+            {
+                PhpReferenceExtractor.EmitDocblockParamTypeReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    docblockContext,
+                    lineNumber,
+                    ResolvePhpDocblockContainer(inDocblock, docblockContainer, getLineContainer));
+            }
+
+            if (originalLine.Contains("return", StringComparison.OrdinalIgnoreCase))
+            {
+                PhpReferenceExtractor.EmitDocblockReturnTypeReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    docblockContext,
+                    lineNumber,
+                    ResolvePhpDocblockContainer(inDocblock, docblockContainer, getLineContainer));
+            }
+
+            if (originalLine.Contains("var", StringComparison.OrdinalIgnoreCase))
+            {
+                PhpReferenceExtractor.EmitDocblockVarTypeReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    docblockContext,
+                    lineNumber,
+                    ResolvePhpDocblockContainer(inDocblock, docblockContainer, getLineContainer));
+            }
+
+            if (originalLine.Contains("@throws", StringComparison.OrdinalIgnoreCase))
+            {
+                PhpReferenceExtractor.EmitDocblockThrowsTypeReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    docblockContext,
+                    lineNumber,
+                    ResolvePhpDocblockContainer(inDocblock, docblockContainer, getLineContainer));
+            }
+
+            if (originalLine.Contains("extends", StringComparison.OrdinalIgnoreCase))
+            {
+                PhpReferenceExtractor.EmitDocblockExtendsTypeReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    docblockContext,
+                    lineNumber,
+                    ResolvePhpDocblockContainer(inDocblock, docblockContainer, getLineContainer));
+            }
+
+            if (originalLine.Contains("implements", StringComparison.OrdinalIgnoreCase))
+            {
+                PhpReferenceExtractor.EmitDocblockImplementsTypeReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    docblockContext,
+                    lineNumber,
+                    ResolvePhpDocblockContainer(inDocblock, docblockContainer, getLineContainer));
+            }
+
+            if (originalLine.Contains("@mixin", StringComparison.OrdinalIgnoreCase))
+            {
+                PhpReferenceExtractor.EmitDocblockMixinTypeReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    docblockContext,
+                    lineNumber,
+                    ResolvePhpDocblockContainer(inDocblock, docblockContainer, getLineContainer));
+            }
+
+            if (originalLine.Contains("property", StringComparison.OrdinalIgnoreCase))
+            {
+                PhpReferenceExtractor.EmitDocblockPropertyTypeReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    docblockContext,
+                    lineNumber,
+                    ResolvePhpDocblockContainer(inDocblock, docblockContainer, getLineContainer),
+                    docblockPropertyNames);
+            }
+
+            if (originalLine.Contains("@method", StringComparison.OrdinalIgnoreCase))
+            {
+                PhpReferenceExtractor.EmitDocblockMethodReturnTypeReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    docblockContext,
+                    lineNumber,
+                    ResolvePhpDocblockContainer(inDocblock, docblockContainer, getLineContainer));
+                PhpReferenceExtractor.EmitDocblockMethodParameterTypeReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    docblockContext,
+                    lineNumber,
+                    ResolvePhpDocblockContainer(inDocblock, docblockContainer, getLineContainer));
+            }
+
+            if (originalLine.Contains("@template", StringComparison.OrdinalIgnoreCase))
+            {
+                PhpReferenceExtractor.EmitDocblockTemplateBoundTypeReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    docblockContext,
+                    lineNumber,
+                    ResolvePhpDocblockContainer(inDocblock, docblockContainer, getLineContainer));
+            }
+
+            if (originalLine.Contains("type", StringComparison.OrdinalIgnoreCase))
+            {
+                PhpReferenceExtractor.EmitDocblockTypeAliasTargetReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    docblockContext,
+                    lineNumber,
+                    ResolvePhpDocblockContainer(inDocblock, docblockContainer, getLineContainer));
+                PhpReferenceExtractor.EmitDocblockImportTypeSourceReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    docblockContext,
+                    lineNumber,
+                    ResolvePhpDocblockContainer(inDocblock, docblockContainer, getLineContainer));
+            }
+        }
+
+        if (inDocblock && originalLine.IndexOf("*/", StringComparison.Ordinal) >= 0)
+        {
+            inDocblock = false;
+            docblockContainer = null;
+            docblockPropertyNames = null;
+        }
+    }
+
+    private static SymbolRecord? ResolvePhpDocblockContainer(
+        bool inDocblock,
+        SymbolRecord? docblockContainer,
+        Func<SymbolRecord?> getLineContainer)
+        => inDocblock ? docblockContainer : getLineContainer();
 
     internal static void AddReference(
         List<ReferenceRecord> references,
