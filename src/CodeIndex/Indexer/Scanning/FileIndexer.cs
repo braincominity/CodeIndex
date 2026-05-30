@@ -79,6 +79,8 @@ public class FileIndexer
     private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp", "msbuild"];
     private const int ConflictMarkerScanLimitBytes = 50 * 1024;
     private static readonly string[] IgnoreFileNames = [".gitignore", ".cdidxignore"];
+    private const int MaxIgnorePatternLength = 512;
+    private static readonly TimeSpan IgnoreRegexMatchTimeout = TimeSpan.FromMilliseconds(100);
     // Extension-to-language mapping / 拡張子→言語名マッピング
     private static readonly Dictionary<string, string> LangMap = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -496,6 +498,12 @@ public class FileIndexer
             if (!TryTokenize(rawLine, out var tokens))
                 return false;
 
+            if (tokens.Count > MaxIgnorePatternLength)
+            {
+                errorMessage = $"Invalid ignore rule skipped: pattern exceeds {MaxIgnorePatternLength} characters";
+                return false;
+            }
+
             if (tokens[0] is { Value: '#', Escaped: false })
                 return false;
 
@@ -665,7 +673,10 @@ public class FileIndexer
             }
 
             builder.Append('$');
-            return new Regex(builder.ToString(), RegexOptions.CultureInvariant | RegexOptions.Compiled);
+            return new Regex(
+                builder.ToString(),
+                RegexOptions.CultureInvariant | RegexOptions.Compiled | RegexOptions.NonBacktracking,
+                IgnoreRegexMatchTimeout);
         }
 
         private static bool TryBuildCharacterClass(IReadOnlyList<PatternToken> pattern, ref int index, StringBuilder builder, bool ignoreCase)
