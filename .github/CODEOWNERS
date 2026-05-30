@@ -1,0 +1,5 @@
+# Release-critical paths require review from the repository owner.
+/.github/workflows/ @Widthdom
+/install.sh @Widthdom
+/src/CodeIndex/CodeIndex.csproj @Widthdom
+/nuget.config @Widthdom
