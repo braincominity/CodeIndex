@@ -68,7 +68,9 @@
   "version": null,
   "summary": "1 files, 3 symbols, 0 refs across 1 languages (csharp); index fresh, DEGRADED",
   "graph_table_available": false,
-  "issues_table_available": false,
+  "issues_table_available": true,
+  "file_issues_data_current": false,
+  "migration_in_progress": false,
   "hotspot_family_ready": false,
   "hotspot_family_degraded_reason": "cross-file hotspot family grouping is degraded (hotspot_family_support_not_indexed=csharp); Run \u0060cdidx index \u003CprojectPath\u003E\u0060 to rebuild and stamp authoritative hotspot families.",
   "csharp_symbol_name_ready": false,
@@ -77,6 +79,54 @@
   "sql_graph_contract_ready": true,
   "fold_ready": false,
   "fold_ready_reason": "missing_fold_backfill",
+  "degraded_reason": "Reference / caller / callee / unused counts are degraded to 0 because the symbol_references table is missing.",
+  "degraded_root_cause": "graph_table_available=false",
+  "recommended_action": "Run \u0060cdidx index \u003CprojectPath\u003E\u0060 to rebuild the graph-capable index.",
+  "alternative_action": "Run \u0060cdidx index \u003CprojectPath\u003E --rebuild\u0060 for a full rebuild.",
+  "readiness_degradations": [
+    {
+      "field": "graph_table_available",
+      "root_cause": "graph_table_available=false",
+      "degraded_reason": "Reference / caller / callee / unused counts are degraded to 0 because the symbol_references table is missing.",
+      "recommended_action": "Run \u0060cdidx index \u003CprojectPath\u003E\u0060 to rebuild the graph-capable index.",
+      "alternative_action": "Run \u0060cdidx index \u003CprojectPath\u003E --rebuild\u0060 for a full rebuild."
+    },
+    {
+      "field": "file_issues_data_current",
+      "root_cause": "file_issues_data_current=false",
+      "degraded_reason": "The file_issues table exists, but its data is not stamped current for this index generation.",
+      "recommended_action": "Run \u0060cdidx index \u003CprojectPath\u003E\u0060 to refresh file issue rows.",
+      "alternative_action": "Run \u0060cdidx index \u003CprojectPath\u003E --rebuild\u0060 for a full rebuild."
+    },
+    {
+      "field": "hotspot_family_ready",
+      "root_cause": "hotspot_family_ready=false",
+      "degraded_reason": "Cross-file hotspot grouping may be degraded for one or more languages.",
+      "recommended_action": "Run \u0060cdidx index \u003CprojectPath\u003E\u0060 to restamp authoritative hotspot families.",
+      "alternative_action": "Run \u0060cdidx index \u003CprojectPath\u003E --rebuild\u0060 for a full rebuild."
+    },
+    {
+      "field": "csharp_symbol_name_ready",
+      "root_cause": "csharp_symbol_name_ready=false",
+      "degraded_reason": "C# exact-name for operators / conversion operators / indexers is degraded.",
+      "recommended_action": "cdidx index <PROJECT_ROOT> --db <PROJECT_ROOT>/.cdidx/codeindex.db",
+      "alternative_action": "Run \u0060cdidx index \u003CprojectPath\u003E --rebuild\u0060 for a full rebuild."
+    },
+    {
+      "field": "csharp_metadata_target_ready",
+      "root_cause": "csharp_metadata_target_stamp_outdated",
+      "degraded_reason": "C# metadata attribute dependency edges are degraded because the metadata-target version stamp is missing or stale.",
+      "recommended_action": "Run \u0060cdidx index \u003CprojectPath\u003E\u0060 to restamp authoritative C# metadata targets.",
+      "alternative_action": "Run \u0060cdidx index \u003CprojectPath\u003E --rebuild\u0060 for a full rebuild."
+    },
+    {
+      "field": "fold_ready",
+      "root_cause": "missing_fold_backfill",
+      "degraded_reason": "--exact falls back to ASCII COLLATE NOCASE because legacy rows without \u0060name_folded\u0060 remain.",
+      "recommended_action": "cdidx backfill-fold --db <PROJECT_ROOT>/.cdidx/codeindex.db",
+      "alternative_action": "cdidx index <PROJECT_ROOT> --db <PROJECT_ROOT>/.cdidx/codeindex.db --rebuild"
+    }
+  ],
   "index_newer_than_reader": false,
   "db_pragma_settings": {
     "journal_mode": "wal",

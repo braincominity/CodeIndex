@@ -138,6 +138,7 @@ The documented `status --json` trust contract covers these fields:
 <table>
 <tbody>
 <tr><td><code>fold_ready</code></td><td><code>fold_ready_reason</code></td><td><code>graph_table_available</code></td><td><code>issues_table_available</code></td></tr>
+<tr><td><code>file_issues_data_current</code></td><td><code>migration_in_progress</code></td><td><code>degraded_root_cause</code></td><td><code>readiness_degradations</code></td></tr>
 <tr><td><code>sql_graph_contract_ready</code></td><td><code>sql_graph_contract_degraded_reason</code></td><td><code>hotspot_family_ready</code></td><td><code>hotspot_family_degraded_reason</code></td></tr>
 <tr><td><code>csharp_symbol_name_ready</code></td><td><code>csharp_metadata_target_ready</code></td><td><code>csharp_metadata_target_degraded_reason</code></td><td><code>indexed_head_commit</code></td></tr>
 <tr><td><code>worktree_head_changed</code></td><td><code>indexed_head_sha</code></td><td><code>indexed_head_branch</code></td><td><code>indexed_head_timestamp</code></td></tr>
@@ -148,6 +149,8 @@ The documented `status --json` trust contract covers these fields:
 <tr><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td></td><td></td></tr>
 </tbody>
 </table>
+
+When any readiness field is degraded, `degraded_root_cause` identifies the primary stable code and `readiness_degradations[]` lists every degraded field with `root_cause`, human `degraded_reason`, `recommended_action`, and `alternative_action`. `issues_table_available` reports physical table presence; use `file_issues_data_current` to decide whether `file_issues` rows are current for the index generation.
 
 For MCP `status`, `mcp_session` is session-scoped diagnostic data rather than persisted index state. It includes `log_level`, `roots`, optional `client_info`, and optional `client_capabilities`.
 
@@ -328,6 +331,7 @@ cdidx mcp
 <table>
 <tbody>
 <tr><td><code>fold_ready</code></td><td><code>fold_ready_reason</code></td><td><code>graph_table_available</code></td><td><code>issues_table_available</code></td></tr>
+<tr><td><code>file_issues_data_current</code></td><td><code>migration_in_progress</code></td><td><code>degraded_root_cause</code></td><td><code>readiness_degradations</code></td></tr>
 <tr><td><code>sql_graph_contract_ready</code></td><td><code>sql_graph_contract_degraded_reason</code></td><td><code>hotspot_family_ready</code></td><td><code>hotspot_family_degraded_reason</code></td></tr>
 <tr><td><code>csharp_symbol_name_ready</code></td><td><code>csharp_metadata_target_ready</code></td><td><code>csharp_metadata_target_degraded_reason</code></td><td><code>indexed_head_commit</code></td></tr>
 <tr><td><code>worktree_head_changed</code></td><td><code>indexed_head_sha</code></td><td><code>indexed_head_branch</code></td><td><code>indexed_head_timestamp</code></td></tr>
@@ -338,6 +342,8 @@ cdidx mcp
 <tr><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td></td><td></td></tr>
 </tbody>
 </table>
+
+readiness field のいずれかが degraded の場合、`degraded_root_cause` は primary の安定コードを示し、`readiness_degradations[]` は degraded な各 field と `root_cause`、人間向け `degraded_reason`、`recommended_action`、`alternative_action` を列挙します。`issues_table_available` は物理 table の有無を表し、`file_issues` 行が現在の index generation に対して current かどうかは `file_issues_data_current` を使って判定します。
 
 MCP `status` の `mcp_session` は永続化された index 状態ではなく、セッション単位の診断情報です。`log_level`、`roots`、任意の `client_info`、任意の `client_capabilities` を含みます。
 

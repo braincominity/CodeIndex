@@ -450,6 +450,10 @@ public partial class DbReader
         // #1546: case-sensitivity stamp も同 snapshot で読む。stamp 無し旧 DB は null。
         var pathCaseSensitive = ParseMetaBool(TryGetMetaStringInternal(DbContext.WorkspacePathCaseSensitiveMetaKey));
         var dbPragmaSettings = GetDbPragmaSettings();
+        var batchInProgress = string.Equals(
+            TryGetMetaStringInternal(DbContext.BatchInProgressMetaKey),
+            "true",
+            StringComparison.OrdinalIgnoreCase);
 
         var result = new StatusResult
         {
@@ -465,7 +469,9 @@ public partial class DbReader
             IndexedHeadTimestamp = indexedHeadTimestamp,
             Languages = langs,
             GraphTableAvailable = _hasReferencesTable,
-            IssuesTableAvailable = _hasIssuesTable,
+            IssuesTableAvailable = _hasIssuesPhysicalTable,
+            FileIssuesDataCurrent = _hasIssuesTable,
+            MigrationInProgress = batchInProgress,
             HotspotFamilyReady = hotspotFamilySignal.Ready,
             HotspotFamilyDegradedReason = hotspotFamilySignal.DegradedReason,
             CSharpSymbolNameReady = csharpSymbolNameReady,

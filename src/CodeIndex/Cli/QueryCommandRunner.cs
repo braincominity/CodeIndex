@@ -109,9 +109,21 @@ public static class QueryCommandRunner
         new(
             "issues_table_available",
             "Validation issues table",
-            "validate can read indexed file issue rows.",
+            "the file_issues table exists in this index.",
             "validate output degrades to empty because the file_issues table is missing.",
             "Run `cdidx index <projectPath>` to rebuild the issue table."),
+        new(
+            "file_issues_data_current",
+            "Validation issues data",
+            "file_issues rows are stamped current for this index generation.",
+            "file_issues rows may be stale or partial for this index generation.",
+            "Run `cdidx index <projectPath>` to refresh file issue rows."),
+        new(
+            "migration_in_progress",
+            "Migration/write state",
+            "no index write or migration is currently in progress.",
+            "an index write or migration is in progress, so readiness may be temporarily degraded.",
+            "Wait for the active `cdidx index` run to finish, then rerun `cdidx status --json`."),
         new(
             "sql_graph_contract_ready",
             "SQL graph contract",
@@ -2651,20 +2663,7 @@ public static class QueryCommandRunner
             var topLangs = status.Languages.OrderByDescending(kv => kv.Value).Take(3).Select(kv => kv.Key);
             var freshness = BuildStatusFreshnessLabel(status);
             var dirty = status.GitIsDirty == true ? ", dirty" : "";
-            if (IsFoldOnlyReadinessDegraded(status))
-            {
-                status.DegradedReason = BuildFoldNotReadyExplanation(status.FoldReadyReason);
-                status.RecommendedAction = BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit);
-                status.AlternativeAction = BuildFoldRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit);
-            }
-            else if (IsCSharpMetadataTargetOnlyReadinessDegraded(status))
-            {
-                var metadata = DegradationReasonCodes.GetMetadata(
-                    status.CSharpMetadataTargetDegradedReason ?? DegradationReasonCodes.CSharpMetadataTargetNotReady);
-                status.DegradedReason = metadata.Code;
-                status.RecommendedAction = metadata.RecommendedAction;
-                status.AlternativeAction = metadata.AlternativeAction;
-            }
+            ApplyStatusDegradationGuidance(status, options);
 
             var degraded = IsStatusDegraded(status)
                 ? ", DEGRADED"
@@ -2773,6 +2772,8 @@ public static class QueryCommandRunner
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", "symbol_references table missing — reference / caller / callee / unused counts are degraded to 0."));
                 if (!status.IssuesTableAvailable)
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", "file_issues table missing — validate output is degraded to empty."));
+                else if (!status.FileIssuesDataCurrent)
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", "file_issues table exists but its rows are not stamped current for this index generation."));
                 if (!status.SqlGraphContractReady)
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", $"SQL graph/dependency results may be stale. Run `{BuildSqlGraphContractRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` before trusting SQL references/callers/deps/unused/hotspots."));
                 if (!status.HotspotFamilyReady && status.HotspotFamilyDegradedReason != null)
@@ -6419,6 +6420,8 @@ public static class QueryCommandRunner
         {
             "graph_table_available" => !status.GraphTableAvailable,
             "issues_table_available" => !status.IssuesTableAvailable,
+            "file_issues_data_current" => !status.FileIssuesDataCurrent,
+            "migration_in_progress" => status.MigrationInProgress,
             "sql_graph_contract_ready" => !status.SqlGraphContractReady,
             "hotspot_family_ready" => !status.HotspotFamilyReady,
             "csharp_symbol_name_ready" => !status.CSharpSymbolNameReady,
@@ -6437,6 +6440,8 @@ public static class QueryCommandRunner
             "index_newer_than_reader" => status.IndexNewerThanReaderReason ?? fallback,
             "graph_table_available" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.GraphTableMissing).HumanText,
             "issues_table_available" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.IssuesTableMissing).HumanText,
+            "file_issues_data_current" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.FileIssuesDataStale).HumanText,
+            "migration_in_progress" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.MigrationInProgress).HumanText,
             "csharp_symbol_name_ready" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.CSharpSymbolNameNotReady).HumanText,
             "csharp_metadata_target_ready" => DegradationReasonCodes.GetMetadata(status.CSharpMetadataTargetDegradedReason ?? DegradationReasonCodes.CSharpMetadataTargetNotReady).HumanText,
             _ => fallback,
@@ -6449,19 +6454,84 @@ public static class QueryCommandRunner
             "csharp_symbol_name_ready" => $"Run `{BuildCSharpCanonicalNameRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to upgrade canonical C# symbol names in place.",
             "fold_ready" => $"Run `{BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit)}` to restamp folded-name columns in place, or `{BuildFoldRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` for a full rebuild.",
             "csharp_metadata_target_ready" => DegradationReasonCodes.GetMetadata(status.CSharpMetadataTargetDegradedReason ?? DegradationReasonCodes.CSharpMetadataTargetNotReady).RecommendedAction,
+            "file_issues_data_current" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.FileIssuesDataStale).RecommendedAction,
+            "migration_in_progress" => DegradationReasonCodes.GetMetadata(DegradationReasonCodes.MigrationInProgress).RecommendedAction,
             "index_newer_than_reader" => "Run status with a current cdidx binary, or rebuild the DB with the version you intend to use.",
             _ => fallback,
         };
 
+    private static void ApplyStatusDegradationGuidance(StatusResult status, QueryCommandOptions options)
+    {
+        var degradations = BuildStatusReadinessDegradations(status, options);
+        if (degradations.Count == 0)
+            return;
+
+        status.ReadinessDegradations = degradations;
+        var primary = degradations[0];
+        status.DegradedRootCause = primary.RootCause;
+        status.DegradedReason = primary.DegradedReason;
+        status.RecommendedAction = primary.RecommendedAction;
+        status.AlternativeAction = primary.AlternativeAction;
+    }
+
+    private static List<StatusReadinessDegradation> BuildStatusReadinessDegradations(StatusResult status, QueryCommandOptions options)
+    {
+        var result = new List<StatusReadinessDegradation>();
+        if (status.MigrationInProgress)
+            result.Add(BuildStatusReadinessDegradation("migration_in_progress", DegradationReasonCodes.MigrationInProgress, options, status));
+        if (!status.GraphTableAvailable)
+            result.Add(BuildStatusReadinessDegradation("graph_table_available", DegradationReasonCodes.GraphTableMissing, options, status));
+        if (!status.IssuesTableAvailable)
+            result.Add(BuildStatusReadinessDegradation("issues_table_available", DegradationReasonCodes.IssuesTableMissing, options, status));
+        else if (!status.FileIssuesDataCurrent)
+            result.Add(BuildStatusReadinessDegradation("file_issues_data_current", DegradationReasonCodes.FileIssuesDataStale, options, status));
+        if (!status.SqlGraphContractReady)
+            result.Add(BuildStatusReadinessDegradation("sql_graph_contract_ready", DegradationReasonCodes.SqlGraphContractNotReady, options, status));
+        if (!status.HotspotFamilyReady)
+            result.Add(BuildStatusReadinessDegradation("hotspot_family_ready", DegradationReasonCodes.HotspotFamilyNotReady, options, status));
+        if (!status.CSharpSymbolNameReady)
+            result.Add(BuildStatusReadinessDegradation("csharp_symbol_name_ready", DegradationReasonCodes.CSharpSymbolNameNotReady, options, status));
+        if (!status.CSharpMetadataTargetReady)
+            result.Add(BuildStatusReadinessDegradation("csharp_metadata_target_ready", status.CSharpMetadataTargetDegradedReason ?? DegradationReasonCodes.CSharpMetadataTargetNotReady, options, status));
+        if (!status.FoldReady)
+            result.Add(BuildStatusReadinessDegradation("fold_ready", DegradationReasonCodes.NormalizeFoldReason(status.FoldReadyReason), options, status));
+        if (status.IndexNewerThanReader)
+            result.Add(BuildStatusReadinessDegradation("index_newer_than_reader", DegradationReasonCodes.IndexNewerThanReader, options, status));
+        return result;
+    }
+
+    private static StatusReadinessDegradation BuildStatusReadinessDegradation(string field, string rootCause, QueryCommandOptions options, StatusResult status)
+    {
+        var metadata = DegradationReasonCodes.GetMetadata(rootCause);
+        return new StatusReadinessDegradation
+        {
+            Field = field,
+            RootCause = metadata.Code,
+            DegradedReason = metadata.HumanText,
+            RecommendedAction = field switch
+            {
+                "fold_ready" => BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit),
+                "sql_graph_contract_ready" => BuildSqlGraphContractRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit),
+                "csharp_symbol_name_ready" => BuildCSharpCanonicalNameRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit),
+                _ => metadata.RecommendedAction,
+            },
+            AlternativeAction = field == "fold_ready"
+                ? BuildFoldRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)
+                : metadata.AlternativeAction,
+        };
+    }
+
     private static bool IsStatusDegraded(StatusResult status)
         => !status.GraphTableAvailable
            || !status.IssuesTableAvailable
+           || !status.FileIssuesDataCurrent
            || !status.SqlGraphContractReady
            || !status.HotspotFamilyReady
            || !status.CSharpSymbolNameReady
            || !status.CSharpMetadataTargetReady
            || !status.FoldReady
-           || status.IndexNewerThanReader;
+           || status.IndexNewerThanReader
+           || status.MigrationInProgress;
 
     private sealed record StatusCheckFailure(string Name, bool IsStale, string Diagnostic);
 
@@ -6491,6 +6561,10 @@ public static class QueryCommandRunner
             failures.Add(new StatusCheckFailure("graph_table_available", false, "[degraded] graph_table_available=false"));
         if (Includes("issues") && !status.IssuesTableAvailable)
             failures.Add(new StatusCheckFailure("issues_table_available", false, "[degraded] issues_table_available=false"));
+        if (Includes("issues") && status.IssuesTableAvailable && !status.FileIssuesDataCurrent)
+            failures.Add(new StatusCheckFailure("file_issues_data_current", false, "[degraded] file_issues_data_current=false"));
+        if (Includes("workspace") && status.MigrationInProgress)
+            failures.Add(new StatusCheckFailure("migration_in_progress", false, "[degraded] migration_in_progress=true"));
         if (Includes("sql") && !status.SqlGraphContractReady)
             failures.Add(new StatusCheckFailure("sql_graph_contract_ready", false, $"[degraded] sql_graph_contract_ready=false reason={status.SqlGraphContractDegradedReason ?? "unknown"}"));
         if (Includes("hotspot") && !status.HotspotFamilyReady)

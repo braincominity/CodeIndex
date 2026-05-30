@@ -594,6 +594,10 @@ public class StatusResult
     /// </summary>
     public bool GraphTableAvailable { get; set; } = true;
     public bool IssuesTableAvailable { get; set; } = true;
+    [JsonPropertyName("file_issues_data_current")]
+    public bool FileIssuesDataCurrent { get; set; } = true;
+    [JsonPropertyName("migration_in_progress")]
+    public bool MigrationInProgress { get; set; }
     /// <summary>
     /// True when authoritative cross-file hotspot-family grouping metadata is current for every
     /// marker-capable language currently indexed in this DB. False means `hotspots` can still
@@ -660,12 +664,18 @@ public class StatusResult
     [JsonPropertyName("degraded_reason")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DegradedReason { get; set; }
+    [JsonPropertyName("degraded_root_cause")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DegradedRootCause { get; set; }
     [JsonPropertyName("recommended_action")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? RecommendedAction { get; set; }
     [JsonPropertyName("alternative_action")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? AlternativeAction { get; set; }
+    [JsonPropertyName("readiness_degradations")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<StatusReadinessDegradation>? ReadinessDegradations { get; set; }
     /// <summary>
     /// The cdidx version string that wrote the most recent successful end-of-index pass
     /// for this DB, stamped from `codeindex_meta.cdidx_writer_version`. Null on legacy
@@ -708,6 +718,19 @@ public class StatusResult
     /// </summary>
     [JsonPropertyName("db_pragma_settings")]
     public StatusDbPragmaSettings DbPragmaSettings { get; set; } = new();
+}
+
+public class StatusReadinessDegradation
+{
+    public string Field { get; set; } = string.Empty;
+    [JsonPropertyName("root_cause")]
+    public string RootCause { get; set; } = string.Empty;
+    [JsonPropertyName("degraded_reason")]
+    public string DegradedReason { get; set; } = string.Empty;
+    [JsonPropertyName("recommended_action")]
+    public string RecommendedAction { get; set; } = string.Empty;
+    [JsonPropertyName("alternative_action")]
+    public string AlternativeAction { get; set; } = string.Empty;
 }
 
 public class StatusDbPragmaSettings
