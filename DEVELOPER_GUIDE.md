@@ -17,6 +17,28 @@ target frameworks when validating the full CI-equivalent test matrix.
 
 For test suite structure, shared helpers, and test-writing conventions, see [TESTING_GUIDE.md](TESTING_GUIDE.md).
 
+## CI / Artifact Distribution
+
+Query commands accept `--read-only` (alias `--immutable`) to open an existing
+CodeIndex database through SQLite's immutable read-only URI mode. Use this for
+CI artifacts, mounted caches, and sandboxes where creating or updating
+`codeindex.db-wal` / `codeindex.db-shm` sidecars is not allowed:
+
+```bash
+cdidx status --db /artifacts/codeindex.db --read-only --json
+cdidx search AuthService --db /artifacts/codeindex.db --immutable
+```
+
+Mutating commands such as `index`, `backfill-fold`, `optimize`, and `vacuum`
+require writable storage and reject read-only database opens.
+
+## Filesystem Permissions
+
+On POSIX filesystems, cdidx creates `.cdidx/` with mode `0700` and applies mode
+`0600` to `codeindex.db` plus WAL/SHM sidecars when they exist. `status --json`
+reports `data_dir_mode` and `db_file_mode` when the platform exposes Unix file
+modes.
+
 ## Release Distribution Checklist
 
 When preparing a release, verify every supported distribution channel documented

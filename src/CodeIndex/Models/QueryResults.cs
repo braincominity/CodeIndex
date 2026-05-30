@@ -478,6 +478,15 @@ public class StatusResult
     [JsonPropertyName("data_dir_mode")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DataDirMode { get; set; }
+    [JsonPropertyName("db_file_mode")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DbFileMode { get; set; }
+    [JsonPropertyName("read_only_fallback")]
+    public bool ReadOnlyFallback { get; set; }
+    [JsonPropertyName("wal_checkpoint_attempted")]
+    public bool WalCheckpointAttempted { get; set; }
+    [JsonPropertyName("wal_checkpoint_succeeded")]
+    public bool WalCheckpointSucceeded { get; set; }
     public string? GitHead { get; set; }
     public bool? GitIsDirty { get; set; }
     /// <summary>
