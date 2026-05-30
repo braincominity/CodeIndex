@@ -1890,11 +1890,11 @@ public class FileIndexerTests
             File.WriteAllText(
                 Path.Combine(tempDir, ".gitignore"),
                 "  #*.py\n  *.py\n*.cs\t\n");
-            File.WriteAllText(Path.Combine(tempDir, "  #x.py"), "print('ignored because leading-space # is literal')");
-            File.WriteAllText(Path.Combine(tempDir, "a.py"), "print('kept because leading spaces are literal')");
-            File.WriteAllText(Path.Combine(tempDir, "  a.py"), "print('ignored by leading-space pattern')");
+            File.WriteAllText(Path.Combine(tempDir, "  #x.py"), "print('kept because leading-space # is a comment')");
+            File.WriteAllText(Path.Combine(tempDir, "a.py"), "print('ignored after leading-space trim')");
+            File.WriteAllText(Path.Combine(tempDir, "  a.py"), "print('ignored by trimmed basename pattern')");
             File.WriteAllText(Path.Combine(tempDir, "a.cs"), "public class IgnoredAfterTrailingTabTrim { }");
-            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('kept')");
+            File.WriteAllText(Path.Combine(tempDir, "keep.js"), "export const kept = true;");
 
             var indexer = new FileIndexer(tempDir);
             var files = indexer.ScanFiles()
@@ -1902,7 +1902,7 @@ public class FileIndexerTests
                 .OrderBy(path => path, StringComparer.Ordinal)
                 .ToList();
 
-            Assert.Equal([".gitignore", "a.py", "keep.py"], files);
+            Assert.Equal([".gitignore", "keep.js"], files);
         }
         finally
         {

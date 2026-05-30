@@ -596,6 +596,8 @@ public class FileIndexer
 
             while (tokens.Count > 0 && tokens[^1] is { Value: ' ' or '\t', Escaped: false })
                 tokens.RemoveAt(tokens.Count - 1);
+            while (tokens.Count > 0 && tokens[0] is { Value: ' ' or '\t', Escaped: false })
+                tokens.RemoveAt(0);
 
             return tokens.Count > 0;
         }
