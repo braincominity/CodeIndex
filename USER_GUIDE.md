@@ -1334,6 +1334,10 @@ Successful narrow update JSON reports `mode: "update"` with `summary.updated`, `
 
 `cdidx index` automatically adds `.cdidx/` to `.git/info/exclude`. You don't need to edit `.gitignore` just to hide the local index, and user-authored `.gitignore` rules are honored during scanning and scoped updates. If you want cdidx-only exclusions without changing Git behavior, add a `.cdidxignore` file.
 
+### Project-local ignore
+
+Place `.cdidxignore` in the project root or any subdirectory to add cdidx-only ignore rules without changing Git behavior. It uses the same Git-style pattern syntax as `.gitignore`: leading unescaped spaces and tabs are ignored, `#` comments are recognized after that leading whitespace, trailing unescaped whitespace is trimmed, and `\#` or `\ ` keep literal characters in the pattern. In each directory, `.gitignore` is loaded first and `.cdidxignore` second, so `.cdidxignore` extends the active rules and later `!` patterns can re-include paths ignored earlier in the same directory scope. A project-root `.codeindex/.cdidxignore` is also loaded as a workspace-scoped ignore file for cdidx-only rules that should not sit at the repository root.
+
 `.git/info/exclude` is a standard Git mechanism that works just like `.gitignore`. Many tools use `.git/info/exclude` or store data inside `.git/` to avoid polluting `.gitignore` — git-lfs, git-secret, git-crypt, git-annex, Husky, pre-commit, JetBrains IDEs, VS Code (GitLens), Eclipse, etc.
 
 ## Git branch switching
