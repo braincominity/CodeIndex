@@ -2232,8 +2232,6 @@ public class FileIndexer
         {
             var ignorePath = Path.Combine(dir, ignoreFileName);
             var prefixedIgnorePath = LongPath.EnsureWindowsPrefix(ignorePath);
-            if (!File.Exists(prefixedIgnorePath))
-                continue;
 
             try
             {
@@ -2249,9 +2247,13 @@ public class FileIndexer
             }
             catch (UnauthorizedAccessException)
             {
-                errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName}."));
-                fullyScanned = false;
-                ignoreRulesAvailable = false;
+                errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName} due to permissions.", ScanIssueSeverity.Warning));
+            }
+            catch (FileNotFoundException)
+            {
+            }
+            catch (DirectoryNotFoundException)
+            {
             }
             catch (IOException)
             {
@@ -2272,9 +2274,6 @@ public class FileIndexer
         ref bool fullyScanned)
     {
         var configIgnorePath = Path.Combine(_projectRoot, ".codeindex", ".cdidxignore");
-        if (!File.Exists(LongPath.EnsureWindowsPrefix(configIgnorePath)))
-            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: true);
-
         return LoadIgnoreRulesFile(
             sourceDirectory: _projectRoot,
             ignorePath: configIgnorePath,
