@@ -518,7 +518,8 @@ public partial class DbReader
             "WHEN @preferCaseInsensitiveNormalizedSqlMatch = 1 AND f.lang = 'sql' AND sql_segment_count(s.name) = @rawQuerySegmentCount AND sql_normalize_name_folded(s.name) = @rawQueryNormalizedFolded THEN 3 " +
             "WHEN @preferCaseInsensitiveSqlLeafMatch = 1 AND f.lang = 'sql' AND sql_leaf_name_folded(s.name) = @rawQueryLeafFolded THEN 4 " +
             "ELSE 5 END, " +
-            $"{PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
+            $"{PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line, " +
+            $"{GetSymbolColumnSql("start_column", "CAST(2147483647 AS INTEGER)")} ASC, s.id ASC LIMIT @limit";
 
         cmd.CommandText = sql;
         if (effectiveQueries != null)

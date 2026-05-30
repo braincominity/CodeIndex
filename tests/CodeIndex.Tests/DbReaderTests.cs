@@ -2056,6 +2056,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchSymbols_BreaksSameLineTiesByStartColumn()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/same_line_symbols.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 1,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord { FileId = fileId, Kind = "function", Name = "SameLine", Line = 1, StartLine = 1, StartColumn = 30, EndLine = 1, Signature = "late SameLine()" },
+            new SymbolRecord { FileId = fileId, Kind = "function", Name = "SameLine", Line = 1, StartLine = 1, StartColumn = 10, EndLine = 1, Signature = "early SameLine()" },
+        ]);
+
+        var results = _reader.SearchSymbols("SameLine", kind: "function", lang: "csharp", exact: true, pathPatterns: ["src/same_line_symbols.cs"]);
+
+        Assert.Equal(["early SameLine()", "late SameLine()"], results.Select(result => result.Signature).ToArray());
+    }
+
+    [Fact]
     public void SearchSymbols_CSharpOperatorsConversionsAndIndexersUseNavigableNames()
     {
         InsertIndexedFile("src/csharp_special_names.cs", "csharp",
