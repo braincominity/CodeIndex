@@ -2040,7 +2040,13 @@ public partial class DbReader
             FROM grouped_rows gr
             JOIN reference_counts rc ON rc.symbol_id = gr.symbol_id
             WHERE rc.ref_count > 0
-            ORDER BY rc.ref_score DESC, rc.ref_count DESC
+            ORDER BY rc.ref_score DESC,
+                     rc.ref_count DESC,
+                     gr.path COLLATE BINARY ASC,
+                     gr.line ASC,
+                     gr.name COLLATE BINARY ASC,
+                     gr.kind COLLATE BINARY ASC,
+                     gr.symbol_id ASC
             LIMIT @limit";
 
         using var cmd = _conn.CreateCommand();

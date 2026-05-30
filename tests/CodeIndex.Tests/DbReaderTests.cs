@@ -600,6 +600,46 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetSymbolHotspots_BreaksEqualCountsByPathLineNameKind()
+    {
+        var betaFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/z_hotspot_tie.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var alphaFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/a_hotspot_tie.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord { FileId = betaFileId, Kind = "function", Name = "BetaTieTarget", Line = 5, StartLine = 5, EndLine = 7, BodyStartLine = 6, BodyEndLine = 7, Signature = "void BetaTieTarget()" },
+            new SymbolRecord { FileId = alphaFileId, Kind = "function", Name = "AlphaTieTarget", Line = 5, StartLine = 5, EndLine = 7, BodyStartLine = 6, BodyEndLine = 7, Signature = "void AlphaTieTarget()" },
+        ]);
+        _writer.InsertReferences(
+        [
+            new ReferenceRecord { FileId = betaFileId, SymbolName = "BetaTieTarget", ReferenceKind = "call", Line = 8, Column = 9, Context = "BetaTieTarget();" },
+            new ReferenceRecord { FileId = alphaFileId, SymbolName = "AlphaTieTarget", ReferenceKind = "call", Line = 8, Column = 9, Context = "AlphaTieTarget();" },
+        ]);
+
+        var hotspots = _reader.GetSymbolHotspots(limit: 10, kind: "function", lang: "csharp", pathPatterns: ["src/a_hotspot_tie.cs", "src/z_hotspot_tie.cs"], excludePathPatterns: null, excludeTests: false)
+            .Where(item => item.Symbol.Name.EndsWith("TieTarget", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.Collection(hotspots,
+            first => Assert.Equal("src/a_hotspot_tie.cs", first.Symbol.Path),
+            second => Assert.Equal("src/z_hotspot_tie.cs", second.Symbol.Path));
+    }
+
+    [Fact]
     public void GetCallers_DefaultWeightedRankingPrioritizesInstantiateOverNoisySubscriptions()
     {
         const string target = "TargetService";
