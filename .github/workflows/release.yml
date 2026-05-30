@@ -388,6 +388,42 @@ jobs:
           cd release-files
           sha256sum * > sha256sums.txt
 
+      - name: Import release GPG key
+        env:
+          RELEASE_GPG_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
+          RELEASE_GPG_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RELEASE_GPG_PRIVATE_KEY}" ]; then
+            echo "RELEASE_GPG_PRIVATE_KEY secret is required to sign sha256sums.txt." >&2
+            exit 1
+          fi
+
+          mkdir -p ~/.gnupg
+          chmod 700 ~/.gnupg
+          printf '%s' "${RELEASE_GPG_PRIVATE_KEY}" | gpg --batch --import
+          if [ -n "${RELEASE_GPG_PASSPHRASE}" ]; then
+            printf '%s' "${RELEASE_GPG_PASSPHRASE}" > ~/.gnupg/release-passphrase
+            chmod 600 ~/.gnupg/release-passphrase
+          fi
+
+      - name: Sign release checksum manifest
+        env:
+          RELEASE_GPG_KEY_ID: ${{ secrets.RELEASE_GPG_KEY_ID }}
+          RELEASE_GPG_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          sign_args=(--batch --yes --armor --detach-sign)
+          if [ -n "${RELEASE_GPG_KEY_ID}" ]; then
+            sign_args+=(--local-user "${RELEASE_GPG_KEY_ID}")
+          fi
+          if [ -n "${RELEASE_GPG_PASSPHRASE}" ]; then
+            sign_args+=(--pinentry-mode loopback --passphrase-file ~/.gnupg/release-passphrase)
+          fi
+
+          gpg "${sign_args[@]}" --output release-files/sha256sums.txt.asc release-files/sha256sums.txt
+          test -s release-files/sha256sums.txt.asc
+
       - name: Write release install notes
         run: |
           cat > release-install-notes.md <<'EOF'
@@ -472,7 +508,7 @@ jobs:
           # リリースが "Failed to download sha256sums.txt ... HTTP 404" で
           # 失敗した。verify step が取得する全 asset をポーリングし、伝播の
           # 遅い asset があってもリリースを失敗させず待ち切る。
-          VERIFY_ASSET_NAMES: CodeIndex-linux-x64.tar.gz sha256sums.txt
+          VERIFY_ASSET_NAMES: CodeIndex-linux-x64.tar.gz sha256sums.txt sha256sums.txt.asc
         run: |
           set -euo pipefail
           mapfile -t expected_assets < <(cd release-files && printf '%s\n' *)

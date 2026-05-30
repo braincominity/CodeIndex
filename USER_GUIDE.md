@@ -436,6 +436,20 @@ Choose the install channel based on runtime ownership and network shape:
 For a full comparison, package maintainer guidance, and planned channels such
 as winget, apt, rpm, Snap, and Flatpak, see [DISTRIBUTION.md](DISTRIBUTION.md).
 
+### Release artifact verification
+
+GitHub releases publish `sha256sums.txt` for every archive and SBOM asset,
+plus a detached GPG signature at `sha256sums.txt.asc`. Verify the checksum
+manifest before trusting downloaded release artifacts:
+
+```bash
+gpg --verify sha256sums.txt.asc sha256sums.txt
+sha256sum -c sha256sums.txt
+```
+
+The GPG signature verifies the checksum manifest through the release signing
+key.
+
 ### Option A: One-liner install (no .NET required)
 
 Works in containers, CI, and any Linux/macOS environment — no .NET SDK needed.
