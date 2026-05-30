@@ -2329,9 +2329,16 @@ public class FileIndexer
         }
         catch (UnauthorizedAccessException)
         {
-            errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName}."));
-            fullyScanned = false;
-            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: false);
+            errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName} due to permissions.", ScanIssueSeverity.Warning));
+            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: true);
+        }
+        catch (FileNotFoundException)
+        {
+            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: true);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: true);
         }
         catch (IOException)
         {

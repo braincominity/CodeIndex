@@ -1608,7 +1608,7 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void ScanFiles_FailsClosedWhenRootIgnoreFileIsUnreadable()
+    public void ScanFiles_PreservesInheritedRulesWhenRootIgnoreFileIsUnreadable()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1628,8 +1628,17 @@ public class FileIndexerTests
             var indexer = new FileIndexer(tempDir);
             var result = indexer.ScanFilesDetailed();
 
-            Assert.Empty(result.Files);
-            Assert.Contains(result.Errors, error => error.Path == ".gitignore" && error.Message == "Could not read .gitignore.");
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "keep.py", "secret.py"], files);
+            Assert.Contains(result.Errors, error =>
+                error.Path == ".gitignore" &&
+                error.Message == "Could not read .gitignore due to permissions." &&
+                error.Severity == FileIndexer.ScanIssueSeverity.Warning);
+            Assert.False(result.HadErrors);
         }
         finally
         {
@@ -1641,7 +1650,7 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void ScanFiles_FailsClosedWhenNestedIgnoreFileIsUnreadable()
+    public void ScanFiles_PreservesInheritedRulesWhenNestedIgnoreFileIsUnreadable()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1667,8 +1676,12 @@ public class FileIndexerTests
                 .OrderBy(path => path, StringComparer.Ordinal)
                 .ToList();
 
-            Assert.Equal(["keep.py"], files);
-            Assert.Contains(result.Errors, error => error.Path == "src/.gitignore" && error.Message == "Could not read .gitignore.");
+            Assert.Equal(["keep.py", "src/.gitignore", "src/keep_nested.py", "src/secret.py"], files);
+            Assert.Contains(result.Errors, error =>
+                error.Path == "src/.gitignore" &&
+                error.Message == "Could not read .gitignore due to permissions." &&
+                error.Severity == FileIndexer.ScanIssueSeverity.Warning);
+            Assert.False(result.HadErrors);
         }
         finally
         {
