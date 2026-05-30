@@ -18,6 +18,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -423,6 +425,16 @@ jobs:
 
           gpg "${sign_args[@]}" --output release-files/sha256sums.txt.asc release-files/sha256sums.txt
           test -s release-files/sha256sums.txt.asc
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            release-files/*.tar.gz
+            release-files/*.zip
+            release-files/*.cdx.json
+            release-files/sha256sums.txt
+            release-files/sha256sums.txt.asc
 
       - name: Write release install notes
         run: |
