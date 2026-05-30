@@ -187,7 +187,7 @@ public static class QueryCommandRunner
     private const string OutputFormatSarif = "sarif";
     private static readonly HashSet<string> InlineValueOptions =
         new(ValueTakingOptions.Concat(["--json"]), StringComparer.Ordinal);
-    private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
+    private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
 
     public static int RunBatch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
