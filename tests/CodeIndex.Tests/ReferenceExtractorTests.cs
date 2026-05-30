@@ -114,12 +114,24 @@ public class ReferenceExtractorTests
     [Fact]
     public void BuildReferenceDedupeKey_IncludesFileIdAndLanguage()
     {
-        var javaKey = ReferenceExtractor.BuildReferenceDedupeKey(1, "java", 3, 5, "type_reference", "Runner");
-        var rustKey = ReferenceExtractor.BuildReferenceDedupeKey(2, "rust", 3, 5, "type_reference", "Runner");
+        var javaKey = ReferenceExtractor.BuildReferenceDedupeKey(1, "java", 3, 5, "type_reference", "Runner", null);
+        var rustKey = ReferenceExtractor.BuildReferenceDedupeKey(2, "rust", 3, 5, "type_reference", "Runner", null);
 
         Assert.NotEqual(javaKey, rustKey);
         Assert.StartsWith("1:java:", javaKey, StringComparison.Ordinal);
         Assert.StartsWith("2:rust:", rustKey, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildReferenceDedupeKey_IncludesContainerContext()
+    {
+        var leftContainer = new SymbolRecord { Kind = "function", Name = "A.foo" };
+        var rightContainer = new SymbolRecord { Kind = "function", Name = "B.foo" };
+
+        var leftKey = ReferenceExtractor.BuildReferenceDedupeKey(1, "csharp", 3, 5, "call", "Bar", leftContainer);
+        var rightKey = ReferenceExtractor.BuildReferenceDedupeKey(1, "csharp", 3, 5, "call", "Bar", rightContainer);
+
+        Assert.NotEqual(leftKey, rightKey);
     }
 
     [Fact]
