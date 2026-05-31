@@ -4270,7 +4270,7 @@ public class FileIndexerTests
             var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath);
             var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
 
-            Assert.Equal(text, content);
+            Assert.Equal(text.Replace("\r\n", "\n", StringComparison.Ordinal), content);
             Assert.DoesNotContain(issues, issue => issue.Kind == "lfs_pointer_skipped");
         }
         finally
