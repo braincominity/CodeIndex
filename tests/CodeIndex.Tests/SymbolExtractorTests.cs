@@ -57,10 +57,12 @@ public class SymbolExtractorTests
                 File.WriteAllText(
                     Path.Combine(tempDir, ".cdidx", "patterns", "toydsl.yaml"),
                     "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
-                Environment.CurrentDirectory = tempDir;
+                var outsideDir = Path.Combine(tempDir, "outside");
+                Directory.CreateDirectory(outsideDir);
+                Environment.CurrentDirectory = outsideDir;
                 ExtractorPluginRegistry.ReloadForTests();
 
-                var symbols = SymbolExtractor.Extract(2, "toydsl", "entity Widget", "demo.toy");
+                var symbols = SymbolExtractor.Extract(2, "toydsl", "entity Widget", "demo.toy", tempDir);
 
                 var symbol = Assert.Single(symbols);
                 Assert.Equal("class", symbol.Kind);

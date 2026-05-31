@@ -11,6 +11,7 @@ public static class ExtractorPluginRegistry
     private static readonly object Gate = new();
     private static readonly Dictionary<string, ISymbolExtractor> SymbolExtractors = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, IReferenceExtractor> ReferenceExtractors = new(StringComparer.Ordinal);
+    private static readonly HashSet<string> LoadedPatternConfigPaths = new(StringComparer.OrdinalIgnoreCase);
     private static bool pluginsLoaded;
 
     public static IReadOnlyCollection<string> SymbolLanguages
@@ -84,6 +85,7 @@ public static class ExtractorPluginRegistry
         {
             SymbolExtractors.Clear();
             ReferenceExtractors.Clear();
+            LoadedPatternConfigPaths.Clear();
             pluginsLoaded = true;
         }
     }
@@ -94,8 +96,19 @@ public static class ExtractorPluginRegistry
         {
             SymbolExtractors.Clear();
             ReferenceExtractors.Clear();
+            LoadedPatternConfigPaths.Clear();
             pluginsLoaded = false;
         }
+    }
+
+    internal static void LoadPatternConfigsForProjectRoot(string? projectRoot)
+    {
+        EnsurePluginsLoaded();
+        if (string.IsNullOrWhiteSpace(projectRoot))
+            return;
+
+        foreach (var patternPath in EnumeratePatternConfigPaths(Path.GetFullPath(projectRoot)))
+            TryLoadPatternConfig(patternPath);
     }
 
     private static void EnsurePluginsLoaded()
@@ -110,7 +123,7 @@ public static class ExtractorPluginRegistry
 
             foreach (var pluginPath in EnumeratePluginAssemblyPaths())
                 TryLoadPlugin(pluginPath);
-            foreach (var patternPath in EnumeratePatternConfigPaths())
+            foreach (var patternPath in EnumeratePatternConfigPaths(Environment.CurrentDirectory))
                 TryLoadPatternConfig(patternPath);
 
             pluginsLoaded = true;
@@ -138,9 +151,9 @@ public static class ExtractorPluginRegistry
             yield return Path.Combine(home, ".cdidx", "plugins");
     }
 
-    private static IEnumerable<string> EnumeratePatternConfigPaths()
+    private static IEnumerable<string> EnumeratePatternConfigPaths(string workspaceRoot)
     {
-        foreach (var directory in EnumeratePatternDirectories())
+        foreach (var directory in EnumeratePatternDirectories(workspaceRoot))
         {
             if (!Directory.Exists(directory))
                 continue;
@@ -152,9 +165,9 @@ public static class ExtractorPluginRegistry
         }
     }
 
-    private static IEnumerable<string> EnumeratePatternDirectories()
+    private static IEnumerable<string> EnumeratePatternDirectories(string workspaceRoot)
     {
-        yield return Path.Combine(Environment.CurrentDirectory, ".cdidx", "patterns");
+        yield return Path.Combine(workspaceRoot, ".cdidx", "patterns");
 
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (!string.IsNullOrWhiteSpace(home))
@@ -165,6 +178,13 @@ public static class ExtractorPluginRegistry
     {
         try
         {
+            path = Path.GetFullPath(path);
+            lock (Gate)
+            {
+                if (!LoadedPatternConfigPaths.Add(path))
+                    return;
+            }
+
             var language = string.Empty;
             var extensions = new List<string>();
             var patterns = new List<ConfiguredSymbolExtractor.PatternRule>();

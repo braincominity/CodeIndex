@@ -1147,7 +1147,7 @@ public class FileIndexer
     {
         language = string.Empty;
         var fileName = Path.GetFileName(filePath);
-        foreach (var (extension, mappedLanguage) in LanguageMapOverrides.LoadEffectiveMap())
+        foreach (var (extension, mappedLanguage) in LanguageMapOverrides.LoadEffectiveMap(filePath))
         {
             if (fileName.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
             {

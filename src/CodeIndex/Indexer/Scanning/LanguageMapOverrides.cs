@@ -4,21 +4,21 @@ internal static class LanguageMapOverrides
 {
     internal const string WorkspaceFileName = ".cdidx-langmap.yaml";
 
-    internal static IReadOnlyDictionary<string, string> LoadEffectiveMap()
+    internal static IReadOnlyDictionary<string, string> LoadEffectiveMap(string? startPath = null)
     {
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var path in EnumerateConfigPaths())
+        foreach (var path in EnumerateConfigPaths(startPath))
             LoadInto(path, map);
         return map;
     }
 
-    private static IEnumerable<string> EnumerateConfigPaths()
+    private static IEnumerable<string> EnumerateConfigPaths(string? startPath)
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (!string.IsNullOrWhiteSpace(home))
             yield return Path.Combine(home, ".config", "cdidx", "langmap.yaml");
 
-        var directory = Environment.CurrentDirectory;
+        var directory = ResolveStartDirectory(startPath);
         while (!string.IsNullOrEmpty(directory))
         {
             var candidate = Path.Combine(directory, WorkspaceFileName);
@@ -30,6 +30,17 @@ internal static class LanguageMapOverrides
 
             directory = Directory.GetParent(directory)?.FullName ?? string.Empty;
         }
+    }
+
+    private static string ResolveStartDirectory(string? startPath)
+    {
+        if (string.IsNullOrWhiteSpace(startPath))
+            return Environment.CurrentDirectory;
+
+        var fullPath = Path.GetFullPath(startPath);
+        return Directory.Exists(fullPath)
+            ? fullPath
+            : Path.GetDirectoryName(fullPath) ?? Environment.CurrentDirectory;
     }
 
     private static void LoadInto(string path, Dictionary<string, string> target)
