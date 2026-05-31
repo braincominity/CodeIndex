@@ -379,18 +379,25 @@ internal static class GlobalToolLog
     private static string ResolveLogPath(string logDirectory, LogOptions options)
     {
         var date = TimeProvider.GetUtcNow().UtcDateTime.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture);
+        var processSuffix = CreateProcessLogSuffix();
         if (options.MaxSizeBytes <= 0)
-            return Path.Combine(logDirectory, $"stderr-{date}.log");
+            return Path.Combine(logDirectory, $"stderr-{date}-{processSuffix}.log");
 
         for (var index = 0; index < 10_000; index++)
         {
             var suffix = index == 0 ? "" : $"-{index}";
-            var candidate = Path.Combine(logDirectory, $"stderr-{date}{suffix}.log");
+            var candidate = Path.Combine(logDirectory, $"stderr-{date}-{processSuffix}{suffix}.log");
             if (!File.Exists(candidate) || new FileInfo(candidate).Length < options.MaxSizeBytes)
                 return candidate;
         }
 
-        return Path.Combine(logDirectory, $"stderr-{date}-{Guid.NewGuid():N}.log");
+        return Path.Combine(logDirectory, $"stderr-{date}-{processSuffix}-{Guid.NewGuid():N}.log");
+    }
+
+    private static string CreateProcessLogSuffix()
+    {
+        var startTime = TimeProvider.GetUtcNow().UtcDateTime.ToString("HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+        return FormattableString.Invariant($"p{Environment.ProcessId}-{startTime}");
     }
 
     private static void PruneOldLogs(string logDirectory, int retainedLogFileCount)
