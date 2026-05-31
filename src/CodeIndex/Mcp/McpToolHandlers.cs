@@ -3418,10 +3418,12 @@ public partial class McpServer
 
     private static bool TryProbeCdidxDirectoryWritable(string cdidxDir, out string? error)
     {
-        var probePath = Path.Combine(cdidxDir, ".write_probe");
+        var probePath = Path.Combine(cdidxDir, $".write_probe.{Guid.NewGuid():N}.tmp");
         try
         {
-            File.WriteAllBytes(probePath, Array.Empty<byte>());
+            using (new FileStream(probePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+            }
             File.Delete(probePath);
             error = null;
             return true;

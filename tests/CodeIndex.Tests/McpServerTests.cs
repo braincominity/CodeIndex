@@ -8771,6 +8771,35 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void SuggestImprovement_WriteProbePreservesExistingProbeFile()
+    {
+        var cdidxDir = Path.GetDirectoryName(_dbPath)!;
+        var existingProbe = Path.Combine(cdidxDir, ".write_probe");
+        File.WriteAllText(existingProbe, "keep me");
+        var uniqueDesc = $"Probe preservation regression {Guid.NewGuid():N}";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        Assert.Equal("keep me", File.ReadAllText(existingProbe));
+    }
+
+    [Fact]
     public void SuggestImprovement_InvalidCategory_ReturnsError()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"suggest_improvement","arguments":{"category":"invalid_category","description":"Some description"}}}""")!;
