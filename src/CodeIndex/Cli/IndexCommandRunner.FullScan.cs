@@ -1390,23 +1390,23 @@ public static partial class IndexCommandRunner
             Console.WriteLine();
             Console.WriteLine("Done.");
             Console.WriteLine();
-            Console.WriteLine(ConsoleUi.FormatSummaryLine("Files", $"{totalFiles:N0}", indent: "  "));
-            Console.WriteLine(ConsoleUi.FormatSummaryLine("Chunks", $"{totalChunks:N0}", indent: "  "));
-            Console.WriteLine(ConsoleUi.FormatSummaryLine("Symbols", $"{totalSymbols:N0}", indent: "  "));
-            Console.WriteLine(ConsoleUi.FormatSummaryLine("Refs", $"{totalReferences:N0}", indent: "  "));
-            if (skipped > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Skipped", $"{skipped:N0} (unchanged)", indent: "  "));
-            if (scanResult.DanglingSymlinks.Count > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Dangling symlinks", $"{scanResult.DanglingSymlinks.Count:N0} skipped", indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Files", ConsoleUi.FormatNumber(totalFiles), indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Chunks", ConsoleUi.FormatNumber(totalChunks), indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Symbols", ConsoleUi.FormatNumber(totalSymbols), indent: "  "));
+            Console.WriteLine(ConsoleUi.FormatSummaryLine("Refs", ConsoleUi.FormatNumber(totalReferences), indent: "  "));
+            if (skipped > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Skipped", $"{ConsoleUi.FormatNumber(skipped)} (unchanged)", indent: "  "));
+            if (scanResult.DanglingSymlinks.Count > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Dangling symlinks", $"{ConsoleUi.FormatNumber(scanResult.DanglingSymlinks.Count)} skipped", indent: "  "));
             if (options.Verbose && scanResult.UnknownExtensionFiles.Count > 0)
             {
-                Console.WriteLine($"  Unknown extension files: {scanResult.UnknownExtensionFiles.Count:N0}");
+                Console.WriteLine($"  Unknown extension files: {ConsoleUi.FormatNumber(scanResult.UnknownExtensionFiles.Count)}");
                 foreach (var relPath in scanResult.UnknownExtensionFiles.Take(5))
                     Console.WriteLine($"    {relPath}");
                 if (scanResult.UnknownExtensionFiles.Count > 5)
-                    Console.WriteLine($"    ... {scanResult.UnknownExtensionFiles.Count - 5:N0} more");
+                    Console.WriteLine($"    ... {ConsoleUi.FormatNumber(scanResult.UnknownExtensionFiles.Count - 5)} more");
             }
-            if (warnings > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Warnings", $"{warnings:N0}", indent: "  "));
-            if (errors > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Errors", $"{errors:N0}", indent: "  "));
-            if (symbolsDroppedByKindFilter > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Filtered symbols", $"{symbolsDroppedByKindFilter:N0}", indent: "  "));
+            if (warnings > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Warnings", ConsoleUi.FormatNumber(warnings), indent: "  "));
+            if (errors > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Errors", ConsoleUi.FormatNumber(errors), indent: "  "));
+            if (symbolsDroppedByKindFilter > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Filtered symbols", ConsoleUi.FormatNumber(symbolsDroppedByKindFilter), indent: "  "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("Graph", graphTableAvailableAfter ? "ready" : "degraded", indent: "  "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("Issues", issuesTableAvailableAfter ? "ready" : "degraded", indent: "  "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("SQL graph", sqlGraphContractReadyAfter ? "ready" : "degraded", indent: "  "));

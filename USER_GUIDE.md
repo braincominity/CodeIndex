@@ -678,7 +678,7 @@ Done.
 
 During long-running indexing on an interactive terminal, `Indexing...` stays live as a spinner instead of dropping to a fixed line until the next 50-file progress update. Warnings still print immediately, but the spinner resumes right after each warning so the run does not look frozen. When stdout is redirected (for example `cdidx . > out.txt`), cdidx prints a single `Indexing...` line to stdout, keeps warnings on stderr, and emits only line-based progress updates to stdout.
 
-Human output formats elapsed index time with unit labels by default: milliseconds under 1 second, seconds under 1 minute, minutes/seconds under 1 hour, and hours/minutes/seconds after that. Use `--duration-format seconds` for decimal seconds or `--duration-format hms` for the legacy `HH:MM:SS` display. JSON output continues to expose raw `elapsed_ms` for machine consumers.
+Human output uses invariant numeric formatting (`.` decimal separator and `,` thousands separators) regardless of the process locale, matching JSON's culture-independent contract. Elapsed index time uses unit labels by default: milliseconds under 1 second, seconds under 1 minute, minutes/seconds under 1 hour, and hours/minutes/seconds after that. Use `--duration-format seconds` for decimal seconds or `--duration-format hms` for the legacy `HH:MM:SS` display. JSON output continues to expose raw `elapsed_ms` for machine consumers.
 
 Machine-readable output also reports the post-run readiness bits directly:
 

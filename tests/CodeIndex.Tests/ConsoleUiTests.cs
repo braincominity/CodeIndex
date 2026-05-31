@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Cli;
@@ -243,6 +244,25 @@ public class ConsoleUiTests
     {
         Assert.Equal("2 in-file matches", ConsoleUi.Counted(2, "in-file match", "in-file matches"));
         Assert.Equal("1,234 files", ConsoleUi.Counted(1234, "file", format: "N0"));
+    }
+
+    [Fact]
+    public void FormatProgressLine_UsesInvariantNumberFormatting()
+    {
+        var originalCulture = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
+
+            var line = ConsoleUi.FormatProgressLine(1234, 2000, windowWidth: 80, useUnicodeGlyphs: false);
+
+            Assert.Contains("61.7%", line);
+            Assert.Contains("[1,234/2,000]", line);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+        }
     }
 
     [Fact]

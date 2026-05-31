@@ -130,6 +130,12 @@ public static class ConsoleUi
         return $"{formatted} {(count == 1 ? singular : plural ?? singular + "s")}";
     }
 
+    internal static string FormatNumber(long value, string format = "N0")
+        => value.ToString(format, CultureInfo.InvariantCulture);
+
+    internal static string FormatNumber(int value, string format = "N0")
+        => value.ToString(format, CultureInfo.InvariantCulture);
+
     internal static string FoundSummary(int count, string singular, string? plural = null)
     {
         plural ??= singular + "s";
@@ -410,7 +416,9 @@ public static class ConsoleUi
     {
         const int barWidth = 32;
         var pct = (double)current / total;
-        var percentAndCounts = $"{pct * 100,5:F1}%  [{current:N0}/{total:N0}]";
+        var percentAndCounts = string.Create(
+            CultureInfo.InvariantCulture,
+            $"{pct * 100,5:F1}%  [{current:N0}/{total:N0}]");
 
         if (useUnicodeGlyphs && windowWidth < 40)
             return percentAndCounts;
