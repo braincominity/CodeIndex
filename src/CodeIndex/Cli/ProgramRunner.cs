@@ -275,10 +275,11 @@ internal static class ProgramRunner
                 return exitCode;
             }
 
-            GlobalToolLog.Error("unhandled_exception", ex);
+            var unhandledExitCode = MapUnhandledExceptionExitCode(ex);
+            GlobalToolLog.Error($"command_complete exit_code={unhandledExitCode} unhandled_exception", ex);
             Console.Error.WriteLine("Error: command failed before it could complete. Run `cdidx report` for details.");
-            EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, CommandExitCodes.DatabaseError, ex.GetType().Name);
-            return CommandExitCodes.DatabaseError;
+            EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, unhandledExitCode, ex.GetType().Name);
+            return unhandledExitCode;
         }
     }
 
@@ -462,6 +463,9 @@ internal static class ProgramRunner
         CommandErrorCodes.Interrupted => CommandExitCodes.CancelledBySignal,
         _ => CommandExitCodes.DatabaseError,
     };
+
+    internal static int MapUnhandledExceptionExitCode(Exception ex) =>
+        CommandExitCodes.UnhandledException;
 
     private sealed class QuietStderrScope : IDisposable
     {

@@ -151,6 +151,33 @@ public class ProgramCliTests
     }
 
     [Fact]
+    public void Run_UnhandledExceptionReturnsUnhandledExitCode()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+
+                var exitCode = ProgramRunner.Run(
+                    ["status"],
+                    appVersion: "1.0.0-test",
+                    beforeDispatchForTesting: () => throw new InvalidOperationException("boom"));
+
+                Assert.Equal(CommandExitCodes.UnhandledException, exitCode);
+                Assert.Contains("Error: command failed before it could complete.", stderr.ToString());
+                Assert.DoesNotContain("InvalidOperationException", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
     public void Completions_HelpLikeValueReturnsCompletionsError()
     {
         var (exitCode, stdout, stderr) = RunCliInSubprocess(["--completions", "-h"]);
