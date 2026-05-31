@@ -2450,6 +2450,7 @@ public static partial class SymbolExtractor
             {
                 var stopAfterFirstPatternMatch = false;
                 var restartPatternScanOffset = -1;
+                CSharpPropertyMatchCandidate? csharpPropertyCandidateForLine = null;
                 foreach (var pattern in patterns)
                 {
                     if (lang == "csharp" && ReferenceEquals(pattern.Regex, CSharpEnumMemberRegex))
@@ -2466,7 +2467,7 @@ public static partial class SymbolExtractor
                     // function パターンは `CSharpPropertyHeaderPrefixRegex` が `(` や `{` を含む行を
                     // 受け付けないため影響を受けず、merger は元の行をそのまま返す。Closes #355.
                     var csharpPropertyCandidate = lang == "csharp" && pattern.Kind is "property" or "function"
-                        ? BuildCSharpPropertyMatchLine(lines, csharpMatchLines!, i)
+                        ? csharpPropertyCandidateForLine ??= BuildCSharpPropertyMatchLine(lines, csharpMatchLines!, i)
                         : new CSharpPropertyMatchCandidate(matchLine, i, i);
                     var patternMatchLine = csharpPropertyCandidate.MatchLine;
                     if (fortranContinuationCandidate != null)
