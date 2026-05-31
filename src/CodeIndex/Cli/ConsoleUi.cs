@@ -110,12 +110,18 @@ public static class ConsoleUi
         ("import", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]"),
         ("languages", "cdidx languages [--json]"),
         ("batch", "cdidx batch [--db <path>]  # reads JSON string arrays from stdin, one query command per line"),
-        ("mcp", "cdidx mcp [--db <path>]"),
+        ("mcp", "cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]"),
         ("lsp", "cdidx lsp [--db <path>]"),
         ("completions", "cdidx completions <shell>"),
         ("--completions", "cdidx --completions <shell>"),
         ("upgrade", "cdidx upgrade [--check-only]"),
         ("license", "cdidx license"),
+    ];
+
+    private static readonly (string Command, string Note)[] CommandUsageNotes =
+    [
+        ("mcp", "--json is not supported; MCP requests and responses are JSON-RPC over the selected transport."),
+        ("completions", "--json is not supported; output is a shell script for the selected shell."),
     ];
 
     public static string FormatSummaryLine(string label, object? value, int labelWidth = SummaryLabelWidth, string indent = "")
@@ -1129,6 +1135,14 @@ public static class ConsoleUi
         Console.WriteLine("Usage:");
         foreach (var usage in usages)
             Console.WriteLine($"  {usage}");
+        var notes = GetCommandUsageNotes(command);
+        if (notes.Count > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("Notes:");
+            foreach (var note in notes)
+                Console.WriteLine($"  {note}");
+        }
         Console.WriteLine();
         Console.WriteLine("Run `cdidx --help` to show all commands and shared options.");
         return true;
@@ -1147,6 +1161,18 @@ public static class ConsoleUi
         }
 
         return usages;
+    }
+
+    private static IReadOnlyList<string> GetCommandUsageNotes(string command)
+    {
+        var notes = new List<string>();
+        foreach (var (name, note) in CommandUsageNotes)
+        {
+            if (string.Equals(name, command, StringComparison.Ordinal))
+                notes.Add(note);
+        }
+
+        return notes;
     }
 
     // --- Did-you-mean / もしかして ---
