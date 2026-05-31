@@ -217,8 +217,14 @@ public class Probe
         {
             (canonical, "<PROJECT_ROOT>"),
         };
+        var jsonEscapedCanonical = canonical.Replace("\\", "\\\\", StringComparison.Ordinal);
+        if (!string.Equals(jsonEscapedCanonical, canonical, StringComparison.Ordinal))
+            replacements.Add((jsonEscapedCanonical, "<PROJECT_ROOT>"));
         if (!string.Equals(projectRoot, canonical, StringComparison.Ordinal))
             replacements.Add((projectRoot, "<PROJECT_ROOT>"));
+        var jsonEscapedProjectRoot = projectRoot.Replace("\\", "\\\\", StringComparison.Ordinal);
+        if (!string.Equals(jsonEscapedProjectRoot, projectRoot, StringComparison.Ordinal))
+            replacements.Add((jsonEscapedProjectRoot, "<PROJECT_ROOT>"));
         return replacements;
     }
 
