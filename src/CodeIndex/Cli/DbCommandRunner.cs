@@ -14,6 +14,7 @@ public static class DbCommandRunner
     private const string CheckpointsDirectorySuffix = ".checkpoints";
     private const string AutoCheckpointPrefix = "auto-";
     private static readonly char[] InvalidCheckpointNameChars = Path.GetInvalidFileNameChars();
+    internal static Action? RestoreFailureAfterBackupForTesting { get; set; }
 
     public static int Run(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -630,15 +631,39 @@ public static class DbCommandRunner
         if (!File.Exists(LongPath.EnsureWindowsPrefix(checkpointDbPath)))
             throw new InvalidOperationException($"checkpoint is incomplete: {name}");
 
+        var restoreTempPath = fullDbPath + ".restore-tmp-" + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
         var backupPath = fullDbPath + ".restore-backup-" + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
-        Directory.CreateDirectory(backupPath);
-        MoveIfExists(fullDbPath, Path.Combine(backupPath, Path.GetFileName(fullDbPath)));
-        MoveIfExists(fullDbPath + "-wal", Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-wal"));
-        MoveIfExists(fullDbPath + "-shm", Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-shm"));
+        Directory.CreateDirectory(restoreTempPath);
+        try
+        {
+            CopyIfExists(checkpointDbPath, Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath)));
+            CopyIfExists(Path.Combine(checkpointPath, Path.GetFileName(fullDbPath) + "-wal"), Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-wal"));
+            CopyIfExists(Path.Combine(checkpointPath, Path.GetFileName(fullDbPath) + "-shm"), Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-shm"));
+            if (!File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath)))))
+                throw new InvalidOperationException($"checkpoint staging failed: {name}");
 
-        CopyIfExists(Path.Combine(checkpointPath, Path.GetFileName(fullDbPath)), fullDbPath);
-        CopyIfExists(Path.Combine(checkpointPath, Path.GetFileName(fullDbPath) + "-wal"), fullDbPath + "-wal");
-        CopyIfExists(Path.Combine(checkpointPath, Path.GetFileName(fullDbPath) + "-shm"), fullDbPath + "-shm");
+            Directory.CreateDirectory(backupPath);
+            MoveIfExists(fullDbPath, Path.Combine(backupPath, Path.GetFileName(fullDbPath)));
+            MoveIfExists(fullDbPath + "-wal", Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-wal"));
+            MoveIfExists(fullDbPath + "-shm", Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-shm"));
+
+            RestoreFailureAfterBackupForTesting?.Invoke();
+
+            MoveIfExists(Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath)), fullDbPath);
+            MoveIfExists(Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-wal"), fullDbPath + "-wal");
+            MoveIfExists(Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-shm"), fullDbPath + "-shm");
+        }
+        catch
+        {
+            RestoreBackedUpFiles(fullDbPath, backupPath);
+            throw;
+        }
+        finally
+        {
+            if (Directory.Exists(restoreTempPath))
+                Directory.Delete(restoreTempPath, recursive: true);
+        }
+
         return backupPath;
     }
 
@@ -674,6 +699,25 @@ public static class DbCommandRunner
     {
         if (File.Exists(LongPath.EnsureWindowsPrefix(source)))
             File.Move(LongPath.EnsureWindowsPrefix(source), LongPath.EnsureWindowsPrefix(destination));
+    }
+
+    private static void RestoreBackedUpFiles(string fullDbPath, string backupPath)
+    {
+        if (!Directory.Exists(backupPath))
+            return;
+
+        DeleteIfExists(fullDbPath);
+        DeleteIfExists(fullDbPath + "-wal");
+        DeleteIfExists(fullDbPath + "-shm");
+        MoveIfExists(Path.Combine(backupPath, Path.GetFileName(fullDbPath)), fullDbPath);
+        MoveIfExists(Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-wal"), fullDbPath + "-wal");
+        MoveIfExists(Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-shm"), fullDbPath + "-shm");
+    }
+
+    private static void DeleteIfExists(string path)
+    {
+        if (File.Exists(LongPath.EnsureWindowsPrefix(path)))
+            File.Delete(LongPath.EnsureWindowsPrefix(path));
     }
 
     internal static DbCommandOptions ParseArgs(string[] args)

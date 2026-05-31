@@ -344,6 +344,42 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_RestoreFailureAfterBackup_RestoresOriginalDatabase()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_fail_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        Directory.CreateDirectory(root);
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var originalBytes = File.ReadAllBytes(dbPath);
+            var (checkpointExit, _, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+
+            File.WriteAllText(dbPath, "changed");
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = () => throw new IOException("injected restore failure");
+
+            var (restoreExit, _, stderr) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, restoreExit);
+            Assert.Contains("injected restore failure", stderr);
+            Assert.Equal("changed", File.ReadAllText(dbPath));
+            Assert.Single(Directory.GetDirectories(root, "codeindex.db.restore-backup-*"));
+            Assert.Empty(Directory.GetDirectories(root, "codeindex.db.restore-tmp-*"));
+        }
+        finally
+        {
+            DbCommandRunner.RestoreFailureAfterBackupForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Run_CorruptedDb_ReturnsDatabaseError()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_corrupt_{Guid.NewGuid():N}.db");
