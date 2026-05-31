@@ -86,6 +86,15 @@ cdidx search AuthService --db /artifacts/codeindex.db --immutable
 Mutating commands such as `index`, `backfill-fold`, `optimize`, and `vacuum`
 require writable storage and reject read-only database opens.
 
+For CI jobs that want to publish a reusable index artifact, run
+`cdidx export codeindex.cdidx.zip` after indexing and upload that archive. A
+consumer can run `cdidx import codeindex.cdidx.zip --db <path>` before query
+commands. Use `--prune-paths` on import when the archive comes from another
+checkout and the restored DB should advertise the current workspace root. The
+archive contains `manifest.json` plus `codeindex.db`; import validates the
+embedded SQLite file as a CodeIndex database before replacing the destination
+DB.
+
 Use `cdidx db checkpoint <name>` to take a filesystem snapshot of
 `codeindex.db` plus existing WAL/SHM sidecars before risky maintenance, and use
 `cdidx db restore <name>` to roll back. Checkpoints live next to the DB under
@@ -103,7 +112,11 @@ without mutating the DB or stamping FoldReady. The MCP `backfill_fold` tool
 accepts the same preview as `dry_run: true`, and also accepts `force: true` to
 rewrite all folded keys when an operator needs to recover from suspicious fold
 metadata or row state even though the stored version/fingerprint appears
-current.
+current. Non-dry-run row rewrites are resumable after interruption: completed
+row updates remain durable, and the final FoldReady metadata is stamped only
+after verification succeeds. MCP responses include `progress.rows_done`,
+`progress.rows_total`, and `progress.fraction` so clients can report and retry
+long backfills.
 
 ## Filesystem Permissions
 
@@ -430,6 +443,12 @@ After a successful `cdidx index` run, the writer refreshes SQLite planner statis
 Each JSON-RPC MCP request gets a server-generated `correlation_id` in addition to the client-controlled JSON-RPC `id`. Successful MCP responses include it under `result._meta.correlation_id`, and error responses include it in `error.data.correlation_id` or tool-error `result.structuredContent.correlation_id`. The serialized JSON-RPC id is echoed as `request_id` in the same metadata when one exists. `batch_query` assigns child correlation IDs to each slot by suffixing the parent value with `.1`, `.2`, and so on.
 
 MCP stderr diagnostics are prefixed with `[rid=<json-rpc-id> cid=<correlation-id>]` when a request context exists. Every `tools/call` also emits one structured JSON line with `event: "mcp.tool.invocation"`, the tool name, elapsed milliseconds, status, result count when available, error metadata, argument keys, and argument lengths. Argument values are intentionally not logged in this telemetry line.
+
+### MCP search pagination
+
+MCP `search` responses include `result_stable_at`, copied from the index freshness timestamp for the database snapshot used by that call. Clients that page through search results should compare `result_stable_at` across calls; if it changes, an intervening index mutation may have shifted the result set and the client should restart pagination.
+
+Non-empty `search` responses also include `next_cursor`. Passing that value back as the `cursor` argument with the same query and filters continues after the last returned `(score, chunk rowid)` anchor. The cursor is an opaque response value; clients should not construct or edit it.
 
 ### MCP health probes
 

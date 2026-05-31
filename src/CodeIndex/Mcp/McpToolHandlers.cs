@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -145,6 +146,45 @@ public partial class McpServer
         payload["freshness_available"] = freshness.FreshnessAvailable;
         if (!freshness.FreshnessAvailable && freshness.FreshnessDegradedReason != null)
             payload["freshness_degraded_reason"] = freshness.FreshnessDegradedReason;
+    }
+
+    private static void AddSearchStabilityMetadata(JsonObject payload, DbReader reader, SearchCursor? cursor, IReadOnlyList<SearchResult> results)
+    {
+        var freshness = reader.GetFreshnessHint();
+        payload["result_stable_at"] = freshness.IndexedAt.HasValue
+            ? JsonSerializer.SerializeToNode(freshness.IndexedAt.Value)
+            : null;
+        payload["freshness_available"] = freshness.FreshnessAvailable;
+        if (!freshness.FreshnessAvailable && freshness.FreshnessDegradedReason != null)
+            payload["freshness_degraded_reason"] = freshness.FreshnessDegradedReason;
+
+        if (results.Count > 0)
+            payload["next_cursor"] = FormatSearchCursor(results[^1]);
+    }
+
+    private static string FormatSearchCursor(SearchResult result)
+        => string.Create(CultureInfo.InvariantCulture, $"{result.Score:R}:{result.ChunkId}:{result.NextOffset}");
+
+    private static bool TryParseSearchCursor(string value, out SearchCursor cursor)
+    {
+        cursor = default;
+        var lastSeparator = value.LastIndexOf(':');
+        if (lastSeparator <= 0 || lastSeparator == value.Length - 1)
+            return false;
+
+        var firstSeparator = value.LastIndexOf(':', lastSeparator - 1);
+        if (firstSeparator <= 0 || firstSeparator == lastSeparator - 1)
+            return false;
+
+        if (!double.TryParse(value.AsSpan(0, firstSeparator), NumberStyles.Float, CultureInfo.InvariantCulture, out var score))
+            return false;
+        if (!long.TryParse(value.AsSpan(firstSeparator + 1, lastSeparator - firstSeparator - 1), NumberStyles.None, CultureInfo.InvariantCulture, out var chunkId))
+            return false;
+        if (!int.TryParse(value.AsSpan(lastSeparator + 1), NumberStyles.None, CultureInfo.InvariantCulture, out var offset) || offset < 0)
+            return false;
+
+        cursor = new SearchCursor(score, chunkId, offset);
+        return true;
     }
 
     private static void AddFtsQueryDiagnostics(JsonObject payload, FtsQueryDiagnostics diagnostics)
@@ -494,7 +534,7 @@ public partial class McpServer
 
     private static IReadOnlySet<string> GetAllowedToolArguments(string toolName) => toolName switch
     {
-        "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "limit", "lang", "snippetLines", "maxLineWidth", "rawQuery", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "exact", "prefix", "countOnly", "format", "project", "solution" },
+        "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "limit", "lang", "snippetLines", "maxLineWidth", "rawQuery", "cursor", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "exact", "prefix", "countOnly", "format", "project", "solution" },
         "definition" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "includeBody", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "format", "project", "solution" },
         "references" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "offset", "maxLineWidth", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
         "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
@@ -511,7 +551,7 @@ public partial class McpServer
         "validate" => new HashSet<string>(StringComparer.Ordinal) { "path", "lang", "limit", "excludePaths", "excludeTests", "project", "solution" },
         "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "project", "solution" },
         "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
-        "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "db", "rebuild", "parallelism", "files", "commits", "changedBetween", "dryRun", "optimize" },
+        "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "db", "rebuild", "parallelism", "maxFileBytes", "files", "commits", "changedBetween", "dryRun", "optimize" },
         "backfill_fold" => new HashSet<string>(StringComparer.Ordinal) { "dry_run", "dryRun", "force" },
         "suggest_improvement" => new HashSet<string>(StringComparer.Ordinal) { "category", "language", "description", "context", "toolInvocationContext" },
         _ => new HashSet<string>(StringComparer.Ordinal),
@@ -914,6 +954,14 @@ public partial class McpServer
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var rawQuery = args?["rawQuery"]?.GetValue<bool>() ?? false;
+        SearchCursor? cursor = null;
+        var cursorValue = args?["cursor"]?.GetValue<string>();
+        if (!string.IsNullOrWhiteSpace(cursorValue))
+        {
+            if (!TryParseSearchCursor(cursorValue, out var parsedCursor))
+                return CreateToolErrorResponse(id, "'cursor' must be a search pagination cursor returned as `next_cursor` by a previous search response.");
+            cursor = parsedCursor;
+        }
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -948,12 +996,13 @@ public partial class McpServer
                 payload["rawQuery"] = rawQuery;
                 payload["path"] = PathEcho(pathPatterns);
                 payload["excludeTests"] = excludeTests;
+                AddSearchStabilityMetadata(payload, reader, cursor, []);
                 if (countResults.Count == 0)
                     AddFtsQueryDiagnostics(payload, DbReader.AnalyzeFtsQuery(query, rawQuery, prefix, lang));
                 return CreateToolResult(id, $"Counted {countResults.Count} search result(s).", payload);
             }
 
-            var results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix);
+            var results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, cursor: cursor);
             var ftsDiagnostics = DbReader.AnalyzeFtsQuery(query, rawQuery, prefix, lang);
             var truncated = TrimToRequestedLimit(results, limit);
             if (results.Count == 0)
@@ -968,6 +1017,7 @@ public partial class McpServer
                     ["excludeTests"] = excludeTests,
                     ["results"] = new JsonArray()
                 };
+                AddSearchStabilityMetadata(payload, reader, cursor, results);
                 AddFtsQueryDiagnostics(payload, ftsDiagnostics);
                 AddResultEnvelope(payload, 0, 0, truncated: false);
                 AddRecoveryHint(
@@ -984,12 +1034,14 @@ public partial class McpServer
             {
                 ["query"] = query,
                 ["rawQuery"] = rawQuery,
+                ["cursor"] = cursorValue,
                 ["snippetLines"] = snippetLines,
                 ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["results"] = ToJsonArray(SearchSnippetFormatter.ToCompactResults(results, query, snippetLines, exact, maxLineWidth))
             };
+            AddSearchStabilityMetadata(structured, reader, cursor, results);
             AddResultEnvelope(structured, results.Count, truncated ? null : results.Count, truncated);
             if (format == "compact")
                 ApplyCompactResults(structured, results, result => result.Path, result => result.StartLine);
@@ -3821,22 +3873,26 @@ public partial class McpServer
                 || !foldMetadataCurrentBefore;
             var symbols = 0;
             var symbolReferences = 0;
+            var totalSymbols = 0;
+            var totalSymbolReferences = 0;
             var verified = false;
             var userVersionAfter = userVersionBefore;
 
+            (totalSymbols, totalSymbolReferences) = writer.CountBackfillFoldedColumns(rewriteAll);
             if (dryRun)
             {
-                (symbols, symbolReferences) = writer.CountBackfillFoldedColumns(rewriteAll);
+                symbols = totalSymbols;
+                symbolReferences = totalSymbolReferences;
             }
             else
             {
                 EmitProgressNotification(progressToken, 0, null, "Backfilling folded-name keys.");
-                using var transaction = writer.BeginTransaction();
                 (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
-                EmitProgressNotification(progressToken, symbols + symbolReferences, null, "Verifying folded-name keys.");
-                // Verify and stamp in the same transaction as the row rewrite so crash recovery
-                // never leaves current fold metadata without a matching FoldReady stamp.
-                // 行の再生成と同じ transaction で検証・stamp し、metadata だけが先に残らないようにする。
+                EmitProgressNotification(progressToken, symbols + symbolReferences, totalSymbols + totalSymbolReferences, "Verifying folded-name keys.");
+                // Row rewrites are intentionally committed before the final FoldReady stamp so
+                // interrupted MCP backfills can resume from the remaining rows.
+                // 行更新は FoldReady stamp より前に永続化し、中断後に残り行から再開できるようにする。
+                using var transaction = writer.BeginTransaction();
                 verified = writer.MarkFoldReady();
                 if (!verified)
                     return CreateToolErrorResponse(id, "Folded-name backfill verification failed: some rows still have NULL folded values. Re-run backfill_fold.");
@@ -3871,6 +3927,7 @@ public partial class McpServer
                 ["fold_key_version_after"] = dryRun ? storedFoldVersion : currentFoldVersion,
                 ["fold_key_fingerprint_before"] = storedFoldFingerprint,
                 ["fold_key_fingerprint_after"] = dryRun ? storedFoldFingerprint : currentFoldFingerprint,
+                ["progress"] = BuildBackfillProgressJson(symbols + symbolReferences, totalSymbols + totalSymbolReferences),
             };
 
             var summary = dryRun
@@ -3884,6 +3941,17 @@ public partial class McpServer
         {
             return CreateToolErrorResponse(id, $"Failed to backfill folded-name columns: {ex.Message}");
         }
+    }
+
+    private static JsonObject BuildBackfillProgressJson(int rowsDone, int rowsTotal)
+    {
+        var fraction = rowsTotal <= 0 ? 1.0 : Math.Min(1.0, rowsDone / (double)rowsTotal);
+        return new JsonObject
+        {
+            ["rows_done"] = rowsDone,
+            ["rows_total"] = rowsTotal,
+            ["fraction"] = fraction,
+        };
     }
 
     /// <summary>
@@ -3997,7 +4065,8 @@ public partial class McpServer
         // Build GitHub submission callback (null if no token configured).
         // GitHub 送信コールバックを構築（トークン未設定なら null）。
         Func<SuggestionRecord, Task<SuggestionStore.SubmitAttemptResult>>? githubCallback = null;
-        if (GitHubIssueReporter.ResolveToken() != null)
+        var githubTokenConfigured = GitHubIssueReporter.ResolveToken() != null;
+        if (githubTokenConfigured)
         {
             var version = _version;
             var cancellationToken = _currentRequestToken.Value;
@@ -4018,9 +4087,12 @@ public partial class McpServer
                         ? "This suggestion was already recorded. GitHub submission retried successfully."
                         : "This suggestion has already been recorded.",
                 ["submitted_to_github"] = result.AlreadySubmitted || result.UpstreamUrl != null,
+                ["github_submission_reason"] = ResolveGitHubSubmissionReason(result, githubTokenConfigured),
                 ["lifecycle_status"] = JsonNamingPolicy.SnakeCaseLower.ConvertName(result.Status.ToString()),
                 ["cdidx_dir"] = cdidxDir,
             };
+            if (result.SubmissionError != null)
+                dupPayload["github_submission_error"] = result.SubmissionError;
             if (result.DuplicateOfHash != null)
                 dupPayload["duplicate_of"] = result.DuplicateOfHash;
             if (result.DuplicateScore != null)
@@ -4042,9 +4114,12 @@ public partial class McpServer
             ["language"] = language,
             ["stored_locally"] = true,
             ["submitted_to_github"] = result.UpstreamUrl != null,
+            ["github_submission_reason"] = ResolveGitHubSubmissionReason(result, githubTokenConfigured),
             ["lifecycle_status"] = JsonNamingPolicy.SnakeCaseLower.ConvertName(result.Status.ToString()),
             ["cdidx_dir"] = cdidxDir,
         };
+        if (result.SubmissionError != null)
+            payload["github_submission_error"] = result.SubmissionError;
         if (result.UpstreamUrl != null)
         {
             payload["upstream_url"] = result.UpstreamUrl;
@@ -4055,6 +4130,26 @@ public partial class McpServer
         if (sampling?.Tags is { Length: > 0 })
             payload["sampled_tags"] = new JsonArray(sampling.Tags.Select(tag => JsonValue.Create(tag)).ToArray<JsonNode?>());
         return CreateToolResult(id, "Suggestion recorded. Thank you for the feedback.", payload);
+    }
+
+    private static string ResolveGitHubSubmissionReason(SuggestionStore.AddAndSubmitResult result, bool githubTokenConfigured)
+    {
+        if (result.AlreadySubmitted || result.UpstreamUrl != null)
+            return "submitted";
+        if (!githubTokenConfigured)
+            return "token_not_configured";
+        if (result.SubmissionError != null)
+            return StartsWithHttpStatusCode(result.SubmissionError) ? "api_error" : "network_error";
+        return "repo_not_configured";
+    }
+
+    private static bool StartsWithHttpStatusCode(string value)
+    {
+        return value.Length >= 4
+            && char.IsDigit(value[0])
+            && char.IsDigit(value[1])
+            && char.IsDigit(value[2])
+            && value[3] == ':';
     }
 
     private sealed record SuggestionSamplingResult(string? Title, string[]? Tags);

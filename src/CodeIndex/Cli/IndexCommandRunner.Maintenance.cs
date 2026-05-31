@@ -195,13 +195,13 @@ public static partial class IndexCommandRunner
                 if (!options.NoCheckpoint)
                     DbCommandRunner.CreateAutomaticCheckpoint(options.DbPath);
 
-                using var transaction = writer.BeginTransaction();
                 (symbols, symbolReferences) = writer.BackfillFoldedColumns(
                     rewriteAll,
                     backfillCancellation.Token);
-                // MarkFoldReady re-verifies in the same transaction so rows, metadata, and
-                // FoldReady stamp commit or roll back together.
-                // 同一 transaction 内で再検証し、行・metadata・FoldReady stamp を原子的に扱う。
+                // Row rewrites commit before the final FoldReady stamp so interrupted
+                // backfills can resume from the remaining rows.
+                // 行更新は FoldReady stamp より前に永続化し、中断後に残り行から再開できるようにする。
+                using var transaction = writer.BeginTransaction();
                 verified = writer.MarkFoldReady();
                 if (!verified)
                 {
