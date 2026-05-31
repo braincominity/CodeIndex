@@ -209,7 +209,50 @@ public class McpServerTests : IDisposable
 
         Assert.True(structured["count_only"]!.GetValue<bool>());
         Assert.True(structured["count"]!.GetValue<int>() > 0);
+        Assert.NotNull(structured["result_stable_at"]);
         Assert.Empty(structured["results"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_SearchReturnsStableAtAndCursorContinuesAfterAnchor_Issue1462()
+    {
+        InsertIndexedFile("src/other.cs", "csharp", "public class Other { public void Run() { } }");
+        var firstRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Run","limit":1}}}""")!;
+
+        var firstResponse = _server.HandleMessage(firstRequest)!;
+        var first = firstResponse["result"]!["structuredContent"]!;
+        var cursor = first["next_cursor"]!.GetValue<string>();
+        var stableAt = first["result_stable_at"]!.GetValue<DateTime>();
+
+        Assert.Single(first["results"]!.AsArray());
+        Assert.False(string.IsNullOrWhiteSpace(cursor));
+
+        var secondRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 2,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "search",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "Run",
+                    ["limit"] = 1,
+                    ["cursor"] = cursor,
+                },
+            },
+        };
+
+        var secondResponse = _server.HandleMessage(secondRequest)!;
+        var second = secondResponse["result"]!["structuredContent"]!;
+
+        Assert.Single(second["results"]!.AsArray());
+        Assert.Equal(stableAt, second["result_stable_at"]!.GetValue<DateTime>());
+        Assert.NotEqual(
+            first["results"]!.AsArray()[0]!["path"]!.GetValue<string>(),
+            second["results"]!.AsArray()[0]!["path"]!.GetValue<string>());
     }
 
     [Fact]
