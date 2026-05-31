@@ -5513,6 +5513,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonFString_MasksMultilineLiteralTextButKeepsInterpolationReferences()
+    {
+        const string content = """"
+            def run():
+                return 42
+
+            def use(user_name):
+                value = f"""hello
+                {run()}
+                goodbye user_name
+                """
+                return value
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        var runReference = Assert.Single(references, reference => reference.SymbolName == "run");
+        Assert.Equal("call", runReference.ReferenceKind);
+        Assert.Equal("use", runReference.ContainerName);
+        Assert.DoesNotContain(references, reference => reference.SymbolName is "hello" or "goodbye" or "user_name");
+    }
+
+    [Fact]
     public void Extract_CsharpInterpolatedVerbatimString_WithEscapedBraces_DoesNotLeakPhantomReference()
     {
         const string content = """
