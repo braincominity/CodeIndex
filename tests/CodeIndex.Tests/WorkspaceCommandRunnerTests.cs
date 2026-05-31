@@ -79,6 +79,17 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void ConfigShowErrors_HonorJsonFlag()
+    {
+        var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => CdidxConfigFile.RunShow(["extra", "--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("\"status\":\"error\"", stdout);
+        Assert.Contains("config show does not accept positional arguments", stdout);
+        Assert.DoesNotContain("config show does not accept positional arguments", stderr);
+    }
+
+    [Fact]
     public void ConfigShow_PrintsPrecedence()
     {
         var configHome = TestProjectHelper.CreateTempProject("cdidx_config_show_config");

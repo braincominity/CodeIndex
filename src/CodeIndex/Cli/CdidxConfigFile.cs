@@ -349,7 +349,7 @@ internal static class CdidxConfigFile
         var json = args.Contains("--json", StringComparer.Ordinal);
         args = args.Where(a => a != "--json").ToArray();
         if (args.Length > 0)
-            return CommandErrorWriter.Write("config show does not accept positional arguments.", CommandExitCodes.UsageError, "run `cdidx config show` from the workspace whose config should be shown.");
+            return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "config show does not accept positional arguments.", CommandExitCodes.UsageError, "run `cdidx config show` from the workspace whose config should be shown.");
 
         var path = FindConfigFile(Environment.CurrentDirectory);
         var active = ActiveWorkspace.Load();
