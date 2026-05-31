@@ -68,7 +68,7 @@ public static class ConsoleUi
 
     private static readonly (string Command, string Usage)[] CommandUsageLines =
     [
-        ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--optimize] [--verbose] [--dry-run] [--force] [--quiet] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--notify <auto|bell|osc9|desktop|none>] [--max-file-bytes <bytes>] [--follow-symlinks <none|internal|all>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]] [--watch [--debounce <ms>]]"),
+        ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--optimize] [--verbose] [--dry-run] [--force] [--quiet] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--notify <auto|bell|osc9|desktop|none>] [--max-file-bytes <bytes>] [--max-symbols-per-file <n>] [--follow-symlinks <none|internal|all>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]] [--watch [--debounce <ms>]]"),
         ("hooks", "cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]"),
         ("backfill-fold", "cdidx backfill-fold [--db <path>] [--dry-run] [--no-checkpoint] [--json]"),
         ("optimize", "cdidx optimize [--db <path>] [--json]"),
@@ -103,6 +103,9 @@ public static class ConsoleUi
         ("unused", "cdidx unused [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]"),
         ("hotspots", "cdidx hotspots [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]"),
         ("suggestions", "cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--format <json|markdown>]"),
+        ("export", "cdidx export <archive> [--db <path>] [--json]"),
+        ("export", "cdidx export ctags [--output <path>] [--db <path>]"),
+        ("import", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]"),
         ("languages", "cdidx languages [--json]"),
         ("batch", "cdidx batch [--db <path>]  # reads JSON string arrays from stdin, one query command per line"),
         ("mcp", "cdidx mcp [--db <path>]"),
@@ -741,6 +744,8 @@ public static class ConsoleUi
         Console.WriteLine("  deps                       Show file-level dependency edges from the reference graph");
         Console.WriteLine("  unused                     Find symbols defined but never referenced (dead code)");
         Console.WriteLine("  hotspots                   Find high-impact symbols; duplicate-name families may fall back conservatively");
+        Console.WriteLine("  export                     Export ctags or a portable CodeIndex archive");
+        Console.WriteLine("  import                     Import a portable CodeIndex archive");
         Console.WriteLine("  batch                      Run newline-delimited JSON query commands with one DB connection");
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
         Console.WriteLine("  lsp                        Start LSP server over stdio (for LSP-native editors)");
@@ -851,6 +856,8 @@ public static class ConsoleUi
         Console.WriteLine("  unused                     Find symbols defined but never referenced (dead code)");
         Console.WriteLine("  hotspots                   Find high-impact symbols; duplicate-name families may fall back conservatively");
         Console.WriteLine("  suggestions                List, inspect, and export local suggestion history");
+        Console.WriteLine("  export                     Export ctags or a portable CodeIndex archive");
+        Console.WriteLine("  import                     Import a portable CodeIndex archive");
         Console.WriteLine("  languages                  List supported languages and their capabilities");
         Console.WriteLine("  batch                      Run newline-delimited JSON query commands with one DB connection");
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
@@ -875,6 +882,7 @@ public static class ConsoleUi
         Console.WriteLine("  --duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms");
         WriteHelpLine("  --notify <mode>           Long index completion signal: auto, bell, osc9, desktop, or none (also honors CDIDX_NOTIFY; quiet/json suppress it)");
         WriteHelpLine("  --max-file-bytes <bytes>  Index only files up to this size (default: 4MiB; also honors CDIDX_MAX_FILE_BYTES; accepts K/M/G suffixes)");
+        WriteHelpLine("  --max-symbols-per-file <n> Skip file content, symbols, and references when one file emits too many symbols (default: 5000)");
         WriteHelpLine("  --parallelism <n>         Full-scan extraction workers (default: CPU count capped at 16; also honors CDIDX_INDEX_PARALLELISM)");
         WriteHelpLine("  --follow-symlinks <mode>  Directory symlink policy: none (default), internal, or all");
         WriteHelpLine("  --include-symbol-kind <kind>[,<kind>]  Keep only matching symbol kinds during indexing");
@@ -965,6 +973,9 @@ public static class ConsoleUi
         Console.WriteLine("                                              Update DB from files changed between two refs");
         Console.WriteLine("  cdidx index ./myproject --files src/app.cs    Update specific files");
         Console.WriteLine("  cdidx index ./myproject --watch               Run an initial scan, then keep the index live as files change (Ctrl+C to stop)");
+        Console.WriteLine("  cdidx export ctags --output tags              Export editor tags for Vim, Emacs, and Sublime");
+        Console.WriteLine("  cdidx export codeindex.cdidx.zip              Export a portable CodeIndex archive");
+        Console.WriteLine("  cdidx import codeindex.cdidx.zip              Import a portable CodeIndex archive");
         Console.WriteLine("  cdidx search \"authenticate\"                    Full-text search");
         Console.WriteLine("  cdidx search \"auth*\"                          Prefix shorthand in literal-safe mode");
         Console.WriteLine("  cdidx search --query --path --path README.md   Search for a literal option token");

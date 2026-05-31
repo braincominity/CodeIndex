@@ -3187,7 +3187,9 @@ public partial class McpServer : IDisposable
                 => $"Language support: Supports graph/reference extraction for: {GraphLanguageList()}. Unsupported `lang` values are reported with graph-support metadata when the tool returns graph-support fields; use `search`, `definition`, `excerpt`, or `files` for non-graph languages.",
             "definition" or "symbols" or "outline" or "analyze_symbol"
                 => $"Language support: Supports symbol extraction for: {SymbolLanguageList()}. Search-only languages can still be indexed and filtered by file tools but may have no symbol rows.",
-            "search" or "find_in_file" or "files" or "map"
+            "search"
+                => "Language support: Supports indexed file/content filters for every detected language; call `languages` for the full catalog.",
+            "find_in_file" or "files" or "map"
                 => $"Language support: Supports indexed file/content filters for every detected language listed by `languages`: {DetectedLanguageList()}. Symbol and graph fields are available only for the languages whose capabilities are advertised by `languages`.",
             "excerpt" or "status" or "validate"
                 => $"Language support: Language-agnostic over indexed files and diagnostics for every detected language listed by `languages`: {DetectedLanguageList()}. This tool does not interpret a `lang` filter.",

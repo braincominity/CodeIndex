@@ -201,6 +201,11 @@ internal static class IndexWatchRunner
             args.Add("--max-file-bytes");
             args.Add(maxFileSizeBytes.ToString(CultureInfo.InvariantCulture));
         }
+        if (baseOptions.MaxSymbolsPerFile != IndexCommandRunner.DefaultMaxSymbolsPerFile)
+        {
+            args.Add("--max-symbols-per-file");
+            args.Add(baseOptions.MaxSymbolsPerFile.ToString(CultureInfo.InvariantCulture));
+        }
         if (baseOptions.SymlinkPolicy != FileIndexer.SymlinkPolicy.None)
         {
             args.Add("--follow-symlinks");
