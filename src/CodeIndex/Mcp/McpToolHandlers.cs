@@ -321,7 +321,7 @@ public partial class McpServer
         "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "project", "solution" },
         "symbols" => new HashSet<string>(StringComparer.Ordinal) { "query", "names", "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "project", "solution" },
         "files" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since" },
-        "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "snippetLines", "focusLine", "focusColumn", "maxLineWidth", "exact" },
+        "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "snippetLines", "focusLine", "focusColumn", "maxLineWidth", "exact", "regex" },
         "excerpt" => new HashSet<string>(StringComparer.Ordinal) { "path", "startLine", "endLine", "before", "after", "focusLine", "focusColumn", "focusLength", "maxLineWidth" },
         "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "project", "solution" },
         "analyze_symbol" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "includeBody", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "maxLineWidth", "project", "solution" },
@@ -1843,10 +1843,19 @@ public partial class McpServer
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        var regex = args?["regex"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth, focusLine, focusColumn);
+            List<FileFindResult> results;
+            try
+            {
+                results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth, focusLine, focusColumn, regex);
+            }
+            catch (ArgumentException ex) when (regex)
+            {
+                return CreateToolErrorResponse(id, $"invalid regular expression: {ex.Message}");
+            }
             var structured = new JsonObject
             {
                 ["query"] = query,
@@ -1857,6 +1866,7 @@ public partial class McpServer
                 ["contextTruncated"] = contextTruncated,
                 ["maxLineWidth"] = maxLineWidth,
                 ["exact"] = exact,
+                ["regex"] = regex,
                 ["count"] = results.Count,
                 ["fileCount"] = results.Select(r => r.Path).Distinct().Count(),
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions),

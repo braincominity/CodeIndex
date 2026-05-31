@@ -201,7 +201,7 @@ public static class QueryCommandRunner
     private const string OutputFormatSarif = "sarif";
     private static readonly HashSet<string> InlineValueOptions =
         new(ValueTakingOptions.Concat(["--json"]), StringComparer.Ordinal);
-    private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
+    private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
 
     public static int RunBatch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -1957,7 +1957,16 @@ public static class QueryCommandRunner
             }
 
             var (contextBefore, contextAfter, snippetLines) = ResolveFindContext(options, preparedFindArgs);
-            var results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, contextBefore, contextAfter, options.Exact, options.MaxLineWidth, options.FocusLine, options.FocusColumn);
+            List<FileFindResult> results;
+            try
+            {
+                results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, contextBefore, contextAfter, options.Exact, options.MaxLineWidth, options.FocusLine, options.FocusColumn, options.Regex);
+            }
+            catch (ArgumentException ex) when (options.Regex)
+            {
+                Console.Error.WriteLine($"Error: invalid regular expression: {ex.Message}");
+                return CommandExitCodes.UsageError;
+            }
             if (results.Count == 0)
             {
                 var candidateFileCount = reader.CountFindCandidateFiles(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
@@ -1975,6 +1984,7 @@ public static class QueryCommandRunner
                         if (snippetLines.HasValue)
                             payload["snippet_lines"] = snippetLines.Value;
                         payload["exact"] = options.Exact;
+                        payload["regex"] = options.Regex;
                         payload["file_count"] = candidateFileCount;
                     });
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
@@ -4428,6 +4438,7 @@ public static class QueryCommandRunner
         bool noDedup = false;
         bool noVisibilityRank = false;
         bool exact = false;
+        bool regex = false;
         bool prefix = false;
         List<string>? parseErrors = null;
         bool exactName = false;
@@ -4713,6 +4724,9 @@ public static class QueryCommandRunner
                     break;
                 case "--exact":
                     exact = true;
+                    break;
+                case "--regex":
+                    regex = true;
                     break;
                 case "--exact-name":
                     exactName = true;
@@ -5120,6 +5134,7 @@ public static class QueryCommandRunner
             NoDedup = noDedup,
             NoVisibilityRank = noVisibilityRank,
             Exact = exact,
+            Regex = regex,
             Prefix = prefix,
             ExactName = exactName,
             ExactSubstring = exactSubstring,
@@ -7744,6 +7759,7 @@ public sealed class QueryCommandOptions
     public bool NoDedup { get; init; }
     public bool NoVisibilityRank { get; init; }
     public bool Exact { get; init; }
+    public bool Regex { get; init; }
     public bool Prefix { get; init; }
     public bool ExactName { get; init; }
     public bool ExactSubstring { get; init; }

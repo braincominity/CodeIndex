@@ -8,7 +8,7 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
-    public List<FileFindResult> FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? focusLine = null, int? focusColumn = null)
+    public List<FileFindResult> FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? focusLine = null, int? focusColumn = null, bool regex = false)
     {
         if (string.IsNullOrWhiteSpace(query) || limit <= 0 || pathPatterns == null || pathPatterns.Count == 0)
             return [];
@@ -17,6 +17,9 @@ public partial class DbReader
         after = Math.Max(0, after);
         maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
         var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var regexMatcher = regex
+            ? new Regex(query, exact ? RegexOptions.None : RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(500))
+            : null;
 
         using var fileCmd = _conn.CreateCommand();
         var sql = "SELECT f.path, f.lang, f.lines FROM files f WHERE 1=1";
@@ -42,7 +45,7 @@ public partial class DbReader
             if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap) || lineMap.Count == 0)
                 continue;
 
-            var searchQuery = exact ? ExactSourceSearchNormalizer.Normalize(query, fileLang) : query;
+            var searchQuery = exact && !regex ? ExactSourceSearchNormalizer.Normalize(query, fileLang) : query;
             for (int lineNumber = 1; lineNumber <= totalLines && results.Count < limit; lineNumber++)
             {
                 if (focusLine.HasValue && lineNumber != focusLine.Value)
@@ -62,24 +65,37 @@ public partial class DbReader
                 if (snippetLineNumbers.Count == 0)
                     continue;
 
+                if (regexMatcher != null)
+                {
+                    foreach (Match match in regexMatcher.Matches(searchLine))
+                    {
+                        if (!match.Success || results.Count >= limit)
+                            break;
+                        TryAddMatch(match.Index, Math.Max(1, match.Length));
+                    }
+                    continue;
+                }
+
                 for (int searchStart = 0; searchStart < searchLine.Length && results.Count < limit;)
                 {
                     var matchColumn = searchLine.IndexOf(searchQuery, searchStart, comparison);
                     if (matchColumn < 0)
                         break;
+                    TryAddMatch(matchColumn, searchQuery.Length);
+                    searchStart = matchColumn + 1;
+                }
 
+                bool TryAddMatch(int matchColumn, int matchLength)
+                {
                     var rawMatchColumn = rawIndexMap == null ? matchColumn : rawIndexMap[matchColumn];
-                    var rawMatchLength = searchQuery.Length;
-                    if (rawIndexMap != null && rawMatchLength > 0)
+                    var rawMatchLength = matchLength;
+                    if (rawIndexMap != null && matchLength > 0)
                     {
-                        var rawMatchEndIndex = rawIndexMap[matchColumn + rawMatchLength - 1];
+                        var rawMatchEndIndex = rawIndexMap[matchColumn + matchLength - 1];
                         rawMatchLength = rawMatchEndIndex - rawMatchColumn + 1;
                     }
                     if (focusColumn.HasValue && (focusColumn.Value < rawMatchColumn + 1 || focusColumn.Value > rawMatchColumn + rawMatchLength))
-                    {
-                        searchStart = matchColumn + 1;
-                        continue;
-                    }
+                        return false;
 
                     var snippetLines = snippetLineNumbers.Select(line => lineMap[line]).ToList();
                     var clampedSnippet = LineWidthFormatter.ClampLines(
@@ -100,8 +116,7 @@ public partial class DbReader
                         Snippet = clampedSnippet.Text,
                         SnippetTruncated = clampedSnippet.Truncated,
                     });
-
-                    searchStart = matchColumn + 1;
+                    return true;
                 }
             }
         }

@@ -236,6 +236,7 @@ internal static class CliFlagSchema
             new() { Name = "--query", ValuePlaceholder = "<query>", Description = "Literal query", Commands = Set(QueryCommands) },
             new() { Name = "--body", Description = "Include body", Commands = Set(BodyCommands) },
             new() { Name = "--exact", Description = "Backward-compatible exact shorthand", Commands = Set(ExactCommands) },
+            new() { Name = "--regex", Description = "Use regular expression matching", Commands = Set("find") },
             new() { Name = "--exact-name", Description = "Exact symbol-name equality", Commands = Set(ExactNameCommands), AlsoAcceptedBy = Set("search") },
             new() { Name = "--exact-substring", Description = "Search-only exact substring match", Commands = Set("search"), AlsoAcceptedBy = Set(ExactSubstringAccepted) },
             new() { Name = "--prefix", Description = "Trailing-asterisk prefix shorthand", Commands = Set("search") },

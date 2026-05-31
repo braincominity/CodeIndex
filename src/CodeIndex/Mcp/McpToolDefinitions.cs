@@ -231,7 +231,8 @@ public partial class McpServer
                         ["focusLine"] = new JsonObject { ["type"] = "integer", ["description"] = "Optional 1-based line that must contain the match", ["minimum"] = 1 },
                         ["focusColumn"] = new JsonObject { ["type"] = "integer", ["description"] = "Optional 1-based column that must be inside the match span", ["minimum"] = 1 },
                         ["maxLineWidth"] = new JsonObject { ["type"] = "integer", ["description"] = "Clamp very long single-line snippets per line (default: 512; 0 disables clamping)", ["default"] = LineWidthFormatter.DefaultMaxLineWidth, ["minimum"] = 0, ["maximum"] = LineWidthFormatter.MaxAllowedLineWidth },
-                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Case-sensitive literal substring match. Default is case-insensitive literal substring matching.", ["default"] = false }
+                        ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Case-sensitive literal substring match. Default is case-insensitive literal substring matching.", ["default"] = false },
+                        ["regex"] = new JsonObject { ["type"] = "boolean", ["description"] = "Treat query as a .NET regular expression with a 500 ms timeout", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query", "path" }
                 },

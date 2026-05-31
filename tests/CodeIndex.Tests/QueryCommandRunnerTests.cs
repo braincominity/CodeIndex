@@ -29117,6 +29117,30 @@ jobs:
     }
 
     [Fact]
+    public void RunFind_RegexMatchesAnchors()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_regex");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Auth.cs", "csharp", "alpha\nGuard()\nnot Guard()\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["^Guard", "--regex", "--db", dbPath, "--path", "src/Auth.cs"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("src/Auth.cs:2:1", stdout);
+            Assert.DoesNotContain("src/Auth.cs:3:5", stdout);
+            Assert.Contains("1 matches in 1 file", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFind_CountOnlyJsonIncludesVisibleMatchAndFileCounts()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_count");

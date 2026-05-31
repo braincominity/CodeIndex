@@ -5640,6 +5640,22 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_FindInFile_RegexMatchesAnchors()
+    {
+        InsertIndexedFile("dist/search-regex.txt", "text", "alpha\ntarget()\nnot target()");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"^target","path":"dist/search-regex.txt","regex":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var result = structured["results"]![0]!;
+
+        Assert.True(structured["regex"]!.GetValue<bool>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal(2, result["line"]!.GetValue<int>());
+        Assert.Equal(1, result["column"]!.GetValue<int>());
+    }
+
+    [Fact]
     public void ToolsCall_AnalyzeSymbol_ClampsBundledReferenceContext()
     {
         InsertIndexedFile("src/target.js", "javascript",
