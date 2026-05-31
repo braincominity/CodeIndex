@@ -378,7 +378,7 @@ public class DbContext : IDisposable
             _walCheckpointSucceeded = true;
             return true;
         }
-        catch (SqliteException)
+        catch (Exception)
         {
             _walCheckpointSucceeded = false;
             return false;

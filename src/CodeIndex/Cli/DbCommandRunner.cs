@@ -372,10 +372,17 @@ public static class DbCommandRunner
 
     private static void RunWalCheckpointTruncate(SqliteConnection connection)
     {
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
-        DbContext.WalCheckpointTruncateExecutedForTesting?.Invoke(connection.DataSource);
-        cmd.ExecuteNonQuery();
+        try
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+            DbContext.WalCheckpointTruncateExecutedForTesting?.Invoke(connection.DataSource);
+            cmd.ExecuteNonQuery();
+        }
+        catch (Exception)
+        {
+            // WAL truncation is opportunistic cleanup. Prune has already committed.
+        }
     }
 
     internal static DbCommandOptions ParseArgs(string[] args)
