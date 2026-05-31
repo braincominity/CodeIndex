@@ -3172,7 +3172,7 @@ public partial class McpServer
         };
         if (!sqlGraphContractReadyAfter)
         {
-            var signalReader = new DbReader(writer.Connection);
+            using var signalReader = new DbReader(writer.Connection);
             AddSqlGraphContractSignal(structured, signalReader.GetSqlGraphContractSignal());
         }
         return CreateToolResult(id,

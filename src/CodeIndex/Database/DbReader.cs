@@ -28,7 +28,7 @@ internal readonly record struct IndexedFileSnapshot(string Path, string? Checksu
 /// Handles read/query operations against the database for search, symbols, and files.
 /// 検索・シンボル・ファイル一覧などのDB読み取り操作を担当する。
 /// </summary>
-public partial class DbReader
+public partial class DbReader : IDisposable
 {
     public const string VerifyFoldReadyRowsEnvironmentVariable = "CDIDX_VERIFY_FOLD_READY_ROWS";
     internal const int MaxReferenceKindAggregateCharacters = 16 * 1024;
@@ -65,6 +65,7 @@ public partial class DbReader
     private readonly Dictionary<string, List<CSharpContainingTypeCandidate>> _csharpTypeContainingTypesByName = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, HashSet<string>> _csharpInheritedContainingTypesByQualifiedName = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CSharpContainingTypeScope?> _csharpContainingTypeScopeByQualifiedName = new(StringComparer.Ordinal);
+    private bool _disposed;
     private HashSet<string>? _csharpGlobalUsingStaticTargets;
     private HashSet<string>? _csharpGlobalUsingNamespaces;
     private Dictionary<string, CSharpUsingAliasScope>? _csharpGlobalUsingAliasesByName;
@@ -561,6 +562,30 @@ public partial class DbReader
         // Issue #1515: 旧 cdidx が新 cdidx 製 DB を開いたケースを明示的に検知する。
         _indexWriterVersion = TryGetMetaString(_conn, DbContext.CdidxWriterVersionMetaKey);
         (_indexNewerThanReader, _indexNewerThanReaderReason) = DetectNewerThanReaderContracts(_conn, userVersion);
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+
+        _disposed = true;
+        _csharpUsingStaticScopesByPath.Clear();
+        _csharpNamespaceScopesByPath.Clear();
+        _csharpContainingTypeScopesByPath.Clear();
+        _csharpUsingNamespaceScopesByPath.Clear();
+        _csharpUsingAliasScopesByPath.Clear();
+        _activeCSharpTypeNamespacesByPathLine.Clear();
+        _activeCSharpContainingTypeScopesByPathLine.Clear();
+        _activeCSharpUsingStaticTargetsByPathLine.Clear();
+        _csharpConstantPatternContainersByMemberName.Clear();
+        _csharpTypeNamespacesByName.Clear();
+        _csharpTypeContainingTypesByName.Clear();
+        _csharpInheritedContainingTypesByQualifiedName.Clear();
+        _csharpContainingTypeScopeByQualifiedName.Clear();
+        _csharpGlobalUsingStaticTargets = null;
+        _csharpGlobalUsingNamespaces = null;
+        _csharpGlobalUsingAliasesByName = null;
     }
 
     /// <summary>
