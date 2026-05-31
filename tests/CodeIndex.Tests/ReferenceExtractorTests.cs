@@ -14791,6 +14791,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_ElixirPipeCalls_DetectsQualifiedAndUnqualifiedTargets()
+    {
+        const string content = """
+            defmodule MyApp do
+              def run(items) do
+                items
+                |> Enum.map(&process/1)
+                |> Enum.filter(&valid?/1)
+                |> normalize(:strict)
+                |> persist!
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "elixir", content);
+        var references = ReferenceExtractor.Extract(1, "elixir", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "map" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "filter" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "normalize" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "persist!" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_ElixirNestedBlocks_AssignsCorrectCallerContainers()
     {
         // Elixir: nested body ranges must keep downstream calls inside the right container / ネストした本体範囲でも呼び出しを正しいコンテナに帰属させる
