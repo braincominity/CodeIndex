@@ -434,7 +434,8 @@ public static class ConsoleUi
             current,
             total,
             redirected ? 80 : GetWindowWidth(),
-            ShouldUseUnicodeGlyphs());
+            ShouldUseUnicodeGlyphs(),
+            ShouldUseProgressAnimation());
 
         if (!redirected)
         {
@@ -457,7 +458,12 @@ public static class ConsoleUi
         }
     }
 
-    internal static string FormatProgressLine(int current, int total, int windowWidth, bool useUnicodeGlyphs)
+    internal static string FormatProgressLine(
+        int current,
+        int total,
+        int windowWidth,
+        bool useUnicodeGlyphs,
+        bool useProgressAnimation = true)
     {
         const int barWidth = 32;
         var pct = (double)current / total;
@@ -472,7 +478,7 @@ public static class ConsoleUi
         if (filled > barWidth) filled = barWidth;
         if (filled < 0) filled = 0;
 
-        var spinner = ResolveProgressSpinner(current, total, useUnicodeGlyphs);
+        var spinner = useProgressAnimation ? ResolveProgressSpinner(current, total, useUnicodeGlyphs) : " ";
         var bar = useUnicodeGlyphs
             ? new string('\u2588', filled) + new string('\u2591', barWidth - filled)
             : $"[{new string('#', filled)}{new string('-', barWidth - filled)}]";

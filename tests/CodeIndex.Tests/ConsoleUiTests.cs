@@ -371,6 +371,20 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void FormatProgressLine_ProgressAnimationDisabled_UsesStaticPrefix()
+    {
+        var line = ConsoleUi.FormatProgressLine(
+            25,
+            100,
+            windowWidth: 80,
+            useUnicodeGlyphs: false,
+            useProgressAnimation: false);
+
+        Assert.StartsWith("  [########", line);
+        Assert.DoesNotContain("- [", line);
+    }
+
+    [Fact]
     public void FormatProgressLine_NarrowUnicodeTerminal_UsesPercentageOnly()
     {
         var line = ConsoleUi.FormatProgressLine(2, 4, windowWidth: 39, useUnicodeGlyphs: true);
