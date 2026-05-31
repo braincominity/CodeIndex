@@ -2349,8 +2349,14 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        if (!TryExtractDepsFormat(cmdArgs, out var depsFormat, out var parseArgs, out var depsFormatError))
+        {
+            Console.Error.WriteLine(depsFormatError);
+            return CommandExitCodes.UsageError;
+        }
+
         var options = ParseArgs(
-            cmdArgs,
+            parseArgs,
             jsonDefault: false,
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false);
@@ -3543,8 +3549,14 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        if (!TryExtractDepsFormat(cmdArgs, out var depsFormat, out var parseArgs, out var depsFormatError))
+        {
+            Console.Error.WriteLine(depsFormatError);
+            return CommandExitCodes.UsageError;
+        }
+
         var options = ParseArgs(
-            cmdArgs,
+            parseArgs,
             jsonDefault: false,
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false);
@@ -3593,9 +3605,9 @@ public static class QueryCommandRunner
                 return ZeroResultExitCode(options);
             }
 
-            if (options.OutputFormat is OutputFormatDot or OutputFormatGraphMl or OutputFormatJsonGraph)
+            if (depsFormat is OutputFormatDot or OutputFormatGraphMl or OutputFormatJsonGraph)
             {
-                WriteDependencyGraph(outputEdges, options.OutputFormat, jsonOptions);
+                WriteDependencyGraph(outputEdges, depsFormat, jsonOptions);
                 return CommandExitCodes.Success;
             }
 
@@ -3633,6 +3645,67 @@ public static class QueryCommandRunner
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    private static bool TryExtractDepsFormat(string[] args, out string format, out string[] parseArgs, out string? error)
+    {
+        format = OutputFormatEdgeList;
+        error = null;
+        var rewritten = new List<string>(args.Length);
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg.StartsWith("--format=", StringComparison.Ordinal))
+            {
+                var rawFormat = arg["--format=".Length..];
+                if (!TryNormalizeDepsFormat(rawFormat, out format, out error))
+                {
+                    parseArgs = args;
+                    return false;
+                }
+                rewritten.Add(format == OutputFormatJsonGraph ? "--format=json" : "--format=text");
+                continue;
+            }
+
+            if (arg == "--format" && i + 1 < args.Length)
+            {
+                var rawFormat = args[++i];
+                if (!TryNormalizeDepsFormat(rawFormat, out format, out error))
+                {
+                    parseArgs = args;
+                    return false;
+                }
+                rewritten.Add("--format");
+                rewritten.Add(format == OutputFormatJsonGraph ? "json" : "text");
+                continue;
+            }
+
+            rewritten.Add(arg);
+        }
+
+        parseArgs = rewritten.ToArray();
+        return true;
+    }
+
+    private static bool TryNormalizeDepsFormat(string rawFormat, out string format, out string? error)
+    {
+        format = rawFormat.ToLowerInvariant();
+        error = null;
+        switch (format)
+        {
+            case OutputFormatText:
+            case OutputFormatJson:
+            case OutputFormatEdgeList:
+                format = OutputFormatEdgeList;
+                return true;
+            case OutputFormatDot:
+            case OutputFormatGraphMl:
+            case OutputFormatJsonGraph:
+                return true;
+            default:
+                error = $"Error: deps --format must be one of edgelist, dot, graphml, or json-graph; got '{rawFormat}'.";
+                return false;
+        }
     }
 
     internal static List<FileDependencyResult> FilterCycleEdges(List<FileDependencyResult> results, out List<List<string>> cycles)
@@ -4985,7 +5058,7 @@ public static class QueryCommandRunner
                         }
                         else
                         {
-                            AddParseError($"Error: --format must be one of text, json, count, compact, csv, tsv, lsp, qf, sarif, dot, graphml, json-graph, or edgelist; got '{formatValue}'.");
+                            AddParseError($"Error: --format must be one of text, json, count, compact, csv, tsv, lsp, qf, or sarif; got '{formatValue}'.");
                         }
                     }
                     else
@@ -5616,10 +5689,6 @@ public static class QueryCommandRunner
             case OutputFormatLsp:
             case OutputFormatQf:
             case OutputFormatSarif:
-            case OutputFormatDot:
-            case OutputFormatGraphMl:
-            case OutputFormatJsonGraph:
-            case OutputFormatEdgeList:
                 format = rawValue.ToLowerInvariant();
                 return true;
             default:

@@ -12613,18 +12613,15 @@ jobs:
     }
 
     [Fact]
-    public void RunDeps_ParseGraphOptions_StoresFormatAndCycles()
+    public void ParseArgs_GraphFormatOutsideDeps_ReturnsParseError()
     {
         var options = QueryCommandRunner.ParseArgs(
-            ["--format", "json-graph", "--cycles"],
+            ["--format", "json-graph"],
             jsonDefault: false,
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false);
 
-        Assert.Equal("json-graph", options.OutputFormat);
-        Assert.True(options.Json);
-        Assert.True(options.DependencyCycles);
-        Assert.Null(options.ParseError);
+        Assert.Contains("--format must be one of text", options.ParseError);
     }
 
     [Fact]
