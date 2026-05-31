@@ -386,6 +386,7 @@ public partial class McpServer
         "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "project", "solution" },
         "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
         "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "db", "rebuild", "parallelism", "files", "commits", "changedBetween", "dryRun", "optimize" },
+        "backfill_fold" => new HashSet<string>(StringComparer.Ordinal) { "dry_run", "dryRun", "force" },
         "suggest_improvement" => new HashSet<string>(StringComparer.Ordinal) { "category", "language", "description", "context", "toolInvocationContext" },
         _ => new HashSet<string>(StringComparer.Ordinal),
     };
@@ -3353,7 +3354,7 @@ public partial class McpServer
 
     private sealed record IndexFileFailure(string Path, string Stage, string ExceptionType, string Message);
 
-    private JsonNode ExecuteBackfillFold(JsonNode? id, JsonNode? progressToken = null)
+    private JsonNode ExecuteBackfillFold(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
         if (!DbContext.TryValidateExistingCodeIndexDb(_dbPath, out var validationMessage, out var isNotFound))
         {
@@ -3375,38 +3376,75 @@ public partial class McpServer
             MarkSharedDbMigrated();
             var writer = new DbWriter(db);
             var userVersionBefore = db.GetUserVersion();
+            var foldReadyBefore = (userVersionBefore & DbContext.FoldReadyFlag) != 0;
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
             var storedFoldVersion = db.GetMetaString("fold_key_version");
             var storedFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
-            var rewriteAll = storedFoldVersion != currentFoldVersion
-                || storedFoldFingerprint != currentFoldFingerprint;
-            EmitProgressNotification(progressToken, 0, null, "Backfilling folded-name keys.");
-            var (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
-            EmitProgressNotification(progressToken, symbols + symbolReferences, null, "Verifying folded-name keys.");
-            // MarkFoldReady wraps its own re-verification in BEGIN IMMEDIATE, so a concurrent
-            // writer cannot insert NULL-folded rows between the verify and the stamp. Issue #1535.
-            // MarkFoldReady は BEGIN IMMEDIATE 内で再検証するため、concurrent writer による
-            // NULL 行差し込みで fold_ready が嘘になるのを防ぐ。Issue #1535。
-            var verified = writer.MarkFoldReady();
-            if (!verified)
-                return CreateToolErrorResponse(id, "Folded-name backfill verification failed: some rows still have NULL folded values. Re-run backfill_fold.");
+            var foldMetadataCurrentBefore = storedFoldVersion == currentFoldVersion
+                && storedFoldFingerprint == currentFoldFingerprint;
+            foldReadyBefore = foldReadyBefore && foldMetadataCurrentBefore;
+            var dryRun = args?["dry_run"]?.GetValue<bool>() ?? args?["dryRun"]?.GetValue<bool>() ?? false;
+            var force = args?["force"]?.GetValue<bool>() ?? false;
+            var rewriteAll = force
+                || !foldMetadataCurrentBefore;
+            var symbols = 0;
+            var symbolReferences = 0;
+            var verified = false;
+            var userVersionAfter = userVersionBefore;
 
-            var userVersionAfter = db.GetUserVersion();
-            EmitProgressNotification(progressToken, symbols + symbolReferences, symbols + symbolReferences, "Folded-name backfill complete.");
+            if (dryRun)
+            {
+                (symbols, symbolReferences) = writer.CountBackfillFoldedColumns(rewriteAll);
+            }
+            else
+            {
+                EmitProgressNotification(progressToken, 0, null, "Backfilling folded-name keys.");
+                using var transaction = writer.BeginTransaction();
+                (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
+                EmitProgressNotification(progressToken, symbols + symbolReferences, null, "Verifying folded-name keys.");
+                // Verify and stamp in the same transaction as the row rewrite so crash recovery
+                // never leaves current fold metadata without a matching FoldReady stamp.
+                // 行の再生成と同じ transaction で検証・stamp し、metadata だけが先に残らないようにする。
+                verified = writer.MarkFoldReady();
+                if (!verified)
+                    return CreateToolErrorResponse(id, "Folded-name backfill verification failed: some rows still have NULL folded values. Re-run backfill_fold.");
+
+                transaction.Commit();
+                userVersionAfter = db.GetUserVersion();
+                EmitProgressNotification(progressToken, symbols + symbolReferences, symbols + symbolReferences, "Folded-name backfill complete.");
+            }
+
+            var foldMetadataCurrentAfter = dryRun
+                ? foldMetadataCurrentBefore
+                : true;
+            var foldReadyAfter = (userVersionAfter & DbContext.FoldReadyFlag) != 0
+                && foldMetadataCurrentAfter;
+            var wasAlreadyComplete = foldReadyBefore && !rewriteAll && symbols == 0 && symbolReferences == 0;
 
             var payload = new JsonObject
             {
                 ["symbols"] = symbols,
                 ["symbol_references"] = symbolReferences,
                 ["rewrite_all"] = rewriteAll,
+                ["dry_run"] = dryRun,
+                ["force"] = force,
+                ["was_already_complete"] = wasAlreadyComplete,
+                ["fold_ready_before"] = foldReadyBefore,
+                ["fold_ready_after"] = foldReadyAfter,
                 ["verified"] = verified,
                 ["user_version_before"] = userVersionBefore,
                 ["user_version_after"] = userVersionAfter,
-                ["fold_ready"] = true,
+                ["fold_ready"] = foldReadyAfter,
+                ["fold_key_version_before"] = storedFoldVersion,
+                ["fold_key_version_after"] = dryRun ? storedFoldVersion : currentFoldVersion,
+                ["fold_key_fingerprint_before"] = storedFoldFingerprint,
+                ["fold_key_fingerprint_after"] = dryRun ? storedFoldFingerprint : currentFoldFingerprint,
             };
 
-            var summary = rewriteAll
+            var summary = dryRun
+                ? "Folded-name backfill preview complete."
+                : rewriteAll
                 ? "Folded-name keys refreshed and FoldReady stamped."
                 : "Missing folded-name keys backfilled and FoldReady stamped.";
             return CreateToolResult(id, summary, payload);

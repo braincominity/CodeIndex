@@ -2190,7 +2190,7 @@ public partial class McpServer : IDisposable
                         "symbol_hotspots" => ExecuteSymbolHotspots(id, args),
                         "ping" => ExecutePing(id),
                         "index" => ExecuteIndex(id, args, progressToken),
-                        "backfill_fold" => ExecuteBackfillFold(id, progressToken),
+                        "backfill_fold" => ExecuteBackfillFold(id, args, progressToken),
                         "suggest_improvement" => await ExecuteSuggestImprovementAsync(id, args).ConfigureAwait(false),
                         _ => CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown tool: {toolName}",
                             category: McpErrorEnvelope.CategoryToolUnknown,
@@ -2970,7 +2970,7 @@ public partial class McpServer : IDisposable
                 },
             },
             "index" => new JsonObject { ["path"] = ".", ["rebuild"] = false },
-            "backfill_fold" => new JsonObject(),
+            "backfill_fold" => new JsonObject { ["dry_run"] = false, ["force"] = false },
             "symbol_hotspots" => new JsonObject { ["lang"] = "csharp", ["limit"] = 10 },
             "unused_symbols" => new JsonObject { ["lang"] = "csharp", ["limit"] = 10 },
             "suggest_improvement" => new JsonObject

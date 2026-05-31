@@ -410,11 +410,15 @@ public partial class McpServer
                 IndexAnnotations()),
             CreateToolDefinition(
                 "backfill_fold",
-                "Upgrade folded-name keys in an existing CodeIndex DB without reparsing source files. Rejects missing or blank targets instead of creating a fresh DB. Fills missing `name_folded` columns (or rewrites all keys after fold metadata drift such as version/fingerprint mismatch) and stamps FoldReady on success. On transports that can carry out-of-band server messages (stdio, and HTTP clients connected to `/events`), when the tools/call request includes `_meta.progressToken`, this tool emits `notifications/progress` with that token during backfill and verification. / ソース再解析なしで既存の CodeIndex DB の folded-name key を更新する。欠落したDBや空のDBを新規作成せず拒否し、欠損 `name_folded` 列を埋めるか、fold metadata の drift（version / fingerprint 不一致など）時は全 key を再生成し、成功時に FoldReady を stamp する。out-of-band のサーバーメッセージを送れる transport（stdio、および `/events` に接続した HTTP クライアント）では、tools/call リクエストに `_meta.progressToken` が含まれる場合、backfill と検証中に同じ token の `notifications/progress` を送信する。",
+                "Upgrade folded-name keys in an existing CodeIndex DB without reparsing source files. Rejects missing or blank targets instead of creating a fresh DB. Fills missing `name_folded` columns (or rewrites all keys after fold metadata drift such as version/fingerprint mismatch) and stamps FoldReady on success. Use `dry_run:true` to preview affected row counts without writing, or `force:true` to rewrite every folded key even when metadata appears current. On transports that can carry out-of-band server messages (stdio, and HTTP clients connected to `/events`), when the tools/call request includes `_meta.progressToken`, this tool emits `notifications/progress` with that token during backfill and verification. / ソース再解析なしで既存の CodeIndex DB の folded-name key を更新する。欠落したDBや空のDBを新規作成せず拒否し、欠損 `name_folded` 列を埋めるか、fold metadata の drift（version / fingerprint 不一致など）時は全 key を再生成し、成功時に FoldReady を stamp する。`dry_run:true` で書き込まず対象行数を確認でき、`force:true` で metadata が current に見える場合でも全 folded key を再生成する。out-of-band のサーバーメッセージを送れる transport（stdio、および `/events` に接続した HTTP クライアント）では、tools/call リクエストに `_meta.progressToken` が含まれる場合、backfill と検証中に同じ token の `notifications/progress` を送信する。",
                 new JsonObject
                 {
                     ["type"] = "object",
-                    ["properties"] = new JsonObject()
+                    ["properties"] = new JsonObject
+                    {
+                        ["dry_run"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preview affected folded-key row counts without writing to the database.", ["default"] = false },
+                        ["force"] = new JsonObject { ["type"] = "boolean", ["description"] = "Rewrite all folded keys even when stored fold metadata matches the current runtime.", ["default"] = false }
+                    }
                 },
                 IndexAnnotations()),
             CreateToolDefinition(

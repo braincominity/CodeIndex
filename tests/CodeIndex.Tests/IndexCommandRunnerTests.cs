@@ -3033,6 +3033,142 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void RunBackfillFold_DryRunReportsRowsWithoutWriting()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_dry_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "café_init", Line = 1, StartLine = 1, EndLine = 1 },
+                ]);
+                writer.MarkGraphReady();
+                writer.MarkIssuesReady();
+            }
+
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE symbols SET name_folded = NULL; PRAGMA user_version = 3";
+                cmd.ExecuteNonQuery();
+            }
+
+            JsonElement json;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var writer = new StringWriter();
+                try
+                {
+                    Console.SetOut(writer);
+                    exitCode = IndexCommandRunner.RunBackfillFold(["--db", dbPath, "--dry-run", "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(writer.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(json.GetProperty("dry_run").GetBoolean());
+            Assert.Equal(1, json.GetProperty("symbols").GetInt32());
+            Assert.False(json.GetProperty("verified").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready_after").GetBoolean());
+
+            using var verifyDb = new DbContext(dbPath);
+            using var count = verifyDb.Connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM symbols WHERE name_folded IS NULL";
+            Assert.Equal(1L, (long)count.ExecuteScalar()!);
+            Assert.Equal(3, verifyDb.GetUserVersion());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void RunBackfillFold_DryRunReportsEffectiveFoldReadyWhenMetadataStale()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_stale_dry_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 64,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "café_init", Line = 1, StartLine = 1, EndLine = 1 },
+                ]);
+                writer.BackfillFoldedColumns(rewriteAll: true);
+                writer.MarkFoldReady();
+                writer.SetMeta("fold_key_fingerprint", "DEADBEEFDEADBEEF");
+            }
+
+            JsonElement json;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var writer = new StringWriter();
+                try
+                {
+                    Console.SetOut(writer);
+                    exitCode = IndexCommandRunner.RunBackfillFold(["--db", dbPath, "--dry-run", "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(writer.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(json.GetProperty("dry_run").GetBoolean());
+            Assert.True(json.GetProperty("rewrite_all").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready_before").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready_after").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Equal("DEADBEEFDEADBEEF", verifyDb.GetMetaString("fold_key_fingerprint"));
+            Assert.Equal(DbContext.FoldReadyFlag, verifyDb.GetUserVersion());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_RewritesAllWhenOnlyFingerprintDrifted()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_fp_{Guid.NewGuid():N}.db");
