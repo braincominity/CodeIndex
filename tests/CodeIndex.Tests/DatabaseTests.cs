@@ -420,6 +420,140 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InitializeSchema_RefreshesLegacyKindCheckConstraints()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_kind_check_{Guid.NewGuid():N}.db");
+        try
+        {
+            var builder = new SqliteConnectionStringBuilder { DataSource = dbPath };
+            using (var conn = new SqliteConnection(builder.ConnectionString))
+            {
+                conn.Open();
+                ExecuteNonQuery(conn, """
+                    CREATE TABLE files (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        path        TEXT NOT NULL UNIQUE,
+                        lang        TEXT,
+                        size        INTEGER,
+                        lines       INTEGER,
+                        checksum    TEXT,
+                        modified    DATETIME,
+                        generated   INTEGER NOT NULL DEFAULT 0,
+                        indexed_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """);
+                ExecuteNonQuery(conn, """
+                    CREATE TABLE chunks (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                        chunk_index INTEGER NOT NULL,
+                        start_line  INTEGER,
+                        end_line    INTEGER,
+                        content     TEXT,
+                        UNIQUE(file_id, chunk_index)
+                    )
+                    """);
+                ExecuteNonQuery(conn, """
+                    CREATE TABLE reference_lines (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                        line        INTEGER NOT NULL,
+                        context     TEXT NOT NULL,
+                        UNIQUE(file_id, line, context)
+                    )
+                    """);
+                ExecuteNonQuery(conn, """
+                    CREATE TABLE symbols (
+                        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                        kind            TEXT CHECK (kind IN ('class','function','module')),
+                        sub_kind        TEXT,
+                        name            TEXT,
+                        line            INTEGER,
+                        start_line      INTEGER,
+                        start_column    INTEGER,
+                        end_line        INTEGER,
+                        body_start_line INTEGER,
+                        body_end_line   INTEGER,
+                        signature       TEXT,
+                        container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ('class','function','module')),
+                        container_name  TEXT,
+                        container_qualified_name TEXT,
+                        family_key      TEXT,
+                        visibility      TEXT,
+                        return_type     TEXT,
+                        is_metadata_target INTEGER,
+                        name_folded     TEXT
+                    )
+                    """);
+                ExecuteNonQuery(conn, """
+                    CREATE TABLE symbol_references (
+                        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                        symbol_name     TEXT,
+                        reference_kind  TEXT CHECK (reference_kind IN ('call','type_reference')),
+                        line            INTEGER,
+                        column_number   INTEGER,
+                        context         TEXT,
+                        reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
+                        container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ('class','function','module')),
+                        container_name  TEXT,
+                        symbol_name_folded TEXT,
+                        container_name_folded TEXT,
+                        is_self_reference INTEGER NOT NULL DEFAULT 0,
+                        is_mutual_recursion INTEGER NOT NULL DEFAULT 0
+                    )
+                    """);
+            }
+
+            using var db = new DbContext(dbPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            var fileId = writer.UpsertFile(new FileRecord
+            {
+                Path = "lib/inspect_impl.ex",
+                Lang = "elixir",
+                Size = 64,
+                Lines = 4,
+                Modified = new DateTime(2026, 5, 31, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = Guid.NewGuid().ToString("N"),
+            });
+            writer.InsertSymbols(
+            [
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "protocol_impl",
+                    Name = "String.Chars, for: User",
+                    Line = 1,
+                    ContainerKind = "protocol_impl",
+                    ContainerName = "String.Chars, for: User",
+                },
+            ]);
+            writer.InsertReferences(
+            [
+                new ReferenceRecord
+                {
+                    FileId = fileId,
+                    SymbolName = "User",
+                    ReferenceKind = "type_reference",
+                    Line = 1,
+                    Column = 23,
+                    ContainerKind = "protocol_impl",
+                    ContainerName = "String.Chars, for: User",
+                },
+            ]);
+
+            Assert.Equal(1, ExecuteScalarLong(db.Connection, "SELECT COUNT(*) FROM symbols WHERE kind = 'protocol_impl'"));
+            Assert.Equal(1, ExecuteScalarLong(db.Connection, "SELECT COUNT(*) FROM symbol_references WHERE container_kind = 'protocol_impl'"));
+        }
+        finally
+        {
+            DeleteDbFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void OptimizeFts_ResetsIncrementalWriteCounterAndStampsTime()
     {
         Assert.Equal(0, _writer.GetFtsIncrementalWritesSinceOptimize());
@@ -2288,5 +2422,12 @@ public class DatabaseTests : IDisposable
         using var cmd = connection.CreateCommand();
         cmd.CommandText = sql;
         return Convert.ToInt64(cmd.ExecuteScalar());
+    }
+
+    private static void ExecuteNonQuery(SqliteConnection connection, string sql)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
     }
 }

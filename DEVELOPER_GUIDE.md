@@ -223,6 +223,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `procedure` | Procedure declarations in languages such as Fortran | Callable definition |
 | `program` | Program block declarations in languages such as Fortran | Definition target and container |
 | `protocol` | Protocol declarations in languages that distinguish protocols from interfaces | Definition target and container |
+| `protocol_impl` | Elixir `defimpl` protocol implementation declarations | Definition target and container for implementation blocks |
 | `reference` | Secondary extracted symbolic references, such as HTML classes or metadata keys | Search/filter symbol |
 | `rule` | CSS/SCSS rule container context used by nested references | Container context |
 | `route` | Razor route directives | Context/search symbol |
