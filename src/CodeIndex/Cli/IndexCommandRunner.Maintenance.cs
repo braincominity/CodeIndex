@@ -172,11 +172,13 @@ public static partial class IndexCommandRunner
             var currentFoldFingerprint = NameFold.Fingerprint();
             var storedFoldVersion = db.GetMetaString("fold_key_version");
             var storedFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+            var foldMetadataCurrentBefore = storedFoldVersion == currentFoldVersion
+                && storedFoldFingerprint == currentFoldFingerprint;
+            foldReadyBefore = foldReadyBefore && foldMetadataCurrentBefore;
             // Missing or mismatched fold metadata means persisted keys may have been generated
             // by a different fold algorithm/runtime, so refresh every row from source names.
             // fold metadata 未記録 / 不一致時は全行再計算して version/runtime skew を解消する。
-            var rewriteAll = storedFoldVersion != currentFoldVersion
-                || storedFoldFingerprint != currentFoldFingerprint;
+            var rewriteAll = !foldMetadataCurrentBefore;
 
             var symbols = 0;
             var symbolReferences = 0;
@@ -211,7 +213,11 @@ public static partial class IndexCommandRunner
                 transaction.Commit();
                 userVersionAfter = db.GetUserVersion();
             }
-            var foldReadyAfter = (userVersionAfter & DbContext.FoldReadyFlag) != 0;
+            var foldMetadataCurrentAfter = options.DryRun
+                ? foldMetadataCurrentBefore
+                : true;
+            var foldReadyAfter = (userVersionAfter & DbContext.FoldReadyFlag) != 0
+                && foldMetadataCurrentAfter;
             var wasAlreadyComplete = foldReadyBefore && !rewriteAll && symbols == 0 && symbolReferences == 0;
 
             if (options.Json)

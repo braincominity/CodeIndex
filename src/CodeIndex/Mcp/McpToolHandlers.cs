@@ -3216,11 +3216,13 @@ public partial class McpServer
             var currentFoldFingerprint = NameFold.Fingerprint();
             var storedFoldVersion = db.GetMetaString("fold_key_version");
             var storedFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+            var foldMetadataCurrentBefore = storedFoldVersion == currentFoldVersion
+                && storedFoldFingerprint == currentFoldFingerprint;
+            foldReadyBefore = foldReadyBefore && foldMetadataCurrentBefore;
             var dryRun = args?["dry_run"]?.GetValue<bool>() ?? args?["dryRun"]?.GetValue<bool>() ?? false;
             var force = args?["force"]?.GetValue<bool>() ?? false;
             var rewriteAll = force
-                || storedFoldVersion != currentFoldVersion
-                || storedFoldFingerprint != currentFoldFingerprint;
+                || !foldMetadataCurrentBefore;
             var symbols = 0;
             var symbolReferences = 0;
             var verified = false;
@@ -3248,7 +3250,11 @@ public partial class McpServer
                 EmitProgressNotification(progressToken, symbols + symbolReferences, symbols + symbolReferences, "Folded-name backfill complete.");
             }
 
-            var foldReadyAfter = (userVersionAfter & DbContext.FoldReadyFlag) != 0;
+            var foldMetadataCurrentAfter = dryRun
+                ? foldMetadataCurrentBefore
+                : true;
+            var foldReadyAfter = (userVersionAfter & DbContext.FoldReadyFlag) != 0
+                && foldMetadataCurrentAfter;
             var wasAlreadyComplete = foldReadyBefore && !rewriteAll && symbols == 0 && symbolReferences == 0;
 
             var payload = new JsonObject

@@ -6526,6 +6526,8 @@ public class McpServerTests : IDisposable
     public void ToolsCall_BackfillFold_DryRunDoesNotWrite()
     {
         var writer = new DbWriter(_db.Connection);
+        writer.BackfillFoldedColumns(rewriteAll: true);
+        writer.MarkFoldReady();
         writer.SetMeta("fold_key_fingerprint", "DEADBEEFDEADBEEF");
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{"dry_run":true}}}""")!;
@@ -6536,10 +6538,12 @@ public class McpServerTests : IDisposable
         Assert.True(structured["dry_run"]!.GetValue<bool>());
         Assert.Equal(2, structured["symbols"]!.GetValue<int>());
         Assert.False(structured["verified"]!.GetValue<bool>());
+        Assert.False(structured["fold_ready_before"]!.GetValue<bool>());
         Assert.False(structured["fold_ready_after"]!.GetValue<bool>());
+        Assert.False(structured["fold_ready"]!.GetValue<bool>());
 
         Assert.Equal("DEADBEEFDEADBEEF", _db.GetMetaString("fold_key_fingerprint"));
-        Assert.Equal(3, _db.GetUserVersion());
+        Assert.Equal(7, _db.GetUserVersion());
     }
 
     [Fact]
