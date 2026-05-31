@@ -143,7 +143,9 @@ Hook failures are isolated to that hook invocation: assembly load, construction,
 
 ### Ignore file parsing
 
-`.gitignore` and `.cdidxignore` parsing follows Git's whitespace rules for pattern lines: leading spaces and tabs are literal pattern characters, `#` starts a comment only when it is the first unescaped character, and unescaped trailing spaces or tabs are trimmed. Escape a trailing space or tab with `\` when the whitespace is part of the filename pattern.
+`.gitignore` and `.cdidxignore` parsing follows Git's whitespace rules for pattern lines: leading unescaped spaces and tabs are ignored before comment/pattern parsing, `#` starts a comment only when it is the first unescaped character after that trim, and unescaped trailing spaces or tabs are trimmed. Escape a leading, trailing, or `#` character with `\` when it is part of the filename pattern.
+
+Ignore-file reads avoid `File.Exists` / `File.ReadLines` time-of-check/time-of-use races: the scanner attempts the UTF-8 read directly, treats missing files as absent rules, treats permission-denied ignore files as warnings while preserving inherited ancestor rules, and treats other I/O failures as unavailable rules so callers can avoid indexing with stale or unknown local ignore state. Ignore patterns are capped at 512 tokens and compiled with the non-backtracking regex engine plus a match timeout so malformed or untrusted ignore files cannot stall a scan with excessive regex work.
 
 Bracket expressions follow Git-compatible glob behavior: both `[!a]` and `[^a]` are treated as negated character classes when `!` or `^` appears immediately after `[`. A caret elsewhere in the class is literal (`[a^b]`), and a literal leading caret must be escaped (`[\^a]`).
 
