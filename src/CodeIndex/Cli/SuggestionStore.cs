@@ -22,10 +22,15 @@ public class SuggestionStore
 {
     private readonly string _filePath;
     private readonly string _lockPath;
+    private readonly string _archivePath;
     private static readonly TimeSpan s_inFlightSubmitRetryDelay = TimeSpan.FromMinutes(1);
     internal const FileShare StreamingReadFileShare = FileShare.ReadWrite | FileShare.Delete;
     internal const string DedupThresholdEnvironmentVariable = "CDIDX_SUGGESTION_DEDUP_THRESHOLD";
+    internal const string MaxAgeDaysEnvironmentVariable = "CDIDX_SUGGESTION_MAX_AGE_DAYS";
+    internal const string MaxCountEnvironmentVariable = "CDIDX_SUGGESTION_MAX_COUNT";
     internal const double DefaultDedupThreshold = 0.85;
+    internal const int DefaultMaxAgeDays = 365;
+    internal const int DefaultMaxCount = 5000;
     private const int FuzzyDedupRecentLimit = 100;
     private const string RedactedAwsAccessKey = "[REDACTED:aws_access_key]";
     private const string RedactedBearerToken = "[REDACTED:bearer_token]";
@@ -97,6 +102,7 @@ public class SuggestionStore
         var safeName = string.IsNullOrWhiteSpace(dbName) ? "codeindex" : dbName;
         _filePath = Path.Combine(cdidxDir, $"suggestions-{safeName}.json");
         _lockPath = Path.Combine(cdidxDir, $"suggestions-{safeName}.lock");
+        _archivePath = Path.Combine(cdidxDir, $"suggestions-{safeName}.archive.jsonl");
     }
 
     /// <summary>
@@ -130,10 +136,12 @@ public class SuggestionStore
         return WithFileLock(() =>
         {
             var existing = ReadUnlocked();
+            PruneUnlocked(existing);
             if (FindDuplicate(existing, record, ResolveDedupThreshold()).Record != null)
                 return false;
 
             existing.Add(record);
+            PruneUnlocked(existing);
             SaveUnlocked(existing);
             return true;
         });
@@ -199,6 +207,7 @@ public class SuggestionStore
         var reservation = WithFileLock(() =>
         {
             var existing = ReadUnlocked();
+            PruneUnlocked(existing);
             var duplicate = FindDuplicate(existing, record, ResolveDedupThreshold());
             var found = duplicate.Record;
 
@@ -208,6 +217,7 @@ public class SuggestionStore
             if (isNew)
             {
                 existing.Add(record);
+                PruneUnlocked(existing);
                 SaveUnlocked(existing);
                 found = record;
             }
@@ -745,6 +755,71 @@ public class SuggestionStore
             return true;
 
         return record.NextRetryAt.Value <= DateTime.UtcNow;
+    }
+
+    private void PruneUnlocked(List<SuggestionRecord> records)
+    {
+        var maxAge = ResolveMaxAge();
+        var maxCount = ResolveMaxCount();
+        var cutoff = DateTime.UtcNow.Subtract(maxAge);
+        var pruned = records
+            .Where(record => record.CreatedAt != default && record.CreatedAt < cutoff)
+            .ToList();
+
+        foreach (var record in pruned)
+            records.Remove(record);
+
+        var overflow = records.Count - maxCount;
+        if (overflow > 0)
+        {
+            var excess = records
+                .OrderBy(record => record.CreatedAt == default ? DateTime.MinValue : record.CreatedAt)
+                .Take(overflow)
+                .ToList();
+            pruned.AddRange(excess);
+            foreach (var record in excess)
+                records.Remove(record);
+        }
+
+        if (pruned.Count == 0)
+            return;
+
+        ArchivePrunedRecords(pruned);
+        try
+        {
+            Console.Error.WriteLine($"[cdidx] Pruned {pruned.Count} stale suggestion record(s) to {_archivePath}.");
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private void ArchivePrunedRecords(IEnumerable<SuggestionRecord> records)
+    {
+        var dir = Path.GetDirectoryName(_archivePath);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+
+        using var stream = new FileStream(_archivePath, FileMode.Append, FileAccess.Write, FileShare.Read);
+        using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        foreach (var record in records)
+            writer.WriteLine(JsonSerializer.Serialize(record, s_jsonOptions));
+    }
+
+    internal static TimeSpan ResolveMaxAge()
+    {
+        var raw = Environment.GetEnvironmentVariable(MaxAgeDaysEnvironmentVariable);
+        return int.TryParse(raw, out var days) && days > 0
+            ? TimeSpan.FromDays(days)
+            : TimeSpan.FromDays(DefaultMaxAgeDays);
+    }
+
+    internal static int ResolveMaxCount()
+    {
+        var raw = Environment.GetEnvironmentVariable(MaxCountEnvironmentVariable);
+        return int.TryParse(raw, out var count) && count > 0
+            ? count
+            : DefaultMaxCount;
     }
 
     private static void StampSubmitAttempt(SuggestionRecord record, DateTime timestamp, string? error, DateTime? nextRetryAt)
