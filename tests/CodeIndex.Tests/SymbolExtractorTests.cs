@@ -129,6 +129,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpManyMethods_DoesNotRescanMethodBodiesAsFieldCandidates()
+    {
+        var methods = Enumerable.Range(0, 80).Select(i => $$"""
+                public void M{{i}}()
+                {
+                    var value = {{i}};
+                    value++;
+                }
+            """);
+        var content = "public class ManyMethods\n{\n" + string.Join('\n', methods) + "\n}";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Equal(80, symbols.Count(symbol => symbol.Kind == "function" && symbol.Name.StartsWith("M", StringComparison.Ordinal)));
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "function" && symbol.Signature?.Contains("value++", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
     public void Extract_PythonDataclassField_IndexesFieldAndMetadataKeys()
     {
         const string content = """
