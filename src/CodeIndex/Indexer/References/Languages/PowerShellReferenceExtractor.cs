@@ -8,7 +8,7 @@ internal static class PowerShellReferenceExtractor
     // `Get-ChildItem -Path .`, `Write-Host "x"`, and `$items | ForEach-Object { ... }`.
     // PowerShell の cmdlet / function 呼び出しは statement-start / pipeline 形で現れる。
     private static readonly Regex CallRegex = new(
-        @"(?:^|[|;&{=]\s*)\s*(?<name>[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z][A-Za-z0-9]*)+)\b",
+        @"(?:^|[|;&{=]\s*)\s*(?<name>[A-Za-z_][A-Za-z0-9_]*(?:-[A-Za-z][A-Za-z0-9_]*)*)\b",
         RegexOptions.Compiled | RegexOptions.Multiline);
 
     public static void EmitCallReferences(string preparedLine, Action<string, int> addCallLikeReference)
@@ -17,7 +17,16 @@ internal static class PowerShellReferenceExtractor
         {
             var name = match.Groups["name"].Value;
             var callIndex = match.Groups["name"].Index;
+            if (IsAssignmentKey(preparedLine, callIndex + name.Length))
+                continue;
             addCallLikeReference(name, callIndex);
         }
+    }
+
+    private static bool IsAssignmentKey(string line, int cursor)
+    {
+        while (cursor < line.Length && char.IsWhiteSpace(line[cursor]))
+            cursor++;
+        return cursor < line.Length && line[cursor] == '=';
     }
 }

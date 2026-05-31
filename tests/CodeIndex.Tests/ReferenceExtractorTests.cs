@@ -18300,6 +18300,11 @@ public class ReferenceExtractorTests
                 Invoke-RestMethod -Uri "https://api.example.com$Endpoint"
             }
 
+            function MyFunction {
+                param($Value)
+                Write-Host $Value
+            }
+
             function Process-Items {
                 param([array]$Items)
                 $Items | ForEach-Object { Process-One $_ }
@@ -18313,6 +18318,7 @@ public class ReferenceExtractorTests
             function Compute-Stats  { param($d) return @{count = $d.Count} }
 
             Get-UserData -Name "Alice" -Id 42
+            MyFunction "hello"
             Process-Items -Items @(1,2,3)
             if ($Items -lt 10) { Write-Host "too few" }
             """;
@@ -18322,6 +18328,7 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "Get-UserData" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "Fetch-Remote" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "MyFunction" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "Process-Items" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "Process-One" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "Transform-Item" && r.ReferenceKind == "call");
