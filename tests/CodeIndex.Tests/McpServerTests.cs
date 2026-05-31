@@ -527,7 +527,7 @@ public class McpServerTests : IDisposable
         Assert.False(capabilities["resources"]!["listChanged"]!.GetValue<bool>());
         Assert.False(capabilities["prompts"]!["listChanged"]!.GetValue<bool>());
         Assert.NotNull(capabilities["logging"]);
-        Assert.Null(capabilities["sampling"]);
+        Assert.NotNull(capabilities["sampling"]);
     }
 
     [Fact]
@@ -9152,6 +9152,89 @@ public class McpServerTests : IDisposable
         Assert.Equal("codex", stored.McpClientName);
         Assert.Equal("5.0", stored.McpClientVersion);
         Assert.Equal("Investigating suggestion triage", stored.ToolInvocationContext);
+    }
+
+    [Fact]
+    public void SuggestImprovement_WhenSamplingAvailable_StoresSampledMetadata()
+    {
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
+        _server.ClientRequestHandlerForTests = (method, _) =>
+        {
+            Assert.Equal("sampling/createMessage", method);
+            return new JsonObject
+            {
+                ["content"] = new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = """{"title":"Improve TypeScript arrow symbol extraction","tags":["symbol_extraction","typescript","ranking"]}"""
+                }
+            };
+        };
+        var uniqueDesc = $"TypeScript arrow symbols need clearer extraction {Guid.NewGuid():N}";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "symbol_extraction",
+                    ["language"] = "typescript",
+                    ["description"] = uniqueDesc,
+                }
+            }
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("Improve TypeScript arrow symbol extraction", structured["sampled_title"]!.GetValue<string>());
+        Assert.Contains(structured["sampled_tags"]!.AsArray(), tag => tag!.GetValue<string>() == "typescript");
+        var stored = new SuggestionStore(Path.GetDirectoryName(_dbPath)!, Path.GetFileNameWithoutExtension(_dbPath)).LoadAll()
+            .Single(s => s.Description == uniqueDesc);
+        Assert.Equal("Improve TypeScript arrow symbol extraction", stored.SampledTitle);
+        Assert.Contains("symbol_extraction", stored.SampledTags!);
+    }
+
+    [Fact]
+    public void SuggestImprovement_WhenSamplingDisabled_DoesNotCallClientSampling()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_SAMPLING");
+        env.Set("CDIDX_MCP_SAMPLING", "0");
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"sampling":{}}}}""")!);
+        var called = false;
+        _server.ClientRequestHandlerForTests = (_, _) =>
+        {
+            called = true;
+            return null;
+        };
+        var uniqueDesc = $"Sampling opt-out regression {Guid.NewGuid():N}";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                }
+            }
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(called);
+        Assert.Equal("recorded", response["result"]!["structuredContent"]!["status"]!.GetValue<string>());
+        Assert.Null(response["result"]!["structuredContent"]!["sampled_title"]);
     }
 
     [Fact]

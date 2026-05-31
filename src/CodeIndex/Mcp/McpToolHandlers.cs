@@ -3713,6 +3713,8 @@ public partial class McpServer
         if (toolInvocationContext != null && SourceCodeDetector.ContainsSourceCode(toolInvocationContext))
             return CreateToolErrorResponse(id, "Tool invocation context appears to contain source code. Please describe the invocation without including code.");
 
+        var sampling = await TrySampleSuggestionMetadataAsync(category, language, description, context, toolInvocationContext).ConfigureAwait(false);
+
         // 4. Compute dedup hash / 重複排除ハッシュを計算
         var hash = SuggestionStore.ComputeHash(category, language, description);
 
@@ -3751,6 +3753,8 @@ public partial class McpServer
             McpClientName = _clientName,
             McpClientVersion = _clientVersion,
             ToolInvocationContext = toolInvocationContext,
+            SampledTitle = sampling?.Title,
+            SampledTags = sampling?.Tags,
         };
 
         // Build GitHub submission callback (null if no token configured).
@@ -3809,7 +3813,126 @@ public partial class McpServer
             payload["upstream_url"] = result.UpstreamUrl;
             payload["github_issue_url"] = result.UpstreamUrl;
         }
+        if (sampling?.Title != null)
+            payload["sampled_title"] = sampling.Title;
+        if (sampling?.Tags is { Length: > 0 })
+            payload["sampled_tags"] = new JsonArray(sampling.Tags.Select(tag => JsonValue.Create(tag)).ToArray<JsonNode?>());
         return CreateToolResult(id, "Suggestion recorded. Thank you for the feedback.", payload);
+    }
+
+    private sealed record SuggestionSamplingResult(string? Title, string[]? Tags);
+
+    private async Task<SuggestionSamplingResult?> TrySampleSuggestionMetadataAsync(
+        string category,
+        string? language,
+        string description,
+        string? context,
+        string? toolInvocationContext)
+    {
+        if (!IsSamplingEnabled() || !HasClientCapability("sampling"))
+            return null;
+
+        var prompt = new StringBuilder();
+        prompt.AppendLine("Extract structured metadata for a cdidx improvement suggestion.");
+        prompt.AppendLine("Return only compact JSON with keys: title (one line, <=80 chars) and tags (array of 1-6 lowercase identifiers).");
+        prompt.AppendLine("Do not include source code.");
+        prompt.AppendLine($"category: {category}");
+        if (!string.IsNullOrWhiteSpace(language))
+            prompt.AppendLine($"language: {language}");
+        prompt.AppendLine($"description: {description}");
+        if (!string.IsNullOrWhiteSpace(context))
+            prompt.AppendLine($"context: {context}");
+        if (!string.IsNullOrWhiteSpace(toolInvocationContext))
+            prompt.AppendLine($"tool_invocation_context: {toolInvocationContext}");
+
+        var result = await SendClientRequestAsync("sampling/createMessage", new JsonObject
+        {
+            ["messages"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["role"] = "user",
+                    ["content"] = new JsonObject
+                    {
+                        ["type"] = "text",
+                        ["text"] = prompt.ToString(),
+                    }
+                }
+            },
+            ["maxTokens"] = 200,
+        }, _currentRequestToken.Value).ConfigureAwait(false);
+
+        var text = ExtractSamplingText(result);
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+        try
+        {
+            var parsed = JsonNode.Parse(text);
+            var title = SanitizeSampledTitle(TryReadStringValue(parsed?["title"]));
+            var tags = parsed?["tags"] is JsonArray tagArray
+                ? tagArray.Select(TryReadStringValue)
+                    .Where(t => !string.IsNullOrWhiteSpace(t))
+                    .Select(SanitizeSampledTag)
+                    .Where(t => t != null)
+                    .Cast<string>()
+                    .Distinct(StringComparer.Ordinal)
+                    .Take(6)
+                    .ToArray()
+                : null;
+            if (title == null && (tags == null || tags.Length == 0))
+                return null;
+            return new SuggestionSamplingResult(title, tags is { Length: > 0 } ? tags : null);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private bool HasClientCapability(string name)
+        => _clientCapabilities is JsonObject obj
+            && obj.TryGetPropertyValue(name, out var node)
+            && node is not null;
+
+    private static bool IsSamplingEnabled()
+    {
+        var raw = Environment.GetEnvironmentVariable(SamplingEnabledEnvironmentVariable);
+        return raw is null || !(raw.Equals("0", StringComparison.OrdinalIgnoreCase)
+            || raw.Equals("false", StringComparison.OrdinalIgnoreCase)
+            || raw.Equals("off", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string? ExtractSamplingText(JsonNode? result)
+    {
+        if (result is null)
+            return null;
+        if (TryReadStringValue(result["content"]?["text"]) is { Length: > 0 } contentText)
+            return contentText;
+        if (result["content"] is JsonArray contentArray)
+        {
+            foreach (var item in contentArray)
+            {
+                if (TryReadStringValue(item?["text"]) is { Length: > 0 } itemText)
+                    return itemText;
+            }
+        }
+        return TryReadStringValue(result["text"]);
+    }
+
+    private static string? SanitizeSampledTitle(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+            return null;
+        title = title.Trim();
+        return title.Length <= 80 ? title : title[..80];
+    }
+
+    private static string? SanitizeSampledTag(string? tag)
+    {
+        if (string.IsNullOrWhiteSpace(tag))
+            return null;
+        var normalized = new string(tag.Trim().ToLowerInvariant().Select(ch => char.IsLetterOrDigit(ch) || ch == '_' || ch == '-' ? ch : '_').ToArray()).Trim('_');
+        return normalized.Length == 0 ? null : normalized.Length <= 40 ? normalized : normalized[..40];
     }
 
     private static bool TryProbeCdidxDirectoryWritable(string cdidxDir, out string? error)
