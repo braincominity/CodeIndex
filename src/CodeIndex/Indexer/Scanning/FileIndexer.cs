@@ -86,6 +86,8 @@ public class FileIndexer
 
     private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp", "msbuild"];
     private const int ConflictMarkerScanLimitBytes = 50 * 1024;
+    private const int MaxDirectoryTraversalDepth = 128;
+    private const int GitLfsPointerMaxBytes = 1024;
     private static readonly string[] IgnoreFileNames = [".gitignore", ".cdidxignore"];
     private const int MaxIgnorePatternLength = 512;
     private static readonly TimeSpan IgnoreRegexMatchTimeout = TimeSpan.FromMilliseconds(100);
@@ -1848,7 +1850,7 @@ public class FileIndexer
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         if (preloadResult.IgnoreRulesAvailable)
         {
-            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeCheckpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, preloadResult.Rules, isProjectRoot: true, continueOnError, cancellationToken);
+            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeCheckpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, preloadResult.Rules, isProjectRoot: true, continueOnError, cancellationToken, depth: 0);
         }
         return new ScanFilesResult(
             files,
@@ -1883,10 +1885,20 @@ public class FileIndexer
         IgnoreRuleSet activeIgnoreRules,
         bool isProjectRoot = false,
         bool continueOnError = true,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int depth = 0)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var relativeDir = ToRelativePath(dir);
+
+        if (depth > MaxDirectoryTraversalDepth)
+        {
+            errors.Add(new ScanError(
+                relativeDir,
+                $"Skipped directory because traversal depth exceeded {MaxDirectoryTraversalDepth}. Check for symlink loops or unexpectedly deep generated trees.",
+                ScanIssueSeverity.Warning));
+            return true;
+        }
 
         if (checkpointedDirectories.Contains(relativeDir))
             return true;
@@ -1899,7 +1911,7 @@ public class FileIndexer
             return true;
         }
 
-        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, activeIgnoreRules, continueOnError, cancellationToken);
+        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, activeIgnoreRules, continueOnError, cancellationToken, depth);
     }
 
     private bool IsNestedGitRepository(string dir)
@@ -1928,7 +1940,8 @@ public class FileIndexer
         HashSet<string> visitedDirectories,
         IgnoreRuleSet inheritedIgnoreRules,
         bool continueOnError,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int depth = 0)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var fullyScanned = true;
@@ -2150,7 +2163,7 @@ public class FileIndexer
                     continue;
                 }
 
-                var childFullyScanned = ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, activeIgnoreRules, continueOnError: continueOnError, cancellationToken: cancellationToken);
+                var childFullyScanned = ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, activeIgnoreRules, continueOnError: continueOnError, cancellationToken: cancellationToken, depth: depth + 1);
                 fullyScanned &= childFullyScanned;
                 if (!continueOnError && !childFullyScanned)
                     break;

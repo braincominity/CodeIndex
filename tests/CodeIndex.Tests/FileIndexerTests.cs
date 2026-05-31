@@ -1312,6 +1312,79 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_FollowAllSymlinks_SkipsAlreadyVisitedDirectoryTarget()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            var subDir = Path.Combine(tempDir, "sub");
+            Directory.CreateDirectory(subDir);
+            File.WriteAllText(Path.Combine(subDir, "foo.py"), "def hello(): pass\n");
+            Directory.CreateSymbolicLink(Path.Combine(subDir, "parent_loop"), "..");
+
+            var indexer = new FileIndexer(
+                tempDir,
+                ignoreCase: false,
+                ignoreRuleRoot: null,
+                maxFileSizeBytes: null,
+                directoryIgnoreCaseProbe: null,
+                symlinkPolicy: FileIndexer.SymlinkPolicy.All);
+            var result = indexer.ScanFilesDetailed();
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["sub/foo.py"], files);
+            Assert.Contains(
+                result.Errors,
+                error => error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Path == "sub/parent_loop"
+                    && error.Message.Contains("already scanned", StringComparison.OrdinalIgnoreCase));
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_ExcessiveDirectoryDepth_SkipsSubtreeWithWarning()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var current = tempDir;
+            for (var i = 0; i < 130; i++)
+            {
+                current = Path.Combine(current, $"d{i:D3}");
+                Directory.CreateDirectory(current);
+            }
+            File.WriteAllText(Path.Combine(current, "too_deep.py"), "print('too deep')\n");
+
+            var result = new FileIndexer(tempDir).ScanFilesDetailed();
+
+            Assert.Empty(result.Files);
+            Assert.Contains(
+                result.Errors,
+                error => error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Message.Contains("traversal depth exceeded", StringComparison.OrdinalIgnoreCase));
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_SkipsFileSymlinkToRealFileInProject()
     {
         if (OperatingSystem.IsWindows())
