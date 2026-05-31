@@ -6,7 +6,7 @@ namespace CodeIndex.Indexer;
 internal static class DartReferenceExtractor
 {
     private static readonly Regex SealedSubtypeRegex = new(
-        @"^\s*(?:base\s+|final\s+|interface\s+|abstract\s+)*class\s+[A-Za-z_]\w*\s+extends\s+(?<name>[A-Za-z_]\w*)",
+        @"^\s*(?:base\s+|final\s+|interface\s+|abstract\s+)*sealed\s+class\s+[A-Za-z_]\w*\s+extends\s+(?<name>[A-Za-z_]\w*)",
         RegexOptions.Compiled);
 
     private static readonly Regex ExtensionOnRegex = new(

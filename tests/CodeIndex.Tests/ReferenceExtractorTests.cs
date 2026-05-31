@@ -13417,7 +13417,7 @@ public class ReferenceExtractorTests
     {
         const string content = """
             sealed class Shape {}
-            class Circle extends Shape with Paintable, Serializable {}
+            sealed class Circle extends Shape with Paintable, Serializable {}
             extension ShapeFormatting on Shape {
               String label() => Shape.label();
             }
@@ -13443,6 +13443,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Trackable" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "RouteAware" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "sealed_subtype");
+        Assert.DoesNotContain(references, r => r.SymbolName == "BaseScreen" && r.ReferenceKind == "sealed_subtype");
         Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "extension_of");
         Assert.Contains(references, r => r.SymbolName == "Paintable" && r.ReferenceKind == "mixin_in");
         Assert.Contains(references, r => r.SymbolName == "Serializable" && r.ReferenceKind == "mixin_in");
