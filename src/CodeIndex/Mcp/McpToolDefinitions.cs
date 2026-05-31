@@ -228,6 +228,8 @@ public partial class McpServer
                         ["before"] = new JsonObject { ["type"] = "integer", ["description"] = "Context lines before the match (default: 0, clamped to 1000)", ["default"] = 0, ["minimum"] = 0 },
                         ["after"] = new JsonObject { ["type"] = "integer", ["description"] = "Context lines after the match (default: 0, clamped to 1000)", ["default"] = 0, ["minimum"] = 0 },
                         ["snippetLines"] = new JsonObject { ["type"] = "integer", ["description"] = "Total snippet lines around each match when before/after are not set (1-20)", ["default"] = 1, ["minimum"] = 1, ["maximum"] = SearchSnippetFormatter.MaxSnippetLines },
+                        ["focusLine"] = new JsonObject { ["type"] = "integer", ["description"] = "Optional 1-based line that must contain the match", ["minimum"] = 1 },
+                        ["focusColumn"] = new JsonObject { ["type"] = "integer", ["description"] = "Optional 1-based column that must be inside the match span", ["minimum"] = 1 },
                         ["maxLineWidth"] = new JsonObject { ["type"] = "integer", ["description"] = "Clamp very long single-line snippets per line (default: 512; 0 disables clamping)", ["default"] = LineWidthFormatter.DefaultMaxLineWidth, ["minimum"] = 0, ["maximum"] = LineWidthFormatter.MaxAllowedLineWidth },
                         ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Case-sensitive literal substring match. Default is case-insensitive literal substring matching.", ["default"] = false }
                     },

@@ -321,7 +321,7 @@ public partial class McpServer
         "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "project", "solution" },
         "symbols" => new HashSet<string>(StringComparer.Ordinal) { "query", "names", "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "project", "solution" },
         "files" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since" },
-        "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "snippetLines", "maxLineWidth", "exact" },
+        "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "snippetLines", "focusLine", "focusColumn", "maxLineWidth", "exact" },
         "excerpt" => new HashSet<string>(StringComparer.Ordinal) { "path", "startLine", "endLine", "before", "after", "focusLine", "focusColumn", "focusLength", "maxLineWidth" },
         "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "project", "solution" },
         "analyze_symbol" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "includeBody", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "maxLineWidth", "project", "solution" },
@@ -1834,13 +1834,19 @@ public partial class McpServer
             if (!afterValue.HasValue)
                 after = surroundingLines - before;
         }
+        var focusLine = args?["focusLine"]?.GetValue<int>();
+        if (focusLine.HasValue && focusLine.Value <= 0)
+            return CreateToolErrorResponse(id, "focusLine must be greater than or equal to 1");
+        var focusColumn = args?["focusColumn"]?.GetValue<int>();
+        if (focusColumn.HasValue && focusColumn.Value <= 0)
+            return CreateToolErrorResponse(id, "focusColumn must be greater than or equal to 1");
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var exact = args?["exact"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth);
+            var results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth, focusLine, focusColumn);
             var structured = new JsonObject
             {
                 ["query"] = query,
@@ -1857,6 +1863,10 @@ public partial class McpServer
             };
             if (snippetLinesValue.HasValue)
                 structured["snippetLines"] = snippetLinesValue.Value;
+            if (focusLine.HasValue)
+                structured["focusLine"] = focusLine.Value;
+            if (focusColumn.HasValue)
+                structured["focusColumn"] = focusColumn.Value;
             if (results.Count == 0)
             {
                 AddFreshnessHint(structured, reader);

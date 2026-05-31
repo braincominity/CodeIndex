@@ -201,7 +201,7 @@ public static class QueryCommandRunner
     private const string OutputFormatSarif = "sarif";
     private static readonly HashSet<string> InlineValueOptions =
         new(ValueTakingOptions.Concat(["--json"]), StringComparer.Ordinal);
-    private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
+    private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
 
     public static int RunBatch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -1957,7 +1957,7 @@ public static class QueryCommandRunner
             }
 
             var (contextBefore, contextAfter, snippetLines) = ResolveFindContext(options, preparedFindArgs);
-            var results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, contextBefore, contextAfter, options.Exact, options.MaxLineWidth);
+            var results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, contextBefore, contextAfter, options.Exact, options.MaxLineWidth, options.FocusLine, options.FocusColumn);
             if (results.Count == 0)
             {
                 var candidateFileCount = reader.CountFindCandidateFiles(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
@@ -2096,6 +2096,8 @@ public static class QueryCommandRunner
                     && NumericFlagUpperBounds.TryGetValue(arg, out var snippetLinesMax)
                     && snippetLinesCeil > snippetLinesMax)
                     return BuildPositiveIntegerUpperBoundError(arg, value, snippetLinesMax);
+                if ((arg == "--focus-line" || arg == "--focus-column") && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var focus) || focus <= 0))
+                    return BuildPositiveIntegerError(arg, value, arg);
                 if (arg == "--query")
                 {
                     queryCount++;

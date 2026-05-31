@@ -29089,6 +29089,34 @@ jobs:
     }
 
     [Fact]
+    public void RunFind_FocusLineAndColumnRestrictMatch()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_focus");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Auth.cs",
+                "csharp",
+                "target here\nno match\nother target\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["target", "--db", dbPath, "--path", "src/Auth.cs", "--focus-line", "3", "--focus-column", "8"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("src/Auth.cs:3:7", stdout);
+            Assert.DoesNotContain("src/Auth.cs:1:1", stdout);
+            Assert.Contains("1 matches in 1 file", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFind_CountOnlyJsonIncludesVisibleMatchAndFileCounts()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_count");

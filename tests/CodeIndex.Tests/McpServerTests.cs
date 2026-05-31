@@ -5623,6 +5623,23 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_FindInFile_FocusLineAndColumnRestrictMatch()
+    {
+        InsertIndexedFile("dist/search-focus.txt", "text", "target here\nno match\nother target");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"target","path":"dist/search-focus.txt","focusLine":3,"focusColumn":8}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var result = structured["results"]![0]!;
+
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal(3, result["line"]!.GetValue<int>());
+        Assert.Equal(7, result["column"]!.GetValue<int>());
+        Assert.Equal(3, structured["focusLine"]!.GetValue<int>());
+        Assert.Equal(8, structured["focusColumn"]!.GetValue<int>());
+    }
+
+    [Fact]
     public void ToolsCall_AnalyzeSymbol_ClampsBundledReferenceContext()
     {
         InsertIndexedFile("src/target.js", "javascript",

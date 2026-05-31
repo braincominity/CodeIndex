@@ -8,7 +8,7 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
-    public List<FileFindResult> FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
+    public List<FileFindResult> FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? focusLine = null, int? focusColumn = null)
     {
         if (string.IsNullOrWhiteSpace(query) || limit <= 0 || pathPatterns == null || pathPatterns.Count == 0)
             return [];
@@ -45,6 +45,8 @@ public partial class DbReader
             var searchQuery = exact ? ExactSourceSearchNormalizer.Normalize(query, fileLang) : query;
             for (int lineNumber = 1; lineNumber <= totalLines && results.Count < limit; lineNumber++)
             {
+                if (focusLine.HasValue && lineNumber != focusLine.Value)
+                    continue;
                 if (!lineMap.TryGetValue(lineNumber, out var lineText))
                     continue;
 
@@ -72,6 +74,11 @@ public partial class DbReader
                     {
                         var rawMatchEndIndex = rawIndexMap[matchColumn + rawMatchLength - 1];
                         rawMatchLength = rawMatchEndIndex - rawMatchColumn + 1;
+                    }
+                    if (focusColumn.HasValue && (focusColumn.Value < rawMatchColumn + 1 || focusColumn.Value > rawMatchColumn + rawMatchLength))
+                    {
+                        searchStart = matchColumn + 1;
+                        continue;
                     }
 
                     var snippetLines = snippetLineNumbers.Select(line => lineMap[line]).ToList();
