@@ -110,6 +110,27 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_Healthz_ReturnsStructuredHealth()
+    {
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+
+        using var client = new HttpClient();
+        using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType!.MediaType);
+        var body = await response.Content.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+        Assert.Equal("ok", root.GetProperty("status").GetString());
+        Assert.True(root.GetProperty("uptime_s").GetInt64() >= 0);
+        Assert.True(root.GetProperty("db_open").GetBoolean());
+        Assert.True(root.GetProperty("transport_ready").GetBoolean());
+        Assert.True(DateTimeOffset.TryParse(root.GetProperty("last_request_at").GetString(), out _));
+        Assert.True(DateTimeOffset.TryParse(root.GetProperty("last_db_check_at").GetString(), out _));
+    }
+
+    [Fact]
     public async Task HttpTransport_RequestLogger_RecordsMethodStatusDurationAndAuthOutcome()
     {
         var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
@@ -242,6 +263,26 @@ public class HttpMcpTransportTests : IDisposable
         var body = await response.Content.ReadAsStringAsync();
         using var doc = JsonDocument.Parse(body);
         Assert.Equal(11, doc.RootElement.GetProperty("id").GetInt32());
+    }
+
+    [Fact]
+    public async Task HttpTransport_EventsStream_EmitsOptInKeepAliveNotifications()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S");
+        env.Set("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S", "0.05");
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+
+        using var client = new HttpClient();
+        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+
+        await using var eventStream = await events.Content.ReadAsStreamAsync();
+        using var reader = new StreamReader(eventStream, Encoding.UTF8, leaveOpen: true);
+
+        var frame = await ReadUntilAsync(reader, "notifications/keep_alive").WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Contains("\"method\":\"notifications/keep_alive\"", frame, StringComparison.Ordinal);
+        Assert.Contains("\"uptime_s\":", frame, StringComparison.Ordinal);
     }
 
     [Fact]

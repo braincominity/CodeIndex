@@ -257,6 +257,23 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessLineAsync_PingReturnsStructuredHealth()
+    {
+        using var writer = new StringWriter();
+
+        await _server.ProcessLineAsync("""{"jsonrpc":"2.0","id":1,"method":"ping"}""", writer);
+
+        using var document = JsonDocument.Parse(writer.ToString());
+        var result = document.RootElement.GetProperty("result");
+        Assert.Equal("ok", result.GetProperty("status").GetString());
+        Assert.True(result.GetProperty("uptime_s").GetInt64() >= 0);
+        Assert.True(result.GetProperty("db_open").GetBoolean());
+        Assert.True(result.GetProperty("transport_ready").GetBoolean());
+        Assert.True(DateTimeOffset.TryParse(result.GetProperty("last_request_at").GetString(), out _));
+        Assert.True(DateTimeOffset.TryParse(result.GetProperty("last_db_check_at").GetString(), out _));
+    }
+
+    [Fact]
     public async Task ProcessLineAsync_ToolCallEmitsInvocationTelemetry()
     {
         using var writer = new StringWriter();
