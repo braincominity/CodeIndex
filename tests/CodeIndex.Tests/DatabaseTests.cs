@@ -434,6 +434,16 @@ public class DatabaseTests : IDisposable
         Assert.False(string.IsNullOrWhiteSpace(_db.GetMetaString(DbWriter.FtsLastOptimizedAtMetaKey)));
     }
 
+    [Fact]
+    public void TryCheckpointWalTruncate_OnWritableDb_ReportsAttemptAndSuccess()
+    {
+        var result = _db.TryCheckpointWalTruncate();
+
+        Assert.True(result);
+        Assert.True(_db.WalCheckpointAttempted);
+        Assert.True(_db.WalCheckpointSucceeded);
+    }
+
     private long UpsertTestFile(string path, string checksum)
         => _writer.UpsertFile(new FileRecord
         {

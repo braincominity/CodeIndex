@@ -362,6 +362,27 @@ public class DbContext : IDisposable
         }
     }
 
+    public bool TryCheckpointWalTruncate()
+    {
+        if (_isReadOnly)
+            return false;
+
+        _walCheckpointAttempted = true;
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+            cmd.ExecuteNonQuery();
+            _walCheckpointSucceeded = true;
+            return true;
+        }
+        catch (SqliteException)
+        {
+            _walCheckpointSucceeded = false;
+            return false;
+        }
+    }
+
     public static string ToReadOnlyUri(string dbPath)
     {
         if (dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
@@ -2437,6 +2458,8 @@ public class DbContext : IDisposable
         _preparedCommands?.Dispose();
         _preparedCommands = null;
         RunOptimizeOnCloseIfNeeded();
+        if (_hasWriteWork)
+            TryCheckpointWalTruncate();
         _connection.Dispose();
     }
 }
