@@ -37,6 +37,12 @@ public static partial class ReferenceExtractor
         var razorReferenceLines = preparedInput.RazorReferenceLines;
         var razorImplementedTypeNames = preparedInput.RazorImplementedTypeNames;
         var typeScriptNamespaceAliases = preparedInput.TypeScriptNamespaceAliases;
+        var typeScriptTypeAliases = language == "typescript"
+            ? TypeScriptReferenceExtractor.BuildTypeAliasTargets(preparedLines)
+            : null;
+        var swiftTypeAliases = language == "swift"
+            ? SwiftReferenceExtractor.BuildTypeAliasTargets(preparedLines)
+            : null;
         var jsTaggedTemplatesByLine = preparedInput.JsTaggedTemplatesByLine;
         // Pre-pass C# attribute analysis so cross-line `[\n Foo("x")\n]` and parameter
         // attributes `void M([Attr] T x)` are classified consistently with same-line `[Foo]`.
@@ -795,6 +801,16 @@ public static partial class ReferenceExtractor
                     context,
                     lineNumber,
                     ResolveContainerForCall);
+
+                TypeScriptReferenceExtractor.EmitAliasTargetReferences(
+                    preparedLine,
+                    typeScriptTypeAliases!,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
             }
             else if (language == "kotlin")
             {
@@ -818,6 +834,15 @@ public static partial class ReferenceExtractor
                     lineNumber,
                     ResolveContainerForCall,
                     ResolveSwiftPropertyContainerForCall);
+                SwiftReferenceExtractor.EmitAliasTargetReferences(
+                    preparedLine,
+                    swiftTypeAliases!,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
             }
             else if (language == "rust")
             {
