@@ -17,6 +17,7 @@ namespace CodeIndex.Mcp;
 public partial class McpServer
 {
     private const int DefaultBatchQueryResponseByteLimit = MaxLineByteLength;
+    private const int DefaultExcerptOutputByteLimit = MaxLineByteLength;
     private const string BatchQueryResponseByteLimitEnvVar = "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES";
     internal const int MaxMcpArrayFilterCount = 100;
     internal const int MaxMcpArrayFilterStringLength = 4096;
@@ -1728,6 +1729,8 @@ public partial class McpServer
         var explicitFocusLength = args?["focusLength"] != null;
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
+        if (!TryReadMaxOutputBytes(args, out var maxOutputBytes, out var maxOutputBytesError))
+            return CreateToolErrorResponse(id, maxOutputBytesError!);
 
         if (focusLine.HasValue && focusLine.Value <= 0)
             return CreateToolErrorResponse(id, "focusLine must be greater than or equal to 1");
@@ -1782,6 +1785,8 @@ public partial class McpServer
             }
 
             var payload = JsonSerializer.SerializeToNode(excerpt, _jsonOptions)!.AsObject();
+            ApplyExcerptOutputBudget(payload, maxOutputBytes);
+            payload["maxOutputBytes"] = maxOutputBytes;
             payload["maxLineWidth"] = maxLineWidth;
             if (focusLine.HasValue)
                 payload["focusLine"] = focusLine.Value;
@@ -1790,6 +1795,45 @@ public partial class McpServer
             payload["focusLength"] = focusLength;
             return CreateToolResult(id, "Excerpt returned.", payload);
         });
+    }
+
+    private static bool TryReadMaxOutputBytes(JsonNode? args, out int maxOutputBytes, out string? error)
+    {
+        maxOutputBytes = DefaultExcerptOutputByteLimit;
+        error = null;
+        if (args?["maxOutputBytes"] is not JsonNode node)
+            return true;
+        var requested = node.GetValue<int>();
+        if (requested <= 0)
+        {
+            error = "maxOutputBytes must be greater than or equal to 1";
+            return false;
+        }
+        maxOutputBytes = Math.Min(requested, DefaultExcerptOutputByteLimit);
+        return true;
+    }
+
+    private static void ApplyExcerptOutputBudget(JsonObject payload, int maxOutputBytes)
+    {
+        var contentKey = payload.ContainsKey("content") ? "content" : "Content";
+        if (payload[contentKey]?.GetValue<string>() is not string content)
+            return;
+        if (Encoding.UTF8.GetByteCount(content) <= maxOutputBytes)
+            return;
+
+        var builder = new StringBuilder();
+        foreach (var line in content.Replace("\r\n", "\n").Split('\n'))
+        {
+            var candidate = builder.Length == 0 ? line : builder.ToString() + "\n" + line;
+            if (Encoding.UTF8.GetByteCount(candidate) > maxOutputBytes)
+                break;
+            builder.Clear();
+            builder.Append(candidate);
+        }
+        payload[contentKey] = builder.ToString();
+        payload["contentTruncated"] = true;
+        payload["truncated"] = true;
+        payload["truncation_reason"] = "output_size_cap";
     }
 
     private JsonNode ExecuteFindInFile(JsonNode? id, JsonNode? args)

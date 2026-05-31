@@ -205,7 +205,8 @@ public partial class McpServer
                         ["focusLine"] = new JsonObject { ["type"] = "integer", ["description"] = "Optional line inside the excerpt whose focused column should stay visible when clamping; requires focusColumn", ["minimum"] = 1 },
                         ["focusColumn"] = new JsonObject { ["type"] = "integer", ["description"] = "Optional 1-based column to keep centered when clamping long single-line content; must be within the focused line length", ["minimum"] = 1 },
                         ["focusLength"] = new JsonObject { ["type"] = "integer", ["description"] = "Optional focused span width when clamping (default: 1); requires focusColumn", ["default"] = 1, ["minimum"] = 1 },
-                        ["maxLineWidth"] = new JsonObject { ["type"] = "integer", ["description"] = "Clamp very long single-line excerpt payloads per line (default: 512; 0 disables clamping)", ["default"] = LineWidthFormatter.DefaultMaxLineWidth, ["minimum"] = 0, ["maximum"] = LineWidthFormatter.MaxAllowedLineWidth }
+                        ["maxLineWidth"] = new JsonObject { ["type"] = "integer", ["description"] = "Clamp very long single-line excerpt payloads per line (default: 512; 0 disables clamping)", ["default"] = LineWidthFormatter.DefaultMaxLineWidth, ["minimum"] = 0, ["maximum"] = LineWidthFormatter.MaxAllowedLineWidth },
+                        ["maxOutputBytes"] = new JsonObject { ["type"] = "integer", ["description"] = "Cap excerpt content bytes at a line boundary (default: 1048576; maximum: 1048576). Responses set `truncated: true` and `truncation_reason: output_size_cap` when the cap is reached.", ["default"] = MaxLineByteLength, ["minimum"] = 1, ["maximum"] = MaxLineByteLength }
                     },
                     ["required"] = new JsonArray { "path", "startLine" }
                 },
