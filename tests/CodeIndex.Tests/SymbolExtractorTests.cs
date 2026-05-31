@@ -21470,6 +21470,26 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CommonLisp_DoesNotTreatQuotedReaderMacroFormsAsDefinitions()
+    {
+        var content = """
+            '(defun quoted-function () nil)
+            `(let ((x 1)) ,x)
+            ,(expand-macro)
+            (quote (defun nested-quoted () nil))
+            (defun real-function () nil)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "commonlisp", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "real-function");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "quoted-function");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "nested-quoted");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "let");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "expand-macro");
+    }
+
+    [Fact]
     public void Extract_Racket_DetectsModuleAndDefinitions()
     {
         // Racket: module, define, define-syntaxes, struct, require / Racket: module、define、define-syntaxes、struct、require
