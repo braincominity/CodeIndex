@@ -2573,6 +2573,20 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_IndexAllowsAdvertisedMaxFileBytesArgument()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"index","arguments":{"path":"/","maxFileBytes":1024}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.DoesNotContain("Unknown argument 'maxFileBytes'", text, StringComparison.Ordinal);
+        Assert.Contains("Path must be within the current working directory", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ToolsList_SearchIncludesPathFilterParams()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
