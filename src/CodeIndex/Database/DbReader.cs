@@ -41,6 +41,9 @@ public partial class DbReader
     private readonly SqliteConnection _conn;
     private readonly PreparedCommandCache? _commandCache;
     private readonly bool _isReadOnly;
+    private readonly bool _readOnlyFallback;
+    private readonly bool _walCheckpointAttempted;
+    private readonly bool _walCheckpointSucceeded;
     private readonly DbSchemaCache? _schemaCache;
     private readonly CancellationToken _cancellation;
     private readonly HashSet<string> _fileColumns;
@@ -67,6 +70,7 @@ public partial class DbReader
     private Dictionary<string, CSharpUsingAliasScope>? _csharpGlobalUsingAliasesByName;
     internal readonly bool _hasReferencesTable;
     internal readonly bool _hasIssuesTable;
+    internal readonly bool _hasIssuesPhysicalTable;
     internal readonly bool _hasChunksTable;
     internal readonly bool _hasReferenceLinesTable;
     internal readonly bool _canUseReferenceLines;
@@ -418,7 +422,10 @@ public partial class DbReader
                context.IsReadOnly,
                context.SchemaCache,
                CancellationToken.None,
-               context.PreparedCommands)
+               context.PreparedCommands,
+               context.ReadOnlyFallback,
+               context.WalCheckpointAttempted,
+               context.WalCheckpointSucceeded)
     {
     }
 
@@ -433,7 +440,10 @@ public partial class DbReader
                context.IsReadOnly,
                context.SchemaCache,
                cancellation,
-               context.PreparedCommands)
+               context.PreparedCommands,
+               context.ReadOnlyFallback,
+               context.WalCheckpointAttempted,
+               context.WalCheckpointSucceeded)
     {
     }
 
@@ -459,7 +469,15 @@ public partial class DbReader
     {
     }
 
-    private DbReader(SqliteConnection connection, bool isReadOnly, DbSchemaCache? schemaCache, CancellationToken cancellation, PreparedCommandCache? commandCache)
+    private DbReader(
+        SqliteConnection connection,
+        bool isReadOnly,
+        DbSchemaCache? schemaCache,
+        CancellationToken cancellation,
+        PreparedCommandCache? commandCache,
+        bool readOnlyFallback = false,
+        bool walCheckpointAttempted = false,
+        bool walCheckpointSucceeded = false)
     {
         _conn = connection;
         _commandCache = commandCache;
@@ -469,6 +487,9 @@ public partial class DbReader
         // SQL ユーザー関数は接続オープン時に `DbContext` が一度だけ登録するため、
         // ここでの再登録は不要 (#1564)。
         _isReadOnly = isReadOnly;
+        _readOnlyFallback = readOnlyFallback;
+        _walCheckpointAttempted = walCheckpointAttempted;
+        _walCheckpointSucceeded = walCheckpointSucceeded;
         _schemaCache = schemaCache;
         _cancellation = cancellation;
         _fileColumns = LoadColumns("files");
@@ -485,7 +506,8 @@ public partial class DbReader
         }
         _hasChunksTable = HasTable("chunks");
         _hasReferencesTable = HasTable("symbol_references") && (userVersion & DbContext.GraphReadyFlag) != 0;
-        _hasIssuesTable = HasTable("file_issues") && (userVersion & DbContext.IssuesReadyFlag) != 0;
+        _hasIssuesPhysicalTable = HasTable("file_issues");
+        _hasIssuesTable = _hasIssuesPhysicalTable && (userVersion & DbContext.IssuesReadyFlag) != 0;
         _hasReferenceLinesTable = HasTable("reference_lines");
         _canUseReferenceLines = _hasReferencesTable && _hasReferenceLinesTable && _referenceColumns.Contains("reference_line_id");
         _referenceIndexes = LoadIndexes("symbol_references");
