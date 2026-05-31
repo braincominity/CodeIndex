@@ -91,7 +91,8 @@ public class LegacySchemaMigrationTests : IDisposable
 
         // Seed one file and a handful of symbols on the legacy schema.
         // レガシースキーマに対してファイル1つとシンボルを数件投入。
-        Exec(conn, "INSERT INTO files (id, path, lang, size, lines, modified) VALUES (1, 'src/Legacy.cs', 'csharp', 200, 20, '2025-06-01 00:00:00')");
+        var modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+        Exec(conn, $"INSERT INTO files (id, path, lang, size, lines, modified) VALUES (1, 'src/Legacy.cs', 'csharp', 200, 20, '{modified}')");
         Exec(conn, @"INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content) VALUES
                      (1, 0, 1, 20, 'class Legacy' || char(10) ||
                                    '{' || char(10) ||
