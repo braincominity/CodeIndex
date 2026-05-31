@@ -111,6 +111,12 @@ The lock files for projects with zero direct `PackageReference` entries (e.g. `t
 | DTOs | `Models/FileRecord.cs`, `Models/ChunkRecord.cs`, `Models/SymbolRecord.cs`, `Models/ReferenceRecord.cs` | Records shared by indexing, storage, query, and MCP layers. |
 | Tests | `tests/CodeIndex.Tests/*Tests.cs`, `TestProjectHelper.cs`, `TestConsoleLock.cs` | Focused unit/integration coverage for chunking, extraction, DB reads/writes, CLI behavior, MCP behavior, git helpers, and shared test harness utilities. |
 
+### Observability
+
+CodeIndex exposes an opt-in `ActivitySource` named `CodeIndex`. MCP JSON-RPC frames create `mcp.request` server spans and SQLite commands routed through tracked database helpers create `db.query` spans. MCP callers can pass W3C trace context as `params._meta.traceparent`; when present, the MCP span uses that trace as its parent. No exporter dependency is bundled, so spans are emitted only when the host process installs an OpenTelemetry/Diagnostics listener.
+
+Set `CDIDX_SLOW_QUERY_MS=<milliseconds>` to write slow SQLite command diagnostics to stderr. Query commands also accept `--profile` for a JSON profile block and `--slow-query-ms <milliseconds>` for command-scoped profiling.
+
 ### Indexing pipeline
 
 ```
