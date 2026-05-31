@@ -17,6 +17,9 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class QueryCommandRunner
 {
+    internal const int DefaultQueryLimit = 20;
+    internal const int DefaultMapLimit = 10;
+    internal const int DefaultImpactLimit = 50;
     internal const string DefaultLimitEnvironmentVariable = "CDIDX_DEFAULT_LIMIT";
     internal const string DefaultSnippetLinesEnvironmentVariable = "CDIDX_DEFAULT_SNIPPET_LINES";
     internal const string DefaultMaxLineWidthEnvironmentVariable = "CDIDX_DEFAULT_MAX_LINE_WIDTH";
@@ -4849,7 +4852,7 @@ public static class QueryCommandRunner
         string? dataDir = null;
         bool? json = null;
         string jsonOutputFormat = JsonOutputFormatNdjson;
-        int limit = ResolveDefaultPositiveInt(DefaultLimitEnvironmentVariable, 20, "--limit", out var defaultLimitError);
+        int limit = ResolveDefaultPositiveInt(DefaultLimitEnvironmentVariable, DefaultQueryLimit, "--limit", out var defaultLimitError);
         string? lang = null;
         string? kind = null;
         string? query = null;

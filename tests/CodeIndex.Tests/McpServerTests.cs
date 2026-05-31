@@ -260,6 +260,37 @@ public class McpServerTests : IDisposable
         Assert.Contains("Gamma", allNames);
     }
 
+    [Theory]
+    [InlineData("references", "Target")]
+    [InlineData("callees", "Source")]
+    public void ToolsCall_GraphTools_TruncatedResponseIncludesEnvelope_Issue1415(string tool, string query)
+    {
+        InsertIndexedFile(
+            "src/paged-graph.cs",
+            "csharp",
+            """
+            class PagedGraph {
+                void Source() { Alpha(); Beta(); Gamma(); }
+                void Alpha() { Target(); }
+                void Beta() { Target(); }
+                void Gamma() { Target(); }
+                void Target() { }
+            }
+            """);
+
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"TOOL","arguments":{"query":"Target","lang":"csharp","exactName":true,"path":"src/paged-graph.cs","limit":2}}}"""
+                .Replace("TOOL", tool, StringComparison.Ordinal)
+                .Replace("Target", query, StringComparison.Ordinal))!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal(2, structured["count"]!.GetValue<int>());
+        Assert.True(structured["truncated"]!.GetValue<bool>());
+        Assert.True(structured["more_available"]!.GetValue<bool>());
+        Assert.Equal(2, structured["next_offset"]!.GetValue<int>());
+    }
+
     [Fact]
     public void ToolsCall_Search_WithResultsIncludesNextStepSuggestion()
     {
@@ -6627,6 +6658,23 @@ public class McpServerTests : IDisposable
         {
             Environment.SetEnvironmentVariable("CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES", previous);
         }
+    }
+
+    [Fact]
+    public void ApplyExcerptOutputBudget_TruncatesAtLineBoundary_Issue1605()
+    {
+        var payload = new JsonObject
+        {
+            ["content"] = "short\n" + new string('x', 200),
+            ["contentTruncated"] = false,
+        };
+
+        McpServer.ApplyExcerptOutputBudget(payload, 20);
+
+        Assert.True(payload["truncated"]!.GetValue<bool>());
+        Assert.Equal("output_size_cap", payload["truncation_reason"]!.GetValue<string>());
+        Assert.Equal("short", payload["content"]!.GetValue<string>());
+        Assert.True(payload["contentTruncated"]!.GetValue<bool>());
     }
 
     [Fact]
