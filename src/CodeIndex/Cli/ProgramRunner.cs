@@ -238,6 +238,7 @@ internal static class ProgramRunner
                     "validate-config" => CdidxConfigFile.RunValidate(subArgs, jsonOptions),
                     "db" => DbCommandRunner.RunIntegrityCheck(subArgs, jsonOptions),
                     "report" => ReportCommandRunner.Run(subArgs, jsonOptions, appVersion),
+                    "test-extractor" => RunTestExtractor(subArgs, jsonOptions),
                     _ when IsProjectPathArg(commandName)
                         => IndexCommandRunner.Run(args, jsonOptions),
                     _ => ShowError(args, $"Unknown command: {commandName}")
@@ -284,6 +285,74 @@ internal static class ProgramRunner
 
     internal static bool IsProjectPathArg(string arg) =>
         !arg.StartsWith('-') && (Directory.Exists(arg) || arg.Contains('/') || arg.Contains('\\') || arg == ".");
+
+    private static int RunTestExtractor(string[] args, JsonSerializerOptions jsonOptions)
+    {
+        string? language = null;
+        string? file = null;
+        string? expect = null;
+        var json = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (TryConsumeInlineOrNext(args, ref i, arg, "--language", out var value))
+                language = value;
+            else if (TryConsumeInlineOrNext(args, ref i, arg, "--file", out value))
+                file = value;
+            else if (TryConsumeInlineOrNext(args, ref i, arg, "--expect-symbols", out value) || TryConsumeInlineOrNext(args, ref i, arg, "--expect", out value))
+                expect = value;
+            else if (arg == "--json")
+                json = true;
+            else
+                return CommandErrorWriter.Write($"Unknown test-extractor argument: {arg}", CommandExitCodes.InvalidArgument, "use --language <lang> --file <path> [--expect-symbols <json>] [--json].");
+        }
+
+        if (string.IsNullOrWhiteSpace(language) || string.IsNullOrWhiteSpace(file))
+            return CommandErrorWriter.Write("test-extractor requires --language and --file.", CommandExitCodes.InvalidArgument, "use --language <lang> --file <path> [--expect-symbols <json>] [--json].");
+        if (!File.Exists(file))
+            return CommandErrorWriter.Write($"File not found: {file}", CommandExitCodes.NotFound);
+
+        var source = File.ReadAllText(file);
+        var symbols = Indexer.SymbolExtractor.Extract(1, language, source, file);
+        if (expect != null)
+        {
+            var expected = File.ReadAllText(expect);
+            var actual = JsonSerializer.Serialize(symbols);
+            if (!JsonEquivalent(expected, actual))
+            {
+                Console.Error.WriteLine("Expected symbols did not match extracted symbols.");
+                Console.Error.WriteLine(actual);
+                return CommandExitCodes.InvalidArgument;
+            }
+        }
+
+        if (json || expect == null)
+            Console.WriteLine(JsonSerializer.Serialize(symbols));
+        return CommandExitCodes.Success;
+    }
+
+    private static bool TryConsumeInlineOrNext(string[] args, ref int index, string arg, string flag, out string value)
+    {
+        value = string.Empty;
+        if (arg.StartsWith(flag + "=", StringComparison.Ordinal))
+        {
+            value = arg[(flag.Length + 1)..];
+            return true;
+        }
+
+        if (arg != flag || index + 1 >= args.Length)
+            return false;
+
+        value = args[++index];
+        return true;
+    }
+
+    private static bool JsonEquivalent(string expected, string actual)
+    {
+        using var expectedDoc = JsonDocument.Parse(expected);
+        using var actualDoc = JsonDocument.Parse(actual);
+        return JsonSerializer.Serialize(expectedDoc.RootElement) == JsonSerializer.Serialize(actualDoc.RootElement);
+    }
 
     internal static void EnsureRedirectedStdoutUsesUtf8()
     {
