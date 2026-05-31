@@ -24400,6 +24400,28 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ReferenceExtractorFixture_CompletesWithinPracticalBudget()
+    {
+        // issue #2710/#2711/#2717 regression: full self-indexing could spend minutes
+        // repeatedly rebuilding the same multi-line C# member candidate while scanning large
+        // extractor sources. Keep this as a broad runaway guard for the realistic file that
+        // reproduced the stall on origin/main.
+        var path = Path.Combine(GetRepositoryRoot(), "src", "CodeIndex", "Indexer", "References", "ReferenceExtractor.cs");
+        var content = File.ReadAllText(path);
+
+        var stopwatch = Stopwatch.StartNew();
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        stopwatch.Stop();
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ReferenceExtractor");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Extract");
+        var runawayBudget = TimeSpan.FromSeconds(30);
+        Assert.True(
+            stopwatch.Elapsed < runawayBudget,
+            $"ReferenceExtractor.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
+    }
+
+    [Fact]
     public void Extract_Java_SameLineAnnotationsCompactConstructorsAndEnumOverrides_StayIndexed()
     {
         const string content = """
