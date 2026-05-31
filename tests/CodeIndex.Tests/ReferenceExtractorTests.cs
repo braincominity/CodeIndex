@@ -5832,6 +5832,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptFunctionTypeAlias_DoesNotEmitTypeParameterAsTarget()
+    {
+        const string content = """
+            class SomeType {}
+            class Arg {}
+            type MyAlias<T> = (value: T) => SomeType;
+            class Derived extends MyAlias<Arg> {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "SomeType"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived"
+            && reference.Context == "class Derived extends MyAlias<Arg> {}");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "T"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived"
+            && reference.Context == "class Derived extends MyAlias<Arg> {}");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeAliasShadowedByScope_UsesActiveAliasBinding()
     {
         const string content = """
