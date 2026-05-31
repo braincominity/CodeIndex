@@ -252,7 +252,7 @@ internal static class ProgramRunner
                     "optimize" => IndexCommandRunner.RunOptimizeFts(subArgs, jsonOptions),
                     "vacuum" => QueryCommandRunner.RunVacuum(subArgs, jsonOptions),
                     "validate-config" => CdidxConfigFile.RunValidate(subArgs, jsonOptions),
-                    "db" => DbCommandRunner.RunIntegrityCheck(subArgs, jsonOptions),
+                    "db" => DbCommandRunner.Run(subArgs, jsonOptions),
                     "report" => ReportCommandRunner.Run(subArgs, jsonOptions, appVersion),
                     _ when IsProjectPathArg(commandName)
                         => IndexCommandRunner.Run(args, jsonOptions),
