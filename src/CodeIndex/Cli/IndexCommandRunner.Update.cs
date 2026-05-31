@@ -702,6 +702,14 @@ public static partial class IndexCommandRunner
                             && (statReusableLanguage != "sql" || sqlGraphContractMatchesCurrent));
                     if (statMatchedId != null)
                     {
+                        if (writer.CountSymbolsForFile(statMatchedId.Value) > options.MaxSymbolsPerFile
+                            || writer.HasIssueForFile(statMatchedId.Value, "symbol_count_exceeded"))
+                        {
+                            statMatchedId = null;
+                        }
+                    }
+                    if (statMatchedId != null)
+                    {
                         skipped++;
                         if (options.Verbose && !options.Json && !options.Quiet)
                         {
@@ -734,6 +742,14 @@ public static partial class IndexCommandRunner
                             && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
                             && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
                             && (record.Lang != "sql" || sqlGraphContractMatchesCurrent));
+                    if (existingId != null)
+                    {
+                        if (writer.CountSymbolsForFile(existingId.Value) > options.MaxSymbolsPerFile
+                            || writer.HasIssueForFile(existingId.Value, "symbol_count_exceeded"))
+                        {
+                            existingId = null;
+                        }
+                    }
                     if (existingId != null)
                     {
                         using var purgeTxn = writer.BeginTransaction();
@@ -772,7 +788,6 @@ public static partial class IndexCommandRunner
                     var fileId = writer.UpsertFile(record);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "chunking");
                     var chunks = ChunkSplitter.Split(fileId, content);
-                    writer.InsertChunks(chunks);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "symbols");
                     var symbols = ExtractSymbolsWithStallTimeout(
                         fileId,
@@ -782,10 +797,39 @@ public static partial class IndexCommandRunner
                         Path.GetFullPath(options.ProjectPath!),
                         currentUpdatePath,
                         cancellationToken);
+                    if (symbols.Count > options.MaxSymbolsPerFile)
+                    {
+                        var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                        writer.InsertSymbols([]);
+                        writer.InsertReferences([]);
+                        writer.InsertIssues(fileId, [issue]);
+                        writer.ClearBatchInProgress();
+                        txn.Commit();
+                        fileBatchMarked = false;
+                        updated++;
+                        ftsMutated = true;
+                        WriteUpdateVerboseStatus($"  [SKIP] {relPath} ({issue.Message})");
+                        continue;
+                    }
                     SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
                     var fileContext = new FileContext(projectRoot, record.Path, absPath, record.Lang);
                     postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
                     symbolsDroppedByKindFilter += options.SymbolKindFilter.Apply(symbols);
+                    if (symbols.Count > options.MaxSymbolsPerFile)
+                    {
+                        var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                        writer.InsertSymbols([]);
+                        writer.InsertReferences([]);
+                        writer.InsertIssues(fileId, [issue]);
+                        writer.ClearBatchInProgress();
+                        txn.Commit();
+                        fileBatchMarked = false;
+                        updated++;
+                        ftsMutated = true;
+                        WriteUpdateVerboseStatus($"  [SKIP] {relPath} ({issue.Message})");
+                        continue;
+                    }
+                    writer.InsertChunks(chunks);
                     FileIndexer.ValidateSymbolLineRanges(record, symbols);
                     writer.InsertSymbols(symbols);
                     currentUpdatePath = FormatIndexPhasePath(relPath, "references");

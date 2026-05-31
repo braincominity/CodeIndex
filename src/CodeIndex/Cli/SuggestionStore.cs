@@ -169,6 +169,7 @@ public class SuggestionStore
         bool AlreadySubmitted,
         SuggestionStatus Status,
         string? UpstreamUrl,
+        string? SubmissionError = null,
         string? DuplicateOfHash = null,
         double? DuplicateScore = null);
 
@@ -275,6 +276,7 @@ public class SuggestionStore
                 reservation.AlreadySubmitted,
                 reservation.Status,
                 reservation.UpstreamUrl,
+                null,
                 reservation.DuplicateOfHash,
                 reservation.DuplicateScore);
         }
@@ -302,6 +304,7 @@ public class SuggestionStore
                     reservation.AlreadySubmitted,
                     reservation.Status,
                     reservation.UpstreamUrl,
+                    null,
                     reservation.DuplicateOfHash,
                     reservation.DuplicateScore);
             }
@@ -317,6 +320,7 @@ public class SuggestionStore
                 reservation.AlreadySubmitted,
                 found.Status,
                 issueUrl ?? found.UpstreamUrl,
+                submitResult.Error,
                 reservation.DuplicateOfHash,
                 reservation.DuplicateScore);
         });
