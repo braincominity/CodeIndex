@@ -43,7 +43,7 @@ public class McpServerTests : IDisposable
             Lang = "csharp",
             Size = 200,
             Lines = 10,
-            Modified = new DateTime(2024, 1, 1),
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
             Checksum = "abc123",
         });
         writer.InsertChunks([new ChunkRecord
@@ -92,7 +92,7 @@ public class McpServerTests : IDisposable
             Lang = lang,
             Size = normalized.Length,
             Lines = lines.Length,
-            Modified = new DateTime(2024, 1, 1),
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
             Checksum = Guid.NewGuid().ToString("N"),
             Generated = generated,
         });
