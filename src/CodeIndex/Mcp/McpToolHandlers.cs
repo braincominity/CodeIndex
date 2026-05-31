@@ -3329,6 +3329,10 @@ public partial class McpServer
         if (!Directory.Exists(projectPath))
             return CreateToolErrorResponse(id, "Directory not found");
 
+        if (!McpIndexRunLock.TryAcquire(_dbPath, out var indexLock, out var lockError))
+            return CreateToolErrorResponse(id, lockError!);
+        using var acquiredIndexLock = indexLock;
+
         // Reuse the per-session DbContext (issue #1494) instead of opening a fresh
         // connection on every index call. InitializeSchema below is idempotent so the
         // shared connection still picks up legacy-DB migrations on demand.
