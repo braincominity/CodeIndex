@@ -25285,6 +25285,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_PerlHashConstants_NormalizesQuotedKeysAndDeduplicates()
+    {
+        var content = """
+            use constant {
+                "foo " => 1,
+                foo => 2,
+                "naïve" => 3,
+                "nai\u0308ve" => 4,
+                "hex\xEF" => 5,
+                "hexï" => 6,
+                "   " => 7,
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "perl", content);
+
+        Assert.Equal(3, symbols.Count(symbol => symbol.Kind == "function"));
+        Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "foo"));
+        Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "naïve"));
+        Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "hexï"));
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "foo ");
+    }
+
+    [Fact]
     public void Extract_Perl_CapturesPackageBlockNamespaces()
     {
         var content = """

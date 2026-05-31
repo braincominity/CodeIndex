@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Models;
 
@@ -11,7 +13,7 @@ public static partial class SymbolExtractor
         @"^\s*use\s+constant\s+\{",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PerlHashConstantKeyRegex = new(
-        @"(?:^|,)\s*(?:""(?<quoted>[\p{L}_][\p{L}\p{Nd}_]*)""|'(?<quoted>[\p{L}_][\p{L}\p{Nd}_]*)'|(?<bare>[\p{L}_][\p{L}\p{Nd}_]*))\s*=>",
+        @"(?:^|,)\s*(?:""(?<quoted>(?:\\x[0-9A-Fa-f]{2}|\\u[0-9A-Fa-f]{4}|\\.|[^""])*)""|'(?<quoted>(?:\\x[0-9A-Fa-f]{2}|\\u[0-9A-Fa-f]{4}|\\.|[^'])*)'|(?<bare>[\p{L}_][\p{L}\p{Nd}_]*))\s*=>",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static void ExtractPerlHashConstantSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
@@ -21,12 +23,16 @@ public static partial class SymbolExtractor
             if (!TryCollectPerlHashConstantBody(lines, i, out var body, out var lineSegments, out var endLineIndex, out var signature))
                 continue;
 
+            var seenConstantNames = new HashSet<string>(StringComparer.Ordinal);
             foreach (Match keyMatch in PerlHashConstantKeyRegex.Matches(body))
             {
                 var nameGroup = keyMatch.Groups["bare"].Success
                     ? keyMatch.Groups["bare"]
                     : keyMatch.Groups["quoted"];
                 if (!nameGroup.Success)
+                    continue;
+                var name = NormalizePerlConstantName(nameGroup.Value);
+                if (name.Length == 0 || !seenConstantNames.Add(name))
                     continue;
 
                 var (lineIndex, column) = ResolvePerlHashConstantBodyPosition(lineSegments, nameGroup.Index);
@@ -38,7 +44,7 @@ public static partial class SymbolExtractor
                     {
                         FileId = fileId,
                         Kind = "function",
-                        Name = nameGroup.Value,
+                        Name = name,
                         Line = lineIndex + 1,
                         StartLine = lineIndex + 1,
                         EndLine = lineIndex + 1,
@@ -50,6 +56,48 @@ public static partial class SymbolExtractor
             i = endLineIndex;
         }
     }
+
+    private static string NormalizePerlConstantName(string name)
+        => DecodePerlQuotedConstantEscapes(name.Trim()).Normalize(NormalizationForm.FormC);
+
+    private static string DecodePerlQuotedConstantEscapes(string value)
+    {
+        if (value.IndexOf('\\') < 0)
+            return value;
+
+        var builder = new StringBuilder(value.Length);
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (value[i] != '\\' || i + 1 >= value.Length)
+            {
+                builder.Append(value[i]);
+                continue;
+            }
+
+            var marker = value[i + 1];
+            if (marker == 'x' && i + 3 < value.Length && TryParseHexScalar(value.AsSpan(i + 2, 2), out var hexByte))
+            {
+                builder.Append((char)hexByte);
+                i += 3;
+                continue;
+            }
+
+            if (marker == 'u' && i + 5 < value.Length && TryParseHexScalar(value.AsSpan(i + 2, 4), out var unicodeScalar))
+            {
+                builder.Append(char.ConvertFromUtf32(unicodeScalar));
+                i += 5;
+                continue;
+            }
+
+            builder.Append(marker);
+            i++;
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool TryParseHexScalar(ReadOnlySpan<char> value, out int scalar)
+        => int.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out scalar);
 
     private readonly record struct PerlBodyLineSegment(int BodyStartIndex, int LineIndex, int ColumnOffset);
 
