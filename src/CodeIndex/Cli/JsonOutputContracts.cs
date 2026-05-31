@@ -159,6 +159,8 @@ internal sealed class IndexFullScanSummaryJsonResult
     public int FilesScanned { get; init; }
     public int FilesSkipped { get; init; }
     public int FilesPurged { get; init; }
+    [JsonPropertyName("dangling_symlinks_skipped")]
+    public int DanglingSymlinksSkipped { get; init; }
     public int Warnings { get; init; }
     public int Errors { get; init; }
     public int SymbolsDroppedByKindFilter { get; init; }

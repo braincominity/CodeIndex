@@ -12,6 +12,36 @@ namespace CodeIndex.Tests;
 public class ProgramRunnerTests
 {
     [Theory]
+    [InlineData("foo.cs", false)]
+    [InlineData("./foo", true)]
+    [InlineData(".", true)]
+    public void IsProjectPathArg_CommonForms_ReturnsExpectedValue(string arg, bool expected)
+    {
+        Assert.Equal(expected, ProgramRunner.IsProjectPathArg(arg));
+    }
+
+    [Fact]
+    public void IsProjectPathArg_PosixLiteralBackslashFileName_IsNotPathSyntax()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        Assert.False(ProgramRunner.IsProjectPathArg(@"weird\name.txt"));
+    }
+
+    [Theory]
+    [InlineData(@"C:\foo")]
+    [InlineData("C:")]
+    [InlineData(@"\\server\share\foo")]
+    public void IsProjectPathArg_WindowsPathForms_ReturnTrueOnWindows(string arg)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        Assert.True(ProgramRunner.IsProjectPathArg(arg));
+    }
+
+    [Theory]
     [InlineData("--json")]
     [InlineData("--json=array")]
     [InlineData("--json-envelope")]

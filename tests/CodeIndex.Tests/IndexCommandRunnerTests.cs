@@ -41,6 +41,44 @@ public class IndexCommandRunnerTests
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
     };
 
+    [Theory]
+    [InlineData("..")]
+    [InlineData("../evil.txt")]
+    [InlineData(@"..\evil.txt")]
+    [InlineData(@"..\..\evil.txt")]
+    public void IsOutsideProjectRoot_ParentTraversalSeparators_ReturnsTrue(string relativePath)
+    {
+        if (relativePath.Contains('\\') && !OperatingSystem.IsWindows())
+            return;
+
+        Assert.True(IndexCommandRunner.IsOutsideProjectRoot(relativePath));
+    }
+
+    [Fact]
+    public void IsOutsideProjectRoot_PosixLiteralBackslashPath_ReturnsFalse()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        Assert.False(IndexCommandRunner.IsOutsideProjectRoot(@"..\evil.txt"));
+    }
+
+    [Fact]
+    public void IsOutsideProjectRoot_RootedPath_ReturnsTrue()
+    {
+        var rootedPath = OperatingSystem.IsWindows()
+            ? @"C:\Windows\evil.txt"
+            : "/etc/passwd";
+
+        Assert.True(IndexCommandRunner.IsOutsideProjectRoot(rootedPath));
+    }
+
+    [Fact]
+    public void IsOutsideProjectRoot_NormalRelativePath_ReturnsFalse()
+    {
+        Assert.False(IndexCommandRunner.IsOutsideProjectRoot("src/app.cs"));
+    }
+
     [Fact]
     public void ParseArgs_HelpFlagSetsShowHelp()
     {
