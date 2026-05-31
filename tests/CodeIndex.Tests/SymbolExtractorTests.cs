@@ -20755,6 +20755,31 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Elixir_DetectsProtocolImplementations()
+    {
+        const string content = """
+            defmodule MyApp.Stream do
+              defstruct [:items]
+            end
+
+            defimpl Enumerable, for: MyApp.Stream do
+              def count(stream), do: {:ok, length(stream.items)}
+            end
+
+            defimpl Inspect, for: [MyApp.Stream, Other.Stream] do
+              def inspect(stream, _opts), do: "#Stream<#{length(stream.items)}>"
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "elixir", content);
+
+        Assert.Contains(symbols, s => s.Kind == "protocol_impl" && s.Name.StartsWith("Enumerable", StringComparison.Ordinal));
+        Assert.Contains(symbols, s => s.Kind == "protocol_impl" && s.Name.StartsWith("Inspect", StringComparison.Ordinal));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "count" && s.ContainerKind == "protocol_impl");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "inspect" && s.ContainerKind == "protocol_impl");
+    }
+
+    [Fact]
     public void Extract_Elixir_NestedBlocks_AndDoShorthand_HaveMatchingBodyRanges()
     {
         // Elixir: nested fn/case/if/with bodies and `, do:` shorthand / ネストした fn/case/if/with と `, do:` 短縮形

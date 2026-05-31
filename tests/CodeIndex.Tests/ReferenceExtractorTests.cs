@@ -14815,6 +14815,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_ElixirDefimpl_CapturesProtocolAndImplementedTypes()
+    {
+        const string content = """
+            defimpl Enumerable, for: MyApp.Stream do
+              def count(stream), do: {:ok, length(stream.items)}
+            end
+
+            defimpl Inspect, for: [MyApp.Stream, Other.Stream] do
+              def inspect(stream, _opts), do: "#Stream<#{length(stream.items)}>"
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "elixir", content);
+        var references = ReferenceExtractor.Extract(1, "elixir", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Enumerable" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Inspect" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "MyApp.Stream" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Other.Stream" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_ElixirNestedBlocks_AssignsCorrectCallerContainers()
     {
         // Elixir: nested body ranges must keep downstream calls inside the right container / ネストした本体範囲でも呼び出しを正しいコンテナに帰属させる
