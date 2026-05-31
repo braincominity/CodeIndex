@@ -27367,7 +27367,7 @@ jobs:
     }
 
     [Fact]
-    public void RunHotspots_GroupByNameJson_CollapsesDuplicateDefinitionSites()
+    public void RunHotspots_GroupByNameJson_CountIsNameKindGroupCount()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_json");
         try
@@ -27414,6 +27414,7 @@ jobs:
             Assert.Equal("name_kind", json.GetProperty("grouped_by").GetString());
             Assert.Equal("SharedHelper", hotspot.GetProperty("name").GetString());
             Assert.Equal("function", hotspot.GetProperty("kind").GetString());
+            Assert.Equal(2, hotspot.GetProperty("reference_count").GetInt32());
             Assert.Equal(2, hotspot.GetProperty("definition_sites").GetInt32());
             Assert.Equal(2, hotspot.GetProperty("paths").GetArrayLength());
         }
