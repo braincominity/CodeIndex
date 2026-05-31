@@ -33838,6 +33838,43 @@ jobs:
     }
 
     [Fact]
+    public void RunStatus_ReadOnlyFlagOpensImmutableUriAndReportsModeFields()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_readonly");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+
+            var options = QueryCommandRunner.ParseArgs(
+                ["--db", dbPath, "--read-only", "--json"],
+                jsonDefault: false,
+                allowStatusCheck: true,
+                validateDefaultLimit: false,
+                validateDefaultSnippetLines: false,
+                validateDefaultMaxLineWidth: false);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--read-only", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.StartsWith("file:", options.DbPath, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("immutable=1", options.DbPath, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("mode=ro", options.DbPath, StringComparison.OrdinalIgnoreCase);
+            Assert.False(document.RootElement.GetProperty("read_only_fallback").GetBoolean());
+            Assert.False(document.RootElement.GetProperty("wal_checkpoint_attempted").GetBoolean());
+            Assert.False(document.RootElement.GetProperty("wal_checkpoint_succeeded").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunMap_HumanLargestFilesFormatsSizesAndBytesFlagKeepsRawCounts()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_size_units");

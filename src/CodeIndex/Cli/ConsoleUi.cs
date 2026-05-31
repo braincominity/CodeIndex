@@ -68,18 +68,18 @@ public static class ConsoleUi
         ("index-commits", "cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-changed-between", "cdidx index <projectPath> --changed-between <old-ref> <new-ref> [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
-        ("search", "cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json[=ndjson|array]] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup] [--no-visibility-rank]"),
-        ("definition", "cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
-        ("goto", "cdidx goto <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--all]"),
-        ("references", "cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
-        ("callers", "cdidx callers <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--kind <kind>] [--rank-by <weighted|count|kind>] [--raw-kinds] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
-        ("callees", "cdidx callees <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--kind <kind>] [--rank-by <weighted|count|kind>] [--raw-kinds] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
-        ("symbols", "cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]"),
-        ("files", "cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]"),
-        ("find", "cdidx find <query> --path <glob> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]"),
+        ("search", "cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json[=ndjson|array]] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup] [--no-visibility-rank]"),
+        ("definition", "cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
+        ("goto", "cdidx goto <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--all]"),
+        ("references", "cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
+        ("callers", "cdidx callers <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--rank-by <weighted|count|kind>] [--raw-kinds] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
+        ("callees", "cdidx callees <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--rank-by <weighted|count|kind>] [--raw-kinds] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
+        ("symbols", "cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]"),
+        ("files", "cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]"),
+        ("find", "cdidx find <query> --path <glob> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]"),
         ("excerpt", "cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--verbose]"),
-        ("map", "cdidx map [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes] [--min-entrypoint-confidence <0.0..1.0>]"),
-        ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]"),
+        ("map", "cdidx map [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes] [--min-entrypoint-confidence <0.0..1.0>]"),
+        ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]"),
         ("outline", "cdidx outline <path> [--db <path>] [--json] [--verbose]"),
         ("status", "cdidx status [--db <path>] [--json] [--verbose] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--stale-after <duration>] [--explain <field>] [--log-path] [--config] [--check-updates]"),
         ("validate-config", "cdidx validate-config"),
@@ -87,10 +87,10 @@ public static class ConsoleUi
         ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n>]"),
         ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n>] [--no-log] [--include-args]"),
         ("validate", "cdidx validate [--db <path>] [--json] [--verbose] [--kind <kind>] [--path <glob>]"),
-        ("impact", "cdidx impact <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--max-hops <n>] [--count] [--with-paths]"),
-        ("deps", "cdidx deps [--db <path>] [--json] [--verbose] [--limit <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--reverse]"),
-        ("unused", "cdidx unused [--db <path>] [--json] [--verbose] [--limit <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]"),
-        ("hotspots", "cdidx hotspots [--db <path>] [--json] [--verbose] [--limit <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]"),
+        ("impact", "cdidx impact <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--max-hops <n>] [--count] [--with-paths]"),
+        ("deps", "cdidx deps [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--reverse]"),
+        ("unused", "cdidx unused [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]"),
+        ("hotspots", "cdidx hotspots [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--group-by <symbol|file|statement>] [--group-by-name]"),
         ("suggestions", "cdidx suggestions <list|show|export> [id] [--db <path>] [--json] [--status <all|submitted|unsubmitted>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--format <json|markdown>]"),
         ("languages", "cdidx languages [--json]"),
         ("batch", "cdidx batch [--db <path>]  # reads JSON string arrays from stdin, one query command per line"),
@@ -620,6 +620,50 @@ public static class ConsoleUi
     /// 使い方を表示する。
     /// </summary>
     public static void PrintUsage(bool showBanner = true)
+        => PrintUsageBrief(showBanner);
+
+    public static void PrintUsageBrief(bool showBanner = true)
+    {
+        if (showBanner)
+        {
+            PrintBanner();
+        }
+
+        Console.WriteLine("Usage:");
+        Console.WriteLine("  cdidx <projectPath>");
+        Console.WriteLine("  cdidx <command> [options]");
+        Console.WriteLine("  cdidx --help-all");
+        Console.WriteLine("  cdidx --help-flags");
+        Console.WriteLine();
+        Console.WriteLine("Commands:");
+        Console.WriteLine("  index <projectPath>        Build or update the index for a project");
+        Console.WriteLine("  search <query>             Full-text search across indexed chunks");
+        Console.WriteLine("  definition <query>         Resolve symbol definitions with extracted ranges");
+        Console.WriteLine("  references <query>         Find indexed references for a symbol (--kind uses reference kind)");
+        Console.WriteLine("  callers <query>            Find callers of a symbol (--kind uses reference kind)");
+        Console.WriteLine("  callees <query>            Find callees used by a caller (--kind uses reference kind)");
+        Console.WriteLine("  symbols [query]            Search symbols (functions, classes, imports)");
+        Console.WriteLine("  map                        Show a repo-level overview for AI orientation");
+        Console.WriteLine("  inspect <query>            Bundle definition, graph, and nearby symbol context");
+        Console.WriteLine("  status                     Show database statistics, freshness, config, and logs");
+        Console.WriteLine("  validate                   Report encoding issues (U+FFFD, BOM, null bytes, mixed line endings, UTF-16 BOM, likely non-UTF8)");
+        Console.WriteLine("  impact <query>             Show transitive callers; type queries may return heuristic file-level dependency hints");
+        Console.WriteLine("  deps                       Show file-level dependency edges from the reference graph");
+        Console.WriteLine("  unused                     Find symbols defined but never referenced (dead code)");
+        Console.WriteLine("  hotspots                   Find high-impact symbols; duplicate-name families may fall back conservatively");
+        Console.WriteLine("  batch                      Run newline-delimited JSON query commands with one DB connection");
+        Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
+        Console.WriteLine("  completions <shell>        Generate shell completions for bash, zsh, fish, or PowerShell");
+        Console.WriteLine();
+        Console.WriteLine("Run `cdidx --help-all` for every command and option, `cdidx --help-flags` for shared flags, or `cdidx <command> --help` for one command.");
+        Console.WriteLine();
+        Console.WriteLine("Examples:");
+        Console.WriteLine("  cdidx ./myproject");
+        Console.WriteLine("  cdidx search \"authenticate\"");
+        Console.WriteLine("  cdidx inspect Run --body --exclude-tests");
+    }
+
+    public static void PrintUsageFull(bool showBanner = true)
     {
         if (showBanner)
         {
@@ -644,6 +688,43 @@ public static class ConsoleUi
         foreach (var (_, usage) in CommandUsageLines)
             WriteHelpLine($"  {usage}");
         Console.WriteLine();
+        PrintCommandSummary();
+        Console.WriteLine();
+        PrintFlagReference(WriteHelpLine);
+        Console.WriteLine();
+        PrintExamples();
+    }
+
+    public static void PrintFlagUsage(bool showBanner = true)
+    {
+        if (showBanner)
+        {
+            PrintBanner();
+        }
+
+        var helpWidth = ShouldUseInteractiveConsole() ? Math.Min(GetWindowWidth(), 120) : 0;
+        void WriteHelpLine(string line = "")
+        {
+            if (helpWidth <= 0)
+            {
+                Console.WriteLine(line);
+                return;
+            }
+
+            foreach (var wrapped in WrapHelpLine(line, helpWidth))
+                Console.WriteLine(wrapped);
+        }
+
+        Console.WriteLine("Usage:");
+        Console.WriteLine("  cdidx --help-flags");
+        Console.WriteLine();
+        PrintFlagReference(WriteHelpLine);
+        Console.WriteLine();
+        Console.WriteLine("Run `cdidx --help-all` to show commands and examples.");
+    }
+
+    private static void PrintCommandSummary()
+    {
         Console.WriteLine("Commands:");
         Console.WriteLine("  index <projectPath>        Build or update the index for a project");
         Console.WriteLine("  backfill-fold              Upgrade folded-name columns in an existing index DB");
@@ -679,6 +760,10 @@ public static class ConsoleUi
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
         Console.WriteLine("  completions <shell>        Generate shell completions for bash, zsh, fish, or PowerShell");
         Console.WriteLine("  license                    Show licensing, trademark, and commercial-use summary");
+    }
+
+    private static void PrintFlagReference(Action<string> WriteHelpLine)
+    {
         Console.WriteLine();
         Console.WriteLine("Index and update options:");
         Console.WriteLine("  --db <path>                Database file path (default for index: <projectPath>/.cdidx/codeindex.db)");
@@ -763,7 +848,10 @@ public static class ConsoleUi
         WriteHelpLine("  --with-paths               impact: also emit `paths` per caller — the shortest call chains [root, ..., caller] (diamond graphs surface every converging route, capped per row)");
         WriteHelpLine("  unused reflection note     C# nameof/typeof and direct reflection member-name literals such as GetMethod(\"Foo\") are indexed; dynamically constructed reflection names may need manual review");
         WriteHelpLine("  Note: if a query itself starts with '-', pass it with --query <query> or -- <query>; for option values that start with '--', use --opt=<value>.");
-        Console.WriteLine();
+    }
+
+    private static void PrintExamples()
+    {
         Console.WriteLine("Examples:");
         Console.WriteLine("  cdidx ./myproject                             Index a project");
         Console.WriteLine("  cdidx backfill-fold                           Upgrade folded-name columns in an existing DB");
@@ -1124,7 +1212,10 @@ public static class ConsoleUi
         var cmds = string.Join(" ", Commands);
         var langs = GetCompletionLangs();
         var kinds = GetCompletionKinds();
+        var version = LoadVersion();
         var sb = new StringBuilder();
+        sb.Append($"# cdidx bash completions generated for version {version}\n");
+        sb.Append("# Regenerate this script after upgrading cdidx.\n");
         sb.Append("_cdidx() {\n");
         sb.Append("    local cur prev commands\n");
         sb.Append("    local cmd\n");
@@ -1213,8 +1304,11 @@ public static class ConsoleUi
         var cmds = string.Join(" ", Commands.Select(c => $"'{c}:{c} command'"));
         var langs = GetCompletionLangs();
         var kinds = GetCompletionKinds();
+        var version = LoadVersion();
         var sb = new StringBuilder();
         sb.Append("#compdef cdidx\n");
+        sb.Append($"# cdidx zsh completions generated for version {version}\n");
+        sb.Append("# Regenerate this script after upgrading cdidx.\n");
         sb.Append("_cdidx() {\n");
         sb.Append("    local -a commands\n");
         sb.Append("    commands=(\n");
@@ -1335,7 +1429,8 @@ public static class ConsoleUi
         var kinds = GetCompletionKinds();
         var lines = new List<string>
         {
-            "# cdidx fish completions",
+            $"# cdidx fish completions generated for version {LoadVersion()}",
+            "# Regenerate this script after upgrading cdidx.",
         };
         foreach (var cmd in Commands)
             lines.Add($"complete -c cdidx -n '__fish_use_subcommand' -a '{cmd}' -d '{cmd} command'");
@@ -1384,7 +1479,8 @@ public static class ConsoleUi
         var langs = FormatPowerShellArray(GetCompletionLangs().Split(' ', StringSplitOptions.RemoveEmptyEntries));
         var kinds = FormatPowerShellArray(GetCompletionKinds().Split(' ', StringSplitOptions.RemoveEmptyEntries));
         var sb = new StringBuilder();
-        sb.AppendLine("# cdidx PowerShell completions");
+        sb.AppendLine($"# cdidx PowerShell completions generated for version {LoadVersion()}");
+        sb.AppendLine("# Regenerate this script after upgrading cdidx.");
         sb.AppendLine("Register-ArgumentCompleter -Native -CommandName cdidx -ScriptBlock {");
         sb.AppendLine("    param($wordToComplete, $commandAst, $cursorPosition)");
         sb.AppendLine($"    $commands = @({cmds})");

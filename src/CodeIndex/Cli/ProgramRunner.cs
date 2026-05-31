@@ -94,11 +94,27 @@ internal static class ProgramRunner
 
         if (args.Length == 0 || args[0] is "--help" or "-h")
         {
-            ConsoleUi.PrintUsage(showBanner: args.Length > 0);
+            ConsoleUi.PrintUsageBrief(showBanner: args.Length > 0);
             var helpExit = args.Length == 0 ? CommandExitCodes.UsageError : CommandExitCodes.Success;
             GlobalToolLog.Info($"command_complete exit_code={helpExit} help_or_usage=true");
             EmitCommandMetric("help", args, commandStartTimestamp, commandStopwatch, helpExit);
             return helpExit;
+        }
+
+        if (args[0] is "--help-all" or "--help-extended")
+        {
+            ConsoleUi.PrintUsageFull(showBanner: true);
+            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} help_all=true");
+            EmitCommandMetric("help-all", args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
+            return CommandExitCodes.Success;
+        }
+
+        if (args[0] == "--help-flags")
+        {
+            ConsoleUi.PrintFlagUsage(showBanner: true);
+            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} help_flags=true");
+            EmitCommandMetric("help-flags", args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
+            return CommandExitCodes.Success;
         }
 
         if (args[0] is "--version" or "-V")
