@@ -2602,6 +2602,20 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsList_SearchDescriptionStaysCompact()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var searchTool = tools.First(t => t!["name"]!.GetValue<string>() == "search")!;
+        var description = searchTool["description"]!.GetValue<string>();
+
+        Assert.True(description.Length < 1000);
+        Assert.Contains("USER_GUIDE.md#search", description, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ToolsList_CommonSchemasAdvertiseClientSideConstraints()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
@@ -2648,7 +2662,7 @@ public class McpServerTests : IDisposable
         var tools = response["result"]!["tools"]!.AsArray();
         var expectedExamples = new Dictionary<string, string[]>
         {
-            ["search"] = ["Examples:", "例:", "search {\"query\":\"handleRequest\",\"lang\":\"csharp\"}", "\"prefix\":true"],
+            ["search"] = ["USER_GUIDE.md#search", "prefix", "exactSubstring"],
             ["definition"] = ["Examples:", "例:", "definition {\"query\":\"McpServer\"}", "\"includeBody\":true", "\"exactName\":true"],
             ["references"] = ["Examples:", "例:", "references {\"query\":\"Run\"}", "\"kind\":\"type_reference\""],
             ["callers"] = ["Examples:", "例:", "callers {\"query\":\"HandleRequest\"}", "\"rankBy\":\"weighted\""],
