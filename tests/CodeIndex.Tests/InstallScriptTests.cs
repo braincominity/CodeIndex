@@ -53,6 +53,19 @@ public sealed class InstallScriptTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(installDir, "LICENSES")));
     }
 
+    [Fact]
+    public void DownloadAndInstall_SecuresStageDirectoryAfterMktemp()
+    {
+        var script = File.ReadAllText(Path.Combine(GetRepositoryRoot(), "install.sh"));
+        var mktempIndex = script.IndexOf("stage_dir=\"$(mktemp -d \"${INSTALL_DIR}/.cdidx-stage.XXXXXX\")\"", StringComparison.Ordinal);
+        var chmodIndex = script.IndexOf("chmod 700 \"$stage_dir\"", StringComparison.Ordinal);
+        var cleanupIndex = script.IndexOf("STAGE_DIR_CLEANUP=\"$stage_dir\"", StringComparison.Ordinal);
+
+        Assert.True(mktempIndex >= 0);
+        Assert.True(chmodIndex > mktempIndex);
+        Assert.True(cleanupIndex > chmodIndex);
+    }
+
     [Theory]
     [InlineData("linux", "x64", "linux-x64", "libe_sqlite3.so")]
     [InlineData("osx", "arm64", "osx-arm64", "libe_sqlite3.dylib")]

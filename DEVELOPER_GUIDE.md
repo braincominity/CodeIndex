@@ -23,6 +23,10 @@ such as replacement characters, BOMs, NUL bytes, mixed line endings, UTF-16 BOMs
 and likely non-UTF8 content. Keep its CLI usage, README entry, and help summary
 in sync when adding validation issue kinds or filters.
 
+`cdidx doctor` is the copy-pasteable environment summary for support requests.
+Keep it redacted by default: secret-like `CDIDX_*` values must not be printed,
+and new diagnostic fields should be stable enough for issue triage.
+
 Generated shell completion scripts include a comment with the `cdidx` version
 that produced them. When command or flag schema changes, update completion
 tests and keep the README guidance that installed completions should be

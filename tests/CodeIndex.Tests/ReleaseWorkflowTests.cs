@@ -15,6 +15,20 @@ public class ReleaseWorkflowTests
         Assert.Contains("'\"version\":'", workflow);
     }
 
+    [Fact]
+    public void ReleaseWorkflow_VerifiesPublishedInstallForTheCurrentRid()
+    {
+        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+
+        Assert.Contains("expected_rids=\"linux-x64 linux-arm64 osx-arm64 win-x64 win-arm64\"", workflow);
+        Assert.Contains("asset=\"CodeIndex-${rid}.zip\"", workflow);
+        Assert.Contains("asset=\"CodeIndex-${rid}.tar.gz\"", workflow);
+        Assert.Contains("Missing release archive for ${rid}", workflow);
+        Assert.Contains("CodeIndex-osx-x64.*", workflow);
+        Assert.Contains("native_asset=\"libe_sqlite3.so\"", workflow);
+        Assert.Contains("for asset in \"$binary_name\" \"$native_asset\"", workflow);
+    }
+
     // Issue #1553: releases must ship a CycloneDX SBOM so enterprise consumers
     // (SOC2/FedRAMP reviewers, Snyk/Trivy/Grype scanners) can verify transitive
     // dependencies and bundled SQLitePCLRaw native assets without re-deriving

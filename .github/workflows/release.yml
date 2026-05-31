@@ -445,6 +445,20 @@ jobs:
           # 完全性を検証できる。
           find all-artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.cdx.json' \) -exec cp {} release-files/ \;
           cd release-files
+          expected_rids="linux-x64 linux-arm64 osx-arm64 win-x64 win-arm64"
+          for rid in $expected_rids; do
+            case "$rid" in
+              win-*) asset="CodeIndex-${rid}.zip" ;;
+              *) asset="CodeIndex-${rid}.tar.gz" ;;
+            esac
+            test -f "$asset" \
+              || { echo "Missing release archive for ${rid}: ${asset}" >&2; ls -la >&2; exit 1; }
+          done
+          if compgen -G 'CodeIndex-osx-x64.*' >/dev/null; then
+            echo "Unexpected osx-x64 release archive found; update platform-support docs and installer guidance before publishing it." >&2
+            ls -la CodeIndex-osx-x64.* >&2
+            exit 1
+          fi
           sha256sum * > sha256sums.txt
 
       - name: Import release GPG key
@@ -674,8 +688,12 @@ jobs:
           mkdir -p "$CDIDX_INSTALL_DIR"
           bash install.sh "${TAG_NAME}"
 
-          # Runtime and license/policy assets must land next to the binary.
-          for asset in cdidx libe_sqlite3.so version.json LICENSE COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md LICENSES; do
+          # This Ubuntu smoke test exercises the linux-x64 installer path. The
+          # release-files collection step above verifies that every published
+          # RID archive exists, including macOS/Windows assets.
+          binary_name="cdidx"
+          native_asset="libe_sqlite3.so"
+          for asset in "$binary_name" "$native_asset" version.json LICENSE COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md LICENSES; do
             test -e "$CDIDX_INSTALL_DIR/$asset" \
               || { echo "Missing $asset in $CDIDX_INSTALL_DIR" >&2; ls -la "$CDIDX_INSTALL_DIR" >&2; exit 1; }
           done
@@ -690,7 +708,7 @@ jobs:
           # instead of an exact match — a wrong version still fails because
           # the suffix can only ever follow a space.
           EXPECTED="cdidx ${TAG_NAME}"
-          ACTUAL="$("$CDIDX_INSTALL_DIR/cdidx" --version)"
+          ACTUAL="$("$CDIDX_INSTALL_DIR/$binary_name" --version)"
           case "$ACTUAL" in
             "$EXPECTED"|"$EXPECTED "*) ;;
             *)
@@ -700,8 +718,8 @@ jobs:
           esac
 
           # A command that touches SQLite must not DllNotFoundException.
-          "$CDIDX_INSTALL_DIR/cdidx" . >/dev/null
-          "$CDIDX_INSTALL_DIR/cdidx" status >/dev/null
+          "$CDIDX_INSTALL_DIR/$binary_name" . >/dev/null
+          "$CDIDX_INSTALL_DIR/$binary_name" status >/dev/null
 
           # CLI --json must work on the published trimmed self-contained release.
           # Every CLI JSON DTO is covered by the source-generated serializer context.
@@ -709,7 +727,7 @@ jobs:
           mkdir -p "$json_temp_dir"
           json_stdout="$json_temp_dir/cdidx_json_stdout.txt"
           json_stderr="$json_temp_dir/cdidx_json_stderr.txt"
-          if ! "$CDIDX_INSTALL_DIR/cdidx" status --json >"$json_stdout" 2>"$json_stderr"; then
+          if ! "$CDIDX_INSTALL_DIR/$binary_name" status --json >"$json_stdout" 2>"$json_stderr"; then
             echo "Expected status --json to exit 0" >&2
             cat "$json_stderr" >&2
             exit 1
