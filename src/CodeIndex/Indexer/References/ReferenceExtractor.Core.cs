@@ -128,6 +128,9 @@ public static partial class ReferenceExtractor
             structuralLines,
             csharpKnownTypeNames,
             csharpUsingAliases);
+        var powershellSplatAssignments = language == "powershell"
+            ? PowerShellReferenceExtractor.BuildSplatAssignments(preparedLines)
+            : null;
         // Workspace-wide same-name type rescue needs cross-file visibility, so the
         // extractor leaves ambiguous unqualified using-static pattern heads for the
         // read path to disambiguate.
@@ -1221,6 +1224,12 @@ public static partial class ReferenceExtractor
             void AddCallLikeReference(string name, int callIndex) =>
                 _ = TryAddCallLikeReference(name, callIndex);
 
+            void AddPowerShellParameterReference(string name, int callIndex)
+            {
+                var callContainer = ResolveContainerForCall(callIndex);
+                AddReference(references, seen, fileId, name, callIndex, "parameter", context, lineNumber, callContainer, language);
+            }
+
             bool TryAddCallLikeReference(string name, int callIndex)
             {
                 var normalizedName = language == "fsharp" && FSharpReferenceExtractor.IsOperatorCallName(name)
@@ -1366,6 +1375,11 @@ public static partial class ReferenceExtractor
             else if (language is "powershell")
             {
                 PowerShellReferenceExtractor.EmitCallReferences(preparedLine, AddCallLikeReference);
+                PowerShellReferenceExtractor.EmitSplatParameterReferences(
+                    preparedLine,
+                    powershellSplatAssignments!,
+                    lineNumber,
+                    AddPowerShellParameterReference);
             }
             else if (language is "shell")
             {

@@ -18341,6 +18341,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PowerShell_SplattingEmitsParameterReferences()
+    {
+        const string content = """
+            $params = @{
+                Path = "."
+                Recurse = $true
+            }
+
+            Get-ChildItem @params
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "powershell", content);
+        var references = ReferenceExtractor.Extract(1, "powershell", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Get-ChildItem" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Path" && r.ReferenceKind == "parameter");
+        Assert.Contains(references, r => r.SymbolName == "Recurse" && r.ReferenceKind == "parameter");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Path" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Recurse" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_Haskell_DetectsParenthesizedCalls()
     {
         // Note: Haskell space-separated calls (e.g. `map f xs`) are not captured — only parenthesized calls.
