@@ -1138,7 +1138,13 @@ public class FileIndexer
             return new LanguageDetectionResult(FileProbeStatus.Supported, pluginLang);
 
         if (!string.IsNullOrEmpty(ext))
+        {
+            ExtractorPluginRegistry.LoadPatternConfigsForPath(filePath);
+            if (ExtractorPluginRegistry.LanguageExtensions.TryGetValue(ext, out pluginLang))
+                return new LanguageDetectionResult(FileProbeStatus.Supported, pluginLang);
+
             return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+        }
 
         return TryDetectLanguageFromShebang(filePath);
     }

@@ -111,6 +111,24 @@ public static class ExtractorPluginRegistry
             TryLoadPatternConfig(patternPath);
     }
 
+    internal static void LoadPatternConfigsForPath(string? path)
+    {
+        EnsurePluginsLoaded();
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+
+        var directory = Path.GetFullPath(path);
+        if (!Directory.Exists(directory))
+            directory = Path.GetDirectoryName(directory) ?? string.Empty;
+
+        while (!string.IsNullOrEmpty(directory))
+        {
+            foreach (var patternPath in EnumeratePatternConfigPaths(directory, includeUserDirectory: false))
+                TryLoadPatternConfig(patternPath);
+            directory = Directory.GetParent(directory)?.FullName ?? string.Empty;
+        }
+    }
+
     private static void EnsurePluginsLoaded()
     {
         if (Volatile.Read(ref pluginsLoaded))
@@ -151,9 +169,9 @@ public static class ExtractorPluginRegistry
             yield return Path.Combine(home, ".cdidx", "plugins");
     }
 
-    private static IEnumerable<string> EnumeratePatternConfigPaths(string workspaceRoot)
+    private static IEnumerable<string> EnumeratePatternConfigPaths(string workspaceRoot, bool includeUserDirectory = true)
     {
-        foreach (var directory in EnumeratePatternDirectories(workspaceRoot))
+        foreach (var directory in EnumeratePatternDirectories(workspaceRoot, includeUserDirectory))
         {
             if (!Directory.Exists(directory))
                 continue;
@@ -165,9 +183,12 @@ public static class ExtractorPluginRegistry
         }
     }
 
-    private static IEnumerable<string> EnumeratePatternDirectories(string workspaceRoot)
+    private static IEnumerable<string> EnumeratePatternDirectories(string workspaceRoot, bool includeUserDirectory)
     {
         yield return Path.Combine(workspaceRoot, ".cdidx", "patterns");
+
+        if (!includeUserDirectory)
+            yield break;
 
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (!string.IsNullOrWhiteSpace(home))
