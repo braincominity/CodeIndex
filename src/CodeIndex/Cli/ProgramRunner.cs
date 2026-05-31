@@ -70,6 +70,7 @@ internal static class ProgramRunner
         }
 
         TryConsumeAsciiFlag(ref args);
+        TryConsumeNoProgressFlag(ref args);
 
         if (!TryConsumeMetricsFlag(ref args, out var metricsPath, out var metricsError))
         {
@@ -860,6 +861,40 @@ internal static class ProgramRunner
             if (arg == "--ascii")
             {
                 ConsoleUi.SetAsciiOutput(true);
+                continue;
+            }
+
+            kept.Add(arg);
+        }
+
+        args = kept.ToArray();
+    }
+
+    internal static void TryConsumeNoProgressFlag(ref string[] args)
+    {
+        ConsoleUi.SetProgressAnimationEnabled(null);
+        if (args.Length == 0)
+            return;
+
+        var kept = new List<string>(args.Length);
+        var passthrough = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (passthrough)
+            {
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--")
+            {
+                passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+            if (arg == "--no-progress")
+            {
+                ConsoleUi.SetProgressAnimationEnabled(false);
                 continue;
             }
 

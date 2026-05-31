@@ -437,6 +437,36 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void ShouldUseProgressAnimation_EnvOptOutDisablesAnimation()
+    {
+        using var env = new ProgressAnimationEnvironmentScope();
+        Environment.SetEnvironmentVariable(ConsoleUi.DisableProgressEnvironmentVariable, "1");
+
+        Assert.False(ConsoleUi.ShouldUseProgressAnimation());
+    }
+
+    [Fact]
+    public void ShouldUseProgressAnimation_ReducedMotionDisablesAnimation()
+    {
+        using var env = new ProgressAnimationEnvironmentScope();
+        Environment.SetEnvironmentVariable(ConsoleUi.PrefersReducedMotionEnvironmentVariable, "1");
+
+        Assert.False(ConsoleUi.ShouldUseProgressAnimation());
+    }
+
+    [Fact]
+    public void TryConsumeNoProgressFlag_RemovesGlobalFlagAndDisablesAnimation()
+    {
+        using var env = new ProgressAnimationEnvironmentScope();
+        string[] args = ["index", ".", "--no-progress", "--json"];
+
+        ProgramRunner.TryConsumeNoProgressFlag(ref args);
+
+        Assert.Equal(["index", ".", "--json"], args);
+        Assert.False(ConsoleUi.ShouldUseProgressAnimation());
+    }
+
+    [Fact]
     public void GetWindowWidth_ColumnsEnvVarSet_UsesColumnsValue()
     {
         WithColumnsEnvironment("200", () =>
@@ -839,7 +869,7 @@ public class ConsoleUiTests
 
         var expected = new SortedSet<string>(StringComparer.Ordinal)
         {
-            "db", "json", "quiet", "silent", "output", "log-lines", "no-log", "include-args",
+            "db", "json", "quiet", "silent", "no-progress", "output", "log-lines", "no-log", "include-args",
         };
         Assert.Equal(expected, bashReport);
         Assert.Equal(expected, zshReport);
@@ -1697,6 +1727,28 @@ public class ConsoleUiTests
             Environment.SetEnvironmentVariable("COLORTERM", _originalColorTerm);
             Environment.SetEnvironmentVariable("TERM", _originalTerm);
             ConsoleUi.SetColorPalette(_original);
+        }
+    }
+
+    private sealed class ProgressAnimationEnvironmentScope : IDisposable
+    {
+        private readonly string? _originalDisableProgress;
+        private readonly string? _originalReducedMotion;
+
+        public ProgressAnimationEnvironmentScope()
+        {
+            _originalDisableProgress = Environment.GetEnvironmentVariable(ConsoleUi.DisableProgressEnvironmentVariable);
+            _originalReducedMotion = Environment.GetEnvironmentVariable(ConsoleUi.PrefersReducedMotionEnvironmentVariable);
+            Environment.SetEnvironmentVariable(ConsoleUi.DisableProgressEnvironmentVariable, null);
+            Environment.SetEnvironmentVariable(ConsoleUi.PrefersReducedMotionEnvironmentVariable, null);
+            ConsoleUi.SetProgressAnimationEnabled(null);
+        }
+
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable(ConsoleUi.DisableProgressEnvironmentVariable, _originalDisableProgress);
+            Environment.SetEnvironmentVariable(ConsoleUi.PrefersReducedMotionEnvironmentVariable, _originalReducedMotion);
+            ConsoleUi.SetProgressAnimationEnabled(null);
         }
     }
 
