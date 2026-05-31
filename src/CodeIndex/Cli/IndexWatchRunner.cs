@@ -201,6 +201,11 @@ internal static class IndexWatchRunner
             args.Add("--max-file-bytes");
             args.Add(maxFileSizeBytes.ToString(CultureInfo.InvariantCulture));
         }
+        if (baseOptions.SymlinkPolicy != FileIndexer.SymlinkPolicy.None)
+        {
+            args.Add("--follow-symlinks");
+            args.Add(baseOptions.SymlinkPolicy.ToString().ToLowerInvariant());
+        }
         return args;
     }
 
