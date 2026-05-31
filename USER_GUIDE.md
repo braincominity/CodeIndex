@@ -640,6 +640,7 @@ cdidx ./myproject
 cdidx ./myproject --rebuild     # full rebuild from scratch
 cdidx ./myproject --verbose     # show per-file details
 cdidx ./myproject --duration-format seconds  # show elapsed time as seconds
+cdidx ./myproject --notify=osc9 # terminal notification after long runs
 cdidx ./myproject --watch       # stay running and reindex on file changes
 cdidx ./myproject --watch --debounce 200   # coalesce bursts within a 200 ms window
 ```
@@ -685,7 +686,9 @@ Done.
 
 During long-running indexing on an interactive terminal, `Indexing...` stays live as a spinner instead of dropping to a fixed line until the next 50-file progress update. Warnings still print immediately, but the spinner resumes right after each warning so the run does not look frozen. When stdout is redirected (for example `cdidx . > out.txt`), cdidx prints a single `Indexing...` line to stdout, keeps warnings on stderr, and emits only line-based progress updates to stdout.
 
-Human output formats elapsed index time with unit labels by default: milliseconds under 1 second, seconds under 1 minute, minutes/seconds under 1 hour, and hours/minutes/seconds after that. Use `--duration-format seconds` for decimal seconds or `--duration-format hms` for the legacy `HH:MM:SS` display. JSON output continues to expose raw `elapsed_ms` for machine consumers.
+Human output uses invariant numeric formatting (`.` decimal separator and `,` thousands separators) regardless of the process locale, matching JSON's culture-independent contract. Elapsed index time uses unit labels by default: milliseconds under 1 second, seconds under 1 minute, minutes/seconds under 1 hour, and hours/minutes/seconds after that. Use `--duration-format seconds` for decimal seconds or `--duration-format hms` for the legacy `HH:MM:SS` display. JSON output continues to expose raw `elapsed_ms` for machine consumers.
+
+For index runs that take at least five seconds, `--notify=<auto|bell|osc9|desktop|none>` controls a completion signal on stderr. `auto` rings the terminal bell only for interactive terminals and stays silent for redirected output; `desktop` currently maps to OSC 9 terminal notification text for terminals that support it. `CDIDX_NOTIFY` sets the same default, and `--quiet` suppresses completion notifications.
 
 Machine-readable output also reports the post-run readiness bits directly:
 
@@ -2330,6 +2333,7 @@ name-based tools では `exactName` を使い、`exact` は後方互換 client �
 | Search snippet lines | `8`（`--snippet-lines`、最大 `20`） | CLI help と search runner |
 | Max line width | `512`（`--max-line-width`、`0` で無効） | `LineWidthFormatter.DefaultMaxLineWidth` |
 | Index max file size | `CDIDX_MAX_FILE_BYTES` 未設定時は `4MiB` | index runner help |
+| Index completion notification | `auto`（interactive terminal は bell、redirected output は none）。`--notify` / `CDIDX_NOTIFY` で上書き | index runner help |
 | Watch debounce | `500` ms（`--debounce`） | index watch runner |
 | Status stale-after hint | `24h`。`--stale-after` / `CDIDX_STALE_AFTER` / `.cdidxrc.json` で上書き | status runner |
 | Color mode | `auto`。`--color` / `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR=0` で上書き | `ConsoleUi` |

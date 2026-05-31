@@ -750,6 +750,15 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_NotifyFlag_ParsesCompletionNotificationMode()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--notify=osc9"]);
+
+        Assert.Equal(CompletionNotificationMode.Osc9, options.NotifyMode);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
     public void Run_FullScanAfterHeadChange_WithPostExtractionHooksKeepsSequentialReferences()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_head_changed_hooks_sequential");
