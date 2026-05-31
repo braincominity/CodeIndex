@@ -1231,6 +1231,16 @@ public class DbContext : IDisposable
     public const string IndexedHeadTimestampMetaKey = "indexed_head_timestamp";
     public const string CommitScopedFreshHeadShaMetaKey = "commit_scoped_fresh_head_sha";
     public const string LastFullScanElapsedMsMetaKey = "last_full_scan_elapsed_ms";
+    public const string LastIndexRunModeMetaKey = "last_index_run_mode";
+    public const string LastIndexRunStartedAtMetaKey = "last_index_run_started_at";
+    public const string LastIndexRunDurationMsMetaKey = "last_index_run_duration_ms";
+    public const string LastIndexRunFilesScannedMetaKey = "last_index_run_files_scanned";
+    public const string LastIndexRunFilesSkippedMetaKey = "last_index_run_files_skipped";
+    public const string LastIndexRunParseErrorsMetaKey = "last_index_run_parse_errors";
+    public const string LastIndexRunBytesReadMetaKey = "last_index_run_bytes_read";
+    public const string LastIndexRunRowsUpsertedMetaKey = "last_index_run_rows_upserted";
+    public const string LastIndexRunRowsDeletedMetaKey = "last_index_run_rows_deleted";
+    public const string LastIndexRunPeakMemoryMbMetaKey = "last_index_run_peak_memory_mb";
     // Issue #1585: count of files seen by the most recent successful full-repository scan
     // whose non-empty extension did not map to a known language. This is a scan coverage
     // signal, not an indexed-file count, and is omitted by readers until a current index pass
@@ -1558,6 +1568,7 @@ public class DbContext : IDisposable
         EnforceRequiredFileIdConstraints();
         EnforceReferenceLineSetNullConstraint();
         EnsureReferenceLinesContextKey();
+        EnsureKindCheckConstraintsCurrent();
 
         // Indexes / インデックス
         Execute("CREATE INDEX IF NOT EXISTS idx_files_lang     ON files(lang)");
@@ -1940,6 +1951,104 @@ public class DbContext : IDisposable
         }
 
         return false;
+    }
+
+    private void EnsureKindCheckConstraintsCurrent()
+    {
+        var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
+        var referenceKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.ReferenceKinds);
+        var symbolsCreateSql =
+            $"""
+            CREATE TABLE symbols (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                kind            TEXT CHECK (kind IN ({symbolKindCheck})),
+                sub_kind        TEXT,
+                name            TEXT,
+                line            INTEGER,
+                start_line      INTEGER,
+                start_column    INTEGER,
+                end_line        INTEGER,
+                body_start_line INTEGER,
+                body_end_line   INTEGER,
+                signature       TEXT,
+                container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ({symbolKindCheck})),
+                container_name  TEXT,
+                container_qualified_name TEXT,
+                family_key      TEXT,
+                visibility      TEXT,
+                return_type     TEXT,
+                is_metadata_target INTEGER,
+                name_folded     TEXT
+            )
+            """;
+        const string symbolsColumns = "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_metadata_target, name_folded";
+        var symbolReferencesCreateSql =
+            $"""
+            CREATE TABLE symbol_references (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                symbol_name     TEXT,
+                reference_kind  TEXT CHECK (reference_kind IN ({referenceKindCheck})),
+                line            INTEGER,
+                column_number   INTEGER,
+                context         TEXT,
+                reference_line_id INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL,
+                container_kind  TEXT CHECK (container_kind IS NULL OR container_kind IN ({symbolKindCheck})),
+                container_name  TEXT,
+                symbol_name_folded TEXT,
+                container_name_folded TEXT,
+                is_self_reference INTEGER NOT NULL DEFAULT 0,
+                is_mutual_recursion INTEGER NOT NULL DEFAULT 0
+            )
+            """;
+        const string symbolReferencesColumns = "id, file_id, symbol_name, reference_kind, line, column_number, context, reference_line_id, container_kind, container_name, symbol_name_folded, container_name_folded, is_self_reference, is_mutual_recursion";
+
+        var foreignKeys = ReadPragmaLong("foreign_keys");
+        Execute("PRAGMA foreign_keys=OFF");
+        try
+        {
+            if (!TableCheckContainsAll("symbols", SymbolKindCatalog.SymbolKinds))
+                RebuildTableWithCurrentKindChecks("symbols", "_symbols_kind_check", symbolsCreateSql, symbolsColumns);
+
+            if (!TableCheckContainsAll("symbol_references", SymbolKindCatalog.SymbolKinds.Concat(SymbolKindCatalog.ReferenceKinds)))
+                RebuildTableWithCurrentKindChecks("symbol_references", "_symbol_references_kind_check", symbolReferencesCreateSql, symbolReferencesColumns);
+        }
+        finally
+        {
+            Execute($"PRAGMA foreign_keys={foreignKeys}");
+        }
+    }
+
+    private bool TableCheckContainsAll(string tableName, IEnumerable<string> allowedValues)
+    {
+        var createSql = GetTableCreateSql(tableName);
+        if (createSql == null)
+            return true;
+
+        if (!createSql.Contains("CHECK", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return allowedValues.All(value => createSql.Contains($"'{value.Replace("'", "''")}'", StringComparison.Ordinal));
+    }
+
+    private string? GetTableCreateSql(string tableName)
+    {
+        using var cmd = _connection.CreateCommand();
+        if (_activeMigrationTransaction != null)
+            cmd.Transaction = _activeMigrationTransaction;
+        cmd.CommandText = "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = @table";
+        cmd.Parameters.AddWithValue("@table", tableName);
+        return cmd.ExecuteScalar() as string;
+    }
+
+    private void RebuildTableWithCurrentKindChecks(string tableName, string oldTableName, string createSql, string columns)
+    {
+        Execute($"DROP TABLE IF EXISTS {oldTableName}");
+        Execute($"ALTER TABLE {tableName} RENAME TO {oldTableName}");
+        Execute(createSql);
+        Execute($"INSERT INTO {tableName} ({columns}) SELECT {columns} FROM {oldTableName}");
+        Execute($"DROP TABLE {oldTableName}");
     }
 
     private void RebuildTableWithRequiredFileId(string tableName, string createSql, string columns)

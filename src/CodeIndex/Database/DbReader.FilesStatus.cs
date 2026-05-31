@@ -437,6 +437,30 @@ public partial class DbReader
                 langs[reader.GetString(0)] = reader.GetInt64(1);
         }
 
+        var symbolsByLanguage = new Dictionary<string, Dictionary<string, long>>(StringComparer.Ordinal);
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = @"
+                SELECT COALESCE(f.lang, 'unknown'), s.kind, COUNT(*)
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                GROUP BY COALESCE(f.lang, 'unknown'), s.kind
+                ORDER BY COALESCE(f.lang, 'unknown'), COUNT(*) DESC, s.kind";
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var lang = reader.GetString(0);
+                var kind = reader.GetString(1);
+                if (!symbolsByLanguage.TryGetValue(lang, out var kinds))
+                {
+                    kinds = new Dictionary<string, long>(StringComparer.Ordinal);
+                    symbolsByLanguage[lang] = kinds;
+                }
+
+                kinds[kind] = reader.GetInt64(2);
+            }
+        }
+
         // #1509: pull persisted HEAD metadata while the SHARED snapshot is open so the
         // recorded SHA / branch / timestamp can't drift relative to the counts and freshness
         // reported by the same status call.
@@ -450,6 +474,9 @@ public partial class DbReader
         // #1546: case-sensitivity stamp も同 snapshot で読む。stamp 無し旧 DB は null。
         var pathCaseSensitive = ParseMetaBool(TryGetMetaStringInternal(DbContext.WorkspacePathCaseSensitiveMetaKey));
         var dbPragmaSettings = GetDbPragmaSettings();
+        var dbSizeBytes = TryGetDatabaseFileSize();
+        var walSizeBytes = TryGetWalFileSize();
+        var lastIndexRun = GetLastIndexRun();
         var batchInProgress = string.Equals(
             TryGetMetaStringInternal(DbContext.BatchInProgressMetaKey),
             "true",
@@ -468,6 +495,7 @@ public partial class DbReader
             IndexedHeadBranch = indexedHeadBranch,
             IndexedHeadTimestamp = indexedHeadTimestamp,
             Languages = langs,
+            SymbolsByLanguage = symbolsByLanguage.Count > 0 ? symbolsByLanguage : null,
             GraphTableAvailable = _hasReferencesTable,
             IssuesTableAvailable = _hasIssuesPhysicalTable,
             FileIssuesDataCurrent = _hasIssuesTable,
@@ -486,6 +514,10 @@ public partial class DbReader
             IndexNewerThanReaderReason = _indexNewerThanReaderReason,
             PathCaseSensitive = pathCaseSensitive,
             DbPragmaSettings = dbPragmaSettings,
+            DbSizeBytes = dbSizeBytes,
+            WalSizeBytes = walSizeBytes,
+            Process = StatusProcessMetrics.Capture(),
+            LastIndexRun = lastIndexRun,
             ReadOnlyFallback = _readOnlyFallback,
             WalCheckpointAttempted = _walCheckpointAttempted,
             WalCheckpointSucceeded = _walCheckpointSucceeded,
@@ -522,6 +554,73 @@ public partial class DbReader
         FreelistCount = ExecuteNullableLong("PRAGMA freelist_count"),
         PageSize = ExecuteNullableLong("PRAGMA page_size"),
     };
+
+    private long? TryGetDatabaseFileSize()
+    {
+        var path = _conn.DataSource;
+        if (string.IsNullOrWhiteSpace(path) || path.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        try
+        {
+            var info = new FileInfo(path);
+            return info.Exists ? info.Length : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private long? TryGetWalFileSize()
+    {
+        var path = _conn.DataSource;
+        if (string.IsNullOrWhiteSpace(path) || path.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        try
+        {
+            var info = new FileInfo(path + "-wal");
+            return info.Exists ? info.Length : 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private StatusLastIndexRun? GetLastIndexRun()
+    {
+        var mode = TryGetMetaStringInternal(DbContext.LastIndexRunModeMetaKey);
+        var startedAt = ParseMetaDateTime(TryGetMetaStringInternal(DbContext.LastIndexRunStartedAtMetaKey));
+        var durationMs = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunDurationMsMetaKey));
+        var filesScanned = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunFilesScannedMetaKey));
+        var filesSkipped = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunFilesSkippedMetaKey));
+        var parseErrors = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunParseErrorsMetaKey));
+        var bytesRead = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunBytesReadMetaKey));
+        var rowsUpserted = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunRowsUpsertedMetaKey));
+        var rowsDeleted = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunRowsDeletedMetaKey));
+        var peakMemoryMb = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunPeakMemoryMbMetaKey));
+        if (mode == null && startedAt == null && durationMs == null && filesScanned == null && filesSkipped == null
+            && parseErrors == null && bytesRead == null && rowsUpserted == null && rowsDeleted == null && peakMemoryMb == null)
+        {
+            return null;
+        }
+
+        return new StatusLastIndexRun
+        {
+            Mode = mode,
+            StartedAt = startedAt,
+            DurationMs = durationMs,
+            FilesScanned = filesScanned,
+            FilesSkipped = filesSkipped,
+            ParseErrors = parseErrors,
+            BytesRead = bytesRead,
+            RowsUpserted = rowsUpserted,
+            RowsDeleted = rowsDeleted,
+            PeakMemoryMb = peakMemoryMb,
+        };
+    }
 
     private string? ExecuteScalarString(string sql)
     {

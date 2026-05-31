@@ -18,6 +18,17 @@ namespace CodeIndex.Tests;
 public class FileIndexerTests
 {
     [Fact]
+    public void NormalizeIgnorePath_PosixPreservesLiteralBackslash()
+    {
+        var normalized = FileIndexer.NormalizeIgnorePath(@"weird\name.py/");
+
+        if (OperatingSystem.IsWindows())
+            Assert.Equal("weird/name.py", normalized);
+        else
+            Assert.Equal(@"weird\name.py", normalized);
+    }
+
+    [Fact]
     public void ScanFilesDetailed_CancelledToken_ThrowsBeforeEnumeration()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-cancel-scan-{Guid.NewGuid():N}");
@@ -355,6 +366,35 @@ public class FileIndexerTests
     public void DetectLanguage_KnownExtensions_ReturnsCorrectLang(string filename, string expected)
     {
         Assert.Equal(expected, FileIndexer.DetectLanguage(filename));
+    }
+
+    [Fact]
+    public void DetectLanguage_WorkspaceLangMapYaml_AliasesExtension()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_{Guid.NewGuid():N}");
+            var originalDirectory = Environment.CurrentDirectory;
+            try
+            {
+                Directory.CreateDirectory(tempDir);
+                File.WriteAllText(
+                    Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName),
+                    "entries:\n  - extension: \".kts.in\"\n    language: \"kotlin\"\n");
+                var outsideDir = Path.Combine(tempDir, "outside");
+                Directory.CreateDirectory(outsideDir);
+                Environment.CurrentDirectory = outsideDir;
+
+                Assert.Equal("kotlin", FileIndexer.DetectLanguage(Path.Combine(tempDir, "build.kts.in")));
+                Assert.Equal("kotlin", FileIndexer.GetLanguageExtensions()[".kts.in"]);
+            }
+            finally
+            {
+                Environment.CurrentDirectory = originalDirectory;
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, recursive: true);
+            }
+        }
     }
 
     [Theory]
@@ -1477,6 +1517,62 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_TrimsLeadingWhitespaceBeforeParsingIgnoreLines()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "  # comment\n  *.tmp\n\\ leading.py\n\\#literal.py\n", Encoding.UTF8);
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
+            File.WriteAllText(Path.Combine(tempDir, "ignored.tmp"), "ignored");
+            File.WriteAllText(Path.Combine(tempDir, " leading.py"), "print('literal leading space')");
+            File.WriteAllText(Path.Combine(tempDir, "#literal.py"), "print('literal hash')");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "keep.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_ReportsOverlongIgnorePatternAndContinues()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), $"{new string('a', 513)}\n*.tmp\n", Encoding.UTF8);
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
+            File.WriteAllText(Path.Combine(tempDir, "ignored.tmp"), "ignored");
+
+            var result = new FileIndexer(tempDir).ScanFilesDetailed();
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "keep.py"], files);
+            var warning = Assert.Single(result.Errors);
+            Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
+            Assert.Contains("pattern exceeds 512 characters", warning.Message);
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_RespectsCdidxignoreAndNestedGitignore()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
@@ -1639,7 +1735,7 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void ScanFiles_FailsClosedWhenRootIgnoreFileIsUnreadable()
+    public void ScanFiles_PreservesInheritedRulesWhenRootIgnoreFileIsUnreadable()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1659,8 +1755,17 @@ public class FileIndexerTests
             var indexer = new FileIndexer(tempDir);
             var result = indexer.ScanFilesDetailed();
 
-            Assert.Empty(result.Files);
-            Assert.Contains(result.Errors, error => error.Path == ".gitignore" && error.Message == "Could not read .gitignore.");
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "keep.py", "secret.py"], files);
+            Assert.Contains(result.Errors, error =>
+                error.Path == ".gitignore" &&
+                error.Message == "Could not read .gitignore due to permissions." &&
+                error.Severity == FileIndexer.ScanIssueSeverity.Warning);
+            Assert.False(result.HadErrors);
         }
         finally
         {
@@ -1672,7 +1777,7 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void ScanFiles_FailsClosedWhenNestedIgnoreFileIsUnreadable()
+    public void ScanFiles_PreservesInheritedRulesWhenNestedIgnoreFileIsUnreadable()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1698,8 +1803,12 @@ public class FileIndexerTests
                 .OrderBy(path => path, StringComparer.Ordinal)
                 .ToList();
 
-            Assert.Equal(["keep.py"], files);
-            Assert.Contains(result.Errors, error => error.Path == "src/.gitignore" && error.Message == "Could not read .gitignore.");
+            Assert.Equal(["keep.py", "src/.gitignore", "src/keep_nested.py", "src/secret.py"], files);
+            Assert.Contains(result.Errors, error =>
+                error.Path == "src/.gitignore" &&
+                error.Message == "Could not read .gitignore due to permissions." &&
+                error.Severity == FileIndexer.ScanIssueSeverity.Warning);
+            Assert.False(result.HadErrors);
         }
         finally
         {
@@ -1921,11 +2030,11 @@ public class FileIndexerTests
             File.WriteAllText(
                 Path.Combine(tempDir, ".gitignore"),
                 "  #*.py\n  *.py\n*.cs\t\n");
-            File.WriteAllText(Path.Combine(tempDir, "  #x.py"), "print('ignored because leading-space # is literal')");
-            File.WriteAllText(Path.Combine(tempDir, "a.py"), "print('kept because leading spaces are literal')");
-            File.WriteAllText(Path.Combine(tempDir, "  a.py"), "print('ignored by leading-space pattern')");
+            File.WriteAllText(Path.Combine(tempDir, "  #x.py"), "print('kept because leading-space # is a comment')");
+            File.WriteAllText(Path.Combine(tempDir, "a.py"), "print('ignored after leading-space trim')");
+            File.WriteAllText(Path.Combine(tempDir, "  a.py"), "print('ignored by trimmed basename pattern')");
             File.WriteAllText(Path.Combine(tempDir, "a.cs"), "public class IgnoredAfterTrailingTabTrim { }");
-            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('kept')");
+            File.WriteAllText(Path.Combine(tempDir, "keep.js"), "export const kept = true;");
 
             var indexer = new FileIndexer(tempDir);
             var files = indexer.ScanFiles()
@@ -1933,7 +2042,7 @@ public class FileIndexerTests
                 .OrderBy(path => path, StringComparer.Ordinal)
                 .ToList();
 
-            Assert.Equal([".gitignore", "a.py", "keep.py"], files);
+            Assert.Equal([".gitignore", "keep.js"], files);
         }
         finally
         {
@@ -3054,6 +3163,154 @@ public class FileIndexerTests
         {
             File.Delete(path);
             yield return path;
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_DanglingDirectorySymlink_RecordsWarningAndCount()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-dangling-symlink-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var linkPath = Path.Combine(tempDir, "missing-link");
+            Directory.CreateSymbolicLink(linkPath, Path.Combine(tempDir, "missing-target"));
+
+            var result = new FileIndexer(tempDir).ScanFilesDetailed();
+
+            Assert.Contains("missing-link", result.DanglingSymlinks);
+            Assert.Contains(
+                result.Errors,
+                error => error.Path == "missing-link"
+                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Message.Contains("dangling symlink", StringComparison.OrdinalIgnoreCase));
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_FollowSymlinksInternal_SkipsOutOfTreeDirectorySymlink()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-policy-{Guid.NewGuid():N}");
+        var externalDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-external-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        Directory.CreateDirectory(externalDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(externalDir, "external.py"), "print('external')\n");
+            var linkPath = Path.Combine(tempDir, "external");
+            Directory.CreateSymbolicLink(linkPath, externalDir);
+
+            var indexer = new FileIndexer(
+                tempDir,
+                ignoreCase: false,
+                ignoreRuleRoot: null,
+                maxFileSizeBytes: null,
+                directoryIgnoreCaseProbe: null,
+                symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
+
+            var result = indexer.ScanFilesDetailed();
+
+            Assert.Empty(result.Files);
+            Assert.Contains(
+                result.Errors,
+                error => error.Path == "external"
+                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Message.Contains("symlinked directory", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+            if (Directory.Exists(externalDir))
+                Directory.Delete(externalDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_FollowSymlinksInternal_FollowsInTreeDirectorySymlinkOnce()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-internal-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var targetDir = Path.Combine(tempDir, "src");
+            Directory.CreateDirectory(targetDir);
+            File.WriteAllText(Path.Combine(targetDir, "app.py"), "print('app')\n");
+            Directory.CreateSymbolicLink(Path.Combine(tempDir, "src-link"), targetDir);
+
+            var indexer = new FileIndexer(
+                tempDir,
+                ignoreCase: false,
+                ignoreRuleRoot: null,
+                maxFileSizeBytes: null,
+                directoryIgnoreCaseProbe: null,
+                symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
+
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Single(files);
+            Assert.Contains(files[0], new[] { "src/app.py", "src-link/app.py" });
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_FollowSymlinksInternal_SkipsCycleToProjectRoot()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-cycle-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('app')\n");
+            Directory.CreateSymbolicLink(Path.Combine(tempDir, "self"), tempDir);
+
+            var indexer = new FileIndexer(
+                tempDir,
+                ignoreCase: false,
+                ignoreRuleRoot: null,
+                maxFileSizeBytes: null,
+                directoryIgnoreCaseProbe: null,
+                symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
+
+            var result = indexer.ScanFilesDetailed();
+
+            Assert.Single(result.Files);
+            Assert.Contains(
+                result.Errors,
+                error => error.Path == "self"
+                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Message.Contains("already scanned", StringComparison.OrdinalIgnoreCase));
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
         }
     }
 

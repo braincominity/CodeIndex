@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Diagnostics;
+using CodeIndex;
 using CodeIndex.Cli;
 using Microsoft.Data.Sqlite;
 
@@ -38,6 +39,10 @@ public static class DbDebug
     private static List<(string Name, string Value)>? _lastParams;
     [ThreadStatic]
     private static List<(string Name, string Value)>? _lastRow;
+    [ThreadStatic]
+    private static List<string>? _lastRowReadExceptionChains;
+    [ThreadStatic]
+    private static List<Exception>? _lastRowReadExceptions;
     [ThreadStatic]
     private static bool _hasContext;
     [ThreadStatic]
@@ -168,6 +173,8 @@ public static class DbDebug
         _lastSql = null;
         _lastParams = null;
         _lastRow = null;
+        _lastRowReadExceptionChains = null;
+        _lastRowReadExceptions = null;
         _hasContext = false;
     }
 
@@ -187,10 +194,28 @@ public static class DbDebug
 
     internal static SqliteDataReader ExecuteReader(SqliteCommand cmd)
     {
-        if (!IsProfileEnabled)
-            return cmd.ExecuteReader();
+        using var activity = CodeIndexTelemetry.ActivitySource.StartActivity("db.query");
+        activity?.SetTag("db.system", "sqlite");
+        activity?.SetTag("db.operation", GetStatementOperation(cmd.CommandText));
+        activity?.SetTag("db.statement_hash", ShortHash(cmd.CommandText ?? string.Empty));
 
-        var entry = new QueryProfileEntry(cmd.CommandText, CaptureQueryPlan(cmd));
+        if (!IsProfileEnabled)
+        {
+            var threshold = ReadSlowQueryThresholdFromEnvironment();
+            var executeStopwatch = Stopwatch.StartNew();
+            var unprofiledReader = cmd.ExecuteReader();
+            executeStopwatch.Stop();
+            activity?.SetTag("db.elapsed_ms", executeStopwatch.Elapsed.TotalMilliseconds);
+            if (threshold.HasValue)
+            {
+                var slowEntry = new QueryProfileEntry(cmd.CommandText ?? string.Empty, []);
+                slowEntry.AddElapsed(executeStopwatch.Elapsed);
+                s_activeProfiles.Add(unprofiledReader, new ActiveProfile(slowEntry, threshold, LogSlowQueryToStderr: true, cmd));
+            }
+            return unprofiledReader;
+        }
+
+        var entry = new QueryProfileEntry(cmd.CommandText ?? string.Empty, CaptureQueryPlan(cmd));
         _profileEntries!.Add(entry);
 
         var sw = Stopwatch.StartNew();
@@ -198,6 +223,7 @@ public static class DbDebug
         sw.Stop();
 
         entry.AddElapsed(sw.Elapsed);
+        activity?.SetTag("db.elapsed_ms", sw.Elapsed.TotalMilliseconds);
         entry.MarkCompletedIfSlow(_slowQueryThresholdMs);
         s_activeProfiles.Add(reader, new ActiveProfile(entry));
         return reader;
@@ -211,7 +237,41 @@ public static class DbDebug
         active.Entry.AddElapsed(elapsed);
         if (rowRead)
             active.Entry.IncrementRows();
+        if (active is { LogSlowQueryToStderr: true, SlowQueryThresholdMs: { } threshold } &&
+            active.Entry.ElapsedMs >= threshold &&
+            active.TryMarkSlowLogged())
+        {
+            WriteSlowQueryToStderr(active.Command!, active.Entry.ElapsedMs, active.Entry.RowsScanned);
+        }
         active.Entry.MarkCompletedIfSlow(_slowQueryThresholdMs);
+    }
+
+    private static long? ReadSlowQueryThresholdFromEnvironment()
+    {
+        var raw = Environment.GetEnvironmentVariable("CDIDX_SLOW_QUERY_MS");
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+        return long.TryParse(raw, out var value) && value >= 0 ? value : null;
+    }
+
+    private static string GetStatementOperation(string? sql)
+    {
+        if (string.IsNullOrWhiteSpace(sql))
+            return "unknown";
+        var trimmed = sql.TrimStart();
+        var end = 0;
+        while (end < trimmed.Length && !char.IsWhiteSpace(trimmed[end]) && trimmed[end] != '(')
+            end++;
+        return end == 0 ? "unknown" : trimmed[..end].ToUpperInvariant();
+    }
+
+    private static void WriteSlowQueryToStderr(SqliteCommand cmd, double elapsedMs, int? rowsRead)
+    {
+        var sql = (cmd.CommandText ?? string.Empty).ReplaceLineEndings(" ");
+        if (sql.Length > 200)
+            sql = sql[..200] + "...";
+        var rowText = rowsRead.HasValue ? $" rows={rowsRead.Value}" : string.Empty;
+        Console.Error.WriteLine($"[cdidx] slow_query elapsed_ms={elapsedMs:0.###}{rowText} sql={sql}");
     }
 
     private static List<QueryPlanRow> CaptureQueryPlan(SqliteCommand source)
@@ -260,6 +320,9 @@ public static class DbDebug
             catch (Exception ex)
             {
                 row.Add((name, $"<error: {ex.GetType().Name}: {ex.Message}>"));
+                (_lastRowReadExceptions ??= new List<Exception>()).Add(ex);
+                (_lastRowReadExceptionChains ??= new List<string>())
+                    .Add($"[{name}]\n{GlobalToolLog.FormatExceptionChain(ex, includeStacks: mode == DebugMode.Unsafe)}");
             }
         }
         _lastRow = row;
@@ -302,6 +365,15 @@ public static class DbDebug
             foreach (var (name, value) in _lastRow)
                 sb.AppendLine($"  [{name}] = {value}");
         }
+        if (_lastRowReadExceptionChains is { Count: > 0 })
+        {
+            sb.AppendLine("Row read exception chains:");
+            foreach (var chain in _lastRowReadExceptionChains)
+                sb.AppendLine(chain);
+        }
+        var rootCause = GetDeepestExceptionIncludingRowReads(ex);
+        if (_lastRowReadExceptionChains is { Count: > 0 })
+            sb.AppendLine($"Root cause: {rootCause.GetType().Name}: {rootCause.Message}");
         if (mode != DebugMode.Unsafe && ex.StackTrace != null)
         {
             sb.AppendLine("Stack:");
@@ -309,6 +381,25 @@ public static class DbDebug
         }
         sb.AppendLine("--- END CDIDX_DEBUG ---");
         Console.Error.Write(sb.ToString());
+    }
+
+    private static Exception GetDeepestException(Exception ex)
+    {
+        var current = ex;
+        while (current.InnerException != null)
+            current = current.InnerException;
+        return current;
+    }
+
+    private static Exception GetDeepestExceptionIncludingRowReads(Exception ex)
+    {
+        var deepest = GetDeepestException(ex);
+        if (_lastRowReadExceptions is not { Count: > 0 })
+            return deepest;
+
+        foreach (var rowException in _lastRowReadExceptions)
+            deepest = GetDeepestException(rowException);
+        return deepest;
     }
 
     private static string FormatValue(object? value, DebugMode mode, string? valueName = null)
@@ -439,4 +530,18 @@ public sealed class QueryProfileEntry
 
 public sealed record QueryPlanRow(int Id, int Parent, int NotUsed, string Detail);
 
-internal sealed record ActiveProfile(QueryProfileEntry Entry);
+internal sealed class ActiveProfile(
+    QueryProfileEntry entry,
+    long? slowQueryThresholdMs = null,
+    bool LogSlowQueryToStderr = false,
+    SqliteCommand? command = null)
+{
+    private int _slowLogged;
+
+    public QueryProfileEntry Entry { get; } = entry;
+    public long? SlowQueryThresholdMs { get; } = slowQueryThresholdMs;
+    public bool LogSlowQueryToStderr { get; } = LogSlowQueryToStderr;
+    public SqliteCommand? Command { get; } = command;
+
+    public bool TryMarkSlowLogged() => Interlocked.Exchange(ref _slowLogged, 1) == 0;
+}

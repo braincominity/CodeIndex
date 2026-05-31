@@ -7,6 +7,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
 using CodeIndex.Mcp;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
 
@@ -252,8 +253,18 @@ internal static class ProgramRunner
                     "optimize" => IndexCommandRunner.RunOptimizeFts(subArgs, jsonOptions),
                     "vacuum" => QueryCommandRunner.RunVacuum(subArgs, jsonOptions),
                     "validate-config" => CdidxConfigFile.RunValidate(subArgs, jsonOptions),
+                    "config" => subArgs.Length > 0 && subArgs[0] == "show"
+                        ? CdidxConfigFile.RunShow(subArgs[1..], jsonOptions)
+                        : CommandErrorWriter.WriteJsonOrHuman(
+                            ContainsJsonOutputFlag(subArgs),
+                            jsonOptions,
+                            "Unknown config command: use `cdidx config show`.",
+                            CommandExitCodes.UsageError,
+                            "use `cdidx config show`."),
+                    "workspace" => WorkspaceCommandRunner.Run(subArgs, jsonOptions),
                     "db" => DbCommandRunner.RunIntegrityCheck(subArgs, jsonOptions),
                     "report" => ReportCommandRunner.Run(subArgs, jsonOptions, appVersion),
+                    "test-extractor" => RunTestExtractor(subArgs, jsonOptions),
                     _ when IsProjectPathArg(commandName)
                         => IndexCommandRunner.Run(args, jsonOptions),
                     _ => ShowError(args, $"Unknown command: {commandName}")
@@ -291,15 +302,106 @@ internal static class ProgramRunner
                 return exitCode;
             }
 
-            GlobalToolLog.Error("unhandled_exception", ex);
+            var unhandledExitCode = MapUnhandledExceptionExitCode(ex);
+            GlobalToolLog.Error($"command_complete exit_code={unhandledExitCode} unhandled_exception", ex);
             Console.Error.WriteLine("Error: command failed before it could complete. Run `cdidx report` for details.");
-            EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, CommandExitCodes.DatabaseError, ex.GetType().Name);
-            return CommandExitCodes.DatabaseError;
+            EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, unhandledExitCode, ex.GetType().Name);
+            return unhandledExitCode;
         }
     }
 
-    internal static bool IsProjectPathArg(string arg) =>
-        !arg.StartsWith('-') && (Directory.Exists(arg) || arg.Contains('/') || arg.Contains('\\') || arg == ".");
+    internal static bool IsProjectPathArg(string arg)
+    {
+        if (arg.StartsWith('-'))
+            return false;
+
+        if (arg == "." || Directory.Exists(arg) || Path.IsPathRooted(arg) || Path.IsPathFullyQualified(arg))
+            return true;
+
+        if (arg.Contains(Path.DirectorySeparatorChar))
+            return true;
+
+        if (Path.AltDirectorySeparatorChar != '\0'
+            && Path.AltDirectorySeparatorChar != Path.DirectorySeparatorChar
+            && arg.Contains(Path.AltDirectorySeparatorChar))
+            return true;
+
+        return OperatingSystem.IsWindows()
+            && (IsWindowsDrivePath(arg) || arg.StartsWith(@"\\", StringComparison.Ordinal));
+    }
+
+    private static bool IsWindowsDrivePath(string arg) =>
+        arg.Length >= 2
+        && arg[1] == ':'
+        && ((arg[0] >= 'A' && arg[0] <= 'Z') || (arg[0] >= 'a' && arg[0] <= 'z'));
+
+    private static int RunTestExtractor(string[] args, JsonSerializerOptions jsonOptions)
+    {
+        string? language = null;
+        string? file = null;
+        string? expect = null;
+        var json = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (TryConsumeInlineOrNext(args, ref i, arg, "--language", out var value))
+                language = value;
+            else if (TryConsumeInlineOrNext(args, ref i, arg, "--file", out value))
+                file = value;
+            else if (TryConsumeInlineOrNext(args, ref i, arg, "--expect-symbols", out value) || TryConsumeInlineOrNext(args, ref i, arg, "--expect", out value))
+                expect = value;
+            else if (arg == "--json")
+                json = true;
+            else
+                return CommandErrorWriter.Write($"Unknown test-extractor argument: {arg}", CommandExitCodes.InvalidArgument, "use --language <lang> --file <path> [--expect-symbols <json>] [--json].");
+        }
+
+        if (string.IsNullOrWhiteSpace(language) || string.IsNullOrWhiteSpace(file))
+            return CommandErrorWriter.Write("test-extractor requires --language and --file.", CommandExitCodes.InvalidArgument, "use --language <lang> --file <path> [--expect-symbols <json>] [--json].");
+        if (!File.Exists(file))
+            return CommandErrorWriter.Write($"File not found: {file}", CommandExitCodes.NotFound);
+
+        var source = File.ReadAllText(file);
+        var symbols = Indexer.SymbolExtractor.Extract(1, language, source, file);
+        if (expect != null)
+        {
+            var expected = File.ReadAllText(expect);
+            var actual = JsonSerializer.Serialize(symbols);
+            if (!JsonEquivalent(expected, actual))
+            {
+                Console.Error.WriteLine("Expected symbols did not match extracted symbols.");
+                Console.Error.WriteLine(actual);
+                return CommandExitCodes.InvalidArgument;
+            }
+        }
+
+        if (json || expect == null)
+            Console.WriteLine(JsonSerializer.Serialize(symbols));
+        return CommandExitCodes.Success;
+    }
+
+    private static bool TryConsumeInlineOrNext(string[] args, ref int index, string arg, string flag, out string value)
+    {
+        value = string.Empty;
+        if (arg.StartsWith(flag + "=", StringComparison.Ordinal))
+        {
+            value = arg[(flag.Length + 1)..];
+            return true;
+        }
+
+        if (arg != flag || index + 1 >= args.Length)
+            return false;
+
+        value = args[++index];
+        return true;
+    }
+
+    private static bool JsonEquivalent(string expected, string actual)
+    {
+        using var expectedDoc = JsonDocument.Parse(expected);
+        using var actualDoc = JsonDocument.Parse(actual);
+        return JsonSerializer.Serialize(expectedDoc.RootElement) == JsonSerializer.Serialize(actualDoc.RootElement);
+    }
 
     internal static void EnsureRedirectedStdoutUsesUtf8()
     {
@@ -478,6 +580,36 @@ internal static class ProgramRunner
         CommandErrorCodes.Interrupted => CommandExitCodes.CancelledBySignal,
         _ => CommandExitCodes.DatabaseError,
     };
+
+    internal static int MapUnhandledExceptionExitCode(Exception ex)
+    {
+        var sqliteException = FindSqliteException(ex);
+        if (sqliteException is null)
+            return CommandExitCodes.UnhandledException;
+
+        return sqliteException.SqliteErrorCode switch
+        {
+            5 or 6 or 8 => CommandExitCodes.TransientDatabaseError,
+            _ => CommandExitCodes.DatabaseError,
+        };
+    }
+
+    private static SqliteException? FindSqliteException(Exception ex)
+    {
+        if (ex is SqliteException sqliteException)
+            return sqliteException;
+        if (ex is AggregateException aggregate)
+        {
+            foreach (var inner in aggregate.InnerExceptions)
+            {
+                var found = FindSqliteException(inner);
+                if (found is not null)
+                    return found;
+            }
+        }
+
+        return ex.InnerException is null ? null : FindSqliteException(ex.InnerException);
+    }
 
     private sealed class QuietStderrScope : IDisposable
     {
@@ -1360,8 +1492,25 @@ internal static class ProgramRunner
             if (string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase))
                 return RunMcpHttp(server, listenSpec ?? DefaultMcpHttpListen);
 
-            server.RunAsync().GetAwaiter().GetResult();
-            return CommandExitCodes.Success;
+            try
+            {
+                server.RunAsync().GetAwaiter().GetResult();
+                return CommandExitCodes.Success;
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Out.Flush();
+                Console.Error.Flush();
+                return CommandExitCodes.CancelledBySignal;
+            }
+            catch (Exception ex)
+            {
+                GlobalToolLog.Error("mcp_server_failed " + GlobalToolLog.FormatExceptionChain(ex));
+                Console.Error.WriteLine($"Error: MCP server failed ({ex.GetType().Name}: {ex.Message}).");
+                Console.Out.Flush();
+                Console.Error.Flush();
+                return CommandExitCodes.DatabaseError;
+            }
         }
         finally
         {
@@ -1425,7 +1574,24 @@ internal static class ProgramRunner
                 else
                     Console.Error.WriteLine($"[cdidx-mcp] HTTP transport listening on {resolved.Prefix} (bearer auth required).");
 
-                server.RunAsync(transport, cts.Token).GetAwaiter().GetResult();
+                try
+                {
+                    server.RunAsync(transport, cts.Token).GetAwaiter().GetResult();
+                }
+                catch (OperationCanceledException)
+                {
+                    Console.Out.Flush();
+                    Console.Error.Flush();
+                    return CommandExitCodes.CancelledBySignal;
+                }
+                catch (Exception ex)
+                {
+                    GlobalToolLog.Error("mcp_http_server_failed " + GlobalToolLog.FormatExceptionChain(ex));
+                    Console.Error.WriteLine($"Error: MCP HTTP server failed ({ex.GetType().Name}: {ex.Message}).");
+                    Console.Out.Flush();
+                    Console.Error.Flush();
+                    return CommandExitCodes.DatabaseError;
+                }
             }
         }
         finally

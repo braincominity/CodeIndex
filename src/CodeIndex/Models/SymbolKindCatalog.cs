@@ -42,6 +42,7 @@ public static class SymbolKindCatalog
         "procedure",
         "program",
         "protocol",
+        "protocol_impl",
         "reference",
         "rule",
         "route",

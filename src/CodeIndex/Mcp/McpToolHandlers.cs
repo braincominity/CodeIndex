@@ -2787,6 +2787,8 @@ public partial class McpServer
         if (maxFileBytes is <= 0 or > int.MaxValue)
             return CreateToolErrorResponse(id, "maxFileBytes must be a positive integer less than or equal to 2147483647");
         var projectPath = Path.GetFullPath(path);
+        var runStartedAtUtc = DateTime.UtcNow;
+        var runStopwatch = Stopwatch.StartNew();
 
         // Prevent path traversal — only allow indexing within current working directory
         // パストラバーサル防止 — カレントディレクトリ配下のみインデックスを許可
@@ -2873,6 +2875,25 @@ public partial class McpServer
             }
         }
 
+        static long SumReadableFileBytes(IEnumerable<string> paths)
+        {
+            long total = 0;
+            foreach (var filePath in paths)
+            {
+                try
+                {
+                    var info = new FileInfo(filePath);
+                    if (info.Exists)
+                        total += info.Length;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+                {
+                }
+            }
+
+            return total;
+        }
+
         // First mutation point — demote readiness just before any write.
         // 実書き込み直前で readiness をクリア。
         writer.ClearReadyFlags();
@@ -2900,6 +2921,7 @@ public partial class McpServer
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
             csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
         int processed = 0, skipped = 0, errors = 0;
+        var failures = new List<IndexFileFailure>();
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var filePath in files)
@@ -2971,9 +2993,10 @@ public partial class McpServer
                         txn.Commit();
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
                     errors++;
+                    failures.Add(BuildIndexFileFailure(projectPath, filePath, ex, "delete_skipped_binary"));
                 }
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
@@ -2992,9 +3015,10 @@ public partial class McpServer
                         txn.Commit();
                     }
                 }
-                catch
+                catch (Exception cleanupEx)
                 {
                     errors++;
+                    failures.Add(BuildIndexFileFailure(projectPath, filePath, cleanupEx, "delete_missing_file"));
                 }
             }
             catch (OperationCanceledException) when (requestToken.IsCancellationRequested)
@@ -3003,11 +3027,12 @@ public partial class McpServer
                     writer.ClearBatchInProgress();
                 throw;
             }
-            catch
+            catch (Exception ex)
             {
                 if (fileBatchMarked)
                     writer.ClearBatchInProgress();
                 errors++;
+                failures.Add(BuildIndexFileFailure(projectPath, filePath, ex, "index_file"));
             }
             processed++;
             EmitProgressNotification(progressToken, processed, files.Count);
@@ -3099,6 +3124,15 @@ public partial class McpServer
             writer.SetMeta(
                 DbContext.UnknownExtensionFileCountMetaKey,
                 scanResult.UnknownExtensionFiles.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp");
+            writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunDurationMsMetaKey, runStopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunFilesScannedMetaKey, files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunFilesSkippedMetaKey, skipped.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunParseErrorsMetaKey, errors.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunBytesReadMetaKey, SumReadableFileBytes(files).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunRowsUpsertedMetaKey, processed.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunRowsDeletedMetaKey, purged.ToString(System.Globalization.CultureInfo.InvariantCulture));
             // Persist the current HEAD only after the run is fully successful (errors == 0).
             // Mirrors the CLI full-scan contract (Issue #1508) so MCP-driven re-indexes also
             // refresh `worktree_head_changed`; partial / failed runs leave the prior HEAD
@@ -3161,7 +3195,8 @@ public partial class McpServer
                 ["skipped"] = skipped,
                 ["purged"] = purged,
                 ["unknown_extension_file_count"] = scanResult.UnknownExtensionFiles.Count,
-                ["errors"] = errors
+                ["errors"] = errors,
+                ["failed_count"] = failures.Count
             },
             ["sql_graph_contract_ready"] = sqlGraphContractReadyAfter,
             ["csharp_symbol_name_ready"] = csharpSymbolNameReadyAfter,
@@ -3171,9 +3206,28 @@ public partial class McpServer
             ["fold_ready"] = foldReadyAfter,
             ["fold_ready_reason"] = foldReadyReason
         };
+        if (failures.Count > 0)
+        {
+            var failureArray = new JsonArray();
+            foreach (var failure in failures.Take(50))
+            {
+                failureArray.Add(new JsonObject
+                {
+                    ["path"] = failure.Path,
+                    ["stage"] = failure.Stage,
+                    ["exception_type"] = failure.ExceptionType,
+                    ["message"] = failure.Message,
+                });
+            }
+            structured["failed_count"] = failures.Count;
+            structured["failures"] = failureArray;
+            if (failures.Count > 50)
+                structured["failures_truncated"] = failures.Count - 50;
+            GlobalToolLog.Error($"mcp_index_file_failures count={failures.Count} first_path='{failures[0].Path}' first_error='{failures[0].ExceptionType}: {failures[0].Message}'");
+        }
         if (!sqlGraphContractReadyAfter)
         {
-            var signalReader = new DbReader(writer.Connection);
+            using var signalReader = new DbReader(writer.Connection);
             AddSqlGraphContractSignal(structured, signalReader.GetSqlGraphContractSignal());
         }
         return CreateToolResult(id,
@@ -3188,6 +3242,14 @@ public partial class McpServer
                 : "Indexing complete.",
             structured);
     }
+
+    private static IndexFileFailure BuildIndexFileFailure(string projectPath, string filePath, Exception ex, string stage)
+    {
+        var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, filePath));
+        return new IndexFileFailure(relativePath, stage, ex.GetType().Name, ex.Message);
+    }
+
+    private sealed record IndexFileFailure(string Path, string Stage, string ExceptionType, string Message);
 
     private JsonNode ExecuteBackfillFold(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
@@ -3361,8 +3423,13 @@ public partial class McpServer
         //    .cdidx ディレクトリを解決し、必要に応じて作成
         var cdidxDir = Path.GetDirectoryName(_dbPath);
         if (string.IsNullOrEmpty(cdidxDir))
+            cdidxDir = Path.GetDirectoryName(Path.GetFullPath(_dbPath));
+        if (string.IsNullOrEmpty(cdidxDir))
             cdidxDir = Path.Combine(Path.GetFullPath("."), ".cdidx");
         DataDirectorySecurity.CreatePrivateDirectory(cdidxDir);
+        cdidxDir = Path.GetFullPath(cdidxDir);
+        if (!TryProbeCdidxDirectoryWritable(cdidxDir, out var probeError))
+            return CreateToolErrorResponse(id, probeError!);
 
         // 6. Store locally, reserve a submission attempt under the file lock,
         //    then call GitHub outside the lock so slow remote I/O does not block
@@ -3415,6 +3482,7 @@ public partial class McpServer
                         : "This suggestion has already been recorded.",
                 ["submitted_to_github"] = result.AlreadySubmitted || result.UpstreamUrl != null,
                 ["lifecycle_status"] = JsonNamingPolicy.SnakeCaseLower.ConvertName(result.Status.ToString()),
+                ["cdidx_dir"] = cdidxDir,
             };
             if (result.DuplicateOfHash != null)
                 dupPayload["duplicate_of"] = result.DuplicateOfHash;
@@ -3438,6 +3506,7 @@ public partial class McpServer
             ["stored_locally"] = true,
             ["submitted_to_github"] = result.UpstreamUrl != null,
             ["lifecycle_status"] = JsonNamingPolicy.SnakeCaseLower.ConvertName(result.Status.ToString()),
+            ["cdidx_dir"] = cdidxDir,
         };
         if (result.UpstreamUrl != null)
         {
@@ -3445,6 +3514,25 @@ public partial class McpServer
             payload["github_issue_url"] = result.UpstreamUrl;
         }
         return CreateToolResult(id, "Suggestion recorded. Thank you for the feedback.", payload);
+    }
+
+    private static bool TryProbeCdidxDirectoryWritable(string cdidxDir, out string? error)
+    {
+        var probePath = Path.Combine(cdidxDir, $".write_probe.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            using (new FileStream(probePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+            }
+            File.Delete(probePath);
+            error = null;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            error = $"Cannot write to .cdidx directory {cdidxDir}; check directory ownership, permissions, and read-only mounts. {ex.Message}";
+            return false;
+        }
     }
 
     private static CSharpStaticInterfaceWorkspaceSymbols BuildMcpCSharpStaticInterfaceWorkspaceSymbols(

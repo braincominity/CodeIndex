@@ -89,6 +89,12 @@ public partial class McpServer : IDisposable
     // (ファイルハンドル / rotation) は ProgramRunner 側で所有する。
     private readonly AuditLogSink? _auditLog;
     private readonly TimeSpan _requestTimeout;
+    private readonly TimeSpan? _keepAliveInterval;
+    private readonly DateTimeOffset _startedAt = DateTimeOffset.UtcNow;
+    private DateTimeOffset _lastRequestAt = DateTimeOffset.UtcNow;
+    private DateTimeOffset? _lastDbCheckAt;
+    private bool? _lastDbCheckOk;
+    private string? _lastDbCheckError;
     private readonly SemaphoreSlim _textWriterGate = new(1, 1);
     // `initialize.clientInfo` echoed into every audit record so the trail can answer
     // "which client issued this call?" without a second log source. Updated on every
@@ -149,6 +155,7 @@ public partial class McpServer : IDisposable
     internal const int MaxLineByteLength = 1_048_576;
     internal const int DefaultMaxResponseBytes = 10 * 1024 * 1024;
     private const string MaxResponseBytesEnvVar = "CDIDX_MCP_RESPONSE_MAX_BYTES";
+    private const string KeepAliveIntervalEnvironmentVariable = "CDIDX_MCP_KEEP_ALIVE_INTERVAL_S";
     internal const int MaxJsonDepth = 32;
     internal const int MaxBatchRequestCount = 100;
     // Stdio buffer for the JSON-RPC loop. Sized to fit typical large MCP payloads (e.g. batch_query)
@@ -247,6 +254,7 @@ public partial class McpServer : IDisposable
         _concurrencyGate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
         MaxConcurrency = maxConcurrency;
         _requestTimeout = DefaultRequestTimeout;
+        _keepAliveInterval = ReadKeepAliveIntervalFromEnvironment();
     }
 
     /// <summary>
@@ -422,7 +430,12 @@ public partial class McpServer : IDisposable
         Console.Error.WriteLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {_dbPath}, transport: {transport.Name} @ {transport.Endpoint}, max in-flight: {MaxConcurrency})");
 
         if (transport is HttpMcpTransport httpTransport)
+        {
             httpTransport.OutOfBandFrameHandler = ProcessFrame;
+            httpTransport.HealthJsonProvider = BuildHealthJson;
+            httpTransport.KeepAliveInterval = _keepAliveInterval;
+            httpTransport.KeepAliveFrameProvider = BuildKeepAliveNotificationJson;
+        }
 
         try
         {
@@ -503,7 +516,12 @@ public partial class McpServer : IDisposable
         finally
         {
             if (transport is HttpMcpTransport httpTransportToClear)
+            {
                 httpTransportToClear.OutOfBandFrameHandler = null;
+                httpTransportToClear.HealthJsonProvider = null;
+                httpTransportToClear.KeepAliveInterval = null;
+                httpTransportToClear.KeepAliveFrameProvider = null;
+            }
         }
 
         Console.Error.WriteLine("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
@@ -818,7 +836,9 @@ public partial class McpServer : IDisposable
             ExtractResponseId(request, out responseHasId, out responseId);
             if (responseHasId && CurrentCorrelationContext.Value is null)
                 frameCorrelationScope = BeginRequestCorrelation(responseId);
+            using var activity = StartMcpActivity(request, responseId);
             var response = await HandleMessageAsync(request, isolateRequestDb: true).ConfigureAwait(false);
+            activity?.SetTag("rpc.result", response is null ? "notification" : "response");
             return response != null ? SerializeResponseOrFallback(response, responseHasId, responseId) : null;
         }
         catch (JsonException ex)
@@ -853,6 +873,39 @@ public partial class McpServer : IDisposable
         {
             frameCorrelationScope?.Dispose();
         }
+    }
+
+    private static Activity? StartMcpActivity(JsonNode request, JsonNode? responseId)
+    {
+        var method = request is JsonObject obj ? TryGetStringMember(obj, "method") : null;
+        var traceParent = TryGetMcpTraceParent(request);
+        ActivityContext parentContext = default;
+        if (traceParent != null)
+            ActivityContext.TryParse(traceParent, traceState: null, out parentContext);
+
+        var activity = parentContext != default
+            ? CodeIndexTelemetry.ActivitySource.StartActivity("mcp.request", ActivityKind.Server, parentContext)
+            : CodeIndexTelemetry.ActivitySource.StartActivity("mcp.request", ActivityKind.Server);
+        activity?.SetTag("rpc.system", "jsonrpc");
+        activity?.SetTag("rpc.service", "mcp");
+        if (!string.IsNullOrWhiteSpace(method))
+            activity?.SetTag("rpc.method", method);
+        if (responseId != null)
+            activity?.SetTag("rpc.request_id", responseId.ToJsonString());
+        return activity;
+    }
+
+    private static string? TryGetMcpTraceParent(JsonNode request)
+    {
+        if (request is not JsonObject obj ||
+            obj["params"] is not JsonObject parameters ||
+            parameters["_meta"] is not JsonObject meta)
+            return null;
+
+        if (meta["traceparent"] is not JsonValue valueNode ||
+            !valueNode.TryGetValue<string>(out var value))
+            return null;
+        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
     private string SerializeResponseOrFallback(JsonNode response, bool hasId, JsonNode? id)
@@ -1016,6 +1069,8 @@ public partial class McpServer : IDisposable
                 suggestion: "Send a JSON-RPC 2.0 object (e.g. {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}).",
                 retrySafe: false);
 
+        _lastRequestAt = DateTimeOffset.UtcNow;
+
         // Extract `method` defensively: a non-string `method` (e.g. `"method":42`) must not
         // throw before the auth gate runs, otherwise a token-protected server would surface
         // `-32603 "Internal error"` to an unauthenticated caller instead of `-32001
@@ -1116,12 +1171,89 @@ public partial class McpServer : IDisposable
             "prompts/list" => Task.FromResult<JsonNode>(HandlePromptsList(id)),
             "prompts/get" => Task.FromResult<JsonNode>(HandlePromptsGet(id, request["params"])),
             "logging/setLevel" => Task.FromResult<JsonNode>(HandleLoggingSetLevel(id, request["params"])),
-            "ping" => Task.FromResult<JsonNode>(CreateSuccessResponse(hasId, id, new JsonObject())),
+            "ping" => Task.FromResult<JsonNode>(CreateSuccessResponse(hasId, id, BuildHealthResult())),
             _ => Task.FromResult<JsonNode>(CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Method not found: {method}",
                 category: McpErrorEnvelope.CategoryMethodNotFound,
                 suggestion: "Supported methods: initialize, tools/list, tools/call, resources/list, resources/read, prompts/list, prompts/get, logging/setLevel, ping, notifications/initialized, notifications/cancelled, notifications/shutdown.",
                 retrySafe: false)),
         }).ConfigureAwait(false);
+    }
+
+    private string BuildHealthJson()
+        => BuildHealthResult().ToJsonString(_jsonOptions);
+
+    private string BuildKeepAliveNotificationJson()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var notification = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["method"] = "notifications/keep_alive",
+            ["params"] = new JsonObject
+            {
+                ["server_time"] = now.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+                ["uptime_s"] = Math.Max(0, (long)Math.Floor((now - _startedAt).TotalSeconds)),
+            }
+        };
+        return notification.ToJsonString(_jsonOptions);
+    }
+
+    private static TimeSpan? ReadKeepAliveIntervalFromEnvironment()
+    {
+        var raw = Environment.GetEnvironmentVariable(KeepAliveIntervalEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+        if (!double.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var seconds)
+            || seconds <= 0)
+            return null;
+        return TimeSpan.FromSeconds(seconds);
+    }
+
+    private JsonObject BuildHealthResult()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var dbOpen = ProbeDbHealth(now, out var dbError);
+        var result = new JsonObject
+        {
+            ["status"] = dbOpen ? "ok" : "degraded",
+            ["uptime_s"] = Math.Max(0, (long)Math.Floor((now - _startedAt).TotalSeconds)),
+            ["last_request_at"] = _lastRequestAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            ["db_open"] = dbOpen,
+            ["last_db_check_at"] = _lastDbCheckAt?.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            ["transport_ready"] = _running,
+        };
+        if (!string.IsNullOrWhiteSpace(dbError))
+            result["db_error"] = dbError;
+        return result;
+    }
+
+    private bool ProbeDbHealth(DateTimeOffset now, out string? error)
+    {
+        try
+        {
+            var builder = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+            {
+                DataSource = _dbPath,
+                Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly,
+            };
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection(builder.ConnectionString);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT 1;";
+            _ = command.ExecuteScalar();
+            _lastDbCheckAt = now;
+            _lastDbCheckOk = true;
+            _lastDbCheckError = null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException or InvalidOperationException)
+        {
+            _lastDbCheckAt = now;
+            _lastDbCheckOk = false;
+            _lastDbCheckError = ex.GetType().Name;
+        }
+
+        error = _lastDbCheckError;
+        return _lastDbCheckOk == true;
     }
 
     private async Task<JsonNode?> HandleBatchMessageAsync(JsonArray batch, bool isolateRequestDb)
@@ -2483,7 +2615,7 @@ public partial class McpServer : IDisposable
         {
             using var isolatedDb = new DbContext(_dbPath);
             isolatedDb.TryMigrateForRead();
-            var isolatedReader = new DbReader(isolatedDb, requestToken);
+            using var isolatedReader = new DbReader(isolatedDb, requestToken);
             isolatedReader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
             return isolatedReader.RunWithGeneratedScope(() => action(isolatedReader));
         }
@@ -2504,7 +2636,7 @@ public partial class McpServer : IDisposable
         // MCP ツール呼び出しごとの schema 再走査を排除し (issue #1565)、
         // per-request cancellation token を reader に渡して SQLite 作業が
         // shutdown / 切断を観測できるようにする (#1567)。
-        var reader = new DbReader(db, requestToken);
+        using var reader = new DbReader(db, requestToken);
         reader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
         return reader.RunWithGeneratedScope(() => action(reader));
     }

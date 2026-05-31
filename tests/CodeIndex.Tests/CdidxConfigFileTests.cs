@@ -35,6 +35,8 @@ public class CdidxConfigFileTests
                   "global_tool_log_dir": "/tmp/logs",
                   "stale_after": "2h",
                   "suggestion_dedup_threshold": 0.75,
+                  "suggestion_max_age_days": 30,
+                  "suggestion_max_count": 250,
                   "indexing": {
                     "includeKinds": ["class"],
                     "excludeKinds": ["test_method", "generated_parser"]
@@ -57,6 +59,8 @@ public class CdidxConfigFileTests
             Assert.Equal("/tmp/logs", env.Writes["CDIDX_GLOBAL_TOOL_LOG_DIR"]);
             Assert.Equal("2h", env.Writes["CDIDX_STALE_AFTER"]);
             Assert.Equal("0.75", env.Writes["CDIDX_SUGGESTION_DEDUP_THRESHOLD"]);
+            Assert.Equal("30", env.Writes["CDIDX_SUGGESTION_MAX_AGE_DAYS"]);
+            Assert.Equal("250", env.Writes["CDIDX_SUGGESTION_MAX_COUNT"]);
             Assert.Equal("class", env.Writes["CDIDX_INDEX_INCLUDE_SYMBOL_KINDS"]);
             Assert.Equal("test_method,generated_parser", env.Writes["CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS"]);
             Assert.Equal("search,definition", env.Writes["CDIDX_MCP_TOOLS_ALLOW"]);
