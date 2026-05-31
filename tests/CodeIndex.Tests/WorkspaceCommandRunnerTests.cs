@@ -47,11 +47,27 @@ public class WorkspaceCommandRunnerTests
     [Fact]
     public void ConfigShow_PrintsPrecedence()
     {
-        var (exitCode, stdout, _) = ConsoleCapture.Capture(() => CdidxConfigFile.RunShow(["--json"], _jsonOptions));
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_config_show_config");
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
 
-        Assert.Equal(CommandExitCodes.Success, exitCode);
-        Assert.Contains("precedence", stdout);
-        Assert.Contains("active_workspace", stdout);
+            var (exitCode, stdout, _) = ConsoleCapture.Capture(() => CdidxConfigFile.RunShow(["--json"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            using var document = JsonDocument.Parse(stdout);
+            var root = document.RootElement;
+            Assert.False(root.TryGetProperty("active_workspace", out _));
+            Assert.Contains(
+                root.GetProperty("precedence").EnumerateArray(),
+                item => item.GetString() == "active_workspace");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
     }
 
     [Fact]
