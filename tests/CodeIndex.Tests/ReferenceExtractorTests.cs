@@ -14771,6 +14771,44 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_ScalaForImplicitGivenUsingReferences_AreIndexed()
+    {
+        const string content = """
+            trait Encoder[T]
+            class User
+            class UserDto
+
+            object Main {
+              implicit def userToDto(user: User): UserDto = UserDto()
+              implicit class UserOps(user: User) {
+                def active: Boolean = true
+              }
+              given userEncoder: Encoder[User] = Encoder.instance
+              def render(value: User)(using encoder: Encoder[User]): String =
+                for {
+                  raw <- users
+                  user <- loadUsers()
+                  dto <- convert(user)
+                  if dto.active
+                } yield dto.toString
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.Contains(symbols, symbol => symbol.Name == "userToDto" && symbol.Kind == "implicit");
+        Assert.Contains(symbols, symbol => symbol.Name == "UserOps" && symbol.Kind == "implicit");
+        Assert.Contains(symbols, symbol => symbol.Name == "userEncoder" && symbol.Kind == "given");
+        Assert.Contains(references, reference => reference.SymbolName == "users" && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference => reference.SymbolName == "loadUsers" && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference => reference.SymbolName == "convert" && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "UserDto" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Encoder[User]" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpEventSubscription_DetectsAsSubscribe()
     {
         const string content = """

@@ -1714,6 +1714,8 @@ public static partial class SymbolExtractor
         ],
         ["scala"] =
         [
+            new("implicit", new Regex(@"^\s*(?<visibility>private|protected)?\s*implicit\s+(?:override\s+)?(?:def|val|var|class)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("given", new Regex(@"^\s*(?<visibility>private|protected)?\s*given\s+(?:(?<name>\w+)\s*(?::|as)|(?<name>[A-Z]\w*)\b)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*(?<visibility>private|protected)?\s*(?:override\s+)?def\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("interface", new Regex(@"^\s*(?<visibility>private|protected)?\s*(?:sealed\s+)?trait\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("enum",     new Regex(@"^\s*(?<visibility>private|protected)?\s*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),

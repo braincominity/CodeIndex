@@ -1498,6 +1498,15 @@ public static partial class ReferenceExtractor
                     ScalaReferenceExtractor.EmitTrailingBlockCallReferences(
                         preparedLine,
                         AddCallLikeReference);
+                    ScalaReferenceExtractor.EmitAdditionalReferences(
+                        preparedLine,
+                        references,
+                        seen,
+                        fileId,
+                        context,
+                        lineNumber,
+                        ResolveContainerForCall,
+                        AddCallLikeReference);
                 }
                 else if (language == "gradle")
                 {
