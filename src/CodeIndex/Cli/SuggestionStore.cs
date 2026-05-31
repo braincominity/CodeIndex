@@ -781,7 +781,7 @@ public class SuggestionStore
     {
         var maxAge = ResolveMaxAge();
         var maxCount = ResolveMaxCount();
-        var cutoff = DateTime.UtcNow.Subtract(maxAge);
+        var cutoff = GetUtcNow().Subtract(maxAge);
         var pruned = records
             .Where(record => record.CreatedAt != default && record.CreatedAt < cutoff)
             .ToList();
@@ -807,7 +807,7 @@ public class SuggestionStore
         ArchivePrunedRecords(pruned);
         try
         {
-            Console.Error.WriteLine($"[cdidx] Pruned {pruned.Count} stale suggestion record(s) to {_archivePath}.");
+            ConsoleUi.TryWriteErrorLine($"[cdidx] Pruned {pruned.Count} stale suggestion record(s) to {_archivePath}.");
         }
         catch (ObjectDisposedException)
         {

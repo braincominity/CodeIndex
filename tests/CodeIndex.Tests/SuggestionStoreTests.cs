@@ -511,19 +511,19 @@ public class SuggestionStoreTests : IDisposable
     [Fact]
     public void LoadSince_ReturnsSuggestionsAtOrAfterThreshold()
     {
-        var clock = new ManualTimeProvider(ManualTimeProvider.FixtureUtcNow);
+        var clock = new ManualTimeProvider(new DateTimeOffset(2031, 5, 1, 9, 0, 0, TimeSpan.Zero));
         var store = new SuggestionStore(_tempDir, null, clock);
         var older = MakeRecord("other", null, "Older suggestion");
         var boundary = MakeRecord("other", null, "Boundary suggestion");
         var newer = MakeRecord("other", null, "Newer suggestion");
 
         store.TryAdd(older);
-        clock.SetUtcNow(ManualTimeProvider.FixtureUtcNow.AddDays(1));
+        clock.SetUtcNow(new DateTimeOffset(2031, 5, 2, 9, 0, 0, TimeSpan.Zero));
         store.TryAdd(boundary);
-        clock.SetUtcNow(ManualTimeProvider.FixtureUtcNow.AddDays(2));
+        clock.SetUtcNow(new DateTimeOffset(2031, 5, 3, 9, 0, 0, TimeSpan.Zero));
         store.TryAdd(newer);
 
-        var loaded = store.LoadSince(ManualTimeProvider.FixtureUtcNow.AddDays(1));
+        var loaded = store.LoadSince(new DateTimeOffset(2031, 5, 2, 9, 0, 0, TimeSpan.Zero));
 
         Assert.Equal(new[] { boundary.Hash, newer.Hash }, loaded.Select(s => s.Hash));
     }
@@ -785,14 +785,16 @@ public class SuggestionStoreTests : IDisposable
     [Fact]
     public void TryAdd_PrunesStaleRecordsToArchive()
     {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2031, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var store = new SuggestionStore(_tempDir, null, clock);
         var old = MakeRecord("other", null, "Old suggestion");
-        old.CreatedAt = DateTime.UtcNow.AddDays(-400);
-        Assert.True(_store.TryAdd(old));
+        Assert.True(store.TryAdd(old));
 
+        clock.SetUtcNow(new DateTimeOffset(2032, 2, 5, 0, 0, 0, TimeSpan.Zero));
         var fresh = MakeRecord("other", null, "Fresh suggestion");
-        Assert.True(_store.TryAdd(fresh));
+        Assert.True(store.TryAdd(fresh));
 
-        var all = _store.LoadAll();
+        var all = store.LoadAll();
         Assert.Single(all);
         Assert.Equal("Fresh suggestion", all[0].Description);
 
@@ -826,15 +828,17 @@ public class SuggestionStoreTests : IDisposable
     [Fact]
     public void TryAdd_DuplicateStillPersistsPrunedRecords()
     {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2031, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var store = new SuggestionStore(_tempDir, null, clock);
         var old = MakeRecord("other", null, "Old suggestion");
-        old.CreatedAt = DateTime.UtcNow.AddDays(-400);
         var duplicate = MakeRecord("other", null, "Duplicate suggestion");
-        Assert.True(_store.TryAdd(old));
-        Assert.True(_store.TryAdd(duplicate));
+        Assert.True(store.TryAdd(old));
+        clock.SetUtcNow(new DateTimeOffset(2032, 2, 5, 0, 0, 0, TimeSpan.Zero));
+        Assert.True(store.TryAdd(duplicate));
 
-        Assert.False(_store.TryAdd(MakeRecord("other", null, "Duplicate suggestion")));
+        Assert.False(store.TryAdd(MakeRecord("other", null, "Duplicate suggestion")));
 
-        var all = _store.LoadAll();
+        var all = store.LoadAll();
         Assert.Single(all);
         Assert.Equal("Duplicate suggestion", all[0].Description);
         var archivePath = Path.Combine(_tempDir, "suggestions-codeindex.archive.jsonl");
