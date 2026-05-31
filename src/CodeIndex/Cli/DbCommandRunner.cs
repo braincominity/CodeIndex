@@ -575,15 +575,28 @@ public static class DbCommandRunner
     private static DbCheckpointOperationResult CreateCheckpoint(string fullDbPath, string name)
     {
         ValidateCheckpointName(name);
+        var root = GetCheckpointRoot(fullDbPath);
         var checkpointPath = GetCheckpointPath(fullDbPath, name);
         if (Directory.Exists(checkpointPath))
             throw new InvalidOperationException($"checkpoint already exists: {name}");
 
-        Directory.CreateDirectory(checkpointPath);
-        CopyIfExists(fullDbPath, Path.Combine(checkpointPath, Path.GetFileName(fullDbPath)));
-        CopyIfExists(fullDbPath + "-wal", Path.Combine(checkpointPath, Path.GetFileName(fullDbPath) + "-wal"));
-        CopyIfExists(fullDbPath + "-shm", Path.Combine(checkpointPath, Path.GetFileName(fullDbPath) + "-shm"));
-        File.WriteAllText(Path.Combine(checkpointPath, "manifest.txt"), $"name={name}{Environment.NewLine}created_at_utc={DateTimeOffset.UtcNow:O}{Environment.NewLine}db={fullDbPath}{Environment.NewLine}");
+        Directory.CreateDirectory(root);
+        var tempPath = Path.Combine(root, ".tmp-" + name + "-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempPath);
+        try
+        {
+            CopyIfExists(fullDbPath, Path.Combine(tempPath, Path.GetFileName(fullDbPath)));
+            CopyIfExists(fullDbPath + "-wal", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-wal"));
+            CopyIfExists(fullDbPath + "-shm", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-shm"));
+            File.WriteAllText(Path.Combine(tempPath, "manifest.txt"), $"name={name}{Environment.NewLine}created_at_utc={DateTimeOffset.UtcNow:O}{Environment.NewLine}db={fullDbPath}{Environment.NewLine}");
+            Directory.Move(tempPath, checkpointPath);
+        }
+        catch
+        {
+            if (Directory.Exists(tempPath))
+                Directory.Delete(tempPath, recursive: true);
+            throw;
+        }
 
         var files = Directory.GetFiles(checkpointPath).Select(Path.GetFileName).Where(f => f is not null).Select(f => f!).OrderBy(f => f, StringComparer.Ordinal).ToList();
         return new DbCheckpointOperationResult(name, checkpointPath, files);
@@ -595,7 +608,10 @@ public static class DbCommandRunner
         if (!Directory.Exists(root))
             return [];
 
+        var dbFileName = Path.GetFileName(fullDbPath);
         return Directory.GetDirectories(root)
+            .Where(path => !Path.GetFileName(path).StartsWith(".tmp-", StringComparison.Ordinal))
+            .Where(path => File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(path, dbFileName))))
             .Select(path =>
             {
                 var info = new DirectoryInfo(path);
@@ -610,6 +626,10 @@ public static class DbCommandRunner
     {
         ValidateCheckpointName(name);
         SqliteConnection.ClearAllPools();
+        var checkpointDbPath = Path.Combine(checkpointPath, Path.GetFileName(fullDbPath));
+        if (!File.Exists(LongPath.EnsureWindowsPrefix(checkpointDbPath)))
+            throw new InvalidOperationException($"checkpoint is incomplete: {name}");
+
         var backupPath = fullDbPath + ".restore-backup-" + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
         Directory.CreateDirectory(backupPath);
         MoveIfExists(fullDbPath, Path.Combine(backupPath, Path.GetFileName(fullDbPath)));

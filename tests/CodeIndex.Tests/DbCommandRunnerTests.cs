@@ -312,6 +312,38 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_RestoreIncompleteCheckpoint_ReturnsErrorAndKeepsDatabase()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_bad_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        Directory.CreateDirectory(root);
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var originalBytes = File.ReadAllBytes(dbPath);
+            var checkpointPath = Path.Combine(root, "codeindex.db.checkpoints", "bad");
+            Directory.CreateDirectory(checkpointPath);
+            File.WriteAllText(Path.Combine(checkpointPath, "manifest.txt"), "name=bad");
+
+            var (restoreExit, _, stderr) = RunAndCaptureStreams(["restore", "bad", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, restoreExit);
+            Assert.Contains("incomplete", stderr);
+            Assert.Equal(originalBytes, File.ReadAllBytes(dbPath));
+            Assert.Empty(Directory.GetDirectories(root, "codeindex.db.restore-backup-*"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Run_CorruptedDb_ReturnsDatabaseError()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_corrupt_{Guid.NewGuid():N}.db");
