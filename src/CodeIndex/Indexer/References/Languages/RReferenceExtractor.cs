@@ -104,6 +104,18 @@ internal static class RReferenceExtractor
     private static readonly Regex RoxygenMethodTagRegex = new(
         @"^\s*#'\s*@method\s+(?:`(?<genericBacktick>[^`]+)`|['""](?<genericQuoted>[^'""]+)['""]|(?<generic>[^\s]+))\s+(?:`(?<classBacktick>[^`]+)`|['""](?<classQuoted>[^'""]+)['""]|(?<class>[^\s]+))",
         RegexOptions.Compiled);
+    private static readonly Regex S4SetGenericCallRegex = new(
+        @"^\s*(?:(?:[\w.]+)::)?set(?:Group)?Generic\s*\(\s*(?:(?:f|generic|name)\s*=\s*)?(?:`(?<backtickName>[^`]+)`|['""](?<quotedName>[^'""]+)['""]|(?<name>[A-Za-z.][\w.]*))",
+        RegexOptions.Compiled);
+    private static readonly Regex S4SetClassCallRegex = new(
+        @"^\s*(?:(?:[\w.]+)::)?(?:setClass|setRefClass|setClassUnion|setOldClass)\s*\(\s*(?:(?:Class|classes|className|classname|name)\s*=\s*)?(?:`(?<backtickName>[^`]+)`|['""](?<quotedName>[^'""]+)['""]|(?<name>[A-Za-z.][\w.]*))",
+        RegexOptions.Compiled);
+    private static readonly Regex S4SetMethodCallRegex = new(
+        @"^\s*(?:(?:[\w.]+)::)?setMethod\s*\(\s*(?:(?:f|generic|name)\s*=\s*)?(?:`(?<genericBacktick>[^`]+)`|['""](?<genericQuoted>[^'""]+)['""]|(?<generic>[A-Za-z.][\w.]*))\s*,(?<tail>.*)$",
+        RegexOptions.Compiled);
+    private static readonly Regex S4SignatureClassRegex = new(
+        @"(?:signature\s*\(|,)\s*(?:(?<parameter>[A-Za-z.][\w.]*)\s*=\s*)?(?:`(?<backtickName>[^`]+)`|['""](?<quotedName>[^'""]+)['""]|(?<name>[A-Za-z.][\w.]*))",
+        RegexOptions.Compiled);
 
     public static void EmitNamespaceReferences(
         string preparedLine,
@@ -401,6 +413,108 @@ internal static class RReferenceExtractor
                 package,
                 packageIndex,
                 "reference",
+                context,
+                lineNumber,
+                container);
+        }
+    }
+
+    public static void EmitS4DispatchReferences(
+        string preparedLine,
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var line = StripRNamespaceDirectiveComment(originalLine);
+
+        var genericMatch = S4SetGenericCallRegex.Match(line);
+        if (genericMatch.Success)
+        {
+            AddS4Reference(genericMatch, "backtickName", "quotedName", "name", "reference");
+            return;
+        }
+
+        var classMatch = S4SetClassCallRegex.Match(line);
+        if (classMatch.Success)
+        {
+            AddS4Reference(classMatch, "backtickName", "quotedName", "name", "type_reference");
+            return;
+        }
+
+        var methodMatch = S4SetMethodCallRegex.Match(line);
+        if (!methodMatch.Success)
+            return;
+
+        var generic = GetNamespaceDirectiveToken(
+            methodMatch,
+            "genericBacktick",
+            "genericQuoted",
+            "generic");
+        if (generic == null)
+            return;
+
+        ReferenceExtractor.AddReference(
+            references,
+            seen,
+            fileId,
+            generic.Value.Name,
+            generic.Value.Index,
+            "reference",
+            context,
+            lineNumber,
+            container);
+
+        var tailGroup = methodMatch.Groups["tail"];
+        foreach (Match signatureMatch in S4SignatureClassRegex.Matches(tailGroup.Value))
+        {
+            var classToken = GetNamespaceDirectiveToken(
+                signatureMatch,
+                "backtickName",
+                "quotedName",
+                "name");
+            if (classToken == null)
+                continue;
+
+            var absoluteIndex = tailGroup.Index + classToken.Value.Index;
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                classToken.Value.Name,
+                absoluteIndex,
+                "type_reference",
+                context,
+                lineNumber,
+                container);
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                $"{generic.Value.Name}.{classToken.Value.Name}",
+                generic.Value.Index,
+                "reference",
+                context,
+                lineNumber,
+                container);
+        }
+
+        void AddS4Reference(Match match, string backtickGroup, string quotedGroup, string nameGroup, string kind)
+        {
+            var token = GetNamespaceDirectiveToken(match, backtickGroup, quotedGroup, nameGroup);
+            if (token == null)
+                return;
+
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                token.Value.Name,
+                token.Value.Index,
+                kind,
                 context,
                 lineNumber,
                 container);

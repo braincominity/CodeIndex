@@ -18313,6 +18313,35 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsS4DispatchReferences()
+    {
+        const string content = """
+            setClass("ExpressionSet", slots = c(assayData = "AssayData"))
+            setGeneric("exprs", function(object) standardGeneric("exprs"))
+            setMethod("exprs", signature(object = "ExpressionSet"), function(object) object@assayData)
+            methods::setMethod("show", signature("ExpressionSet"), function(object) show(object))
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(symbols, symbol => symbol.Name == "ExpressionSet" && symbol.Kind == "class");
+        Assert.Contains(symbols, symbol => symbol.Name == "exprs" && symbol.Kind == "function");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ExpressionSet"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "exprs"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "exprs.ExpressionSet"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "show.ExpressionSet"
+            && reference.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_R_PreservesQualifiedBacktickNamespaceReferencesWhenLeafIsDefinedLocally()
     {
         const string content = """

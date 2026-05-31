@@ -2075,6 +2075,15 @@ public static partial class ReferenceExtractor
                     context,
                     lineNumber,
                     container);
+                RReferenceExtractor.EmitS4DispatchReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
                 RReferenceExtractor.EmitBacktickCallReferences(
                     preparedLine,
                     references,
