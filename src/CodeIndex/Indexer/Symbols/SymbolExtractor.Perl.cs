@@ -13,7 +13,7 @@ public static partial class SymbolExtractor
         @"^\s*use\s+constant\s+\{",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PerlHashConstantKeyRegex = new(
-        @"(?:^|,)\s*(?:""(?<quoted>(?:\\x[0-9A-Fa-f]{2}|\\u[0-9A-Fa-f]{4}|\\.|[^""])*)""|'(?<quoted>(?:\\x[0-9A-Fa-f]{2}|\\u[0-9A-Fa-f]{4}|\\.|[^'])*)'|(?<bare>[\p{L}_][\p{L}\p{Nd}_]*))\s*=>",
+        @"(?:^|,)\s*(?:""(?<quoted>(?:\\x\{[0-9A-Fa-f]+\}|\\x[0-9A-Fa-f]{2}|\\.|[^""])*)""|'(?<quoted>(?:\\x\{[0-9A-Fa-f]+\}|\\x[0-9A-Fa-f]{2}|\\.|[^'])*)'|(?<bare>[\p{L}_][\p{L}\p{Nd}_]*))\s*=>",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static void ExtractPerlHashConstantSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
@@ -75,17 +75,22 @@ public static partial class SymbolExtractor
             }
 
             var marker = value[i + 1];
+            if (marker == 'x'
+                && i + 3 < value.Length
+                && value[i + 2] == '{'
+                && TryFindPerlBracedHexEscapeEnd(value, i + 3, out var escapeEnd)
+                && TryParseHexScalar(value.AsSpan(i + 3, escapeEnd - (i + 3)), out var scalar)
+                && scalar <= 0x10FFFF)
+            {
+                builder.Append(char.ConvertFromUtf32(scalar));
+                i = escapeEnd;
+                continue;
+            }
+
             if (marker == 'x' && i + 3 < value.Length && TryParseHexScalar(value.AsSpan(i + 2, 2), out var hexByte))
             {
                 builder.Append((char)hexByte);
                 i += 3;
-                continue;
-            }
-
-            if (marker == 'u' && i + 5 < value.Length && TryParseHexScalar(value.AsSpan(i + 2, 4), out var unicodeScalar))
-            {
-                builder.Append(char.ConvertFromUtf32(unicodeScalar));
-                i += 5;
                 continue;
             }
 
@@ -98,6 +103,21 @@ public static partial class SymbolExtractor
 
     private static bool TryParseHexScalar(ReadOnlySpan<char> value, out int scalar)
         => int.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out scalar);
+
+    private static bool TryFindPerlBracedHexEscapeEnd(string value, int start, out int end)
+    {
+        for (var i = start; i < value.Length; i++)
+        {
+            if (value[i] == '}')
+            {
+                end = i;
+                return i > start;
+            }
+        }
+
+        end = -1;
+        return false;
+    }
 
     private readonly record struct PerlBodyLineSegment(int BodyStartIndex, int LineIndex, int ColumnOffset);
 
@@ -124,11 +144,13 @@ public static partial class SymbolExtractor
             return false;
 
         var builder = new System.Text.StringBuilder();
+        var inQuotedKey = false;
+        var quotedKeyDelimiter = '\0';
         for (var lineIndex = startLineIndex; lineIndex < lines.Length; lineIndex++)
         {
             var line = lines[lineIndex];
             var segmentStart = lineIndex == startLineIndex ? openBraceIndex + 1 : 0;
-            var closeBraceIndex = line.IndexOf('}', segmentStart);
+            var closeBraceIndex = FindPerlHashConstantBlockCloseBrace(line, segmentStart, ref inQuotedKey, ref quotedKeyDelimiter);
             var segmentEnd = closeBraceIndex >= 0 ? closeBraceIndex : line.Length;
             if (segmentEnd > segmentStart)
             {
@@ -147,6 +169,45 @@ public static partial class SymbolExtractor
         }
 
         return false;
+    }
+
+    private static int FindPerlHashConstantBlockCloseBrace(
+        string line,
+        int start,
+        ref bool inQuotedKey,
+        ref char quotedKeyDelimiter)
+    {
+        for (var i = start; i < line.Length; i++)
+        {
+            if (inQuotedKey)
+            {
+                if (line[i] == '\\' && i + 1 < line.Length)
+                {
+                    i++;
+                    continue;
+                }
+
+                if (line[i] == quotedKeyDelimiter)
+                {
+                    inQuotedKey = false;
+                    quotedKeyDelimiter = '\0';
+                }
+
+                continue;
+            }
+
+            if (line[i] == '"' || line[i] == '\'')
+            {
+                inQuotedKey = true;
+                quotedKeyDelimiter = line[i];
+                continue;
+            }
+
+            if (line[i] == '}')
+                return i;
+        }
+
+        return -1;
     }
 
     private static (int LineIndex, int Column) ResolvePerlHashConstantBodyPosition(

@@ -25305,19 +25305,22 @@ public class SymbolExtractorTests
                 "foo " => 1,
                 foo => 2,
                 "naïve" => 3,
-                "nai\u0308ve" => 4,
+                "naïve" => 4,
                 "hex\xEF" => 5,
                 "hexï" => 6,
-                "   " => 7,
+                "braced\x{00EF}" => 7,
+                "bracedï" => 8,
+                "   " => 9,
             };
             """;
 
         var symbols = SymbolExtractor.Extract(1, "perl", content);
 
-        Assert.Equal(3, symbols.Count(symbol => symbol.Kind == "function"));
+        Assert.Equal(4, symbols.Count(symbol => symbol.Kind == "function"));
         Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "foo"));
         Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "naïve"));
         Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "hexï"));
+        Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "bracedï"));
         Assert.DoesNotContain(symbols, symbol => symbol.Name == "foo ");
     }
 
