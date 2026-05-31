@@ -1462,13 +1462,23 @@ public class McpServerTests : IDisposable
         // exception type should reach the wire; full detail stays in stderr.
         var ex = new InvalidOperationException("near 'SECRET_LITERAL': syntax error");
 
-        var message = McpServer.BuildSanitizedToolErrorMessage("search", ex);
+        var previous = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
+        string message;
+        try
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, null);
+            message = McpServer.BuildSanitizedToolErrorMessage("search", ex);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previous);
+        }
 
-        Assert.Contains("Error executing search", message);
-        Assert.Contains(nameof(InvalidOperationException), message);
+        Assert.Equal("Tool 'search' failed. See cdidx server stderr for details.", message);
         Assert.Contains("server stderr", message);
         Assert.DoesNotContain("SECRET_LITERAL", message);
         Assert.DoesNotContain("syntax error", message);
+        Assert.DoesNotContain(nameof(InvalidOperationException), message);
     }
 
     [Fact]
@@ -1478,13 +1488,44 @@ public class McpServerTests : IDisposable
         // outer JSON-RPC loop catch-all (#1530).
         var ex = new InvalidOperationException("PRAGMA failed: secret table 'leaky_table' missing");
 
-        var message = McpServer.BuildSanitizedLoopErrorMessage(ex);
+        var previous = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
+        string message;
+        try
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, null);
+            message = McpServer.BuildSanitizedLoopErrorMessage(ex);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previous);
+        }
 
-        Assert.Contains("Internal error", message);
-        Assert.Contains(nameof(InvalidOperationException), message);
+        Assert.Equal("Internal MCP error. See cdidx server stderr for details.", message);
         Assert.Contains("server stderr", message);
         Assert.DoesNotContain("leaky_table", message);
         Assert.DoesNotContain("PRAGMA failed", message);
+        Assert.DoesNotContain(nameof(InvalidOperationException), message);
+    }
+
+    [Fact]
+    public void BuildSanitizedToolErrorMessage_UnsafeDebugIncludesExceptionType()
+    {
+        var previous = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, "unsafe");
+            var ex = new InvalidOperationException("near 'SECRET_LITERAL': syntax error");
+
+            var message = McpServer.BuildSanitizedToolErrorMessage("search", ex);
+
+            Assert.Contains("Error executing search", message);
+            Assert.Contains(nameof(InvalidOperationException), message);
+            Assert.DoesNotContain("SECRET_LITERAL", message);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previous);
+        }
     }
 
     [Fact]
@@ -1503,7 +1544,17 @@ public class McpServerTests : IDisposable
             path: "/var/cdidx/state.db",
             hint: "Close other cdidx invocations.");
 
-        var message = McpServer.BuildSanitizedToolErrorMessage("search", ex);
+        var previous = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
+        string message;
+        try
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, "unsafe");
+            message = McpServer.BuildSanitizedToolErrorMessage("search", ex);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previous);
+        }
 
         Assert.Contains("Error executing search", message);
         Assert.Contains(nameof(CodeIndexException), message);
@@ -1692,7 +1743,17 @@ public class McpServerTests : IDisposable
             path: "/var/cdidx/state.db",
             hint: "Close other cdidx invocations.");
 
-        var message = McpServer.BuildSanitizedLoopErrorMessage(ex);
+        var previous = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
+        string message;
+        try
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, "unsafe");
+            message = McpServer.BuildSanitizedLoopErrorMessage(ex);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previous);
+        }
 
         Assert.Contains("Internal error", message);
         Assert.Contains(nameof(CodeIndexException), message);
@@ -1710,7 +1771,17 @@ public class McpServerTests : IDisposable
             category: CodeIndexExceptionCategory.Database,
             message: "Generic failure.");
 
-        var message = McpServer.BuildSanitizedToolErrorMessage("status", ex);
+        var previous = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
+        string message;
+        try
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, "unsafe");
+            message = McpServer.BuildSanitizedToolErrorMessage("status", ex);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previous);
+        }
 
         Assert.Contains("[E008_DB_ERROR/database]", message);
         Assert.DoesNotContain("path=", message);

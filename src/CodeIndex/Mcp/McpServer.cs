@@ -2606,6 +2606,8 @@ public partial class McpServer : IDisposable
     // #1530 で封じた ex.Message 漏れを再現させずに失敗詳細をクライアントへ届ける。
     internal static string BuildSanitizedToolErrorMessage(string toolName, Exception ex)
     {
+        if (!IsUnsafeDebugEnabled())
+            return $"Tool '{toolName}' failed. See cdidx server stderr for details.";
         if (ex is CodeIndexException codeIndexEx)
             return $"Error executing {toolName} ({ex.GetType().Name}) [{codeIndexEx.Code}/{codeIndexEx.Category}]{BuildPathFragment(codeIndexEx)}{BuildHintFragment(codeIndexEx)}. See cdidx server stderr for details.";
         return $"Error executing {toolName} ({ex.GetType().Name}). See cdidx server stderr for details.";
@@ -2616,6 +2618,8 @@ public partial class McpServer : IDisposable
     // JSON-RPC ループ catch-all のワイヤー向け本文。理由はツール catch-all と同じ（#1530, #1580）。
     internal static string BuildSanitizedLoopErrorMessage(Exception ex)
     {
+        if (!IsUnsafeDebugEnabled())
+            return "Internal MCP error. See cdidx server stderr for details.";
         if (ex is CodeIndexException codeIndexEx)
             return $"Internal error ({ex.GetType().Name}) [{codeIndexEx.Code}/{codeIndexEx.Category}]{BuildPathFragment(codeIndexEx)}{BuildHintFragment(codeIndexEx)}. See cdidx server stderr for details.";
         return $"Internal error ({ex.GetType().Name}). See cdidx server stderr for details.";
