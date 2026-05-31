@@ -6366,22 +6366,24 @@ public class McpServerTests : IDisposable
     [Fact]
     public void ToolsCall_BatchQuery_RejectsTypeMismatchedInnerArguments_Issue1615()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"search","arguments":{"query":"App","limit":"twenty"}},{"tool":"ping"}]}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"search","arguments":{"query":"App","limit":"twenty"}},{"tool":"search","arguments":{"query":"App","format":false}},{"tool":"ping"}]}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var structured = response["result"]!["structuredContent"]!;
-        Assert.Equal(2, structured["total_count"]!.GetValue<int>());
+        Assert.Equal(3, structured["total_count"]!.GetValue<int>());
         Assert.Equal(1, structured["success_count"]!.GetValue<int>());
-        Assert.Equal(1, structured["failure_count"]!.GetValue<int>());
+        Assert.Equal(2, structured["failure_count"]!.GetValue<int>());
         Assert.True(structured["partial_failure"]!.GetValue<bool>());
         Assert.Equal("isolated", structured["failure_scope"]!.GetValue<string>());
 
         var results = structured["results"]!.AsArray();
-        Assert.Equal(2, results.Count);
+        Assert.Equal(3, results.Count);
         Assert.False(results[0]!["ok"]!.GetValue<bool>());
         Assert.Contains("Invalid argument 'limit'", results[0]!["error"]!.GetValue<string>());
         Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, results[0]!["category"]!.GetValue<string>());
-        Assert.True(results[1]!["ok"]!.GetValue<bool>());
+        Assert.False(results[1]!["ok"]!.GetValue<bool>());
+        Assert.Contains("Invalid argument 'format'", results[1]!["error"]!.GetValue<string>());
+        Assert.True(results[2]!["ok"]!.GetValue<bool>());
     }
 
     [Fact]

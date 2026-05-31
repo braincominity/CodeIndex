@@ -406,7 +406,7 @@ public partial class McpServer
 
             "includeBody" or "lsp_compatible" or "excludeTests" or "includeGenerated" or "rawQuery" or
             "noDedup" or "exactSubstring" or "exact" or "exactName" or "countOnly" or "regex" or
-            "includeImports" or "withPaths" or "rebuild" or "dry_run" or "dryRun" or "force" or "optimize"
+            "includeImports" or "withPaths" or "prefix" or "rebuild" or "dry_run" or "dryRun" or "force" or "optimize"
                 => IsJsonBoolean(value) ? null : BuildInvalidToolArgumentType(toolName, propertyName, "boolean"),
 
             "path" or "project" or "excludePaths" or "names" or "files" or "commits" or "changedBetween"
@@ -416,7 +416,7 @@ public partial class McpServer
                 => value is JsonArray ? null : BuildInvalidToolArgumentType(toolName, propertyName, "array"),
 
             "query" or "kind" or "lang" or "since" or "solution" or "rankBy" or "direction" or "symbol" or
-            "groupBy" or "db" or "category" or "language" or "description" or "context" or "toolInvocationContext"
+            "groupBy" or "format" or "db" or "category" or "language" or "description" or "context" or "toolInvocationContext"
                 => IsJsonString(value) ? null : BuildInvalidToolArgumentType(toolName, propertyName, "string"),
 
             _ => null,
