@@ -2523,8 +2523,8 @@ public class FileIndexer
         }
     }
 
-    private static string NormalizeIgnorePath(string path)
-        => path.Replace('\\', '/').TrimEnd('/');
+    internal static string NormalizeIgnorePath(string path)
+        => NormalizePathSeparators(path).TrimEnd('/');
 
     /// <summary>
     /// Normalize OS path separators to '/' for DB storage and lookup.

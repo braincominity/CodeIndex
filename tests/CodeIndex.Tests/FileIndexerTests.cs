@@ -18,6 +18,17 @@ namespace CodeIndex.Tests;
 public class FileIndexerTests
 {
     [Fact]
+    public void NormalizeIgnorePath_PosixPreservesLiteralBackslash()
+    {
+        var normalized = FileIndexer.NormalizeIgnorePath(@"weird\name.py/");
+
+        if (OperatingSystem.IsWindows())
+            Assert.Equal("weird/name.py", normalized);
+        else
+            Assert.Equal(@"weird\name.py", normalized);
+    }
+
+    [Fact]
     public void ScanFilesDetailed_CancelledToken_ThrowsBeforeEnumeration()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-cancel-scan-{Guid.NewGuid():N}");
