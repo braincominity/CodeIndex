@@ -3552,12 +3552,12 @@ public static class QueryCommandRunner
         }
 
         foreach (var sourceDb in memberDbs)
-        foreach (var targetDb in memberDbs)
-        {
-            if (string.Equals(sourceDb, targetDb, StringComparison.Ordinal))
-                continue;
-            results.AddRange(GetCrossDatabaseFileDependencies(sourceDb, targetDb, options, reverse));
-        }
+            foreach (var targetDb in memberDbs)
+            {
+                if (string.Equals(sourceDb, targetDb, StringComparison.Ordinal))
+                    continue;
+                results.AddRange(GetCrossDatabaseFileDependencies(sourceDb, targetDb, options, reverse));
+            }
 
         return results
             .OrderByDescending(result => result.ReferenceCount)

@@ -8953,7 +8953,8 @@ public class McpServerTests : IDisposable
         var uniqueDesc = $"Arrow functions are not detected as symbols {Guid.NewGuid():N}";
         var json = new JsonObject
         {
-            ["jsonrpc"] = "2.0", ["id"] = 1,
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
             ["method"] = "tools/call",
             ["params"] = new JsonObject
             {
@@ -8978,7 +8979,8 @@ public class McpServerTests : IDisposable
         var uniqueDesc = $"NullReferenceException when searching with empty query {Guid.NewGuid():N}";
         var json = new JsonObject
         {
-            ["jsonrpc"] = "2.0", ["id"] = 1,
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
             ["method"] = "tools/call",
             ["params"] = new JsonObject
             {
@@ -9001,7 +9003,8 @@ public class McpServerTests : IDisposable
         var uniqueDesc = $"Attribution metadata regression {Guid.NewGuid():N}";
         var json = new JsonObject
         {
-            ["jsonrpc"] = "2.0", ["id"] = 1,
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
             ["method"] = "tools/call",
             ["params"] = new JsonObject
             {
@@ -9035,7 +9038,8 @@ public class McpServerTests : IDisposable
         var uniqueDesc = $"Add support for Zig language {Guid.NewGuid():N}";
         JsonNode MakeRequest(int id) => new JsonObject
         {
-            ["jsonrpc"] = "2.0", ["id"] = id,
+            ["jsonrpc"] = "2.0",
+            ["id"] = id,
             ["method"] = "tools/call",
             ["params"] = new JsonObject
             {
@@ -9160,7 +9164,8 @@ public class McpServerTests : IDisposable
         var desc = "public void Foo()\n{\n    var x = 1;\n    var y = 2;\n    var z = x + y;\n    Console.WriteLine(z);\n}";
         var json = new JsonObject
         {
-            ["jsonrpc"] = "2.0", ["id"] = 1,
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
             ["method"] = "tools/call",
             ["params"] = new JsonObject
             {
@@ -9180,7 +9185,8 @@ public class McpServerTests : IDisposable
         var ctx = "function foo() {\n    let x = 1;\n    let y = 2;\n    return x + y;\n}";
         var json = new JsonObject
         {
-            ["jsonrpc"] = "2.0", ["id"] = 1,
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
             ["method"] = "tools/call",
             ["params"] = new JsonObject
             {

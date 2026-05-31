@@ -178,6 +178,9 @@ jobs:
             throw "High or critical NuGet vulnerability detected."
           }
 
+      - name: Verify formatting
+        run: dotnet format CodeIndex.sln --verify-no-changes --no-restore --verbosity minimal
+
       - name: Build
         run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore
 

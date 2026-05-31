@@ -586,21 +586,21 @@ public static partial class ReferenceExtractor
                     ref pendingCSharpMultiLineTypePattern);
             }
 
-              bool ShouldSuppressDefinitionCall(string resolvedName, int callIndex)
-              {
-                  if (definitionNames == null)
-                      return false;
+            bool ShouldSuppressDefinitionCall(string resolvedName, int callIndex)
+            {
+                if (definitionNames == null)
+                    return false;
 
-                  if (language == "csharp")
-                  {
-                      if (context.Contains("when", StringComparison.Ordinal))
-                          return false;
-                  }
+                if (language == "csharp")
+                {
+                    if (context.Contains("when", StringComparison.Ordinal))
+                        return false;
+                }
 
-                  if (language != "sql")
-                      return definitionNameIndices != null
-                          && definitionNameIndices.TryGetValue(resolvedName, out var definitionIndex)
-                          && callIndex == definitionIndex;
+                if (language != "sql")
+                    return definitionNameIndices != null
+                        && definitionNameIndices.TryGetValue(resolvedName, out var definitionIndex)
+                        && callIndex == definitionIndex;
 
                 return SqlReferenceExtractor.ShouldSuppressDefinitionCall(sqlDefinitionLeafSpans, resolvedName, callIndex);
             }

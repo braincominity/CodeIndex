@@ -648,16 +648,16 @@ public class FileIndexerTests
             Directory.CreateDirectory(tempDir);
             var files = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["Gemfile"]         = "source 'https://rubygems.org'\ngem 'rails', '~> 7.0'\n",
-                ["Rakefile"]        = "task :default => [:test]\n",
-                ["Containerfile"]   = "FROM alpine\nRUN echo hi\n",
-                ["Dockerfile.dev"]  = "FROM alpine AS builder\nRUN echo dev\n",
-                ["GNUmakefile"]     = "all:\n\techo hi\n",
-                ["common.mk"]       = "OBJ = foo.o bar.o\n",
-                ["stub.pyi"]        = "def foo() -> int: ...\n",
-                ["style.less"]      = ".foo { color: red; }\n",
-                ["page.htm"]        = "<html><body>old-school</body></html>\n",
-                ["Makefile.am"]     = "SUBDIRS = lib\n",
+                ["Gemfile"] = "source 'https://rubygems.org'\ngem 'rails', '~> 7.0'\n",
+                ["Rakefile"] = "task :default => [:test]\n",
+                ["Containerfile"] = "FROM alpine\nRUN echo hi\n",
+                ["Dockerfile.dev"] = "FROM alpine AS builder\nRUN echo dev\n",
+                ["GNUmakefile"] = "all:\n\techo hi\n",
+                ["common.mk"] = "OBJ = foo.o bar.o\n",
+                ["stub.pyi"] = "def foo() -> int: ...\n",
+                ["style.less"] = ".foo { color: red; }\n",
+                ["page.htm"] = "<html><body>old-school</body></html>\n",
+                ["Makefile.am"] = "SUBDIRS = lib\n",
             };
             foreach (var (name, content) in files)
                 File.WriteAllText(Path.Combine(tempDir, name), content);
@@ -2715,7 +2715,7 @@ public class FileIndexerTests
         }
         finally
         {
-                Directory.Delete(tempDir, true);
+            Directory.Delete(tempDir, true);
         }
     }
 

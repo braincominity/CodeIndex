@@ -896,15 +896,15 @@ public static partial class ReferenceExtractor
         return cursor;
     }
 
-      internal static bool IsCSharpPatternHeadCallSite(string[] preparedLines, int lineIndex, string preparedLine, int nameIndex)
-      {
-          var whenOffset = FindTopLevelCSharpWhenKeywordOffset(preparedLine);
-          if (whenOffset >= 0 && nameIndex > whenOffset)
-              return false;
+    internal static bool IsCSharpPatternHeadCallSite(string[] preparedLines, int lineIndex, string preparedLine, int nameIndex)
+    {
+        var whenOffset = FindTopLevelCSharpWhenKeywordOffset(preparedLine);
+        if (whenOffset >= 0 && nameIndex > whenOffset)
+            return false;
 
-          var cursor = nameIndex;
-          if (IsCSharpConstantPatternAnchor(preparedLine, ref cursor))
-              return true;
+        var cursor = nameIndex;
+        if (IsCSharpConstantPatternAnchor(preparedLine, ref cursor))
+            return true;
 
         cursor = nameIndex;
         cursor = SkipCSharpTriviaBackward(preparedLine, cursor);

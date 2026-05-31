@@ -24,31 +24,31 @@ public static class Program
             switch (command)
             {
                 case "check":
-                {
-                    var summary = tool.CheckFragments();
-                    Console.Out.WriteLine(summary);
-                    return 0;
-                }
+                    {
+                        var summary = tool.CheckFragments();
+                        Console.Out.WriteLine(summary);
+                        return 0;
+                    }
                 case "prepare":
-                {
-                    var options = ParseOptions(args[1..], requireDate: true);
-                    var result = tool.Prepare(options.Version, options.ReleaseDate, writeChanges: true);
-                    Console.Out.WriteLine(result.Summary);
-                    return 0;
-                }
+                    {
+                        var options = ParseOptions(args[1..], requireDate: true);
+                        var result = tool.Prepare(options.Version, options.ReleaseDate, writeChanges: true);
+                        Console.Out.WriteLine(result.Summary);
+                        return 0;
+                    }
                 case "render":
-                {
-                    var options = ParseOptions(args[1..], requireDate: true);
-                    var result = tool.Prepare(options.Version, options.ReleaseDate, writeChanges: false);
-                    Console.Out.Write(result.RenderedChangelog ?? string.Empty);
-                    return 0;
-                }
+                    {
+                        var options = ParseOptions(args[1..], requireDate: true);
+                        var result = tool.Prepare(options.Version, options.ReleaseDate, writeChanges: false);
+                        Console.Out.Write(result.RenderedChangelog ?? string.Empty);
+                        return 0;
+                    }
                 case "release-notes":
-                {
-                    var options = ParseOptions(args[1..], requireDate: false);
-                    Console.Out.Write(tool.RenderReleaseNotes(options.Version));
-                    return 0;
-                }
+                    {
+                        var options = ParseOptions(args[1..], requireDate: false);
+                        Console.Out.Write(tool.RenderReleaseNotes(options.Version));
+                        return 0;
+                    }
                 default:
                     throw new ChangelogException($"Unknown command '{command}'.");
             }

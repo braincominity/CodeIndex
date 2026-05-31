@@ -1449,11 +1449,11 @@ public class QueryCommandRunnerTests
             Assert.Equal("1", stdout.Trim());
             Assert.Equal(string.Empty, stderr);
         }
-    finally
-    {
-        TestProjectHelper.DeleteDirectory(projectRoot);
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
-}
 
     [Theory]
     [InlineData("js")]
@@ -25936,7 +25936,7 @@ jobs:
             MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Ready", "--db", dbPath, "--json", "--lang", "javascript", "--exact-name", "--path", "web/","--count"],
+                ["Ready", "--db", dbPath, "--json", "--lang", "javascript", "--exact-name", "--path", "web/", "--count"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);

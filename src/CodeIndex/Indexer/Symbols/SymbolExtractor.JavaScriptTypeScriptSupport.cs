@@ -7510,18 +7510,18 @@ public static partial class SymbolExtractor
                 return;
             }
 
-        AddJavaScriptTypeScriptSyntheticClassTarget(
-            fileId,
-            lang,
-            lines,
-            symbols,
-            targets,
-            startIndex,
-            startColumn + anonymousDefaultMatch.Index,
-            classTokenLineIndex,
-            classTokenStartColumn,
-            containerName: "default",
-            visibility: TryGetGroup(anonymousDefaultMatch, "visibility"));
+            AddJavaScriptTypeScriptSyntheticClassTarget(
+                fileId,
+                lang,
+                lines,
+                symbols,
+                targets,
+                startIndex,
+                startColumn + anonymousDefaultMatch.Index,
+                classTokenLineIndex,
+                classTokenStartColumn,
+                containerName: "default",
+                visibility: TryGetGroup(anonymousDefaultMatch, "visibility"));
             return;
         }
 
