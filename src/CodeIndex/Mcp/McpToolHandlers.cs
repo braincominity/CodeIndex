@@ -1528,12 +1528,33 @@ public partial class McpServer
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var sections = ReadStringList(args, "sections").Select(section => section.ToLowerInvariant()).ToHashSet(StringComparer.Ordinal);
+        var depth = args?["depth"]?.GetValue<int>();
 
         return WithDbReader(id, args, reader =>
         {
             var map = reader.GetRepoMap(limit, lang, pathPatterns, excludePaths, excludeTests);
             WorkspaceMetadataEnricher.Enrich(map, _dbPath, _dbPathExplicit);
             var structured = JsonSerializer.SerializeToNode(map, _jsonOptions)!.AsObject();
+            if (depth is >= 0)
+            {
+                var modules = structured["modules"] as JsonArray;
+                if (modules != null)
+                {
+                    var kept = new JsonArray(modules
+                        .Where(node =>
+                        {
+                            var module = node?["module"]?.GetValue<string>() ?? string.Empty;
+                            return module.Split('/', StringSplitOptions.RemoveEmptyEntries).Length <= depth.Value;
+                        })
+                        .Select(node => node!.DeepClone())
+                        .ToArray());
+                    structured["modules"] = kept;
+                }
+                structured["depth"] = depth.Value;
+            }
+            if (sections.Count > 0)
+                ApplyMapSectionFilter(structured, sections);
             structured["limit"] = limit;
             structured["lang"] = lang;
             structured["path"] = PathEcho(pathPatterns);
@@ -1546,6 +1567,33 @@ public partial class McpServer
                 : hasFilter ? "No files found matching the given filters." : "Repo map returned.";
             return CreateToolResult(id, summary, structured);
         });
+    }
+
+    private static void ApplyMapSectionFilter(JsonObject structured, IReadOnlySet<string> sections)
+    {
+        var keep = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "api_version", "fileCount", "totalLines", "totalSymbols", "totalReferences",
+            "indexedAt", "latestModified", "workspaceIndexedAt", "workspaceLatestModified",
+            "projectRoot", "gitHead", "gitIsDirty", "indexed_head_commit", "worktree_head_changed",
+            "graphTableAvailable", "limit", "lang", "path", "excludeTests", "depth",
+        };
+        if (sections.Contains("languages"))
+            keep.Add("languages");
+        if (sections.Contains("tree") || sections.Contains("modules"))
+            keep.Add("modules");
+        if (sections.Contains("hotspots"))
+        {
+            keep.Add("topFiles");
+            keep.Add("symbolRichFiles");
+            keep.Add("referenceRichFiles");
+            keep.Add("entrypoints");
+        }
+        if (sections.Contains("metrics"))
+            keep.Add("largestFiles");
+        foreach (var key in structured.Select(property => property.Key).Where(key => !keep.Contains(key)).ToList())
+            structured.Remove(key);
+        structured["sections"] = new JsonArray(sections.Select(section => JsonValue.Create(section)).ToArray<JsonNode?>());
     }
 
     private JsonNode ExecuteAnalyzeSymbol(JsonNode? id, JsonNode? args)
@@ -2621,6 +2669,8 @@ public partial class McpServer
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var reverse = args?["reverse"]?.GetValue<bool>() ?? false;
+        var cyclesOnly = args?["cycles"]?.GetValue<bool>() ?? false;
+        var format = args?["format"]?.GetValue<string>()?.ToLowerInvariant() ?? "edgelist";
 
         return WithDbReader(id, args, reader =>
         {
@@ -2633,19 +2683,37 @@ public partial class McpServer
                     baseSqlGraphSignal,
                     results.SelectMany(result => new[] { result.SourcePath, result.TargetPath }),
                     lang);
-            var payload = new JsonObject
-            {
-                ["count"] = results.Count,
-                ["edges"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
-            };
+            List<List<string>> cycles = [];
+            var outputEdges = cyclesOnly ? QueryCommandRunner.FilterCycleEdges(results, out cycles) : results;
+            var payload = new JsonObject { ["count"] = cyclesOnly ? cycles.Count : results.Count };
+            if (cyclesOnly)
+                payload["cycles"] = QueryCommandRunner.BuildDependencyCyclesJson(cycles);
+            else if (format == "json-graph")
+                payload["graph"] = BuildJsonGraphPayload(outputEdges);
+            else
+                payload["edges"] = JsonSerializer.SerializeToNode(outputEdges, _jsonOptions);
+            payload["format"] = format;
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
-            var summary = results.Count > 0
-                ? $"Found {ConsoleUi.Counted(results.Count, "dependency edge")}."
+            var summary = payload["count"]!.GetValue<int>() > 0
+                ? cyclesOnly ? $"Found {ConsoleUi.Counted(cycles.Count, "dependency cycle")}." : $"Found {ConsoleUi.Counted(results.Count, "dependency edge")}."
                 : "No file dependencies found.";
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id, summary, payload);
         });
+    }
+
+    private static JsonObject BuildJsonGraphPayload(IReadOnlyList<FileDependencyResult> edges)
+    {
+        var nodes = edges
+            .SelectMany(edge => new[] { edge.SourcePath, edge.TargetPath })
+            .Distinct(StringComparer.Ordinal)
+            .Select(path => new JsonObject { ["id"] = path })
+            .ToArray<JsonNode?>();
+        var graphEdges = edges
+            .Select(edge => new JsonObject { ["source"] = edge.SourcePath, ["target"] = edge.TargetPath, ["reference_count"] = edge.ReferenceCount })
+            .ToArray<JsonNode?>();
+        return new JsonObject { ["nodes"] = new JsonArray(nodes), ["edges"] = new JsonArray(graphEdges) };
     }
 
     private JsonNode ExecuteImpactAnalysis(JsonNode? id, JsonNode? args)

@@ -244,7 +244,7 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "map",
-                "Return a repo-level overview with languages, modules, top files, and likely entrypoints. / 言語、モジュール、主要ファイル、推定エントリポイントを含むリポジトリ俯瞰情報を返す。",
+                "Return a repo-level overview with selectable sections (`tree`, `languages`, `hotspots`, `metrics`) and optional module depth control. / セクション選択（`tree`, `languages`, `hotspots`, `metrics`）とモジュール深さ制御に対応したリポジトリ俯瞰情報を返す。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -254,7 +254,9 @@ public partial class McpServer
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict glob-style path patterns. `*` and `?` are wildcards. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude glob-style path patterns. `*` and `?` are wildcards." },
-                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false }
+                        ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
+                        ["sections"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "tree", "languages", "hotspots", "metrics" } }, ["description"] = "Only include selected response sections. Omit for the full backward-compatible map." },
+                        ["depth"] = new JsonObject { ["type"] = "integer", ["description"] = "Maximum module/tree depth to include; 0 keeps only root-level modules.", ["minimum"] = 0 }
                     }
                 },
                 ReadOnlyAnnotations()),
@@ -328,7 +330,7 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "deps",
-                "Show file-level dependency edges from the indexed reference graph. / インデックス済み参照グラフからファイル間の依存エッジを返す。",
+                "Show file-level dependency edges, JSON graph payloads, or dependency cycles from the indexed reference graph. / インデックス済み参照グラフからファイル間の依存エッジ、JSON graph ペイロード、依存サイクルを返す。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -340,7 +342,9 @@ public partial class McpServer
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude glob-style path patterns. `*` and `?` are wildcards." },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude test files", ["default"] = false },
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
-                        ["reverse"] = new JsonObject { ["type"] = "boolean", ["description"] = "Reverse lookup: show files that depend ON the matched path", ["default"] = false }
+                        ["reverse"] = new JsonObject { ["type"] = "boolean", ["description"] = "Reverse lookup: show files that depend ON the matched path", ["default"] = false },
+                        ["format"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "edgelist", "json-graph" }, ["description"] = "Structured response format. `edgelist` preserves the existing edges array; `json-graph` returns nodes and edges.", ["default"] = "edgelist" },
+                        ["cycles"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return dependency cycles instead of ordinary edge rows.", ["default"] = false }
                     }
                 },
                 ReadOnlyAnnotations()),

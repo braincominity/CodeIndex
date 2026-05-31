@@ -12597,6 +12597,53 @@ jobs:
     }
 
     [Fact]
+    public void RunMap_ParseSectionsAndDepth_StoresSelectors()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["--json", "--sections", "tree,languages", "--depth", "2"],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+
+        Assert.True(options.Json);
+        Assert.Equal(["tree", "languages"], options.MapSections);
+        Assert.True(options.ContextAfterExplicit);
+        Assert.Equal(2, options.ContextAfter);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void RunDeps_ParseGraphOptions_StoresFormatAndCycles()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["--format", "json-graph", "--cycles"],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+
+        Assert.Equal("json-graph", options.OutputFormat);
+        Assert.True(options.Json);
+        Assert.True(options.DependencyCycles);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void FindDependencyCycles_ReturnsStronglyConnectedFileComponents()
+    {
+        var edges = new List<FileDependencyResult>
+        {
+            new() { SourcePath = "a.cs", TargetPath = "b.cs", ReferenceCount = 1 },
+            new() { SourcePath = "b.cs", TargetPath = "a.cs", ReferenceCount = 1 },
+            new() { SourcePath = "c.cs", TargetPath = "d.cs", ReferenceCount = 1 },
+        };
+
+        var cycles = QueryCommandRunner.FindDependencyCycles(edges);
+
+        var cycle = Assert.Single(cycles);
+        Assert.Equal(["a.cs", "b.cs"], cycle);
+    }
+
+    [Fact]
     public void RunDeps_ZeroJson_StaleSqlGraphContractIncludesDegradedStateWhenSqlScopeIsEmpty()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_zero_sql_graph_contract");
