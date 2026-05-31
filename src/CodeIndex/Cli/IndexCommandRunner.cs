@@ -19,6 +19,7 @@ public static partial class IndexCommandRunner
 {
     internal const string IncludeSymbolKindsEnvironmentVariable = "CDIDX_INDEX_INCLUDE_SYMBOL_KINDS";
     internal const string ExcludeSymbolKindsEnvironmentVariable = "CDIDX_INDEX_EXCLUDE_SYMBOL_KINDS";
+    internal const int DefaultMaxSymbolsPerFile = 5000;
     private const string SymbolKindFilterMetaKey = "index_symbol_kind_filter";
     private const int ScanCheckpointVersion = 1;
     private const string ScanCheckpointFileName = "scan-checkpoint.json";
@@ -1270,6 +1271,7 @@ public sealed class IndexCommandOptions
     public DurationOutputFormat DurationFormat { get; init; } = DurationOutputFormat.Auto;
     public CompletionNotificationMode NotifyMode { get; init; } = CompletionNotificationMode.Auto;
     public long? MaxFileSizeBytes { get; init; }
+    public int MaxSymbolsPerFile { get; init; } = IndexCommandRunner.DefaultMaxSymbolsPerFile;
     public int Parallelism { get; init; } = IndexCommandRunner.DefaultIndexParallelism();
     public bool MemoryTrace { get; init; }
     public FileIndexer.SymlinkPolicy SymlinkPolicy { get; init; } = FileIndexer.SymlinkPolicy.None;
