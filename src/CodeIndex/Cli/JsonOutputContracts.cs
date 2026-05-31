@@ -293,12 +293,15 @@ internal sealed record VersionInfoJsonResult(
     PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(BackfillFoldJsonResult))]
+[JsonSerializable(typeof(ActiveWorkspaceJsonResult))]
+[JsonSerializable(typeof(ActiveWorkspaceState))]
 [JsonSerializable(typeof(CalleeResult))]
 [JsonSerializable(typeof(CallerResult))]
 [JsonSerializable(typeof(CliJsonMessage))]
 [JsonSerializable(typeof(CompactSearchResult))]
 [JsonSerializable(typeof(CompactSearchResult[]))]
 [JsonSerializable(typeof(CommandErrorJsonResult))]
+[JsonSerializable(typeof(ConfigShowJsonResult))]
 [JsonSerializable(typeof(DbIntegrityCheckJsonResult))]
 [JsonSerializable(typeof(DefinitionResult))]
 [JsonSerializable(typeof(Dictionary<string, int>))]
@@ -386,6 +389,9 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(CodeIndex.Models.UpdateCheckResult))]
 [JsonSerializable(typeof(VacuumResult))]
 [JsonSerializable(typeof(VersionInfoJsonResult))]
+[JsonSerializable(typeof(WorkspaceListJsonResult))]
+[JsonSerializable(typeof(WorkspaceManifest))]
+[JsonSerializable(typeof(WorkspaceMember))]
 internal partial class CliJsonSerializerContext : JsonSerializerContext;
 
 internal static class CliJsonSerializerContextFactory

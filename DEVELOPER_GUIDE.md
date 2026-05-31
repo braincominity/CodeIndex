@@ -116,6 +116,12 @@ The lock files for projects with zero direct `PackageReference` entries (e.g. `t
 | DTOs | `Models/FileRecord.cs`, `Models/ChunkRecord.cs`, `Models/SymbolRecord.cs`, `Models/ReferenceRecord.cs` | Records shared by indexing, storage, query, and MCP layers. |
 | Tests | `tests/CodeIndex.Tests/*Tests.cs`, `TestProjectHelper.cs`, `TestConsoleLock.cs` | Focused unit/integration coverage for chunking, extraction, DB reads/writes, CLI behavior, MCP behavior, git helpers, and shared test harness utilities. |
 
+### Workspaces
+
+`cdidx.workspace.json` and `.cdidx-workspace.json` declare monorepo members without adding a YAML dependency. The supported schema is additive: `members` is an array of member paths relative to the manifest directory, `index_strategy` is `per_member` or `single`, `default_db_name` overrides `codeindex.db`, and `shared_ignores` is reserved for shared ignore policy. `cdidx workspace list` and `cdidx workspace status` report member DB paths.
+
+`cdidx workspace use <name>` writes the active workspace to the per-user config directory. Query DB resolution keeps existing precedence: explicit `--db`, then explicit `--data-dir` / `CDIDX_DATA_DIR`, then active workspace state, then ancestor/CWD discovery.
+
 ### Observability
 
 CodeIndex exposes an opt-in `ActivitySource` named `CodeIndex`. MCP JSON-RPC frames create `mcp.request` server spans and SQLite commands routed through tracked database helpers create `db.query` spans. MCP callers can pass W3C trace context as `params._meta.traceparent`; when present, the MCP span uses that trace as its parent. No exporter dependency is bundled, so spans are emitted only when the host process installs an OpenTelemetry/Diagnostics listener.
