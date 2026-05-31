@@ -168,6 +168,8 @@ _FORBIDDEN_COMMAND_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 _SCRIPT_FORBIDDEN_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (SEARCH_OR_DISCOVERY_RE, "script contains shell search/file-discovery command"),
+    (GIT_GREP_RE, "script contains git grep"),
     *_FORBIDDEN_COMMAND_PATTERNS,
 ]
 

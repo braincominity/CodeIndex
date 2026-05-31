@@ -384,6 +384,22 @@ class CommandGuardCoreTests(TestCase):
 
             self.assertFalse(decision.allowed)
 
+    def test_check_script_file_denies_search_commands_inside_shell_constructs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "tools" / "guard.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+
+            for body in (
+                "if grep SymbolExtractor src; then echo yes; fi\n",
+                "if git grep SymbolExtractor; then echo yes; fi\n",
+            ):
+                with self.subTest(body=body):
+                    script.write_text(body, encoding="utf-8")
+                    decision = core.check_script_file(script, project_root=root)
+
+                    self.assertFalse(decision.allowed)
+
     def test_check_script_file_denies_quote_concatenated_forbidden_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
