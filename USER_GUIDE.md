@@ -129,6 +129,13 @@ cdidx .
 cdidx search "handleRequest"
 ```
 
+Or run the official container image without installing a local binary:
+
+```bash
+docker run --rm -v "$PWD:/repo" ghcr.io/widthdom/codeindex:latest search "handleRequest"
+docker run --rm -v "$PWD:/repo" ghcr.io/widthdom/codeindex:latest . --json
+```
+
 That is the whole loop:
 
 1. `cdidx .` builds or refreshes `.cdidx/codeindex.db`
@@ -140,6 +147,23 @@ a `67.0% [28/42]`-style progress line. If a large first index looks slow, rerun
 with `cdidx . --verbose` to see `[OK  ]`, `[SKIP]`, `[DEL ]`, and `[ERR ]`
 file statuses. Use incremental refreshes after the first run; see
 [Options](#options) for `--files` and `--commits`.
+
+## Container Image
+
+Release builds publish `ghcr.io/widthdom/codeindex:<version>` and
+`ghcr.io/widthdom/codeindex:latest`. The image sets `/repo` as its working
+directory and uses `cdidx` as the entrypoint, so pass normal cdidx arguments
+after the image name:
+
+```bash
+docker run --rm -v "$PWD:/repo" ghcr.io/widthdom/codeindex:latest . --json
+docker run --rm -v "$PWD:/repo" ghcr.io/widthdom/codeindex:latest search "authenticate"
+docker run --rm -v "$PWD:/repo" ghcr.io/widthdom/codeindex:latest mcp
+```
+
+Mount the repository read-write when indexing because `.cdidx/codeindex.db` is
+created beside the project. For read-only query containers, mount a repository
+that already includes a fresh `.cdidx/codeindex.db`.
 
 ## Shell completion
 
@@ -2171,6 +2195,13 @@ cdidx .
 cdidx search "handleRequest"
 ```
 
+ローカルに binary を入れず、公式 container image からも実行できます:
+
+```bash
+docker run --rm -v "$PWD:/repo" ghcr.io/widthdom/codeindex:latest search "handleRequest"
+docker run --rm -v "$PWD:/repo" ghcr.io/widthdom/codeindex:latest . --json
+```
+
 やることはこれだけです:
 
 1. `cdidx .` で `.cdidx/codeindex.db` を作成または更新
@@ -2182,6 +2213,23 @@ cdidx search "handleRequest"
 場合は `cdidx . --verbose` で再実行すると、`[OK  ]`、`[SKIP]`、`[DEL ]`、`[ERR ]`
 のファイル別ステータスを確認できます。初回以降は差分更新を使ってください。
 `--files` と `--commits` は [オプション一覧](#オプション一覧) を参照してください。
+
+## Container image
+
+リリースビルドは `ghcr.io/widthdom/codeindex:<version>` と
+`ghcr.io/widthdom/codeindex:latest` を公開します。image は `/repo` を working
+directory にし、`cdidx` を entrypoint にしているため、image 名の後ろに通常の
+cdidx 引数を渡します:
+
+```bash
+docker run --rm -v "$PWD:/repo" ghcr.io/widthdom/codeindex:latest . --json
+docker run --rm -v "$PWD:/repo" ghcr.io/widthdom/codeindex:latest search "authenticate"
+docker run --rm -v "$PWD:/repo" ghcr.io/widthdom/codeindex:latest mcp
+```
+
+indexing では `.cdidx/codeindex.db` を project 横に作成するため、repository は
+read-write で mount してください。read-only query container では、fresh な
+`.cdidx/codeindex.db` を含む repository を mount します。
 
 ## シェル補完
 
