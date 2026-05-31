@@ -2008,7 +2008,16 @@ public partial class McpServer : IDisposable
         JsonNode response;
         try
         {
-            if (ValidateCommonListArguments(args) is JsonObject listArgumentError)
+            if (ValidateToolArguments(toolName, args) is JsonObject argumentError)
+            {
+                metricsError = "invalid_argument";
+                response = CreateToolErrorResponse(id, argumentError["message"]!.GetValue<string>(),
+                    category: McpErrorEnvelope.CategoryInvalidArgument,
+                    suggestion: "Use exactly the argument names advertised by tools/list for this tool.",
+                    retrySafe: false,
+                    extraData: argumentError);
+            }
+            else if (ValidateCommonListArguments(args) is JsonObject listArgumentError)
             {
                 metricsError = "invalid_list_argument";
                 response = CreateToolErrorResponse(id, listArgumentError["message"]!.GetValue<string>(),
