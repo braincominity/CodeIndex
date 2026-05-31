@@ -200,8 +200,6 @@ public static class DbDebug
             var unprofiledReader = cmd.ExecuteReader();
             executeStopwatch.Stop();
             activity?.SetTag("db.elapsed_ms", executeStopwatch.Elapsed.TotalMilliseconds);
-            if (threshold.HasValue && executeStopwatch.Elapsed.TotalMilliseconds >= threshold.Value)
-                WriteSlowQueryToStderr(cmd, executeStopwatch.Elapsed.TotalMilliseconds, rowsRead: null);
             if (threshold.HasValue)
             {
                 var slowEntry = new QueryProfileEntry(cmd.CommandText ?? string.Empty, []);
