@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.27.2] - 2026-06-01
+
+#### Changed
+
+- **Windows release artifacts can be published before Authenticode signing is configured** — the release workflow now skips Windows executable signing when the signing certificate secrets are absent, emits an explicit warning, and continues publishing unsigned Windows artifacts.
+
 ### [1.27.1] - 2026-06-01
 
 #### Security
@@ -3176,6 +3182,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.27.2] - 2026-06-01
+
+#### 変更
+
+- **Authenticode 署名の設定前でも Windows release artifact を公開できるようにしました** — release workflow は署名証明書 secret が無い場合に Windows 実行ファイル署名をスキップし、明示的な warning を出したうえで未署名の Windows artifact 公開を継続します。
+
 ### [1.27.1] - 2026-06-01
 
 #### セキュリティ
@@ -6330,7 +6342,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.27.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.27.2...HEAD
+[1.27.2]: https://github.com/Widthdom/CodeIndex/compare/v1.27.1...v1.27.2
 [1.27.1]: https://github.com/Widthdom/CodeIndex/compare/v1.27.0...v1.27.1
 [1.27.0]: https://github.com/Widthdom/CodeIndex/compare/v1.26.3...v1.27.0
 [1.26.3]: https://github.com/Widthdom/CodeIndex/compare/v1.26.2...v1.26.3
