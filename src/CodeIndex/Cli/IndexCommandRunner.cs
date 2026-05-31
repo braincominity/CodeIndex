@@ -55,7 +55,7 @@ public static partial class IndexCommandRunner
 
         if (options.ShowHelp)
         {
-            ConsoleUi.PrintUsage();
+            ConsoleUi.PrintUsageFull();
             return CommandExitCodes.Success;
         }
 
@@ -178,6 +178,16 @@ public static partial class IndexCommandRunner
             using (indexLock)
             {
                 using var db = new DbContext(dbPath);
+                if (db.ReadOnlyFallback)
+                {
+                    return WriteCommandError(
+                        options.Json,
+                        jsonOptions,
+                        $"database opened through stale read-only fallback after WAL checkpoint failed: {resolvedDbPath}; index requires a writable database",
+                        CommandExitCodes.DatabaseError,
+                        "Move the database to writable storage, stop the writer holding the WAL lock, or rerun the query command with --read-only if you only need read access.",
+                        CommandErrorCodes.DbNotWritable);
+                }
 
         // Capture prior readiness BEFORE we clear it. Update mode (--commits / --files) only
         // touches a subset of files, so trust bits the DB did NOT previously carry must not
@@ -1154,6 +1164,7 @@ public sealed class IndexCommandOptions
     public string? EasterEgg { get; init; }
     public bool DryRun { get; init; }
     public bool Force { get; init; }
+    public bool ReadOnly { get; init; }
     public bool Yes { get; init; }
     public bool Watch { get; init; }
     public bool OptimizeOnly { get; init; }

@@ -213,12 +213,23 @@ public class Probe
     private static IReadOnlyList<(string Original, string Placeholder)> BuildPathReplacements(string projectRoot)
     {
         var canonical = Path.GetFullPath(projectRoot);
+        var canonicalDbPath = Path.Combine(canonical, ".cdidx", "codeindex.db");
         var replacements = new List<(string, string)>
         {
+            (canonicalDbPath, "<PROJECT_ROOT>/.cdidx/codeindex.db"),
             (canonical, "<PROJECT_ROOT>"),
         };
+        var jsonEscapedCanonicalDbPath = canonicalDbPath.Replace("\\", "\\\\", StringComparison.Ordinal);
+        if (!string.Equals(jsonEscapedCanonicalDbPath, canonicalDbPath, StringComparison.Ordinal))
+            replacements.Add((jsonEscapedCanonicalDbPath, "<PROJECT_ROOT>/.cdidx/codeindex.db"));
+        var jsonEscapedCanonical = canonical.Replace("\\", "\\\\", StringComparison.Ordinal);
+        if (!string.Equals(jsonEscapedCanonical, canonical, StringComparison.Ordinal))
+            replacements.Add((jsonEscapedCanonical, "<PROJECT_ROOT>"));
         if (!string.Equals(projectRoot, canonical, StringComparison.Ordinal))
             replacements.Add((projectRoot, "<PROJECT_ROOT>"));
+        var jsonEscapedProjectRoot = projectRoot.Replace("\\", "\\\\", StringComparison.Ordinal);
+        if (!string.Equals(jsonEscapedProjectRoot, projectRoot, StringComparison.Ordinal))
+            replacements.Add((jsonEscapedProjectRoot, "<PROJECT_ROOT>"));
         return replacements;
     }
 
