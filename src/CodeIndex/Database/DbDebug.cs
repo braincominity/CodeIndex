@@ -42,6 +42,8 @@ public static class DbDebug
     [ThreadStatic]
     private static List<string>? _lastRowReadExceptionChains;
     [ThreadStatic]
+    private static List<Exception>? _lastRowReadExceptions;
+    [ThreadStatic]
     private static bool _hasContext;
     [ThreadStatic]
     private static List<QueryProfileEntry>? _profileEntries;
@@ -172,6 +174,7 @@ public static class DbDebug
         _lastParams = null;
         _lastRow = null;
         _lastRowReadExceptionChains = null;
+        _lastRowReadExceptions = null;
         _hasContext = false;
     }
 
@@ -317,6 +320,7 @@ public static class DbDebug
             catch (Exception ex)
             {
                 row.Add((name, $"<error: {ex.GetType().Name}: {ex.Message}>"));
+                (_lastRowReadExceptions ??= new List<Exception>()).Add(ex);
                 (_lastRowReadExceptionChains ??= new List<string>())
                     .Add($"[{name}]\n{GlobalToolLog.FormatExceptionChain(ex, includeStacks: mode == DebugMode.Unsafe)}");
             }
@@ -367,7 +371,7 @@ public static class DbDebug
             foreach (var chain in _lastRowReadExceptionChains)
                 sb.AppendLine(chain);
         }
-        var rootCause = GetDeepestException(ex);
+        var rootCause = GetDeepestExceptionIncludingRowReads(ex);
         if (_lastRowReadExceptionChains is { Count: > 0 })
             sb.AppendLine($"Root cause: {rootCause.GetType().Name}: {rootCause.Message}");
         if (mode != DebugMode.Unsafe && ex.StackTrace != null)
@@ -385,6 +389,17 @@ public static class DbDebug
         while (current.InnerException != null)
             current = current.InnerException;
         return current;
+    }
+
+    private static Exception GetDeepestExceptionIncludingRowReads(Exception ex)
+    {
+        var deepest = GetDeepestException(ex);
+        if (_lastRowReadExceptions is not { Count: > 0 })
+            return deepest;
+
+        foreach (var rowException in _lastRowReadExceptions)
+            deepest = GetDeepestException(rowException);
+        return deepest;
     }
 
     private static string FormatValue(object? value, DebugMode mode, string? valueName = null)
