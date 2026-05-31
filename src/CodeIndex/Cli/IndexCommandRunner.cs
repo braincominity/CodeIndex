@@ -183,7 +183,7 @@ public static partial class IndexCommandRunner
                     return WriteCommandError(
                         options.Json,
                         jsonOptions,
-                        "database opened through stale read-only fallback after WAL checkpoint failed; index requires a writable database",
+                        $"database opened through stale read-only fallback after WAL checkpoint failed: {resolvedDbPath}; index requires a writable database",
                         CommandExitCodes.DatabaseError,
                         "Move the database to writable storage, stop the writer holding the WAL lock, or rerun the query command with --read-only if you only need read access.",
                         CommandErrorCodes.DbNotWritable);
