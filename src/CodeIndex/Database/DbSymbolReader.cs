@@ -1690,6 +1690,7 @@ public partial class DbReader
     private static int FindOutlineContainerIndex(List<OutlineSymbol> symbols, int childIndex, string containerName, string? containerKind)
     {
         var child = symbols[childIndex];
+        var expectedContainerPath = GetOutlineContainerPath(child);
         for (var i = childIndex - 1; i >= 0; i--)
         {
             var candidate = symbols[i];
@@ -1697,6 +1698,11 @@ public partial class DbReader
                 continue;
             if (containerKind != null && !string.Equals(candidate.Kind, containerKind, StringComparison.Ordinal))
                 continue;
+            if (expectedContainerPath != null
+                && !string.Equals(candidate.Path, expectedContainerPath, StringComparison.Ordinal))
+            {
+                continue;
+            }
             if (candidate.Line > child.Line)
                 continue;
             if (IsOutlineContainerMatch(candidate, child.Line))
@@ -1704,6 +1710,17 @@ public partial class DbReader
         }
 
         return -1;
+    }
+
+    private static string? GetOutlineContainerPath(OutlineSymbol symbol)
+    {
+        if (string.IsNullOrWhiteSpace(symbol.Path) || string.IsNullOrWhiteSpace(symbol.Name))
+            return null;
+
+        var suffix = "." + symbol.Name;
+        return symbol.Path.EndsWith(suffix, StringComparison.Ordinal)
+            ? symbol.Path[..^suffix.Length]
+            : null;
     }
 
     private static bool IsOutlineContainerMatch(OutlineSymbol candidate, int childLine)
