@@ -2227,6 +2227,15 @@ public class DatabaseTests : IDisposable
         DeleteDbPath();
     }
 
+    [Fact]
+    public void DbContext_NewDatabaseRestrictsFileModeOnPosix()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        Assert.Equal("0600", DbContext.GetUnixFileModeString(_dbPath));
+    }
+
     private void DeleteDbPath()
     {
         DeleteDbFiles(_dbPath);

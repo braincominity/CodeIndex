@@ -62,6 +62,20 @@ Keep changes focused and follow the existing style of the files you touch:
   contracts change;
 - add or update tests when behavior changes.
 
+## Release-Critical Paths
+
+Changes to release-critical files require CODEOWNERS review once branch
+protection is configured to require it:
+
+- `.github/workflows/`
+- `install.sh`
+- `src/CodeIndex/CodeIndex.csproj`
+- `nuget.config`
+
+When adding a new file that can affect release artifact contents, signing,
+publishing, installer behavior, or package restore trust, add it to
+`.github/CODEOWNERS` in the same change.
+
 Before opening a pull request, run the checks that match the change. For code
 changes, the default full validation is:
 

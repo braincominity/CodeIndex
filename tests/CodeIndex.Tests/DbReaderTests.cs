@@ -600,6 +600,46 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetSymbolHotspots_BreaksEqualCountsByPathLineNameKind()
+    {
+        var betaFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/z_hotspot_tie.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var alphaFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/a_hotspot_tie.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord { FileId = betaFileId, Kind = "function", Name = "BetaTieTarget", Line = 5, StartLine = 5, EndLine = 7, BodyStartLine = 6, BodyEndLine = 7, Signature = "void BetaTieTarget()" },
+            new SymbolRecord { FileId = alphaFileId, Kind = "function", Name = "AlphaTieTarget", Line = 5, StartLine = 5, EndLine = 7, BodyStartLine = 6, BodyEndLine = 7, Signature = "void AlphaTieTarget()" },
+        ]);
+        _writer.InsertReferences(
+        [
+            new ReferenceRecord { FileId = betaFileId, SymbolName = "BetaTieTarget", ReferenceKind = "call", Line = 8, Column = 9, Context = "BetaTieTarget();" },
+            new ReferenceRecord { FileId = alphaFileId, SymbolName = "AlphaTieTarget", ReferenceKind = "call", Line = 8, Column = 9, Context = "AlphaTieTarget();" },
+        ]);
+
+        var hotspots = _reader.GetSymbolHotspots(limit: 10, kind: "function", lang: "csharp", pathPatterns: ["src/a_hotspot_tie.cs", "src/z_hotspot_tie.cs"], excludePathPatterns: null, excludeTests: false)
+            .Where(item => item.Symbol.Name.EndsWith("TieTarget", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.Collection(hotspots,
+            first => Assert.Equal("src/a_hotspot_tie.cs", first.Symbol.Path),
+            second => Assert.Equal("src/z_hotspot_tie.cs", second.Symbol.Path));
+    }
+
+    [Fact]
     public void GetCallers_DefaultWeightedRankingPrioritizesInstantiateOverNoisySubscriptions()
     {
         const string target = "TargetService";
@@ -2053,6 +2093,28 @@ public class DbReaderTests : IDisposable
         Assert.Single(results);
         Assert.Equal("function", results[0].Kind);
         Assert.Equal("src/auth.py", results[0].Path);
+    }
+
+    [Fact]
+    public void SearchSymbols_BreaksSameLineTiesByStartColumn()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/same_line_symbols.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 1,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord { FileId = fileId, Kind = "function", Name = "SameLine", Line = 1, StartLine = 1, StartColumn = 30, EndLine = 1, Signature = "late SameLine()" },
+            new SymbolRecord { FileId = fileId, Kind = "function", Name = "SameLine", Line = 1, StartLine = 1, StartColumn = 10, EndLine = 1, Signature = "early SameLine()" },
+        ]);
+
+        var results = _reader.SearchSymbols("SameLine", kind: "function", lang: "csharp", exact: true, pathPatterns: ["src/same_line_symbols.cs"]);
+
+        Assert.Equal(["early SameLine()", "late SameLine()"], results.Select(result => result.Signature).ToArray());
     }
 
     [Fact]

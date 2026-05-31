@@ -264,6 +264,79 @@ public partial class McpServer
         return null;
     }
 
+    private static JsonObject? ValidateToolArguments(string toolName, JsonNode? args)
+    {
+        if (!IsKnownToolName(toolName))
+            return null;
+
+        if (args is null)
+            return null;
+        if (args is not JsonObject obj)
+            return new JsonObject
+            {
+                ["message"] = "Tool arguments must be a JSON object.",
+                ["tool"] = toolName,
+            };
+
+        var allowed = GetAllowedToolArguments(toolName);
+        if (allowed.Count == 0)
+            return obj.Count == 0 ? null : new JsonObject
+            {
+                ["message"] = $"Tool '{toolName}' does not accept arguments.",
+                ["tool"] = toolName,
+                ["unknown_argument"] = obj.First().Key,
+            };
+
+        foreach (var property in obj)
+        {
+            if (!allowed.Contains(property.Key))
+            {
+                return new JsonObject
+                {
+                    ["message"] = $"Unknown argument '{property.Key}' for tool '{toolName}'.",
+                    ["tool"] = toolName,
+                    ["unknown_argument"] = property.Key,
+                };
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsKnownToolName(string toolName) => toolName switch
+    {
+        "search" or "definition" or "references" or "callers" or "callees" or "symbols" or
+        "files" or "find_in_file" or "excerpt" or "map" or "analyze_symbol" or "status" or
+        "outline" or "batch_query" or "deps" or "impact_analysis" or "languages" or "validate" or
+        "unused_symbols" or "symbol_hotspots" or "ping" or "index" or "backfill_fold" or
+        "suggest_improvement" => true,
+        _ => false,
+    };
+
+    private static IReadOnlySet<string> GetAllowedToolArguments(string toolName) => toolName switch
+    {
+        "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "limit", "lang", "snippetLines", "maxLineWidth", "rawQuery", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "exact", "prefix", "countOnly", "project", "solution" },
+        "definition" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "includeBody", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "project", "solution" },
+        "references" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "offset", "maxLineWidth", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "project", "solution" },
+        "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "project", "solution" },
+        "symbols" => new HashSet<string>(StringComparer.Ordinal) { "query", "names", "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "project", "solution" },
+        "files" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since" },
+        "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "maxLineWidth", "exact" },
+        "excerpt" => new HashSet<string>(StringComparer.Ordinal) { "path", "startLine", "endLine", "before", "after", "focusLine", "focusColumn", "focusLength", "maxLineWidth" },
+        "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "project", "solution" },
+        "analyze_symbol" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "includeBody", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "maxLineWidth", "project", "solution" },
+        "outline" => new HashSet<string>(StringComparer.Ordinal) { "path", "limit", "includeImports", "maxLineWidth" },
+        "batch_query" => new HashSet<string>(StringComparer.Ordinal) { "queries" },
+        "deps" => new HashSet<string>(StringComparer.Ordinal) { "path", "direction", "lang", "limit", "excludePaths", "excludeTests", "project", "solution" },
+        "impact_analysis" => new HashSet<string>(StringComparer.Ordinal) { "symbol", "query", "lang", "maxHops", "maxDepth", "depth", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "withPaths", "countOnly", "project", "solution" },
+        "validate" => new HashSet<string>(StringComparer.Ordinal) { "path", "lang", "limit", "excludePaths", "excludeTests", "project", "solution" },
+        "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "project", "solution" },
+        "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
+        "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "db", "rebuild", "parallelism", "files", "commits", "changedBetween", "dryRun", "optimize" },
+        "suggest_improvement" => new HashSet<string>(StringComparer.Ordinal) { "category", "language", "description", "context", "toolInvocationContext" },
+        _ => new HashSet<string>(StringComparer.Ordinal),
+    };
+
     private static JsonObject? ValidateStringListArgument(JsonNode? args, string propertyName)
     {
         var node = args?[propertyName];
@@ -479,39 +552,39 @@ public partial class McpServer
             ["api_version"] = analysis.ApiVersion,
             ["query"] = analysis.Query,
             ["file"] = JsonSerializer.SerializeToNode(analysis.File, _jsonOptions),
-            ["workspaceIndexedAt"] = JsonSerializer.SerializeToNode(analysis.WorkspaceIndexedAt, _jsonOptions),
-            ["workspaceLatestModified"] = JsonSerializer.SerializeToNode(analysis.WorkspaceLatestModified, _jsonOptions),
-            ["projectRoot"] = analysis.ProjectRoot,
-            ["gitHead"] = analysis.GitHead,
-            ["gitIsDirty"] = analysis.GitIsDirty,
-            ["graphLanguage"] = analysis.GraphLanguage,
-            ["graphSupported"] = analysis.GraphSupported,
-            ["graphSupportReason"] = analysis.GraphSupportReason,
+            ["workspace_indexed_at"] = JsonSerializer.SerializeToNode(analysis.WorkspaceIndexedAt, _jsonOptions),
+            ["workspace_latest_modified"] = JsonSerializer.SerializeToNode(analysis.WorkspaceLatestModified, _jsonOptions),
+            ["project_root"] = analysis.ProjectRoot,
+            ["git_head"] = analysis.GitHead,
+            ["git_is_dirty"] = analysis.GitIsDirty,
+            ["graph_language"] = analysis.GraphLanguage,
+            ["graph_supported"] = analysis.GraphSupported,
+            ["graph_support_reason"] = analysis.GraphSupportReason,
             ["definitions"] = ToJsonArray(analysis.Definitions),
-            ["nearbySymbols"] = ToJsonArray(analysis.NearbySymbols),
+            ["nearby_symbols"] = ToJsonArray(analysis.NearbySymbols),
             ["references"] = ToJsonArray(analysis.References),
             ["callers"] = ToJsonArray(analysis.Callers),
             ["callees"] = ToJsonArray(analysis.Callees),
-            ["graphTableAvailable"] = analysis.GraphTableAvailable,
+            ["graph_table_available"] = analysis.GraphTableAvailable,
         };
         if (analysis.IndexedHeadCommit != null)
             payload["indexed_head_commit"] = analysis.IndexedHeadCommit;
         if (analysis.WorktreeHeadChanged.HasValue)
             payload["worktree_head_changed"] = analysis.WorktreeHeadChanged.Value;
         if (analysis.GraphDegraded.HasValue)
-            payload["graphDegraded"] = analysis.GraphDegraded.Value;
+            payload["graph_degraded"] = analysis.GraphDegraded.Value;
         if (analysis.UnsupportedSymbolKind != null)
-            payload["unsupportedSymbolKind"] = analysis.UnsupportedSymbolKind;
+            payload["unsupported_symbol_kind"] = analysis.UnsupportedSymbolKind;
         if (analysis.SqlGraphContractReady.HasValue)
-            payload["sqlGraphContractReady"] = analysis.SqlGraphContractReady.Value;
+            payload["sql_graph_contract_ready"] = analysis.SqlGraphContractReady.Value;
         if (analysis.SqlGraphContractDegradedReason != null)
-            payload["sqlGraphContractDegradedReason"] = analysis.SqlGraphContractDegradedReason;
+            payload["sql_graph_contract_degraded_reason"] = analysis.SqlGraphContractDegradedReason;
         if (analysis.ExactZeroHint != null)
-            payload["exactZeroHint"] = JsonSerializer.SerializeToNode(analysis.ExactZeroHint, _jsonOptions);
+            payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(analysis.ExactZeroHint, _jsonOptions);
         if (analysis.ExactIndexAvailable.HasValue)
-            payload["exactIndexAvailable"] = analysis.ExactIndexAvailable.Value;
+            payload["exact_index_available"] = analysis.ExactIndexAvailable.Value;
         if (analysis.DegradedReason != null)
-            payload["degradedReason"] = analysis.DegradedReason;
+            payload["degraded_reason"] = analysis.DegradedReason;
         return payload;
     }
 
@@ -974,9 +1047,9 @@ public partial class McpServer
                 ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
-                ["graphLanguage"] = graphSupport.GraphLanguage,
-                ["graphSupported"] = graphSupport.GraphSupported,
-                ["graphSupportReason"] = graphSupport.GraphSupportReason,
+                ["graph_language"] = graphSupport.GraphLanguage,
+                ["graph_supported"] = graphSupport.GraphSupported,
+                ["graph_support_reason"] = graphSupport.GraphSupportReason,
                 ["results"] = ToJsonArray(results)
             };
             AddPaginatedResultEnvelope(payload, results.Count, total, truncated, offset);
@@ -1061,9 +1134,9 @@ public partial class McpServer
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["rankBy"] = QueryCommandRunner.FormatReferenceRankMode(rankMode),
-                ["graphLanguage"] = graphSupport.GraphLanguage,
-                ["graphSupported"] = graphSupport.GraphSupported,
-                ["graphSupportReason"] = graphSupport.GraphSupportReason,
+                ["graph_language"] = graphSupport.GraphLanguage,
+                ["graph_supported"] = graphSupport.GraphSupported,
+                ["graph_support_reason"] = graphSupport.GraphSupportReason,
                 ["results"] = ToJsonArray(results)
             };
             AddPaginatedResultEnvelope(payload, results.Count, total, truncated, offset);
@@ -1149,9 +1222,9 @@ public partial class McpServer
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["rankBy"] = QueryCommandRunner.FormatReferenceRankMode(rankMode),
-                ["graphLanguage"] = graphSupport.GraphLanguage,
-                ["graphSupported"] = graphSupport.GraphSupported,
-                ["graphSupportReason"] = graphSupport.GraphSupportReason,
+                ["graph_language"] = graphSupport.GraphLanguage,
+                ["graph_supported"] = graphSupport.GraphSupported,
+                ["graph_support_reason"] = graphSupport.GraphSupportReason,
                 ["results"] = ToJsonArray(results)
             };
             AddPaginatedResultEnvelope(payload, results.Count, total, truncated, offset);
@@ -1284,7 +1357,6 @@ public partial class McpServer
             analysis.SqlGraphContractDegradedReason = sqlGraphSignal.Relevant ? sqlGraphSignal.DegradedReason : null;
             WorkspaceMetadataEnricher.Enrich(analysis, _dbPath, _dbPathExplicit);
             var structured = ToAnalyzeSymbolJsonObject(analysis);
-            AddExactSignalAliases(structured);
             AddSqlGraphContractSignal(structured, sqlGraphSignal);
             structured.Remove("exactZeroHint");
             AddExactZeroHint(structured, analysis.ExactZeroHint);
@@ -1312,7 +1384,7 @@ public partial class McpServer
         payload["exact_index_available"] = signal.ExactIndexAvailable;
         if (signal.DegradedReason != null)
             payload["degraded_reason"] = signal.DegradedReason;
-        AddExactSignalAliases(payload);
+        // MCP uses snake_case response keys consistently; do not add camelCase aliases here.
     }
 
     private static void AddSqlGraphContractSignal(JsonObject payload, SqlGraphContractSignal signal)
@@ -1321,14 +1393,12 @@ public partial class McpServer
             return;
 
         payload["sql_graph_contract_ready"] = signal.Ready;
-        payload["sqlGraphContractReady"] = signal.Ready;
         if (!signal.Ready)
         {
             payload["degraded"] = true;
             if (signal.DegradedReason != null)
             {
                 payload["sql_graph_contract_degraded_reason"] = signal.DegradedReason;
-                payload["sqlGraphContractDegradedReason"] = signal.DegradedReason;
             }
         }
     }
@@ -1476,14 +1546,12 @@ public partial class McpServer
     private static void AddHotspotFamilySignal(JsonObject payload, HotspotFamilySignal signal)
     {
         payload["hotspot_family_ready"] = signal.Ready;
-        payload["hotspotFamilyReady"] = signal.Ready;
         if (!signal.Ready)
         {
             payload["degraded"] = true;
             if (signal.DegradedReason != null)
             {
                 payload["hotspot_family_degraded_reason"] = signal.DegradedReason;
-                payload["hotspotFamilyDegradedReason"] = signal.DegradedReason;
             }
         }
     }
@@ -1516,12 +1584,14 @@ public partial class McpServer
                 status.AlternativeAction = BuildFoldRebuildRepairCommand(status.ProjectRoot, _dbPath, _dbPathExplicit);
             }
             var structured = JsonSerializer.SerializeToNode(status, _jsonOptions)!.AsObject();
-            structured["hotspotFamilyReady"] = status.HotspotFamilyReady;
-            if (status.HotspotFamilyDegradedReason != null)
-                structured["hotspotFamilyDegradedReason"] = status.HotspotFamilyDegradedReason;
-            structured["sqlGraphContractReady"] = status.SqlGraphContractReady;
+            structured["project_root"] = status.ProjectRoot;
+            structured["git_head"] = status.GitHead;
+            structured["git_is_dirty"] = status.GitIsDirty;
+            structured.Remove("hotspotFamilyReady");
+            structured.Remove("hotspotFamilyDegradedReason");
+            structured["sql_graph_contract_ready"] = status.SqlGraphContractReady;
             if (status.SqlGraphContractDegradedReason != null)
-                structured["sqlGraphContractDegradedReason"] = status.SqlGraphContractDegradedReason;
+                structured["sql_graph_contract_degraded_reason"] = status.SqlGraphContractDegradedReason;
             structured["mcp_session"] = BuildMcpSessionStatus();
             structured["mcp"] = new JsonObject
             {
@@ -1929,6 +1999,15 @@ public partial class McpServer
                 AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, message,
                     category: McpErrorEnvelope.CategoryMissingParameter,
                     suggestion: "Each batch_query slot must include a string `tool` field.",
+                    retrySafe: false);
+                continue;
+            }
+
+            if (ValidateToolArguments(toolName, toolArgs) is JsonObject argumentError)
+            {
+                AppendSlotError(requestIndex, toolName, toolArgs, slotStopwatch, argumentError["message"]!.GetValue<string>(),
+                    category: McpErrorEnvelope.CategoryInvalidArgument,
+                    suggestion: "Use exactly the argument names advertised by tools/list for this tool.",
                     retrySafe: false);
                 continue;
             }
@@ -3084,7 +3163,6 @@ public partial class McpServer
                 ["errors"] = errors
             },
             ["sql_graph_contract_ready"] = sqlGraphContractReadyAfter,
-            ["sqlGraphContractReady"] = sqlGraphContractReadyAfter,
             ["csharp_symbol_name_ready"] = csharpSymbolNameReadyAfter,
             ["csharp_metadata_target_ready"] = csharpMetadataTargetReadyAfter,
             // #86 codex review: AI clients use this to tell whether --exact will use the

@@ -1220,7 +1220,7 @@ public static partial class ReferenceExtractor
         string? language = null)
     {
         var column = nameIndex + 1;
-        var dedupeKey = BuildReferenceDedupeKey(fileId, language, lineNumber, column, referenceKind, name);
+        var dedupeKey = BuildReferenceDedupeKey(fileId, language, lineNumber, column, referenceKind, name, container);
         if (!seen.Add(dedupeKey))
             return;
 
@@ -1244,10 +1244,13 @@ public static partial class ReferenceExtractor
         int lineNumber,
         int column,
         string referenceKind,
-        string name)
+        string name,
+        SymbolRecord? container)
     {
         var languageSegment = string.IsNullOrWhiteSpace(language) ? "-" : language;
-        return $"{fileId}:{languageSegment}:{lineNumber}:{column}:{referenceKind}:{name}";
+        var containerKindSegment = string.IsNullOrWhiteSpace(container?.Kind) ? "-" : container.Kind;
+        var containerNameSegment = string.IsNullOrWhiteSpace(container?.Name) ? "-" : container.Name;
+        return $"{fileId}:{languageSegment}:{lineNumber}:{column}:{referenceKind}:{containerKindSegment}:{containerNameSegment}:{name}";
     }
 
     private static void EmitCSharpLambdaCaptureReferences(
@@ -1761,7 +1764,7 @@ public static partial class ReferenceExtractor
             if (!IsIgnoredTypeReferenceSegment(language, normalizedSegment, isEscapedCSharpIdentifier))
             {
                 int column = argStartInLine + offset + 1; // 1-based / 1始まり
-                var dedupeKey = BuildReferenceDedupeKey(fileId, language, lineNumber, column, "type_reference", normalizedSegment);
+                var dedupeKey = BuildReferenceDedupeKey(fileId, language, lineNumber, column, "type_reference", normalizedSegment, container);
                 if (seen.Add(dedupeKey))
                 {
                     references.Add(new ReferenceRecord
