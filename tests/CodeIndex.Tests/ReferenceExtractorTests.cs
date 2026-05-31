@@ -265,6 +265,40 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Go_GenericMethodsEmitTypeParameterAndParameterReferences()
+    {
+        const string content = """
+            package demo
+
+            type Repo struct {}
+            type Constraint interface {}
+            type Input struct {}
+
+            func (r *Repo) Get[T Constraint](input Input) T {
+                var zero T
+                return zero
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "Get");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Constraint"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Get");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Input"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Get");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "T"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Get");
+    }
+
+    [Fact]
     public void TryGetExtractor_RegisteredLanguage_ReturnsAddressableExtractor()
     {
         const string content = """

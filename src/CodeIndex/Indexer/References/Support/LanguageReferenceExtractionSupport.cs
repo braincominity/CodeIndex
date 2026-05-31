@@ -4725,8 +4725,25 @@ internal static class LanguageReferenceExtractionSupport
                 if (nextParen > afterReceiver)
                 {
                     EmitGoParameterListTypes(preparedLine, firstParen + 1, receiverClose, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-                    parameterOpen = nextParen;
                     functionHeaderStart = afterReceiver;
+
+                    var afterName = afterReceiver + 1;
+                    while (afterName < preparedLine.Length && IsSimpleIdentifierPart(preparedLine[afterName]))
+                        afterName++;
+                    while (afterName < preparedLine.Length && char.IsWhiteSpace(preparedLine[afterName]))
+                        afterName++;
+
+                    if (afterName < preparedLine.Length && preparedLine[afterName] == '[')
+                    {
+                        var typeParameterClose = ReferenceExtractor.FindMatchingChar(preparedLine, afterName, '[', ']');
+                        if (typeParameterClose > afterName)
+                        {
+                            EmitGoTypeParameterConstraints(preparedLine, afterName, typeParameterClose + 1, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+                            nextParen = preparedLine.IndexOf('(', typeParameterClose + 1);
+                        }
+                    }
+
+                    parameterOpen = nextParen;
                 }
             }
         }
