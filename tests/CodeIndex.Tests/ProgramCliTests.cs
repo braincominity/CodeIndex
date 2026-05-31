@@ -1,5 +1,6 @@
 using CodeIndex.Cli;
 using CodeIndex.Models;
+using Microsoft.Data.Sqlite;
 using System.Text.Json;
 
 namespace CodeIndex.Tests;
@@ -169,6 +170,61 @@ public class ProgramCliTests
                 Assert.Equal(CommandExitCodes.UnhandledException, exitCode);
                 Assert.Contains("Error: command failed before it could complete.", stderr.ToString());
                 Assert.DoesNotContain("InvalidOperationException", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(5)]
+    [InlineData(6)]
+    [InlineData(8)]
+    public void Run_UnhandledSqliteTransientExceptionReturnsTransientDatabaseExitCode(int sqliteErrorCode)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+
+                var exitCode = ProgramRunner.Run(
+                    ["status"],
+                    appVersion: "1.0.0-test",
+                    beforeDispatchForTesting: () => throw new SqliteException("database unavailable", sqliteErrorCode));
+
+                Assert.Equal(CommandExitCodes.TransientDatabaseError, exitCode);
+                Assert.Contains("Error: command failed before it could complete.", stderr.ToString());
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
+    public void Run_UnhandledPermanentSqliteExceptionReturnsDatabaseExitCode()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            using var stderr = new StringWriter();
+            try
+            {
+                Console.SetError(stderr);
+
+                var exitCode = ProgramRunner.Run(
+                    ["status"],
+                    appVersion: "1.0.0-test",
+                    beforeDispatchForTesting: () => throw new SqliteException("database disk image is malformed", 11));
+
+                Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+                Assert.Contains("Error: command failed before it could complete.", stderr.ToString());
             }
             finally
             {

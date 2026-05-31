@@ -7,6 +7,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
 using CodeIndex.Mcp;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
 
@@ -464,8 +465,35 @@ internal static class ProgramRunner
         _ => CommandExitCodes.DatabaseError,
     };
 
-    internal static int MapUnhandledExceptionExitCode(Exception ex) =>
-        CommandExitCodes.UnhandledException;
+    internal static int MapUnhandledExceptionExitCode(Exception ex)
+    {
+        var sqliteException = FindSqliteException(ex);
+        if (sqliteException is null)
+            return CommandExitCodes.UnhandledException;
+
+        return sqliteException.SqliteErrorCode switch
+        {
+            5 or 6 or 8 => CommandExitCodes.TransientDatabaseError,
+            _ => CommandExitCodes.DatabaseError,
+        };
+    }
+
+    private static SqliteException? FindSqliteException(Exception ex)
+    {
+        if (ex is SqliteException sqliteException)
+            return sqliteException;
+        if (ex is AggregateException aggregate)
+        {
+            foreach (var inner in aggregate.InnerExceptions)
+            {
+                var found = FindSqliteException(inner);
+                if (found is not null)
+                    return found;
+            }
+        }
+
+        return ex.InnerException is null ? null : FindSqliteException(ex.InnerException);
+    }
 
     private sealed class QuietStderrScope : IDisposable
     {
