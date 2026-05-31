@@ -1365,6 +1365,31 @@ public class FileIndexer
         return true;
     }
 
+    private static string GetDirectoryTraversalIdentity(string directory)
+    {
+        if (!IsReparsePoint(directory))
+            return directory;
+
+        try
+        {
+            DirectoryInfo info = new(LongPath.EnsureWindowsPrefix(directory));
+            var target = info.ResolveLinkTarget(returnFinalTarget: true);
+            if (target?.FullName is { Length: > 0 } targetPath)
+                return targetPath;
+        }
+        catch (FileNotFoundException)
+        {
+        }
+        catch (DirectoryNotFoundException)
+        {
+        }
+        catch (IOException)
+        {
+        }
+
+        return directory;
+    }
+
     internal static FileProbeStatus GetFileIndexability(string filePath)
     {
         if (OperatingSystem.IsWindows() && IsWindowsDevicePath(filePath))
@@ -2074,7 +2099,7 @@ public class FileIndexer
                     continue;
                 }
 
-                var resolvedSubDir = NormalizePathForComparison(subDir);
+                var resolvedSubDir = NormalizePathForComparison(GetDirectoryTraversalIdentity(subDir));
                 if (!visitedDirectories.Add(resolvedSubDir))
                 {
                     var subRelative = ToRelativePath(subDir);

@@ -3137,6 +3137,44 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_FollowSymlinksInternal_SkipsCycleToProjectRoot()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-cycle-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('app')\n");
+            Directory.CreateSymbolicLink(Path.Combine(tempDir, "self"), tempDir);
+
+            var indexer = new FileIndexer(
+                tempDir,
+                ignoreCase: false,
+                ignoreRuleRoot: null,
+                maxFileSizeBytes: null,
+                directoryIgnoreCaseProbe: null,
+                symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
+
+            var result = indexer.ScanFilesDetailed();
+
+            Assert.Single(result.Files);
+            Assert.Contains(
+                result.Errors,
+                error => error.Path == "self"
+                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Message.Contains("already scanned", StringComparison.OrdinalIgnoreCase));
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_DescendsIntoSubmoduleHostedUnderSkipDir()
     {
         // .gitmodules declared submodule under a SkipDirs-named directory (e.g. vendor/foo)
