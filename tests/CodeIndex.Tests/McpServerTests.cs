@@ -6993,6 +6993,9 @@ public class McpServerTests : IDisposable
         Assert.Equal(3, structured["user_version_before"]!.GetValue<int>());
         Assert.Equal(7, structured["user_version_after"]!.GetValue<int>());
         Assert.True(structured["fold_ready"]!.GetValue<bool>());
+        Assert.Equal(2, structured["progress"]!["rows_done"]!.GetValue<int>());
+        Assert.Equal(2, structured["progress"]!["rows_total"]!.GetValue<int>());
+        Assert.Equal(1.0, structured["progress"]!["fraction"]!.GetValue<double>());
 
         using var verifyDb = new DbContext(_dbPath);
         verifyDb.TryMigrateForRead();
@@ -7015,6 +7018,7 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
         Assert.True(structured["dry_run"]!.GetValue<bool>());
         Assert.Equal(2, structured["symbols"]!.GetValue<int>());
+        Assert.Equal(2, structured["progress"]!["rows_total"]!.GetValue<int>());
         Assert.False(structured["verified"]!.GetValue<bool>());
         Assert.False(structured["fold_ready_before"]!.GetValue<bool>());
         Assert.False(structured["fold_ready_after"]!.GetValue<bool>());
@@ -7037,6 +7041,7 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal(0, structured["symbols"]!.GetValue<int>());
         Assert.Equal(0, structured["symbol_references"]!.GetValue<int>());
+        Assert.Equal(0, structured["progress"]!["rows_total"]!.GetValue<int>());
         Assert.False(structured["rewrite_all"]!.GetValue<bool>());
         Assert.True(structured["was_already_complete"]!.GetValue<bool>());
         Assert.True(structured["fold_ready_before"]!.GetValue<bool>());

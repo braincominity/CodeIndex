@@ -3817,22 +3817,26 @@ public partial class McpServer
                 || !foldMetadataCurrentBefore;
             var symbols = 0;
             var symbolReferences = 0;
+            var totalSymbols = 0;
+            var totalSymbolReferences = 0;
             var verified = false;
             var userVersionAfter = userVersionBefore;
 
+            (totalSymbols, totalSymbolReferences) = writer.CountBackfillFoldedColumns(rewriteAll);
             if (dryRun)
             {
-                (symbols, symbolReferences) = writer.CountBackfillFoldedColumns(rewriteAll);
+                symbols = totalSymbols;
+                symbolReferences = totalSymbolReferences;
             }
             else
             {
                 EmitProgressNotification(progressToken, 0, null, "Backfilling folded-name keys.");
-                using var transaction = writer.BeginTransaction();
                 (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
-                EmitProgressNotification(progressToken, symbols + symbolReferences, null, "Verifying folded-name keys.");
-                // Verify and stamp in the same transaction as the row rewrite so crash recovery
-                // never leaves current fold metadata without a matching FoldReady stamp.
-                // 行の再生成と同じ transaction で検証・stamp し、metadata だけが先に残らないようにする。
+                EmitProgressNotification(progressToken, symbols + symbolReferences, totalSymbols + totalSymbolReferences, "Verifying folded-name keys.");
+                // Row rewrites are intentionally committed before the final FoldReady stamp so
+                // interrupted MCP backfills can resume from the remaining rows.
+                // 行更新は FoldReady stamp より前に永続化し、中断後に残り行から再開できるようにする。
+                using var transaction = writer.BeginTransaction();
                 verified = writer.MarkFoldReady();
                 if (!verified)
                     return CreateToolErrorResponse(id, "Folded-name backfill verification failed: some rows still have NULL folded values. Re-run backfill_fold.");
@@ -3867,6 +3871,7 @@ public partial class McpServer
                 ["fold_key_version_after"] = dryRun ? storedFoldVersion : currentFoldVersion,
                 ["fold_key_fingerprint_before"] = storedFoldFingerprint,
                 ["fold_key_fingerprint_after"] = dryRun ? storedFoldFingerprint : currentFoldFingerprint,
+                ["progress"] = BuildBackfillProgressJson(symbols + symbolReferences, totalSymbols + totalSymbolReferences),
             };
 
             var summary = dryRun
@@ -3880,6 +3885,17 @@ public partial class McpServer
         {
             return CreateToolErrorResponse(id, $"Failed to backfill folded-name columns: {ex.Message}");
         }
+    }
+
+    private static JsonObject BuildBackfillProgressJson(int rowsDone, int rowsTotal)
+    {
+        var fraction = rowsTotal <= 0 ? 1.0 : Math.Min(1.0, rowsDone / (double)rowsTotal);
+        return new JsonObject
+        {
+            ["rows_done"] = rowsDone,
+            ["rows_total"] = rowsTotal,
+            ["fraction"] = fraction,
+        };
     }
 
     /// <summary>

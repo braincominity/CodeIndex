@@ -103,7 +103,11 @@ without mutating the DB or stamping FoldReady. The MCP `backfill_fold` tool
 accepts the same preview as `dry_run: true`, and also accepts `force: true` to
 rewrite all folded keys when an operator needs to recover from suspicious fold
 metadata or row state even though the stored version/fingerprint appears
-current.
+current. Non-dry-run row rewrites are resumable after interruption: completed
+row updates remain durable, and the final FoldReady metadata is stamped only
+after verification succeeds. MCP responses include `progress.rows_done`,
+`progress.rows_total`, and `progress.fraction` so clients can report and retry
+long backfills.
 
 ## Filesystem Permissions
 

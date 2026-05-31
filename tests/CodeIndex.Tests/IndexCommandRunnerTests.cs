@@ -3261,7 +3261,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void BackfillFoldedColumns_CancelledDuringSymbolLoop_RollsBackTransaction()
+    public void BackfillFoldedColumns_CancelledDuringSymbolLoop_KeepsCompletedRowsForResume()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_cancel_symbols_{Guid.NewGuid():N}.db");
         var cts = new CancellationTokenSource();
@@ -3296,7 +3296,7 @@ public class IndexCommandRunnerTests
 
                 using var count = db.Connection.CreateCommand();
                 count.CommandText = "SELECT COUNT(*) FROM symbols WHERE name_folded IS NOT NULL";
-                Assert.Equal(0L, (long)count.ExecuteScalar()!);
+                Assert.Equal(1L, (long)count.ExecuteScalar()!);
             }
         }
         finally
@@ -3310,7 +3310,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void BackfillFoldedColumns_CancelledDuringReferenceLoop_RollsBackTransaction()
+    public void BackfillFoldedColumns_CancelledDuringReferenceLoop_KeepsCompletedRowsForResume()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_cancel_refs_{Guid.NewGuid():N}.db");
         var cts = new CancellationTokenSource();
@@ -3345,7 +3345,53 @@ public class IndexCommandRunnerTests
 
                 using var count = db.Connection.CreateCommand();
                 count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE symbol_name_folded IS NOT NULL OR container_name_folded IS NOT NULL";
-                Assert.Equal(0L, (long)count.ExecuteScalar()!);
+                Assert.Equal(1L, (long)count.ExecuteScalar()!);
+            }
+        }
+        finally
+        {
+            DbWriter.FoldBackfillRowUpdatedForTesting = null;
+            cts.Dispose();
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void BackfillFoldedColumns_RewriteAllResumesAfterCheckpoint()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_rewrite_resume_{Guid.NewGuid():N}.db");
+        var cts = new CancellationTokenSource();
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "first", Line = 1, StartLine = 1, EndLine = 1 },
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "second", Line = 2, StartLine = 2, EndLine = 2 },
+                ]);
+
+                DbWriter.FoldBackfillRowUpdatedForTesting = cts.Cancel;
+                Assert.Throws<OperationCanceledException>(() => writer.BackfillFoldedColumns(rewriteAll: true, cts.Token));
+
+                DbWriter.FoldBackfillRowUpdatedForTesting = null;
+                var resumed = writer.BackfillFoldedColumns(rewriteAll: true);
+
+                Assert.Equal(1, resumed.Symbols);
+                using var count = db.Connection.CreateCommand();
+                count.CommandText = "SELECT COUNT(*) FROM symbols WHERE name_folded IS NOT NULL";
+                Assert.Equal(2L, (long)count.ExecuteScalar()!);
             }
         }
         finally
