@@ -2670,7 +2670,7 @@ internal static class StructuralLineMasker
             if (line[p] == '\\' && p + 1 < line.Length)
                 p += 2;
             else
-            p++;
+                p++;
         }
         if (p < line.Length)
             p++;
@@ -2904,17 +2904,17 @@ internal static class StructuralLineMasker
                             // still reach the reference graph), and otherwise mask.
                             // 外側ホール内で開いた nested triple 本体。閉じ `"""`、内側
                             // `${...}` ホール、それ以外は body としてマスク。
-                                if (pos + 2 < line.Length
-                                    && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"')
-                                {
-                                    ReplaceWithSpaces(masked, pos, 3);
-                                    pos += 3;
-                                    nestedTripleOpen = false;
-                                    nestedHoleBraceDepth = -1;
-                                    deepNestedTripleDepth = 0;
-                                    deepNestedTripleHashCounts.Clear();
-                                    continue;
-                                }
+                            if (pos + 2 < line.Length
+                                && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"')
+                            {
+                                ReplaceWithSpaces(masked, pos, 3);
+                                pos += 3;
+                                nestedTripleOpen = false;
+                                nestedHoleBraceDepth = -1;
+                                deepNestedTripleDepth = 0;
+                                deepNestedTripleHashCounts.Clear();
+                                continue;
+                            }
                             if (pos + 1 < line.Length && line[pos] == '$' && line[pos + 1] == '{')
                             {
                                 ReplaceWithSpaces(masked, pos, 2);
@@ -3745,18 +3745,18 @@ internal static class StructuralLineMasker
                             // 外側ホール内で開いた nested triple 本体。閉じ `"""`、
                             // interpolator 付きでは `${...}` を内部ホールとして開く、
                             // それ以外は body としてマスク。
-                                if (pos + 2 < line.Length
-                                    && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"')
-                                {
-                                    ReplaceWithSpaces(masked, pos, 3);
-                                    pos += 3;
-                                    nestedTripleOpen = false;
-                                    nestedTripleIsInterpolator = false;
-                                    nestedHoleBraceDepth = -1;
-                                    deepNestedTripleDepth = 0;
-                                    deepNestedTripleHashCounts.Clear();
-                                    continue;
-                                }
+                            if (pos + 2 < line.Length
+                                && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"')
+                            {
+                                ReplaceWithSpaces(masked, pos, 3);
+                                pos += 3;
+                                nestedTripleOpen = false;
+                                nestedTripleIsInterpolator = false;
+                                nestedHoleBraceDepth = -1;
+                                deepNestedTripleDepth = 0;
+                                deepNestedTripleHashCounts.Clear();
+                                continue;
+                            }
                             if (nestedTripleIsInterpolator
                                 && pos + 1 < line.Length
                                 && line[pos] == '$' && line[pos + 1] == '{')

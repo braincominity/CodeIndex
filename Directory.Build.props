@@ -13,6 +13,9 @@
       詳細は DEVELOPER_GUIDE.md および issue #1556 を参照。
     -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);IL2026;IL2067;IL2072;IL2075</WarningsNotAsErrors>
+    <ILLinkTreatWarningsAsErrors>false</ILLinkTreatWarningsAsErrors>
   </PropertyGroup>
 
 </Project>

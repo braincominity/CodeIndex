@@ -21514,11 +21514,11 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
     }
 
-      [Fact]
-      public void Extract_CsharpMultilinePositionalPatterns_CaptureTypeReferences()
-      {
-          // issue #969: multiline positional `case` / `is` heads must behave the same as
-          // the same-line forms and keep the real `type_reference` without phantom calls.
+    [Fact]
+    public void Extract_CsharpMultilinePositionalPatterns_CaptureTypeReferences()
+    {
+        // issue #969: multiline positional `case` / `is` heads must behave the same as
+        // the same-line forms and keep the real `type_reference` without phantom calls.
         // issue #969: 改行をまたぐ positional `case` / `is` head も同一行版と同様に
         // 本物の `type_reference` を残し、phantom な call を出してはならない。
         const string content = """
@@ -21631,15 +21631,15 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
-          Assert.Equal(2, pointRefs.Count);
-          Assert.All(pointRefs, r => Assert.Equal("Match", r.ContainerName));
-          Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
-      }
+        Assert.Equal(2, pointRefs.Count);
+        Assert.All(pointRefs, r => Assert.Equal("Match", r.ContainerName));
+        Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
+    }
 
-      [Fact]
-      public void Extract_CsharpCaseLogicalAndNegatedTypePatterns_CaptureTypeReferences()
-      {
-          // issues #668/#670: logical/negated type patterns must keep the left-hand type
+    [Fact]
+    public void Extract_CsharpCaseLogicalAndNegatedTypePatterns_CaptureTypeReferences()
+    {
+        // issues #668/#670: logical/negated type patterns must keep the left-hand type
         // dependency for both unqualified and qualified heads without reclassifying enum
         // member labels such as `Color.Red or Probe.Color.Blue` as type dependencies.
         // issues #668/#670: logical/negated な型パターンは unqualified / qualified の両方で

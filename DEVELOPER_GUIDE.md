@@ -7,9 +7,30 @@
 ```bash
 dotnet build
 dotnet test
+dotnet format CodeIndex.sln --verify-no-changes
 dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --settings tests/CodeIndex.Tests/CodeIndex.Tests.runsettings --blame-crash --blame-hang --blame-hang-timeout 5m
 dotnet run --project src/CodeIndex -- <command> [options]
 ```
+
+CI enforces repository formatting with `.editorconfig` and treats compiler
+warnings as errors through `Directory.Build.props`, so local changes should pass
+the format check before opening a PR. Existing trim-analysis warnings are
+explicitly listed in `WarningsNotAsErrors` until they are fixed without blocking
+ordinary compiler-warning enforcement, and ILLink keeps reporting trim warnings
+without failing trimmed publish smoke tests.
+
+Common local workflows are also available through the top-level task wrappers:
+
+```bash
+make build
+make test
+make lint
+make coverage
+make mcp-smoke
+```
+
+Use `FRAMEWORK=net9.0 make test` to match the net9 CI lane. On systems without
+`make`, run the same tasks as `./dev.sh build`, `./dev.sh test`, and so on.
 
 CLI help is intentionally layered: `cdidx --help` stays brief, `cdidx --help-all`
 prints the full command/flag/example reference, `cdidx --help-flags` prints only
