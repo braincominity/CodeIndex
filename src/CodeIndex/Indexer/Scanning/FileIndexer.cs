@@ -2842,23 +2842,6 @@ public class FileIndexer
                 break;
         }
 
-        // Compute the checksum on the byte stream after collapsing CRLF / CR to LF so
-        // a Windows clone (core.autocrlf=true) and a Linux/macOS clone of the same logical
-        // file produce identical checksums. Hashing the unnormalized raw bytes used to
-        // mark every file as "changed" the first time a developer indexed a cross-OS clone
-        // or a shared NAS workspace. BOM bytes are preserved verbatim so BOM addition /
-        // removal still flips the checksum and triggers incremental re-index. The streaming
-        // helper avoids re-encoding the UTF-8 string (~10 MB saved for large files).
-        // Closes #1544.
-        // CRLF / CR を LF に潰した上で SHA256 を取り、Windows (core.autocrlf=true) clone と
-        // Linux/macOS clone の同じ論理内容で checksum を一致させる。生バイトをそのまま
-        // ハッシュしていた以前は、cross-OS の clone や共有 NAS で全ファイルが「変更あり」
-        // 扱いとなり毎回フル再索引が走っていた。BOM はそのままハッシュ対象に残すので
-        // BOM の追加 / 削除はインクリメンタル再索引で引き続き検知できる。streaming
-        // ヘルパは UTF-8 文字列を再エンコードせずに済み、大ファイルで約 10 MB 節約する。
-        // Closes #1544.
-        var checksum = ComputeChecksum(bytes);
-
         var isUtf16Encoded = TryDetectUtf16Encoding(bytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
 
         if (!isUtf16Encoded && ContainsIndexBlockingNullByte(bytes))
@@ -2893,8 +2876,6 @@ public class FileIndexer
                 warning = $"{relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)";
             }
         }
-        var lineCount = CountPhysicalLines(content);
-
         // Normalize line endings to LF in one pass / 改行を1パスでLFに正規化
         content = NormalizeLineEndings(content);
         // Strip every line-leading UTF-8 BOM (U+FEFF): the leading BOM at offset 0
@@ -2906,10 +2887,8 @@ public class FileIndexer
         // output. Non-line-leading U+FEFF (Unicode 3.2+ ZWNBSP inside a string
         // literal, identifier, or comment — e.g. `const s = "A\uFEFFB"`) is kept
         // verbatim: stripping it would corrupt content fidelity for intentional
-        // mid-line ZWNBSP use. The checksum computed above keeps BOM bytes in the
-        // hash input (only CRLF / CR are collapsed to LF) so incremental re-index
-        // still detects BOM add / removal. Closes #183. Cross-OS CRLF / LF parity
-        // is handled by ComputeChecksum itself; see #1544.
+        // mid-line ZWNBSP use. The checksum is computed after this canonicalization
+        // so freshness decisions match stored chunk/symbol line metadata. Closes #183/#1467.
         // 行頭の UTF-8 BOM (U+FEFF) だけを剥がす — オフセット 0 の先頭 BOM と、
         // `\n` の直後にある BOM (ファイル連結やツール挿入で発生) が対象。先頭 BOM
         // だけでも行指向の `^\s*` 固定正規表現で BOM 付き Windows 作成ソースの
@@ -2918,11 +2897,13 @@ public class FileIndexer
         // (Unicode 3.2+ の ZWNBSP を文字列リテラル・識別子・コメントで意図的に
         // 使用しているケース、例: `const s = "A\uFEFFB"`) はそのまま保持する:
         // これを剥がすと mid-line ZWNBSP の意図的利用に対して内容が壊れる。
-        // checksum は上で算出済みで、ハッシュ入力に BOM をそのまま含めたまま
-        // CRLF / CR のみを LF に潰すため、BOM の追加 / 削除はインクリメンタル
-        // 再索引で引き続き検知される。Closes #183。OS をまたいだ CRLF / LF の
-        // 同一性は ComputeChecksum 自体で担保する。#1544 参照。
+        // checksum はこの canonicalization 後に算出し、freshness 判定と保存される
+        // chunk / symbol 行メタデータを一致させる。Closes #183/#1467。
         content = StripLineLeadingInvisibles(content);
+        if (IsGitLfsPointer(bytes))
+            content = string.Empty;
+        var lineCount = CountPhysicalLines(content);
+        var checksum = ComputeChecksum(Encoding.UTF8.GetBytes(content));
         var record = new FileRecord
         {
             Path = normalizedRelativePath,
@@ -3216,6 +3197,21 @@ public class FileIndexer
     }
 
     private static bool IsLineLeadingInvisible(char c) => c is '\uFEFF' or '\u200B';
+
+    internal static bool IsGitLfsPointer(byte[] rawBytes)
+    {
+        if (rawBytes.Length == 0 || rawBytes.Length >= GitLfsPointerMaxBytes)
+            return false;
+
+        ReadOnlySpan<byte> firstLine = rawBytes;
+        var newlineIndex = firstLine.IndexOf((byte)'\n');
+        if (newlineIndex >= 0)
+            firstLine = firstLine[..newlineIndex];
+        if (firstLine.Length > 0 && firstLine[^1] == (byte)'\r')
+            firstLine = firstLine[..^1];
+
+        return firstLine.SequenceEqual("version https://git-lfs.github.com/spec/v1"u8);
+    }
 
     /// <summary>
     /// Validate file content for encoding issues.

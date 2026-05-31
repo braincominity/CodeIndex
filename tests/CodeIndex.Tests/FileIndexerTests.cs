@@ -2860,8 +2860,8 @@ public class FileIndexerTests
     [InlineData("class A\r\n{\r\n}\r\n", 3)]
     [InlineData("class A\n{\n}\n", 3)]
     [InlineData("class A\r{\r}\r", 3)]
-    [InlineData("\uFEFF", 1)]
-    public void BuildRecord_CountsPhysicalLinesBeforeLineLeadingInvisibleStripping(string content, int expectedLines)
+    [InlineData("\uFEFF", 0)]
+    public void BuildRecord_CountsPhysicalLinesAfterLineLeadingInvisibleStripping(string content, int expectedLines)
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
         try
@@ -3674,12 +3674,12 @@ public class FileIndexerTests
     {
         // Files whose on-disk bytes begin with UTF-8 BOM (EF BB BF) must have the BOM
         // stripped from the decoded content so downstream consumers never see a phantom
-        // U+FEFF glyph on line 1. The checksum must still reflect the BOM bytes so adding
-        // or removing the BOM keeps triggering incremental change detection. Closes #183.
+        // U+FEFF glyph on line 1. The checksum must reflect the same canonical content
+        // stored in chunks so BOM-only changes do not desynchronize line metadata. Closes #183/#1467.
         // オンディスク先頭に UTF-8 BOM (EF BB BF) を持つファイルは、デコード後の content
-        // から BOM を剥がし、下流に幽霊 U+FEFF を渡さないようにする。checksum は BOM の
-        // バイトを含めたまま算出し、BOM 追加/削除をインクリメンタル更新判定で引き続き
-        // 検知できるようにする。Closes #183.
+        // から BOM を剥がし、下流に幽霊 U+FEFF を渡さないようにする。checksum は chunk
+        // に保存される canonical content と同じ内容から算出し、行メタデータとのずれを防ぐ。
+        // Closes #183/#1467.
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
         try
         {
@@ -3700,19 +3700,9 @@ public class FileIndexerTests
             // 文字列オーバーロードではなくコードポイントで確認する。
             Assert.DoesNotContain('\uFEFF', content);
             Assert.Equal(2, record.Lines);
-            // Pin the BOM-detection contract: BOM bytes feed into the checksum hash input
-            // so adding or removing a BOM still flips the checksum and triggers incremental
-            // re-index. This test's payload has no CR bytes, so the line-ending normalization
-            // added for #1544 is a no-op and the expected value still matches raw-byte SHA256.
-            // Cross-OS CRLF / LF parity is covered by BuildRecord_Checksum_CrlfAndLfMatch.
-            // Closes #183.
-            // BOM 検知契約を固定: BOM のバイトは checksum のハッシュ入力にそのまま含まれ、
-            // BOM の追加 / 削除でハッシュが変化することでインクリメンタル再索引が走る。
-            // このテストの payload には CR が無いため #1544 の改行正規化は no-op となり、
-            // 期待値は生バイトの SHA256 と一致する。OS をまたいだ CRLF / LF の同一性は
-            // BuildRecord_Checksum_CrlfAndLfMatch で担保する。Closes #183.
             var expectedChecksum = Convert.ToHexString(
-                System.Security.Cryptography.SHA256.HashData(rawBytes)).ToLowerInvariant();
+                System.Security.Cryptography.SHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
             Assert.Equal(expectedChecksum, record.Checksum);
         }
         finally
@@ -3767,14 +3757,14 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void BuildRecord_Checksum_BomAddRemoveStillDetected()
+    public void BuildRecord_Checksum_BomAddRemoveUsesSameCanonicalContent()
     {
-        // BOM bytes (EF BB BF) must still be part of the checksum hash input so a clone
-        // that gained or lost a leading BOM is detected as changed by incremental re-index.
-        // Only CRLF / CR are collapsed; BOM passes through unchanged. Closes #1544.
-        // BOM のバイト (EF BB BF) はハッシュ入力に残し、BOM の有無が変わった clone を
-        // インクリメンタル再索引で変更として検知できるようにする。畳むのは CRLF / CR のみで
-        // BOM はそのまま通す。Closes #1544.
+        // BOM-only edits should hash to the same canonical content that chunking and
+        // excerpts see. This prevents freshness checks from accepting line metadata
+        // produced from a different byte sequence. Closes #1467.
+        // BOM のみの差分は chunk / excerpt が見る canonical content と同じ内容として
+        // hash される。別のバイト列から作られた行メタデータを freshness が受け入れる
+        // ずれを防ぐ。Closes #1467.
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
         try
         {
@@ -3789,7 +3779,7 @@ public class FileIndexerTests
             var (bomRecord, _, _) = indexer.BuildRecord(bomPath);
             var (noBomRecord, _, _) = indexer.BuildRecord(noBomPath);
 
-            Assert.NotEqual(bomRecord.Checksum, noBomRecord.Checksum);
+            Assert.Equal(bomRecord.Checksum, noBomRecord.Checksum);
         }
         finally
         {
@@ -3843,15 +3833,14 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void BuildRecord_BomOnlyFile_ReportsOnePhysicalLine()
+    public void BuildRecord_BomOnlyFile_ReportsNoCanonicalLines()
     {
         // A file whose on-disk bytes are exactly the UTF-8 BOM (EF BB BF) and
-        // nothing else still has one physical decoded source line, even though the
-        // normalized content handed to chunking/extraction becomes empty. This pins
-        // the line-number contract used for stale-line detection. Closes #1890.
+        // nothing else becomes empty canonical content, so the stored line count must
+        // match the chunking/extraction input. Closes #1467/#1890.
         // オンディスクバイト列が UTF-8 BOM (EF BB BF) のみのファイルも、正規化後に
-        // chunk/extraction へ渡す content は空になるが、デコード済み元ソースとしては
-        // 1 つの物理行を持つ。この stale line 検出用の行番号契約を固定する。Closes #1890.
+        // chunk/extraction へ渡す canonical content が空になるため、保存する行数も
+        // その入力と一致させる。Closes #1467/#1890.
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
         try
         {
@@ -3863,7 +3852,7 @@ public class FileIndexerTests
             var (record, content, _) = indexer.BuildRecord(filePath);
 
             Assert.Equal(string.Empty, content);
-            Assert.Equal(1, record.Lines);
+            Assert.Equal(0, record.Lines);
         }
         finally
         {
