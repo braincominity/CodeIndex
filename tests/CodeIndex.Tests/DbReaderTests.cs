@@ -128,6 +128,27 @@ public class DbReaderTests : IDisposable
         Assert.Equal(1, counts.FileCount);
     }
 
+    [Fact]
+    public void AnalyzeFtsQuery_AllTokensTooLong_ReturnsDegradedReason()
+    {
+        var query = new string('x', DbReader.FtsUnicode61MaxTokenLength + 1);
+
+        var diagnostics = DbReader.AnalyzeFtsQuery(query);
+
+        Assert.Equal(DbReader.AllTokensFilteredByLengthReason, diagnostics.QueryDegradedReason);
+        Assert.Equal([query], diagnostics.TokensDropped);
+    }
+
+    [Fact]
+    public void Search_ExplicitPrefixMatchesLatinDiacriticToken()
+    {
+        InsertIndexedFile("src/cafe.md", "markdown", "menu café_au_lait\n");
+
+        var results = _reader.Search("café*", lang: "markdown");
+
+        Assert.Contains(results, r => r.Path == "src/cafe.md");
+    }
+
     [Theory]
     [InlineData("rowid:authenticate", "rowid:")]
     [InlineData("title:authenticate", "title:")]
@@ -2382,6 +2403,35 @@ public class DbReaderTests : IDisposable
         Assert.Contains("def authenticate(user, password):", definition.Content);
         Assert.NotNull(definition.BodyContent);
         Assert.Contains("return True", definition.BodyContent);
+    }
+
+    [Fact]
+    public void GetDefinitions_CSharpAddsDefinitionDisambiguators()
+    {
+        InsertIndexedFile("src/disambiguators.cs", "csharp",
+            """
+            public partial class Widget
+            {
+                public void Convert(int value) { }
+                public void Convert(string value) { }
+                public static void Touch(this string value) { }
+            }
+
+            public partial class Widget
+            {
+            }
+            """);
+
+        var overloads = _reader.GetDefinitions("Convert", limit: 10, lang: "csharp", exact: true)
+            .OrderBy(result => result.Line)
+            .ToList();
+        Assert.Equal(["overload(int)", "overload(string)"], overloads.Select(result => result.Disambiguator).ToArray());
+
+        var partials = _reader.GetDefinitions("Widget", limit: 10, lang: "csharp", exact: true);
+        Assert.All(partials, result => Assert.Equal("partial-class", result.Disambiguator));
+
+        var extension = Assert.Single(_reader.GetDefinitions("Touch", limit: 10, lang: "csharp", exact: true));
+        Assert.Equal("extension-method-on(string)", extension.Disambiguator);
     }
 
     [Fact]
@@ -5283,7 +5333,9 @@ public class DbReaderTests : IDisposable
         Assert.Empty(analysis.Callers);
         Assert.Empty(analysis.FileImpacts);
         Assert.Equal("none", analysis.ImpactMode);
-        Assert.Equal("depth_zero", analysis.ZeroResultReason);
+        Assert.Equal("depth_requested_zero", analysis.ZeroResultReason);
+        Assert.Equal(["depth_requested_zero"], analysis.ImpactFailureChain);
+        Assert.Equal("precondition", analysis.SuggestionType);
         Assert.Contains("--max-hops 1", analysis.Suggestion, StringComparison.Ordinal);
     }
 
@@ -9600,6 +9652,8 @@ public class DbReaderTests : IDisposable
         Assert.Equal("@missing", miss.ResolvedName);
         Assert.Equal(0, miss.DefinitionCount);
         Assert.Equal("no_matching_definition", miss.ZeroResultReason);
+        Assert.Equal(["definition_not_found"], miss.ImpactFailureChain);
+        Assert.Equal("resolution", miss.SuggestionType);
     }
 
     [Fact]
@@ -11384,7 +11438,9 @@ public class DbReaderTests : IDisposable
         Assert.False(analysis.Truncated);
         Assert.Null(analysis.TruncatedReason);
         Assert.Equal(ImpactTerminationReasons.Completed, analysis.TerminationReason);
-        Assert.Equal("depth_zero", analysis.ZeroResultReason);
+        Assert.Equal("depth_requested_zero", analysis.ZeroResultReason);
+        Assert.Equal(["depth_requested_zero"], analysis.ImpactFailureChain);
+        Assert.Equal("precondition", analysis.SuggestionType);
         Assert.False(analysis.CycleDetected);
         Assert.Null(analysis.Cycles);
     }

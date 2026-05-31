@@ -3430,6 +3430,18 @@ public class FileIndexer
             });
         }
 
+        var longFtsTokenLine = FindOversizeFtsTokenLine(content, CodeIndex.Database.DbReader.FtsUnicode61MaxTokenLength);
+        if (longFtsTokenLine > 0)
+        {
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "fts_token_too_long",
+                Line = longFtsTokenLine,
+                Message = $"Line {longFtsTokenLine} contains an FTS5 unicode61 token longer than {CodeIndex.Database.DbReader.FtsUnicode61MaxTokenLength} characters; that token is not searchable through FTS",
+            });
+        }
+
         return issues;
     }
 
@@ -3597,6 +3609,43 @@ public class FileIndexer
         }
         return 0;
     }
+
+    private static int FindOversizeFtsTokenLine(string content, int maxTokenLength)
+    {
+        if (string.IsNullOrEmpty(content))
+            return 0;
+
+        var lineNumber = 1;
+        var tokenLength = 0;
+        foreach (var rune in content.EnumerateRunes())
+        {
+            if (rune.Value == '\n')
+            {
+                lineNumber++;
+                tokenLength = 0;
+                continue;
+            }
+
+            if (IsLikelyUnicode61TokenRune(rune))
+            {
+                tokenLength++;
+                if (tokenLength > maxTokenLength)
+                    return lineNumber;
+            }
+            else
+            {
+                tokenLength = 0;
+            }
+        }
+
+        return 0;
+    }
+
+    private static bool IsLikelyUnicode61TokenRune(Rune rune)
+        => rune.Value == '_'
+            || Rune.IsLetter(rune)
+            || Rune.IsDigit(rune)
+            || Rune.GetUnicodeCategory(rune) == UnicodeCategory.NonSpacingMark;
 
     /// <summary>
     /// Count U+FFFD replacement characters in decoded content.

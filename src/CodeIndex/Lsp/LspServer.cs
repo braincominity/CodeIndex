@@ -188,15 +188,18 @@ internal sealed class LspServer : IDisposable
 
         var normalizedIndexed = indexedPath.Replace('\\', '/');
         var normalizedDocument = documentPath.Replace('\\', '/');
-        return normalizedDocument.EndsWith("/" + normalizedIndexed, StringComparison.Ordinal)
-            || string.Equals(Path.GetFileName(normalizedIndexed), Path.GetFileName(normalizedDocument), StringComparison.Ordinal);
+        return normalizedDocument.EndsWith("/" + normalizedIndexed, StringComparison.Ordinal);
     }
 
     private string? ResolveIndexedPath(string documentPath)
     {
         var fileName = Path.GetFileName(documentPath);
         var files = _reader.ListFiles(fileName, 1000);
-        return files.FirstOrDefault(file => MatchesDocumentPath(file.Path, documentPath))?.Path;
+        var matches = files
+            .Where(file => MatchesDocumentPath(file.Path, documentPath))
+            .Take(2)
+            .ToList();
+        return matches.Count == 1 ? matches[0].Path : null;
     }
 
     private JsonObject ToWorkspaceSymbol(SymbolResult symbol) => new()

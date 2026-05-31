@@ -87,6 +87,50 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_DocumentSymbol_ResolvesDuplicateBasenamesByRelativePath()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_duplicate");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var srcPath = Path.Combine(projectRoot, "src", "app.cs");
+            var testPath = Path.Combine(projectRoot, "tests", "app.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(srcPath)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(testPath)!);
+            File.WriteAllText(srcPath, "class SrcApp { }\n");
+            File.WriteAllText(testPath, "class TestApp { }\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", File.ReadAllText(srcPath));
+            TestProjectHelper.InsertIndexedFile(dbPath, "tests/app.cs", "csharp", File.ReadAllText(testPath));
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 22,
+                method = "textDocument/documentSymbol",
+                @params = new
+                {
+                    textDocument = new { uri = new Uri(testPath).AbsoluteUri },
+                },
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var names = response!["result"]!
+                .AsArray()
+                .Select(symbol => symbol?["name"]?.GetValue<string>())
+                .ToArray();
+            Assert.Contains("TestApp", names);
+            Assert.DoesNotContain("SrcApp", names);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_Definition_ReturnsLocationForTokenAtPosition()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition");
