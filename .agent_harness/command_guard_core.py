@@ -300,7 +300,11 @@ def _token_is_forbidden_cdidx_executable(token: str, cwd: Path) -> bool:
 
 def _command_mentions_forbidden_cdidx_executable(command: str, cwd: Path) -> bool:
     tokens = _split_command(command)
-    return any(_token_is_forbidden_cdidx_executable(token, cwd) for token in tokens)
+    for segment in _token_segments(tokens):
+        segment = _strip_transparent_script_wrappers(_strip_leading_env_assignments(segment))
+        if segment and _token_is_forbidden_cdidx_executable(segment[0], cwd):
+            return True
+    return False
 
 
 def _command_is_safe_expanded_installed_cdidx(command: str, cwd: Path) -> bool:
