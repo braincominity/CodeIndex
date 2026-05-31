@@ -106,6 +106,7 @@ public static class ConsoleUi
         ("languages", "cdidx languages [--json]"),
         ("batch", "cdidx batch [--db <path>]  # reads JSON string arrays from stdin, one query command per line"),
         ("mcp", "cdidx mcp [--db <path>]"),
+        ("lsp", "cdidx lsp [--db <path>]"),
         ("completions", "cdidx completions <shell>"),
         ("--completions", "cdidx --completions <shell>"),
         ("upgrade", "cdidx upgrade [--check-only]"),
@@ -742,6 +743,7 @@ public static class ConsoleUi
         Console.WriteLine("  hotspots                   Find high-impact symbols; duplicate-name families may fall back conservatively");
         Console.WriteLine("  batch                      Run newline-delimited JSON query commands with one DB connection");
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
+        Console.WriteLine("  lsp                        Start LSP server over stdio (for LSP-native editors)");
         Console.WriteLine("  completions <shell>        Generate shell completions for bash, zsh, fish, or PowerShell");
         Console.WriteLine();
         Console.WriteLine("Run `cdidx --help-all` for every command and option, `cdidx --help-flags` for shared flags, or `cdidx <command> --help` for one command.");
@@ -852,6 +854,7 @@ public static class ConsoleUi
         Console.WriteLine("  languages                  List supported languages and their capabilities");
         Console.WriteLine("  batch                      Run newline-delimited JSON query commands with one DB connection");
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
+        Console.WriteLine("  lsp                        Start LSP server over stdio (for LSP-native editors)");
         Console.WriteLine("  completions <shell>        Generate shell completions for bash, zsh, fish, or PowerShell");
         Console.WriteLine("  license                    Show licensing, trademark, and commercial-use summary");
     }
