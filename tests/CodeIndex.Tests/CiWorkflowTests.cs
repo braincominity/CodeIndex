@@ -5,14 +5,16 @@ namespace CodeIndex.Tests;
 public class CiWorkflowTests
 {
     [Fact]
-    public void DotnetWorkflow_RunsTestsWithRunsettingsBlameAndArtifacts()
+    public void DotnetWorkflow_RunsTestsWithRunsettingsBlameRetryAndArtifacts()
     {
         var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "dotnet.yml"));
 
-        Assert.Contains("--settings tests/CodeIndex.Tests/CodeIndex.Tests.runsettings", workflow);
+        Assert.Contains("--settings\", \"tests/CodeIndex.Tests/CodeIndex.Tests.runsettings", workflow);
         Assert.Contains("--blame-crash", workflow);
         Assert.Contains("--blame-hang", workflow);
-        Assert.Contains("--blame-hang-timeout 5m", workflow);
+        Assert.Contains("--blame-hang-timeout\", \"5m", workflow);
+        Assert.Contains("Rerunning once to classify possible flakiness.", workflow);
+        Assert.Contains("flaky-retry.txt", workflow);
         Assert.Contains("TestResults/**/*.trx", workflow);
         Assert.Contains("TestResults/**/*Sequence*.xml", workflow);
         Assert.Contains("TestResults/**/*.dmp", workflow);

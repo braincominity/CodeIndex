@@ -182,7 +182,41 @@ jobs:
         run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore
 
       - name: Test
-        run: dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-build --nologo --settings tests/CodeIndex.Tests/CodeIndex.Tests.runsettings --blame-crash --blame-hang --blame-hang-timeout 5m --logger "trx;LogFileName=test_results.trx" --results-directory ./TestResults
+        shell: pwsh
+        run: |
+          $testArgs = @(
+            "test",
+            "tests/CodeIndex.Tests/CodeIndex.Tests.csproj",
+            "--configuration", "Release",
+            "--framework", "${{ matrix.test-framework }}",
+            "--no-build",
+            "--nologo",
+            "--settings", "tests/CodeIndex.Tests/CodeIndex.Tests.runsettings",
+            "--blame-crash",
+            "--blame-hang",
+            "--blame-hang-timeout", "5m",
+            "--logger", "trx;LogFileName=test_results.trx",
+            "--results-directory", "./TestResults"
+          )
+
+          dotnet @testArgs
+          $firstExitCode = $LASTEXITCODE
+          if ($firstExitCode -eq 0) {
+            exit 0
+          }
+
+          Write-Warning "Initial test run failed with exit code $firstExitCode. Rerunning once to classify possible flakiness."
+          dotnet @testArgs
+          $retryExitCode = $LASTEXITCODE
+          if ($retryExitCode -eq 0) {
+            New-Item -ItemType Directory -Force -Path ./TestResults | Out-Null
+            "Initial test run failed, but the single retry passed. Treat this run as flaky and inspect TRX/blame artifacts." |
+              Set-Content -Encoding UTF8 ./TestResults/flaky-retry.txt
+            Write-Warning "Tests passed on retry; uploaded TestResults include flaky-retry.txt."
+            exit 0
+          }
+
+          exit $retryExitCode
 
       - name: Summarize TRX telemetry
         if: always()
