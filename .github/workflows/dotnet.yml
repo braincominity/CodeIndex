@@ -182,7 +182,7 @@ jobs:
         run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore
 
       - name: Test
-        run: dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-build --nologo --logger "trx;LogFileName=test_results.trx" --results-directory ./TestResults
+        run: dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-build --nologo --settings tests/CodeIndex.Tests/CodeIndex.Tests.runsettings --blame-crash --blame-hang --blame-hang-timeout 5m --logger "trx;LogFileName=test_results.trx" --results-directory ./TestResults
 
       - name: Summarize TRX telemetry
         if: always()
@@ -194,7 +194,14 @@ jobs:
         with:
           name: TestResults-${{ matrix.os }}-${{ matrix.test-framework }}
           if-no-files-found: warn
-          path: TestResults/**/*.trx
+          path: |
+            TestResults/**/*.trx
+            TestResults/**/*.txt
+            TestResults/**/*.xml
+            TestResults/**/*.dmp
+            TestResults/**/*.dump
+            TestResults/**/*Sequence*.xml
+            TestResults/**/*.hangdump
 
       - name: Publish
         if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'

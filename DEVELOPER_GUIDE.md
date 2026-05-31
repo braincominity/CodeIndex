@@ -7,6 +7,7 @@
 ```bash
 dotnet build
 dotnet test
+dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --settings tests/CodeIndex.Tests/CodeIndex.Tests.runsettings --blame-crash --blame-hang --blame-hang-timeout 5m
 dotnet run --project src/CodeIndex -- <command> [options]
 ```
 
@@ -15,7 +16,9 @@ multi-targets `net8.0;net9.0`, and CI runs the test suite on both frameworks
 across Linux, Windows, and macOS. Use a .NET SDK that can restore and run both
 target frameworks when validating the full CI-equivalent test matrix.
 
-For test suite structure, shared helpers, and test-writing conventions, see [TESTING_GUIDE.md](TESTING_GUIDE.md).
+CI uses `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings` plus VSTest blame
+crash/hang collection. For test suite structure, shared helpers, timeout
+diagnostics, and test-writing conventions, see [TESTING_GUIDE.md](TESTING_GUIDE.md).
 
 ## Release Distribution Checklist
 
