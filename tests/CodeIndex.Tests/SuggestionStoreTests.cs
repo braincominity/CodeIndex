@@ -7,6 +7,7 @@ namespace CodeIndex.Tests;
 /// Tests for SuggestionStore (local JSON storage with deduplication).
 /// SuggestionStoreのテスト（ローカルJSON蓄積 + 重複排除）。
 /// </summary>
+[Collection("SQLite pool sensitive")]
 public class SuggestionStoreTests : IDisposable
 {
     private readonly string _tempDir;
@@ -90,6 +91,20 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void TryAdd_StampsCreatedAtFromInjectedClockWhenPersisted()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2030, 2, 3, 4, 5, 6, TimeSpan.Zero));
+        var store = new SuggestionStore(_tempDir, null, clock);
+        var record = MakeRecord("symbol_extraction", "csharp", "Missing record support");
+        record.CreatedAt = new DateTime(1999, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        Assert.True(store.TryAdd(record));
+
+        var saved = Assert.Single(store.LoadAll());
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, saved.CreatedAt);
+    }
+
+    [Fact]
     public void TryAdd_Duplicate_ReturnsFalse()
     {
         var record1 = MakeRecord("symbol_extraction", "csharp", "Missing record support");
@@ -138,6 +153,22 @@ public class SuggestionStoreTests : IDisposable
         Assert.False(second.IsNew);
         Assert.Equal(record1.Hash, second.DuplicateOfHash);
         Assert.True(second.DuplicateScore >= SuggestionStore.DefaultDedupThreshold);
+    }
+
+    [Fact]
+    public void TryAddAndSubmit_UsesInjectedClockForRetryAndSubmissionTimestamps()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2031, 3, 4, 5, 6, 7, TimeSpan.Zero));
+        var store = new SuggestionStore(_tempDir, null, clock);
+        var record = MakeRecord("other", null, "submit me");
+
+        var result = store.TryAddAndSubmit(record, _ => SuggestionStore.SubmitAttemptResult.Success("https://github.com/Widthdom/CodeIndex/issues/1"));
+
+        Assert.True(result.IsNew);
+        var saved = Assert.Single(store.LoadAll());
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, saved.CreatedAt);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, saved.LastSubmitAttempt);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, saved.LastSyncedAt);
     }
 
     [Fact]
@@ -264,6 +295,29 @@ public class SuggestionStoreTests : IDisposable
         Assert.Equal(0, r.SubmitAttemptCount);
         Assert.Null(r.SubmittedToGitHub);
         Assert.Null(r.GitHubIssueUrl);
+    }
+
+    [Fact]
+    public void TryAdd_RedactsSensitiveTextBeforePersistence()
+    {
+        var record = MakeRecord(
+            "other",
+            null,
+            "AWS AKIA1234567890ABCDEF and password=swordfish and Bearer AbCdEfGhIjKlMnOpQrStUvWxYz123456 should not persist");
+        record.Context = "token aaBB11ccDD22eeFF33ggHH44iiJJ55kk";
+        record.ToolInvocationContext = "secret=hunter2";
+
+        Assert.True(_store.TryAdd(record));
+
+        var stored = Assert.Single(_store.LoadAll());
+        Assert.Contains("[REDACTED:aws_access_key]", stored.Description);
+        Assert.Contains("password=[REDACTED:credential]", stored.Description);
+        Assert.Contains("[REDACTED:bearer_token]", stored.Description);
+        Assert.Contains("[REDACTED:high_entropy_token]", stored.Context);
+        Assert.Contains("secret=[REDACTED:credential]", stored.ToolInvocationContext);
+        Assert.DoesNotContain("AKIA1234567890ABCDEF", stored.Description);
+        Assert.DoesNotContain("swordfish", stored.Description);
+        Assert.DoesNotContain("hunter2", stored.ToolInvocationContext);
     }
 
     [Fact]
@@ -457,18 +511,19 @@ public class SuggestionStoreTests : IDisposable
     [Fact]
     public void LoadSince_ReturnsSuggestionsAtOrAfterThreshold()
     {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2031, 5, 1, 9, 0, 0, TimeSpan.Zero));
+        var store = new SuggestionStore(_tempDir, null, clock);
         var older = MakeRecord("other", null, "Older suggestion");
-        older.CreatedAt = new DateTime(2026, 5, 1, 9, 0, 0, DateTimeKind.Utc);
         var boundary = MakeRecord("other", null, "Boundary suggestion");
-        boundary.CreatedAt = new DateTime(2026, 5, 2, 9, 0, 0, DateTimeKind.Utc);
         var newer = MakeRecord("other", null, "Newer suggestion");
-        newer.CreatedAt = new DateTime(2026, 5, 3, 9, 0, 0, DateTimeKind.Utc);
 
-        _store.TryAdd(older);
-        _store.TryAdd(boundary);
-        _store.TryAdd(newer);
+        store.TryAdd(older);
+        clock.SetUtcNow(new DateTimeOffset(2031, 5, 2, 9, 0, 0, TimeSpan.Zero));
+        store.TryAdd(boundary);
+        clock.SetUtcNow(new DateTimeOffset(2031, 5, 3, 9, 0, 0, TimeSpan.Zero));
+        store.TryAdd(newer);
 
-        var loaded = _store.LoadSince(new DateTimeOffset(2026, 5, 2, 9, 0, 0, TimeSpan.Zero));
+        var loaded = store.LoadSince(new DateTimeOffset(2031, 5, 2, 9, 0, 0, TimeSpan.Zero));
 
         Assert.Equal(new[] { boundary.Hash, newer.Hash }, loaded.Select(s => s.Hash));
     }
@@ -725,6 +780,69 @@ public class SuggestionStoreTests : IDisposable
         var all = _store.LoadAll();
         Assert.Single(all);
         Assert.Equal("Post-corruption suggestion", all[0].Description);
+    }
+
+    [Fact]
+    public void TryAdd_PrunesStaleRecordsToArchive()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2031, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var store = new SuggestionStore(_tempDir, null, clock);
+        var old = MakeRecord("other", null, "Old suggestion");
+        Assert.True(store.TryAdd(old));
+
+        clock.SetUtcNow(new DateTimeOffset(2032, 2, 5, 0, 0, 0, TimeSpan.Zero));
+        var fresh = MakeRecord("other", null, "Fresh suggestion");
+        Assert.True(store.TryAdd(fresh));
+
+        var all = store.LoadAll();
+        Assert.Single(all);
+        Assert.Equal("Fresh suggestion", all[0].Description);
+
+        var archivePath = Path.Combine(_tempDir, "suggestions-codeindex.archive.jsonl");
+        Assert.True(File.Exists(archivePath));
+        var archive = File.ReadAllText(archivePath);
+        Assert.Contains("Old suggestion", archive);
+    }
+
+    [Fact]
+    public void TryAdd_PrunesOldestRecordsOverConfiguredMaxCount()
+    {
+        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxCountEnvironmentVariable);
+        env.Set(SuggestionStore.MaxCountEnvironmentVariable, "2");
+        var first = MakeRecord("other", null, "First suggestion");
+        first.CreatedAt = DateTime.UtcNow.AddMinutes(-3);
+        var second = MakeRecord("other", null, "Second suggestion");
+        second.CreatedAt = DateTime.UtcNow.AddMinutes(-2);
+        var third = MakeRecord("other", null, "Third suggestion");
+        third.CreatedAt = DateTime.UtcNow.AddMinutes(-1);
+
+        Assert.True(_store.TryAdd(first));
+        Assert.True(_store.TryAdd(second));
+        Assert.True(_store.TryAdd(third));
+
+        var all = _store.LoadAll();
+        Assert.Equal(new[] { "Second suggestion", "Third suggestion" }, all.Select(record => record.Description));
+        Assert.Contains("First suggestion", File.ReadAllText(Path.Combine(_tempDir, "suggestions-codeindex.archive.jsonl")));
+    }
+
+    [Fact]
+    public void TryAdd_DuplicateStillPersistsPrunedRecords()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2031, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var store = new SuggestionStore(_tempDir, null, clock);
+        var old = MakeRecord("other", null, "Old suggestion");
+        var duplicate = MakeRecord("other", null, "Duplicate suggestion");
+        Assert.True(store.TryAdd(old));
+        clock.SetUtcNow(new DateTimeOffset(2032, 2, 5, 0, 0, 0, TimeSpan.Zero));
+        Assert.True(store.TryAdd(duplicate));
+
+        Assert.False(store.TryAdd(MakeRecord("other", null, "Duplicate suggestion")));
+
+        var all = store.LoadAll();
+        Assert.Single(all);
+        Assert.Equal("Duplicate suggestion", all[0].Description);
+        var archivePath = Path.Combine(_tempDir, "suggestions-codeindex.archive.jsonl");
+        Assert.Equal(1, File.ReadAllText(archivePath).Split("Old suggestion").Length - 1);
     }
 
     [Fact]

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -163,6 +164,59 @@ public partial class McpServer
             payload["exact_zero_hint"]!["relaxed_count"] = exactZeroHint.RelaxedCount.Value;
     }
 
+    private static void AddRecoveryHint(JsonObject payload, string reason, string suggestedAction, string? tool = null, JsonObject? args = null)
+    {
+        var hint = new JsonObject
+        {
+            ["reason"] = reason,
+            ["suggested_action"] = suggestedAction,
+        };
+        if (tool != null)
+            hint["tool"] = tool;
+        if (args != null)
+            hint["args"] = args;
+        payload["recovery_hint"] = hint;
+    }
+
+    private static void AddSymbolRecoveryHint(JsonObject payload, string query, string toolName, string? lang, string? kind, JsonNode? path)
+    {
+        var args = new JsonObject
+        {
+            ["query"] = query,
+            ["limit"] = 5,
+        };
+        if (lang != null)
+            args["lang"] = lang;
+        if (kind != null)
+            args["kind"] = kind;
+        if (path != null)
+            args["path"] = path.DeepClone();
+
+        AddRecoveryHint(
+            payload,
+            "no_results",
+            $"{toolName} returned no rows; check whether the symbol is indexed, whether filters are too narrow, or whether a broader symbol lookup finds a nearby name.",
+            "symbols",
+            args);
+    }
+
+    private static void AddNextStepSuggestion(JsonObject payload, string tool, JsonObject args)
+    {
+        payload["next_step_suggestion"] = new JsonObject
+        {
+            ["tool"] = tool,
+            ["args"] = args,
+        };
+    }
+
+    private static JsonObject BuildExcerptArgs(string path, int startLine, int endLine)
+        => new()
+        {
+            ["path"] = path,
+            ["startLine"] = startLine,
+            ["endLine"] = endLine,
+        };
+
     /// <summary>
     /// Clamp limit to a safe range to prevent resource exhaustion.
     /// リソース枯渇を防ぐためlimitを安全な範囲にクランプ。
@@ -321,7 +375,7 @@ public partial class McpServer
         "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "project", "solution" },
         "symbols" => new HashSet<string>(StringComparer.Ordinal) { "query", "names", "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "project", "solution" },
         "files" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since" },
-        "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "maxLineWidth", "exact" },
+        "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "snippetLines", "focusLine", "focusColumn", "maxLineWidth", "exact", "regex" },
         "excerpt" => new HashSet<string>(StringComparer.Ordinal) { "path", "startLine", "endLine", "before", "after", "focusLine", "focusColumn", "focusLength", "maxLineWidth" },
         "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "project", "solution" },
         "analyze_symbol" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "includeBody", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "maxLineWidth", "project", "solution" },
@@ -333,6 +387,7 @@ public partial class McpServer
         "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "project", "solution" },
         "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
         "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "db", "rebuild", "parallelism", "files", "commits", "changedBetween", "dryRun", "optimize" },
+        "backfill_fold" => new HashSet<string>(StringComparer.Ordinal) { "dry_run", "dryRun", "force" },
         "suggest_improvement" => new HashSet<string>(StringComparer.Ordinal) { "category", "language", "description", "context", "toolInvocationContext" },
         _ => new HashSet<string>(StringComparer.Ordinal),
     };
@@ -783,6 +838,12 @@ public partial class McpServer
                     ["results"] = new JsonArray()
                 };
                 AddResultEnvelope(payload, 0, 0, truncated: false);
+                AddRecoveryHint(
+                    payload,
+                    "no_results",
+                    "search returned no rows; try removing lang/path filters, using prefix for token-prefix matches, or using exactSubstring for literal punctuation or emoji.",
+                    "search",
+                    new JsonObject { ["query"] = query, ["limit"] = 5 });
                 AddFreshnessHint(payload, reader);
                 return CreateToolResult(id, "No results found.", payload);
             }
@@ -798,6 +859,11 @@ public partial class McpServer
                 ["results"] = ToJsonArray(SearchSnippetFormatter.ToCompactResults(results, query, snippetLines, exact, maxLineWidth))
             };
             AddResultEnvelope(structured, results.Count, truncated ? null : results.Count, truncated);
+            var topResult = results[0];
+            AddNextStepSuggestion(
+                structured,
+                "excerpt",
+                BuildExcerptArgs(topResult.Path, topResult.StartLine, topResult.EndLine));
             // Include top file paths in summary for quick AI orientation
             // AIが素早く位置把握できるよう、サマリにトップファイルパスを含める
             var topPaths = results.Select(r => r.Path).Distinct().Take(3);
@@ -970,6 +1036,7 @@ public partial class McpServer
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
+                AddSymbolRecoveryHint(payload, query, "definition", lang, kind, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
@@ -1059,7 +1126,16 @@ public partial class McpServer
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
+                AddSymbolRecoveryHint(payload, query, "references", lang, kind, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
+            }
+            else
+            {
+                var topReference = results[0];
+                AddNextStepSuggestion(
+                    payload,
+                    "excerpt",
+                    BuildExcerptArgs(topReference.Path, topReference.Line, topReference.Line));
             }
             return CreateToolResult(id,
                 BuildGraphSummary("reference", "references", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason),
@@ -1147,6 +1223,7 @@ public partial class McpServer
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
+                AddSymbolRecoveryHint(payload, query, "callers", lang, kind, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
@@ -1235,6 +1312,7 @@ public partial class McpServer
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
+                AddSymbolRecoveryHint(payload, query, "callees", lang, kind, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
@@ -1710,14 +1788,15 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "endLine must be greater than or equal to startLine");
 
         var beforeValue = args?["before"]?.GetValue<int>();
-        if (beforeValue.HasValue && (beforeValue.Value < 0 || beforeValue.Value > MaxContextLines))
+        if (beforeValue.HasValue && beforeValue.Value < 0)
             return CreateToolErrorResponse(id, $"before must be in [0, {MaxContextLines}]");
-        var before = beforeValue ?? 0;
+        var before = ClampContextLines(beforeValue ?? 0);
 
         var afterValue = args?["after"]?.GetValue<int>();
-        if (afterValue.HasValue && (afterValue.Value < 0 || afterValue.Value > MaxContextLines))
+        if (afterValue.HasValue && afterValue.Value < 0)
             return CreateToolErrorResponse(id, $"after must be in [0, {MaxContextLines}]");
-        var after = afterValue ?? 0;
+        var after = ClampContextLines(afterValue ?? 0);
+        var contextTruncated = beforeValue > MaxContextLines || afterValue > MaxContextLines;
 
         var focusLine = args?["focusLine"]?.GetValue<int>();
         var focusColumn = args?["focusColumn"]?.GetValue<int>();
@@ -1777,17 +1856,30 @@ public partial class McpServer
                     ["path"] = path,
                     ["count"] = 0
                 };
+                AddRecoveryHint(
+                    emptyPayload,
+                    "file_or_range_not_indexed",
+                    "excerpt found no indexed content for the requested range; verify the path with files or outline, then retry with an indexed line range.",
+                    "outline",
+                    new JsonObject { ["path"] = path });
                 AddFreshnessHint(emptyPayload, reader);
                 return CreateToolResult(id, "No excerpt found.", emptyPayload);
             }
 
             var payload = JsonSerializer.SerializeToNode(excerpt, _jsonOptions)!.AsObject();
+            payload["before"] = before;
+            payload["after"] = after;
+            payload["contextTruncated"] = contextTruncated;
             payload["maxLineWidth"] = maxLineWidth;
             if (focusLine.HasValue)
                 payload["focusLine"] = focusLine.Value;
             if (focusColumn.HasValue)
                 payload["focusColumn"] = focusColumn.Value;
             payload["focusLength"] = focusLength;
+            AddNextStepSuggestion(
+                payload,
+                "outline",
+                new JsonObject { ["path"] = excerpt.Path });
             return CreateToolResult(id, "Excerpt returned.", payload);
         });
     }
@@ -1812,19 +1904,46 @@ public partial class McpServer
         var beforeValue = args?["before"]?.GetValue<int>();
         if (beforeValue.HasValue && beforeValue.Value < 0)
             return CreateToolErrorResponse(id, "before must be greater than or equal to 0");
-        var before = beforeValue ?? 0;
+        var before = ClampContextLines(beforeValue ?? 0);
 
         var afterValue = args?["after"]?.GetValue<int>();
         if (afterValue.HasValue && afterValue.Value < 0)
             return CreateToolErrorResponse(id, "after must be greater than or equal to 0");
-        var after = afterValue ?? 0;
+        var after = ClampContextLines(afterValue ?? 0);
+        var contextTruncated = beforeValue > MaxContextLines || afterValue > MaxContextLines;
+        var snippetLinesValue = args?["snippetLines"]?.GetValue<int>();
+        if (snippetLinesValue.HasValue && (snippetLinesValue.Value <= 0 || snippetLinesValue.Value > SearchSnippetFormatter.MaxSnippetLines))
+            return CreateToolErrorResponse(id, $"snippetLines must be in [1, {SearchSnippetFormatter.MaxSnippetLines}]");
+        if (snippetLinesValue.HasValue)
+        {
+            var surroundingLines = snippetLinesValue.Value - 1;
+            if (!beforeValue.HasValue)
+                before = surroundingLines / 2;
+            if (!afterValue.HasValue)
+                after = surroundingLines - before;
+        }
+        var focusLine = args?["focusLine"]?.GetValue<int>();
+        if (focusLine.HasValue && focusLine.Value <= 0)
+            return CreateToolErrorResponse(id, "focusLine must be greater than or equal to 1");
+        var focusColumn = args?["focusColumn"]?.GetValue<int>();
+        if (focusColumn.HasValue && focusColumn.Value <= 0)
+            return CreateToolErrorResponse(id, "focusColumn must be greater than or equal to 1");
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        var regex = args?["regex"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth);
+            List<FileFindResult> results;
+            try
+            {
+                results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth, focusLine, focusColumn, regex);
+            }
+            catch (Exception ex) when (regex && (ex is ArgumentException || ex is RegexMatchTimeoutException))
+            {
+                return CreateToolErrorResponse(id, $"invalid regular expression: {ex.Message}");
+            }
             var structured = new JsonObject
             {
                 ["query"] = query,
@@ -1832,12 +1951,20 @@ public partial class McpServer
                 ["excludeTests"] = excludeTests,
                 ["before"] = before,
                 ["after"] = after,
+                ["contextTruncated"] = contextTruncated,
                 ["maxLineWidth"] = maxLineWidth,
                 ["exact"] = exact,
+                ["regex"] = regex,
                 ["count"] = results.Count,
                 ["fileCount"] = results.Select(r => r.Path).Distinct().Count(),
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions),
             };
+            if (snippetLinesValue.HasValue)
+                structured["snippetLines"] = snippetLinesValue.Value;
+            if (focusLine.HasValue)
+                structured["focusLine"] = focusLine.Value;
+            if (focusColumn.HasValue)
+                structured["focusColumn"] = focusColumn.Value;
             if (results.Count == 0)
             {
                 AddFreshnessHint(structured, reader);
@@ -1847,6 +1974,11 @@ public partial class McpServer
             var fileCount = structured["fileCount"]!.GetValue<int>();
             return CreateToolResult(id, $"Found {ConsoleUi.Counted(results.Count, "in-file match", "in-file matches")} across {ConsoleUi.Counted(fileCount, "file")}.", structured);
         });
+    }
+
+    private static int ClampContextLines(int value)
+    {
+        return Math.Min(value, MaxContextLines);
     }
 
     private JsonNode ExecuteBatchQuery(JsonNode? id, JsonNode? args)
@@ -2518,6 +2650,7 @@ public partial class McpServer
 
             if (count == 0)
             {
+                AddSymbolRecoveryHint(payload, query, "impact_analysis", lang, null, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
                 var graphReason = ReferenceExtractor.BuildGraphSupportReason(lang, lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null);
                 if (graphReason != null)
@@ -2650,7 +2783,15 @@ public partial class McpServer
                 summary += " Warning: cross-file hotspot family grouping is degraded, so results may be conservative until the next successful reindex.";
             }
             if (visibleCount == 0)
+            {
+                AddRecoveryHint(
+                    payload,
+                    "no_results",
+                    "symbol_hotspots returned no rows; verify that graph references are indexed and loosen kind/lang/path filters.",
+                    "status",
+                    new JsonObject());
                 AddFreshnessHint(payload, reader);
+            }
             return CreateToolResult(id, summary, payload);
         });
     }
@@ -2707,7 +2848,15 @@ public partial class McpServer
                 summary += " Warning: symbol_references table is missing in this index; zero-result unused output is degraded, not authoritative.";
             }
             if (results.Count == 0)
+            {
+                AddRecoveryHint(
+                    payload,
+                    "no_results",
+                    "unused_symbols returned no rows; verify graph readiness and loosen kind/lang/path filters before treating this as authoritative.",
+                    "status",
+                    new JsonObject());
                 AddFreshnessHint(payload, reader);
+            }
             return CreateToolResult(id, summary, payload);
         });
     }
@@ -2717,7 +2866,7 @@ public partial class McpServer
         var payload = new JsonObject
         {
             ["version"] = _version,
-            ["timestamp"] = DateTime.UtcNow.ToString("O"),
+            ["timestamp"] = GetUtcNow().ToString("O"),
             ["db_path"] = _dbPath,
             ["db_exists"] = File.Exists(LongPath.EnsureWindowsPrefix(_dbPath)),
         };
@@ -2786,6 +2935,8 @@ public partial class McpServer
         if (maxFileBytes is <= 0 or > int.MaxValue)
             return CreateToolErrorResponse(id, "maxFileBytes must be a positive integer less than or equal to 2147483647");
         var projectPath = Path.GetFullPath(path);
+        var runStartedAtUtc = DateTime.UtcNow;
+        var runStopwatch = Stopwatch.StartNew();
 
         // Prevent path traversal — only allow indexing within current working directory
         // パストラバーサル防止 — カレントディレクトリ配下のみインデックスを許可
@@ -2872,6 +3023,25 @@ public partial class McpServer
             }
         }
 
+        static long SumReadableFileBytes(IEnumerable<string> paths)
+        {
+            long total = 0;
+            foreach (var filePath in paths)
+            {
+                try
+                {
+                    var info = new FileInfo(filePath);
+                    if (info.Exists)
+                        total += info.Length;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+                {
+                }
+            }
+
+            return total;
+        }
+
         // First mutation point — demote readiness just before any write.
         // 実書き込み直前で readiness をクリア。
         writer.ClearReadyFlags();
@@ -2899,6 +3069,7 @@ public partial class McpServer
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
             csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
         int processed = 0, skipped = 0, errors = 0;
+        var failures = new List<IndexFileFailure>();
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var filePath in files)
@@ -2970,9 +3141,10 @@ public partial class McpServer
                         txn.Commit();
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
                     errors++;
+                    failures.Add(BuildIndexFileFailure(projectPath, filePath, ex, "delete_skipped_binary"));
                 }
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
@@ -2991,9 +3163,10 @@ public partial class McpServer
                         txn.Commit();
                     }
                 }
-                catch
+                catch (Exception cleanupEx)
                 {
                     errors++;
+                    failures.Add(BuildIndexFileFailure(projectPath, filePath, cleanupEx, "delete_missing_file"));
                 }
             }
             catch (OperationCanceledException) when (requestToken.IsCancellationRequested)
@@ -3002,11 +3175,12 @@ public partial class McpServer
                     writer.ClearBatchInProgress();
                 throw;
             }
-            catch
+            catch (Exception ex)
             {
                 if (fileBatchMarked)
                     writer.ClearBatchInProgress();
                 errors++;
+                failures.Add(BuildIndexFileFailure(projectPath, filePath, ex, "index_file"));
             }
             processed++;
             EmitProgressNotification(progressToken, processed, files.Count);
@@ -3098,6 +3272,15 @@ public partial class McpServer
             writer.SetMeta(
                 DbContext.UnknownExtensionFileCountMetaKey,
                 scanResult.UnknownExtensionFiles.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp");
+            writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunDurationMsMetaKey, runStopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunFilesScannedMetaKey, files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunFilesSkippedMetaKey, skipped.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunParseErrorsMetaKey, errors.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunBytesReadMetaKey, SumReadableFileBytes(files).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunRowsUpsertedMetaKey, processed.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunRowsDeletedMetaKey, purged.ToString(System.Globalization.CultureInfo.InvariantCulture));
             // Persist the current HEAD only after the run is fully successful (errors == 0).
             // Mirrors the CLI full-scan contract (Issue #1508) so MCP-driven re-indexes also
             // refresh `worktree_head_changed`; partial / failed runs leave the prior HEAD
@@ -3114,7 +3297,7 @@ public partial class McpServer
             {
                 var headBranch = GitHelper.TryGetHeadBranch(projectPath);
                 var timestamp = currentHeadCommit != null
-                    ? DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture)
+                    ? GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture)
                     : null;
                 writer.SetMeta(DbContext.IndexedHeadShaMetaKey, currentHeadCommit);
                 writer.SetMeta(DbContext.IndexedHeadBranchMetaKey, headBranch);
@@ -3160,7 +3343,8 @@ public partial class McpServer
                 ["skipped"] = skipped,
                 ["purged"] = purged,
                 ["unknown_extension_file_count"] = scanResult.UnknownExtensionFiles.Count,
-                ["errors"] = errors
+                ["errors"] = errors,
+                ["failed_count"] = failures.Count
             },
             ["sql_graph_contract_ready"] = sqlGraphContractReadyAfter,
             ["csharp_symbol_name_ready"] = csharpSymbolNameReadyAfter,
@@ -3170,9 +3354,28 @@ public partial class McpServer
             ["fold_ready"] = foldReadyAfter,
             ["fold_ready_reason"] = foldReadyReason
         };
+        if (failures.Count > 0)
+        {
+            var failureArray = new JsonArray();
+            foreach (var failure in failures.Take(50))
+            {
+                failureArray.Add(new JsonObject
+                {
+                    ["path"] = failure.Path,
+                    ["stage"] = failure.Stage,
+                    ["exception_type"] = failure.ExceptionType,
+                    ["message"] = failure.Message,
+                });
+            }
+            structured["failed_count"] = failures.Count;
+            structured["failures"] = failureArray;
+            if (failures.Count > 50)
+                structured["failures_truncated"] = failures.Count - 50;
+            GlobalToolLog.Error($"mcp_index_file_failures count={failures.Count} first_path='{failures[0].Path}' first_error='{failures[0].ExceptionType}: {failures[0].Message}'");
+        }
         if (!sqlGraphContractReadyAfter)
         {
-            var signalReader = new DbReader(writer.Connection);
+            using var signalReader = new DbReader(writer.Connection);
             AddSqlGraphContractSignal(structured, signalReader.GetSqlGraphContractSignal());
         }
         return CreateToolResult(id,
@@ -3188,7 +3391,15 @@ public partial class McpServer
             structured);
     }
 
-    private JsonNode ExecuteBackfillFold(JsonNode? id, JsonNode? progressToken = null)
+    private static IndexFileFailure BuildIndexFileFailure(string projectPath, string filePath, Exception ex, string stage)
+    {
+        var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, filePath));
+        return new IndexFileFailure(relativePath, stage, ex.GetType().Name, ex.Message);
+    }
+
+    private sealed record IndexFileFailure(string Path, string Stage, string ExceptionType, string Message);
+
+    private JsonNode ExecuteBackfillFold(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
         if (!DbContext.TryValidateExistingCodeIndexDb(_dbPath, out var validationMessage, out var isNotFound))
         {
@@ -3210,38 +3421,75 @@ public partial class McpServer
             MarkSharedDbMigrated();
             var writer = new DbWriter(db);
             var userVersionBefore = db.GetUserVersion();
+            var foldReadyBefore = (userVersionBefore & DbContext.FoldReadyFlag) != 0;
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
             var storedFoldVersion = db.GetMetaString("fold_key_version");
             var storedFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
-            var rewriteAll = storedFoldVersion != currentFoldVersion
-                || storedFoldFingerprint != currentFoldFingerprint;
-            EmitProgressNotification(progressToken, 0, null, "Backfilling folded-name keys.");
-            var (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
-            EmitProgressNotification(progressToken, symbols + symbolReferences, null, "Verifying folded-name keys.");
-            // MarkFoldReady wraps its own re-verification in BEGIN IMMEDIATE, so a concurrent
-            // writer cannot insert NULL-folded rows between the verify and the stamp. Issue #1535.
-            // MarkFoldReady は BEGIN IMMEDIATE 内で再検証するため、concurrent writer による
-            // NULL 行差し込みで fold_ready が嘘になるのを防ぐ。Issue #1535。
-            var verified = writer.MarkFoldReady();
-            if (!verified)
-                return CreateToolErrorResponse(id, "Folded-name backfill verification failed: some rows still have NULL folded values. Re-run backfill_fold.");
+            var foldMetadataCurrentBefore = storedFoldVersion == currentFoldVersion
+                && storedFoldFingerprint == currentFoldFingerprint;
+            foldReadyBefore = foldReadyBefore && foldMetadataCurrentBefore;
+            var dryRun = args?["dry_run"]?.GetValue<bool>() ?? args?["dryRun"]?.GetValue<bool>() ?? false;
+            var force = args?["force"]?.GetValue<bool>() ?? false;
+            var rewriteAll = force
+                || !foldMetadataCurrentBefore;
+            var symbols = 0;
+            var symbolReferences = 0;
+            var verified = false;
+            var userVersionAfter = userVersionBefore;
 
-            var userVersionAfter = db.GetUserVersion();
-            EmitProgressNotification(progressToken, symbols + symbolReferences, symbols + symbolReferences, "Folded-name backfill complete.");
+            if (dryRun)
+            {
+                (symbols, symbolReferences) = writer.CountBackfillFoldedColumns(rewriteAll);
+            }
+            else
+            {
+                EmitProgressNotification(progressToken, 0, null, "Backfilling folded-name keys.");
+                using var transaction = writer.BeginTransaction();
+                (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
+                EmitProgressNotification(progressToken, symbols + symbolReferences, null, "Verifying folded-name keys.");
+                // Verify and stamp in the same transaction as the row rewrite so crash recovery
+                // never leaves current fold metadata without a matching FoldReady stamp.
+                // 行の再生成と同じ transaction で検証・stamp し、metadata だけが先に残らないようにする。
+                verified = writer.MarkFoldReady();
+                if (!verified)
+                    return CreateToolErrorResponse(id, "Folded-name backfill verification failed: some rows still have NULL folded values. Re-run backfill_fold.");
+
+                transaction.Commit();
+                userVersionAfter = db.GetUserVersion();
+                EmitProgressNotification(progressToken, symbols + symbolReferences, symbols + symbolReferences, "Folded-name backfill complete.");
+            }
+
+            var foldMetadataCurrentAfter = dryRun
+                ? foldMetadataCurrentBefore
+                : true;
+            var foldReadyAfter = (userVersionAfter & DbContext.FoldReadyFlag) != 0
+                && foldMetadataCurrentAfter;
+            var wasAlreadyComplete = foldReadyBefore && !rewriteAll && symbols == 0 && symbolReferences == 0;
 
             var payload = new JsonObject
             {
                 ["symbols"] = symbols,
                 ["symbol_references"] = symbolReferences,
                 ["rewrite_all"] = rewriteAll,
+                ["dry_run"] = dryRun,
+                ["force"] = force,
+                ["was_already_complete"] = wasAlreadyComplete,
+                ["fold_ready_before"] = foldReadyBefore,
+                ["fold_ready_after"] = foldReadyAfter,
                 ["verified"] = verified,
                 ["user_version_before"] = userVersionBefore,
                 ["user_version_after"] = userVersionAfter,
-                ["fold_ready"] = true,
+                ["fold_ready"] = foldReadyAfter,
+                ["fold_key_version_before"] = storedFoldVersion,
+                ["fold_key_version_after"] = dryRun ? storedFoldVersion : currentFoldVersion,
+                ["fold_key_fingerprint_before"] = storedFoldFingerprint,
+                ["fold_key_fingerprint_after"] = dryRun ? storedFoldFingerprint : currentFoldFingerprint,
             };
 
-            var summary = rewriteAll
+            var summary = dryRun
+                ? "Folded-name backfill preview complete."
+                : rewriteAll
                 ? "Folded-name keys refreshed and FoldReady stamped."
                 : "Missing folded-name keys backfilled and FoldReady stamped.";
             return CreateToolResult(id, summary, payload);
@@ -3323,8 +3571,13 @@ public partial class McpServer
         //    .cdidx ディレクトリを解決し、必要に応じて作成
         var cdidxDir = Path.GetDirectoryName(_dbPath);
         if (string.IsNullOrEmpty(cdidxDir))
+            cdidxDir = Path.GetDirectoryName(Path.GetFullPath(_dbPath));
+        if (string.IsNullOrEmpty(cdidxDir))
             cdidxDir = Path.Combine(Path.GetFullPath("."), ".cdidx");
         DataDirectorySecurity.CreatePrivateDirectory(cdidxDir);
+        cdidxDir = Path.GetFullPath(cdidxDir);
+        if (!TryProbeCdidxDirectoryWritable(cdidxDir, out var probeError))
+            return CreateToolErrorResponse(id, probeError!);
 
         // 6. Store locally, reserve a submission attempt under the file lock,
         //    then call GitHub outside the lock so slow remote I/O does not block
@@ -3335,7 +3588,7 @@ public partial class McpServer
         // Derive DB identity for scoped suggestion storage.
         // スコープ付き提案蓄積のため DB identity を導出。
         var dbName = Path.GetFileNameWithoutExtension(_dbPath);
-        var store = new SuggestionStore(cdidxDir, dbName);
+        var store = new SuggestionStore(cdidxDir, dbName, _timeProvider);
         var record = new SuggestionRecord
         {
             Category = category,
@@ -3343,7 +3596,6 @@ public partial class McpServer
             Description = description,
             Context = context,
             Hash = hash,
-            CreatedAt = DateTime.UtcNow,
             CreatedByAgent = ResolveSuggestionAgent(),
             SessionId = _sessionId,
             ClientVersion = _version,
@@ -3377,6 +3629,7 @@ public partial class McpServer
                         : "This suggestion has already been recorded.",
                 ["submitted_to_github"] = result.AlreadySubmitted || result.UpstreamUrl != null,
                 ["lifecycle_status"] = JsonNamingPolicy.SnakeCaseLower.ConvertName(result.Status.ToString()),
+                ["cdidx_dir"] = cdidxDir,
             };
             if (result.DuplicateOfHash != null)
                 dupPayload["duplicate_of"] = result.DuplicateOfHash;
@@ -3400,6 +3653,7 @@ public partial class McpServer
             ["stored_locally"] = true,
             ["submitted_to_github"] = result.UpstreamUrl != null,
             ["lifecycle_status"] = JsonNamingPolicy.SnakeCaseLower.ConvertName(result.Status.ToString()),
+            ["cdidx_dir"] = cdidxDir,
         };
         if (result.UpstreamUrl != null)
         {
@@ -3407,6 +3661,25 @@ public partial class McpServer
             payload["github_issue_url"] = result.UpstreamUrl;
         }
         return CreateToolResult(id, "Suggestion recorded. Thank you for the feedback.", payload);
+    }
+
+    private static bool TryProbeCdidxDirectoryWritable(string cdidxDir, out string? error)
+    {
+        var probePath = Path.Combine(cdidxDir, $".write_probe.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            using (new FileStream(probePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+            }
+            File.Delete(probePath);
+            error = null;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            error = $"Cannot write to .cdidx directory {cdidxDir}; check directory ownership, permissions, and read-only mounts. {ex.Message}";
+            return false;
+        }
     }
 
     private static CSharpStaticInterfaceWorkspaceSymbols BuildMcpCSharpStaticInterfaceWorkspaceSymbols(

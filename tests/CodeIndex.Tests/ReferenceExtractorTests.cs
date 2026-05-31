@@ -14791,6 +14791,52 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_ElixirPipeCalls_DetectsQualifiedAndUnqualifiedTargets()
+    {
+        const string content = """
+            defmodule MyApp do
+              def run(items) do
+                items
+                |> Enum.map(&process/1)
+                |> Enum.filter(&valid?/1)
+                |> normalize(:strict)
+                |> persist!
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "elixir", content);
+        var references = ReferenceExtractor.Extract(1, "elixir", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "map" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "filter" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "normalize" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "persist!" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_ElixirDefimpl_CapturesProtocolAndImplementedTypes()
+    {
+        const string content = """
+            defimpl Enumerable, for: MyApp.Stream do
+              def count(stream), do: {:ok, length(stream.items)}
+            end
+
+            defimpl Inspect, for: [MyApp.Stream, Other.Stream] do
+              def inspect(stream, _opts), do: "#Stream<#{length(stream.items)}>"
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "elixir", content);
+        var references = ReferenceExtractor.Extract(1, "elixir", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Enumerable" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Inspect" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "MyApp.Stream" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Other.Stream" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_ElixirNestedBlocks_AssignsCorrectCallerContainers()
     {
         // Elixir: nested body ranges must keep downstream calls inside the right container / ネストした本体範囲でも呼び出しを正しいコンテナに帰属させる

@@ -33,6 +33,7 @@ public partial class McpServer : IDisposable
     private readonly Func<JsonNode, string> _serializeResponse;
     private readonly IMcpAuthenticator _authenticator;
     private readonly McpToolFilter _toolFilter;
+    private readonly TimeProvider _timeProvider;
     // Bounds the number of MCP tool calls in flight at once so an unbounded burst of
     // requests cannot exhaust memory or wedge the SQLite reader lock (#1567). The
     // stdio / HTTP loop today only ever has one frame in flight, but the gate
@@ -89,6 +90,12 @@ public partial class McpServer : IDisposable
     // (ファイルハンドル / rotation) は ProgramRunner 側で所有する。
     private readonly AuditLogSink? _auditLog;
     private readonly TimeSpan _requestTimeout;
+    private readonly TimeSpan? _keepAliveInterval;
+    private readonly DateTimeOffset _startedAt = DateTimeOffset.UtcNow;
+    private DateTimeOffset _lastRequestAt = DateTimeOffset.UtcNow;
+    private DateTimeOffset? _lastDbCheckAt;
+    private bool? _lastDbCheckOk;
+    private string? _lastDbCheckError;
     private readonly SemaphoreSlim _textWriterGate = new(1, 1);
     // `initialize.clientInfo` echoed into every audit record so the trail can answer
     // "which client issued this call?" without a second log source. Updated on every
@@ -149,6 +156,7 @@ public partial class McpServer : IDisposable
     internal const int MaxLineByteLength = 1_048_576;
     internal const int DefaultMaxResponseBytes = 10 * 1024 * 1024;
     private const string MaxResponseBytesEnvVar = "CDIDX_MCP_RESPONSE_MAX_BYTES";
+    private const string KeepAliveIntervalEnvironmentVariable = "CDIDX_MCP_KEEP_ALIVE_INTERVAL_S";
     internal const int MaxJsonDepth = 32;
     internal const int MaxBatchRequestCount = 100;
     // Stdio buffer for the JSON-RPC loop. Sized to fit typical large MCP payloads (e.g. batch_query)
@@ -166,17 +174,17 @@ public partial class McpServer : IDisposable
     internal static readonly TimeSpan DefaultEofPostCancelDrainTimeout = TimeSpan.FromSeconds(5);
 
     public McpServer(string dbPath, string version, bool dbPathExplicit = false)
-        : this(dbPath, version, dbPathExplicit, null, null, null, null, DefaultMaxConcurrency)
+        : this(dbPath, version, dbPathExplicit, null, null, null, null, DefaultMaxConcurrency, null)
     {
     }
 
     public McpServer(string dbPath, string version, bool dbPathExplicit, IMcpAuthenticator authenticator)
-        : this(dbPath, version, dbPathExplicit, null, authenticator, null, null, DefaultMaxConcurrency)
+        : this(dbPath, version, dbPathExplicit, null, authenticator, null, null, DefaultMaxConcurrency, null)
     {
     }
 
     public McpServer(string dbPath, string version, bool dbPathExplicit, McpToolFilter? toolFilter)
-        : this(dbPath, version, dbPathExplicit, null, null, toolFilter, null, DefaultMaxConcurrency)
+        : this(dbPath, version, dbPathExplicit, null, null, toolFilter, null, DefaultMaxConcurrency, null)
     {
     }
 
@@ -184,22 +192,22 @@ public partial class McpServer : IDisposable
     // do not need a custom authenticator or tool filter.
     // serializer 注入だけが必要な既存テスト向けの内部互換 entry。
     internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse)
-        : this(dbPath, version, dbPathExplicit, serializeResponse, null, null, null, DefaultMaxConcurrency)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, null, null, null, DefaultMaxConcurrency, null)
     {
     }
 
     internal McpServer(string dbPath, string version, bool dbPathExplicit, AuditLogSink? auditLog)
-        : this(dbPath, version, dbPathExplicit, null, null, null, auditLog, DefaultMaxConcurrency)
+        : this(dbPath, version, dbPathExplicit, null, null, null, auditLog, DefaultMaxConcurrency, null)
     {
     }
 
     internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator)
-        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, null, null, DefaultMaxConcurrency)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, null, null, DefaultMaxConcurrency, null)
     {
     }
 
     internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator, McpToolFilter? toolFilter)
-        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, toolFilter, null, DefaultMaxConcurrency)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, toolFilter, null, DefaultMaxConcurrency, null)
     {
     }
 
@@ -207,7 +215,7 @@ public partial class McpServer : IDisposable
     // with a null AuditLogSink so the maxConcurrency tests do not need to thread an audit log.
     // #1567 由来の maxConcurrency 注入用 overload。auditLog は null 固定で master に流す。
     internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator, McpToolFilter? toolFilter, int maxConcurrency)
-        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, toolFilter, null, maxConcurrency)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, toolFilter, null, maxConcurrency, null)
     {
     }
 
@@ -217,16 +225,21 @@ public partial class McpServer : IDisposable
     // ProgramRunner が authenticator (#1559) と audit log (#1562) を同時に注入できる
     // 経路。それ以外の組み合わせは上の個別 overload で済む。
     internal McpServer(string dbPath, string version, bool dbPathExplicit, IMcpAuthenticator? authenticator, AuditLogSink? auditLog)
-        : this(dbPath, version, dbPathExplicit, null, authenticator, null, auditLog, DefaultMaxConcurrency)
+        : this(dbPath, version, dbPathExplicit, null, authenticator, null, auditLog, DefaultMaxConcurrency, null)
     {
     }
 
     internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator, McpToolFilter? toolFilter, AuditLogSink? auditLog)
-        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, toolFilter, auditLog, DefaultMaxConcurrency)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, toolFilter, auditLog, DefaultMaxConcurrency, null)
     {
     }
 
     internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator, McpToolFilter? toolFilter, AuditLogSink? auditLog, int maxConcurrency)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, toolFilter, auditLog, maxConcurrency, null)
+    {
+    }
+
+    internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator, McpToolFilter? toolFilter, AuditLogSink? auditLog, int maxConcurrency, TimeProvider? timeProvider)
     {
         if (maxConcurrency < 1)
             throw new ArgumentOutOfRangeException(nameof(maxConcurrency), maxConcurrency, "MCP concurrency cap must be at least 1.");
@@ -242,11 +255,13 @@ public partial class McpServer : IDisposable
         _serializeResponse = serializeResponse ?? (node => node.ToJsonString(_jsonOptions));
         _authenticator = authenticator ?? LocalStdioAuthenticator.Instance;
         _toolFilter = toolFilter ?? McpToolFilter.FromEnvironment();
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _auditLog = auditLog;
         RateLimiter = new RateLimiter(RateLimiterOptions.FromEnvironment());
         _concurrencyGate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
         MaxConcurrency = maxConcurrency;
         _requestTimeout = DefaultRequestTimeout;
+        _keepAliveInterval = ReadKeepAliveIntervalFromEnvironment();
     }
 
     /// <summary>
@@ -295,6 +310,8 @@ public partial class McpServer : IDisposable
     /// 現在設定されている in-flight ツール呼び出し上限 (#1567)。テスト向けに公開。
     /// </summary>
     internal int MaxConcurrency { get; }
+
+    private DateTime GetUtcNow() => _timeProvider.GetUtcNow().UtcDateTime;
 
     internal TimeSpan RequestTimeout
     {
@@ -419,10 +436,15 @@ public partial class McpServer : IDisposable
 
         // Use stderr for logging so stdout stays clean for JSON-RPC
         // stdoutをJSON-RPC用にクリーンに保つため、ログはstderrに出力
-        Console.Error.WriteLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {_dbPath}, transport: {transport.Name} @ {transport.Endpoint}, max in-flight: {MaxConcurrency})");
+        ConsoleUi.TryWriteErrorLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {_dbPath}, transport: {transport.Name} @ {transport.Endpoint}, max in-flight: {MaxConcurrency})");
 
         if (transport is HttpMcpTransport httpTransport)
+        {
             httpTransport.OutOfBandFrameHandler = ProcessFrame;
+            httpTransport.HealthJsonProvider = BuildHealthJson;
+            httpTransport.KeepAliveInterval = _keepAliveInterval;
+            httpTransport.KeepAliveFrameProvider = BuildKeepAliveNotificationJson;
+        }
 
         try
         {
@@ -503,7 +525,12 @@ public partial class McpServer : IDisposable
         finally
         {
             if (transport is HttpMcpTransport httpTransportToClear)
+            {
                 httpTransportToClear.OutOfBandFrameHandler = null;
+                httpTransportToClear.HealthJsonProvider = null;
+                httpTransportToClear.KeepAliveInterval = null;
+                httpTransportToClear.KeepAliveFrameProvider = null;
+            }
         }
 
         Console.Error.WriteLine("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
@@ -1051,6 +1078,8 @@ public partial class McpServer : IDisposable
                 suggestion: "Send a JSON-RPC 2.0 object (e.g. {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}).",
                 retrySafe: false);
 
+        _lastRequestAt = DateTimeOffset.UtcNow;
+
         // Extract `method` defensively: a non-string `method` (e.g. `"method":42`) must not
         // throw before the auth gate runs, otherwise a token-protected server would surface
         // `-32603 "Internal error"` to an unauthenticated caller instead of `-32001
@@ -1151,12 +1180,89 @@ public partial class McpServer : IDisposable
             "prompts/list" => Task.FromResult<JsonNode>(HandlePromptsList(id)),
             "prompts/get" => Task.FromResult<JsonNode>(HandlePromptsGet(id, request["params"])),
             "logging/setLevel" => Task.FromResult<JsonNode>(HandleLoggingSetLevel(id, request["params"])),
-            "ping" => Task.FromResult<JsonNode>(CreateSuccessResponse(hasId, id, new JsonObject())),
+            "ping" => Task.FromResult<JsonNode>(CreateSuccessResponse(hasId, id, BuildHealthResult())),
             _ => Task.FromResult<JsonNode>(CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Method not found: {method}",
                 category: McpErrorEnvelope.CategoryMethodNotFound,
                 suggestion: "Supported methods: initialize, tools/list, tools/call, resources/list, resources/read, prompts/list, prompts/get, logging/setLevel, ping, notifications/initialized, notifications/cancelled, notifications/shutdown.",
                 retrySafe: false)),
         }).ConfigureAwait(false);
+    }
+
+    private string BuildHealthJson()
+        => BuildHealthResult().ToJsonString(_jsonOptions);
+
+    private string BuildKeepAliveNotificationJson()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var notification = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["method"] = "notifications/keep_alive",
+            ["params"] = new JsonObject
+            {
+                ["server_time"] = now.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+                ["uptime_s"] = Math.Max(0, (long)Math.Floor((now - _startedAt).TotalSeconds)),
+            }
+        };
+        return notification.ToJsonString(_jsonOptions);
+    }
+
+    private static TimeSpan? ReadKeepAliveIntervalFromEnvironment()
+    {
+        var raw = Environment.GetEnvironmentVariable(KeepAliveIntervalEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+        if (!double.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var seconds)
+            || seconds <= 0)
+            return null;
+        return TimeSpan.FromSeconds(seconds);
+    }
+
+    private JsonObject BuildHealthResult()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var dbOpen = ProbeDbHealth(now, out var dbError);
+        var result = new JsonObject
+        {
+            ["status"] = dbOpen ? "ok" : "degraded",
+            ["uptime_s"] = Math.Max(0, (long)Math.Floor((now - _startedAt).TotalSeconds)),
+            ["last_request_at"] = _lastRequestAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            ["db_open"] = dbOpen,
+            ["last_db_check_at"] = _lastDbCheckAt?.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            ["transport_ready"] = _running,
+        };
+        if (!string.IsNullOrWhiteSpace(dbError))
+            result["db_error"] = dbError;
+        return result;
+    }
+
+    private bool ProbeDbHealth(DateTimeOffset now, out string? error)
+    {
+        try
+        {
+            var builder = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+            {
+                DataSource = _dbPath,
+                Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly,
+            };
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection(builder.ConnectionString);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT 1;";
+            _ = command.ExecuteScalar();
+            _lastDbCheckAt = now;
+            _lastDbCheckOk = true;
+            _lastDbCheckError = null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException or InvalidOperationException)
+        {
+            _lastDbCheckAt = now;
+            _lastDbCheckOk = false;
+            _lastDbCheckError = ex.GetType().Name;
+        }
+
+        error = _lastDbCheckError;
+        return _lastDbCheckOk == true;
     }
 
     private async Task<JsonNode?> HandleBatchMessageAsync(JsonArray batch, bool isolateRequestDb)
@@ -2093,7 +2199,7 @@ public partial class McpServer : IDisposable
                         "symbol_hotspots" => ExecuteSymbolHotspots(id, args),
                         "ping" => ExecutePing(id),
                         "index" => ExecuteIndex(id, args, progressToken),
-                        "backfill_fold" => ExecuteBackfillFold(id, progressToken),
+                        "backfill_fold" => ExecuteBackfillFold(id, args, progressToken),
                         "suggest_improvement" => await ExecuteSuggestImprovementAsync(id, args).ConfigureAwait(false),
                         _ => CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown tool: {toolName}",
                             category: McpErrorEnvelope.CategoryToolUnknown,
@@ -2518,7 +2624,7 @@ public partial class McpServer : IDisposable
         {
             using var isolatedDb = new DbContext(_dbPath);
             isolatedDb.TryMigrateForRead();
-            var isolatedReader = new DbReader(isolatedDb, requestToken);
+            using var isolatedReader = new DbReader(isolatedDb, requestToken);
             isolatedReader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
             return isolatedReader.RunWithGeneratedScope(() => action(isolatedReader));
         }
@@ -2539,7 +2645,7 @@ public partial class McpServer : IDisposable
         // MCP ツール呼び出しごとの schema 再走査を排除し (issue #1565)、
         // per-request cancellation token を reader に渡して SQLite 作業が
         // shutdown / 切断を観測できるようにする (#1567)。
-        var reader = new DbReader(db, requestToken);
+        using var reader = new DbReader(db, requestToken);
         reader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
         return reader.RunWithGeneratedScope(() => action(reader));
     }
@@ -2873,7 +2979,7 @@ public partial class McpServer : IDisposable
                 },
             },
             "index" => new JsonObject { ["path"] = ".", ["rebuild"] = false },
-            "backfill_fold" => new JsonObject(),
+            "backfill_fold" => new JsonObject { ["dry_run"] = false, ["force"] = false },
             "symbol_hotspots" => new JsonObject { ["lang"] = "csharp", ["limit"] = 10 },
             "unused_symbols" => new JsonObject { ["lang"] = "csharp", ["limit"] = 10 },
             "suggest_improvement" => new JsonObject

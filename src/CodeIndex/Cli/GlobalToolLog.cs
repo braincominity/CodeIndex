@@ -18,6 +18,7 @@ internal static class GlobalToolLog
     internal const string LogRetainEnvironmentVariable = "CDIDX_LOG_RETAIN";
     internal const string LogMaxSizeMbEnvironmentVariable = "CDIDX_LOG_MAX_SIZE_MB";
     private const string RedactedValue = "<redacted>";
+    internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
     private static readonly AsyncLocal<Session?> CurrentSession = new();
     private static readonly Regex SensitiveAssignmentPattern = new(
         @"^(?<name>--?[^=\s]*(?:token|password|passwd|pwd|secret|auth|apikey|api-key|access-key|credential)[^=\s]*)=(?<value>.+)$",
@@ -377,7 +378,7 @@ internal static class GlobalToolLog
 
     private static string ResolveLogPath(string logDirectory, LogOptions options)
     {
-        var date = DateTime.UtcNow.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture);
+        var date = TimeProvider.GetUtcNow().UtcDateTime.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture);
         if (options.MaxSizeBytes <= 0)
             return Path.Combine(logDirectory, $"stderr-{date}.log");
 
@@ -638,26 +639,39 @@ internal static class GlobalToolLog
 
         public override void Flush()
         {
-            primary.Flush();
-            secondary.Flush();
+            TryWrite(primary.Flush);
+            TryWrite(secondary.Flush);
         }
 
         public override void Write(char value)
         {
-            primary.Write(value);
-            secondary.Write(value);
+            TryWrite(() => primary.Write(value));
+            TryWrite(() => secondary.Write(value));
         }
 
         public override void Write(string? value)
         {
-            primary.Write(value);
-            secondary.Write(value);
+            TryWrite(() => primary.Write(value));
+            TryWrite(() => secondary.Write(value));
         }
 
         public override void WriteLine(string? value)
         {
-            primary.WriteLine(value);
-            secondary.WriteLine(value);
+            TryWrite(() => primary.WriteLine(value));
+            TryWrite(() => secondary.WriteLine(value));
+        }
+
+        private static void TryWrite(Action write)
+        {
+            try
+            {
+                write();
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+            {
+                // Best-effort mirror: a disposed console writer must not cascade into callers.
+                // mirror はベストエフォート。閉じた console writer が呼び出し側へ波及しないようにする。
+            }
         }
     }
 }

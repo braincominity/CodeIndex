@@ -14,6 +14,10 @@ internal sealed record BackfillFoldJsonResult(
     [property: JsonPropertyName("symbols")] int Symbols,
     [property: JsonPropertyName("symbol_references")] int SymbolReferences,
     [property: JsonPropertyName("rewrite_all")] bool RewriteAll,
+    [property: JsonPropertyName("dry_run")] bool DryRun,
+    [property: JsonPropertyName("was_already_complete")] bool WasAlreadyComplete,
+    [property: JsonPropertyName("fold_ready_before")] bool FoldReadyBefore,
+    [property: JsonPropertyName("fold_ready_after")] bool FoldReadyAfter,
     [property: JsonPropertyName("verified")] bool Verified,
     [property: JsonPropertyName("user_version_before")] int UserVersionBefore,
     [property: JsonPropertyName("user_version_after")] int UserVersionAfter,
@@ -186,6 +190,27 @@ internal sealed class IndexFullScanSummaryJsonResult
     public int SymbolsDroppedByKindFilter { get; init; }
 }
 
+internal sealed class IndexMemorySampleJsonResult
+{
+    public string Phase { get; init; } = string.Empty;
+    public long ElapsedMs { get; init; }
+    public long HeapBytes { get; init; }
+    public long TotalAllocatedBytes { get; init; }
+    public long GcHeapSizeBytes { get; init; }
+    public long FragmentedBytes { get; init; }
+    public long WorkingSetBytes { get; init; }
+    public int Gen0Collections { get; init; }
+    public int Gen1Collections { get; init; }
+    public int Gen2Collections { get; init; }
+}
+
+internal sealed class IndexMemoryTimelineJsonResult
+{
+    public List<IndexMemorySampleJsonResult> Samples { get; init; } = [];
+    public long PeakWorkingSetBytes { get; init; }
+    public long PeakHeapBytes { get; init; }
+}
+
 public sealed class IndexSymbolKindFilterJsonResult
 {
     public IReadOnlyList<string> Include { get; init; } = [];
@@ -219,6 +244,7 @@ internal sealed class IndexUpdateJsonResult
     public string? CwdDriftNotice { get; init; }
     public List<CliJsonMessage>? Errors { get; init; }
     public List<CliJsonMessage>? Warnings { get; init; }
+    public IndexMemoryTimelineJsonResult? MemoryTimeline { get; init; }
     public long ElapsedMs { get; init; }
 }
 
@@ -253,6 +279,7 @@ internal sealed class IndexFullScanJsonResult
     public string? CwdDriftNotice { get; init; }
     public List<CliJsonMessage>? Errors { get; init; }
     public List<CliJsonMessage>? Warnings { get; init; }
+    public IndexMemoryTimelineJsonResult? MemoryTimeline { get; init; }
     public long ElapsedMs { get; init; }
 }
 
@@ -290,12 +317,15 @@ internal sealed record VersionInfoJsonResult(
     PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(BackfillFoldJsonResult))]
+[JsonSerializable(typeof(ActiveWorkspaceJsonResult))]
+[JsonSerializable(typeof(ActiveWorkspaceState))]
 [JsonSerializable(typeof(CalleeResult))]
 [JsonSerializable(typeof(CallerResult))]
 [JsonSerializable(typeof(CliJsonMessage))]
 [JsonSerializable(typeof(CompactSearchResult))]
 [JsonSerializable(typeof(CompactSearchResult[]))]
 [JsonSerializable(typeof(CommandErrorJsonResult))]
+[JsonSerializable(typeof(ConfigShowJsonResult))]
 [JsonSerializable(typeof(DbIntegrityCheckJsonResult))]
 [JsonSerializable(typeof(DbPruneJsonResult))]
 [JsonSerializable(typeof(DbSchemaEntryJsonResult))]
@@ -323,6 +353,8 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(IndexFreshnessCheckResult))]
 [JsonSerializable(typeof(IndexFullScanJsonResult))]
 [JsonSerializable(typeof(IndexFullScanSummaryJsonResult))]
+[JsonSerializable(typeof(IndexMemorySampleJsonResult))]
+[JsonSerializable(typeof(IndexMemoryTimelineJsonResult))]
 [JsonSerializable(typeof(IndexUpdateJsonResult))]
 [JsonSerializable(typeof(IndexUpdateSummaryJsonResult))]
 [JsonSerializable(typeof(IndexWatchEventJsonResult))]
@@ -372,6 +404,8 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(StatusResult))]
 [JsonSerializable(typeof(StatusReadinessDegradation))]
 [JsonSerializable(typeof(StatusDbPragmaSettings))]
+[JsonSerializable(typeof(StatusLastIndexRun))]
+[JsonSerializable(typeof(StatusProcessMetrics))]
 [JsonSerializable(typeof(SuggestionDetailJsonResult))]
 [JsonSerializable(typeof(SuggestionExportJsonResult))]
 [JsonSerializable(typeof(SuggestionListItemJsonResult))]
@@ -382,6 +416,9 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(CodeIndex.Models.UpdateCheckResult))]
 [JsonSerializable(typeof(VacuumResult))]
 [JsonSerializable(typeof(VersionInfoJsonResult))]
+[JsonSerializable(typeof(WorkspaceListJsonResult))]
+[JsonSerializable(typeof(WorkspaceManifest))]
+[JsonSerializable(typeof(WorkspaceMember))]
 internal partial class CliJsonSerializerContext : JsonSerializerContext;
 
 internal static class CliJsonSerializerContextFactory

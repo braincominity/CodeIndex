@@ -60,14 +60,14 @@ public static class ConsoleUi
 
     private static readonly (string Command, string Usage)[] CommandUsageLines =
     [
-        ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--optimize] [--verbose] [--dry-run] [--force] [--quiet] [--json] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--follow-symlinks <none|internal|all>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]] [--watch [--debounce <ms>]]"),
+        ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--optimize] [--verbose] [--dry-run] [--force] [--quiet] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--follow-symlinks <none|internal|all>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]] [--watch [--debounce <ms>]]"),
         ("hooks", "cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]"),
-        ("backfill-fold", "cdidx backfill-fold [--db <path>] [--json]"),
+        ("backfill-fold", "cdidx backfill-fold [--db <path>] [--dry-run] [--json]"),
         ("optimize", "cdidx optimize [--db <path>] [--json]"),
         ("vacuum", "cdidx vacuum [--db <path>] [--json]"),
-        ("index-commits", "cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
-        ("index-changed-between", "cdidx index <projectPath> --changed-between <old-ref> <new-ref> [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
-        ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
+        ("index-commits", "cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
+        ("index-changed-between", "cdidx index <projectPath> --changed-between <old-ref> <new-ref> [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
+        ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("search", "cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json[=ndjson|array]] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup] [--no-visibility-rank]"),
         ("definition", "cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
         ("goto", "cdidx goto <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--all]"),
@@ -76,12 +76,14 @@ public static class ConsoleUi
         ("callees", "cdidx callees <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--rank-by <weighted|count|kind>] [--raw-kinds] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
         ("symbols", "cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]"),
         ("files", "cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]"),
-        ("find", "cdidx find <query> --path <glob> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]"),
+        ("find", "cdidx find <query> --path <glob> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]"),
         ("excerpt", "cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--verbose]"),
         ("map", "cdidx map [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes] [--min-entrypoint-confidence <0.0..1.0>]"),
         ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]"),
         ("outline", "cdidx outline <path> [--db <path>] [--json] [--verbose]"),
         ("status", "cdidx status [--db <path>] [--json] [--verbose] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--stale-after <duration>] [--explain <field>] [--log-path] [--config] [--check-updates]"),
+        ("workspace", "cdidx workspace <list|status|use|current> [name] [--json]"),
+        ("config", "cdidx config show [--json]"),
         ("validate-config", "cdidx validate-config"),
         ("db", "cdidx db --integrity-check|schema|prune [--dry-run|--apply] [--db <path>] [--json]"),
         ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n>]"),
@@ -153,6 +155,23 @@ public static class ConsoleUi
                 _synchronizedError = TextWriter.Synchronized(error);
                 Console.SetError(_synchronizedError);
             }
+        }
+    }
+
+    internal static void TryWriteErrorLine(string? value = null)
+    {
+        try
+        {
+            if (value == null)
+                Console.Error.WriteLine();
+            else
+                Console.Error.WriteLine(value);
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (IOException)
+        {
         }
     }
 
@@ -744,6 +763,8 @@ public static class ConsoleUi
         Console.WriteLine("  inspect <query>            Bundle definition, graph, and nearby symbol context");
         Console.WriteLine("  outline <path>             Show a file outline ordered by line, start column, kind, and name");
         Console.WriteLine("  status                     Show database statistics; add --check for freshness, --config for effective config, --explain <field> for readiness, or --log-path for logs");
+        Console.WriteLine("  workspace                  List manifest members and manage the active workspace");
+        Console.WriteLine("  config show                Show resolved workspace config and precedence");
         Console.WriteLine("  upgrade                    Check for and install the latest release via install.sh");
         Console.WriteLine("  validate-config            Validate .cdidx/config.json or .cdidxrc.json");
         Console.WriteLine("  db --integrity-check       Run SQLite `PRAGMA integrity_check` and report findings");
@@ -769,11 +790,13 @@ public static class ConsoleUi
         Console.WriteLine();
         Console.WriteLine("Index and update options:");
         Console.WriteLine("  --db <path>                Database file path (default for index: <projectPath>/.cdidx/codeindex.db)");
+        WriteHelpLine("  .cdidxignore               Optional project-local ignore file; loaded after .gitignore in each directory");
         Console.WriteLine("  --rebuild                  Delete existing DB and rebuild from scratch");
         Console.WriteLine("  --verbose                  Show per-file status ([OK  ]/[SKIP]/[DEL ]/[ERR ])");
         Console.WriteLine("  --dry-run                  Scan files without writing to the database");
         Console.WriteLine("  --force                    Bypass the per-database index lock; only use when no other cdidx index is active");
         Console.WriteLine("  --json                     Output results as JSON (for AI/machine use)");
+        Console.WriteLine("  --memory-trace             Include phase memory samples in index JSON output");
         Console.WriteLine("  --quiet, -q, --silent      Suppress informational stderr output; errors still print (also honors CDIDX_QUIET=1)");
         Console.WriteLine("  --duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms");
         WriteHelpLine("  --max-file-bytes <bytes>  Index only files up to this size (default: 4MiB; also honors CDIDX_MAX_FILE_BYTES; accepts K/M/G suffixes)");
@@ -817,11 +840,11 @@ public static class ConsoleUi
         Console.WriteLine("  --exclude-path <glob>      Exclude glob-style path patterns (* and ?) (repeatable)");
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
         Console.WriteLine("  --include-generated        Include generated files in query results");
-        Console.WriteLine("  --snippet-lines <n>        Search snippet length (1-20, default: 8)");
+        Console.WriteLine("  --snippet-lines <n>        search/find snippet length (1-20, default: search 8; find 1)");
         Console.WriteLine("  --snippet-focus <mode>     search only: long-line focus mode (leftmost|quality|proximity, default: quality)");
         WriteHelpLine($"  --max-line-width <n>       search/references/callers/callees/find/excerpt/impact/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: {LineWidthFormatter.DefaultMaxLineWidth})");
-        Console.WriteLine("  --focus-line <line>        excerpt: line whose focused column should stay visible (requires --focus-column)");
-        Console.WriteLine("  --focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)");
+        Console.WriteLine("  --focus-line <line>        find/excerpt: focus a specific line");
+        Console.WriteLine("  --focus-column <n>         find/excerpt: focus a specific 1-based column");
         Console.WriteLine("  --focus-length <n>         excerpt: width of the focused span (default: 1, requires --focus-column)");
         WriteHelpLine($"  --fts                      Use raw FTS5 query syntax for search (content:term, NEAR(a b, 5), OR, NOT, groups, prefix*, \"phrase\"; search query max {QueryLimits.MaxQueryLength} chars; raw FTS parser max {DbReader.MaxRawFtsQueryLength} chars, {DbReader.MaxRawFtsBooleanOperators} boolean ops, {DbReader.MaxRawFtsNearOperators} NEAR ops; trailing * is a prefix shorthand in literal-safe mode)");
         Console.WriteLine("  --exact                    Backward-compatible shorthand.");

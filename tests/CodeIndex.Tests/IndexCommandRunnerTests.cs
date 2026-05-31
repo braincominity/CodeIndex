@@ -3033,6 +3033,142 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void RunBackfillFold_DryRunReportsRowsWithoutWriting()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_dry_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "café_init", Line = 1, StartLine = 1, EndLine = 1 },
+                ]);
+                writer.MarkGraphReady();
+                writer.MarkIssuesReady();
+            }
+
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE symbols SET name_folded = NULL; PRAGMA user_version = 3";
+                cmd.ExecuteNonQuery();
+            }
+
+            JsonElement json;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var writer = new StringWriter();
+                try
+                {
+                    Console.SetOut(writer);
+                    exitCode = IndexCommandRunner.RunBackfillFold(["--db", dbPath, "--dry-run", "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(writer.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(json.GetProperty("dry_run").GetBoolean());
+            Assert.Equal(1, json.GetProperty("symbols").GetInt32());
+            Assert.False(json.GetProperty("verified").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready_after").GetBoolean());
+
+            using var verifyDb = new DbContext(dbPath);
+            using var count = verifyDb.Connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM symbols WHERE name_folded IS NULL";
+            Assert.Equal(1L, (long)count.ExecuteScalar()!);
+            Assert.Equal(3, verifyDb.GetUserVersion());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void RunBackfillFold_DryRunReportsEffectiveFoldReadyWhenMetadataStale()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_stale_dry_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 64,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "café_init", Line = 1, StartLine = 1, EndLine = 1 },
+                ]);
+                writer.BackfillFoldedColumns(rewriteAll: true);
+                writer.MarkFoldReady();
+                writer.SetMeta("fold_key_fingerprint", "DEADBEEFDEADBEEF");
+            }
+
+            JsonElement json;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var writer = new StringWriter();
+                try
+                {
+                    Console.SetOut(writer);
+                    exitCode = IndexCommandRunner.RunBackfillFold(["--db", dbPath, "--dry-run", "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(writer.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(json.GetProperty("dry_run").GetBoolean());
+            Assert.True(json.GetProperty("rewrite_all").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready_before").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready_after").GetBoolean());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+
+            using var verifyDb = new DbContext(dbPath);
+            Assert.Equal("DEADBEEFDEADBEEF", verifyDb.GetMetaString("fold_key_fingerprint"));
+            Assert.Equal(DbContext.FoldReadyFlag, verifyDb.GetUserVersion());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_RewritesAllWhenOnlyFingerprintDrifted()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_fp_{Guid.NewGuid():N}.db");
@@ -4296,15 +4432,16 @@ public class IndexCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "secret.py", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("partial", json.GetProperty("status").GetString());
-            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.Equal(".gitignore", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.Equal(".gitignore", json.GetProperty("warnings")[0].GetProperty("file").GetString());
 
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
-            Assert.DoesNotContain("secret.py", indexedPaths);
+            Assert.Contains("secret.py", indexedPaths);
         }
         finally
         {
@@ -4350,15 +4487,16 @@ public class IndexCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", commitId, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("partial", json.GetProperty("status").GetString());
-            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
-            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
-            Assert.False(json.GetProperty("fold_ready").GetBoolean());
-            Assert.Equal(".gitignore", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(".gitignore", json.GetProperty("warnings")[0].GetProperty("file").GetString());
 
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.Contains("secret.py", indexedPaths);
@@ -4366,10 +4504,10 @@ public class IndexCommandRunnerTests
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
-            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(statusJson.GetProperty("graph_table_available").GetBoolean());
             Assert.True(statusJson.GetProperty("issues_table_available").GetBoolean());
-            Assert.False(statusJson.GetProperty("file_issues_data_current").GetBoolean());
-            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+            Assert.True(statusJson.GetProperty("file_issues_data_current").GetBoolean());
+            Assert.True(statusJson.GetProperty("fold_ready").GetBoolean());
         }
         finally
         {
@@ -4406,22 +4544,23 @@ public class IndexCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "keep.py", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.Equal(".gitignore", json.GetProperty("errors")[0].GetProperty("file").GetString());
-            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
-            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
-            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.Equal(".gitignore", json.GetProperty("warnings")[0].GetProperty("file").GetString());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
 
             var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
-            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(statusJson.GetProperty("graph_table_available").GetBoolean());
             Assert.True(statusJson.GetProperty("issues_table_available").GetBoolean());
-            Assert.False(statusJson.GetProperty("file_issues_data_current").GetBoolean());
-            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+            Assert.True(statusJson.GetProperty("file_issues_data_current").GetBoolean());
+            Assert.True(statusJson.GetProperty("fold_ready").GetBoolean());
         }
         finally
         {
@@ -4458,23 +4597,24 @@ public class IndexCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "a.cs", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.Equal(".gitignore", json.GetProperty("errors")[0].GetProperty("file").GetString());
-            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
-            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
-            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.Equal(".gitignore", json.GetProperty("warnings")[0].GetProperty("file").GetString());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
             Assert.Contains("a.cs", ReadIndexedPaths(dbPath));
 
             var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
-            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(statusJson.GetProperty("graph_table_available").GetBoolean());
             Assert.True(statusJson.GetProperty("issues_table_available").GetBoolean());
-            Assert.False(statusJson.GetProperty("file_issues_data_current").GetBoolean());
-            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+            Assert.True(statusJson.GetProperty("file_issues_data_current").GetBoolean());
+            Assert.True(statusJson.GetProperty("fold_ready").GetBoolean());
         }
         finally
         {
@@ -4513,22 +4653,23 @@ public class IndexCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "keep.py", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("partial", json.GetProperty("status").GetString());
-            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.Equal(".gitignore", json.GetProperty("errors")[0].GetProperty("file").GetString());
-            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
-            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
-            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.Equal(".gitignore", json.GetProperty("warnings")[0].GetProperty("file").GetString());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
 
             var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
-            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(statusJson.GetProperty("graph_table_available").GetBoolean());
             Assert.True(statusJson.GetProperty("issues_table_available").GetBoolean());
-            Assert.False(statusJson.GetProperty("file_issues_data_current").GetBoolean());
-            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+            Assert.True(statusJson.GetProperty("file_issues_data_current").GetBoolean());
+            Assert.True(statusJson.GetProperty("fold_ready").GetBoolean());
         }
         finally
         {
@@ -8844,6 +8985,8 @@ public class IndexCommandRunnerTests
         {
             RunGit(workDir, "config", "user.name", "CodeIndex Tests");
             RunGit(workDir, "config", "user.email", "tests@codeindex.local");
+            RunGit(workDir, "config", "commit.gpgsign", "false");
+            RunGit(workDir, "config", "tag.gpgsign", "false");
         }
     }
 

@@ -41,6 +41,8 @@ internal static class CdidxConfigFile
         "graph",
         "folding",
         "suggestion_dedup_threshold",
+        "suggestion_max_age_days",
+        "suggestion_max_count",
         "mcp",
     };
 
@@ -163,6 +165,20 @@ internal static class CdidxConfigFile
                 }
 
                 pending.Add((SuggestionStore.DedupThresholdEnvironmentVariable, value!));
+            }
+
+            if (root.TryGetProperty("suggestion_max_age_days", out var suggestionMaxAgeDays))
+            {
+                if (!TryReadPositiveIntegerAsString(suggestionMaxAgeDays, "suggestion_max_age_days", path, out var value, out var err))
+                    return new LoadResult(Path: path, Error: err);
+                pending.Add((SuggestionStore.MaxAgeDaysEnvironmentVariable, value!));
+            }
+
+            if (root.TryGetProperty("suggestion_max_count", out var suggestionMaxCount))
+            {
+                if (!TryReadPositiveIntegerAsString(suggestionMaxCount, "suggestion_max_count", path, out var value, out var err))
+                    return new LoadResult(Path: path, Error: err);
+                pending.Add((SuggestionStore.MaxCountEnvironmentVariable, value!));
             }
 
             if (root.TryGetProperty("indexing", out var indexing))
@@ -344,6 +360,32 @@ internal static class CdidxConfigFile
         return CommandExitCodes.Success;
     }
 
+    internal static int RunShow(string[] args, JsonSerializerOptions jsonOptions)
+    {
+        var json = args.Contains("--json", StringComparer.Ordinal);
+        args = args.Where(a => a != "--json").ToArray();
+        if (args.Length > 0)
+            return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "config show does not accept positional arguments.", CommandExitCodes.UsageError, "run `cdidx config show` from the workspace whose config should be shown.");
+
+        var path = FindConfigFile(Environment.CurrentDirectory);
+        var active = ActiveWorkspace.Load();
+        var payload = new ConfigShowJsonResult(
+            path,
+            active,
+            ["cli", "env", "config_file", "active_workspace", "cwd_default"],
+            [ProjectConfigRelativePath, FileName]);
+        if (json)
+            Console.WriteLine(JsonSerializer.Serialize(payload, jsonOptions));
+        else
+        {
+            Console.WriteLine($"Config path      : {path ?? "(none)"}");
+            Console.WriteLine($"Active workspace : {(active == null ? "(none)" : active.Name + " -> " + active.DbPath)}");
+            Console.WriteLine("Precedence       : CLI > env > config file > active workspace > CWD default");
+        }
+
+        return CommandExitCodes.Success;
+    }
+
     private static bool ValidateOptionalObject(JsonElement root, string key, IReadOnlyList<string> knownKeys, string path, out string? error)
     {
         error = null;
@@ -440,6 +482,26 @@ internal static class CdidxConfigFile
             return false;
         }
         value = element.GetRawText();
+        return true;
+    }
+
+    private static bool TryReadPositiveIntegerAsString(JsonElement element, string key, string path, out string? value, out string? error)
+    {
+        value = null;
+        error = null;
+        if (element.ValueKind != JsonValueKind.Number)
+        {
+            error = $"[cdidx] {path}: `{key}` must be a number.";
+            return false;
+        }
+
+        if (!element.TryGetInt32(out var parsed) || parsed <= 0)
+        {
+            error = $"[cdidx] {path}: `{key}` must be a positive integer.";
+            return false;
+        }
+
+        value = parsed.ToString(System.Globalization.CultureInfo.InvariantCulture);
         return true;
     }
 

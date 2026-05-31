@@ -8,7 +8,7 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
-    public List<FileFindResult> FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
+    public List<FileFindResult> FindInFiles(string query, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int before = 0, int after = 0, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? focusLine = null, int? focusColumn = null, bool regex = false)
     {
         if (string.IsNullOrWhiteSpace(query) || limit <= 0 || pathPatterns == null || pathPatterns.Count == 0)
             return [];
@@ -17,6 +17,9 @@ public partial class DbReader
         after = Math.Max(0, after);
         maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
         var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var regexMatcher = regex
+            ? new Regex(query, exact ? RegexOptions.None : RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(500))
+            : null;
 
         using var fileCmd = _conn.CreateCommand();
         var sql = "SELECT f.path, f.lang, f.lines FROM files f WHERE 1=1";
@@ -42,14 +45,16 @@ public partial class DbReader
             if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap) || lineMap.Count == 0)
                 continue;
 
-            var searchQuery = exact ? ExactSourceSearchNormalizer.Normalize(query, fileLang) : query;
+            var searchQuery = exact && !regex ? ExactSourceSearchNormalizer.Normalize(query, fileLang) : query;
             for (int lineNumber = 1; lineNumber <= totalLines && results.Count < limit; lineNumber++)
             {
+                if (focusLine.HasValue && lineNumber != focusLine.Value)
+                    continue;
                 if (!lineMap.TryGetValue(lineNumber, out var lineText))
                     continue;
 
                 int[]? rawIndexMap = null;
-                var searchLine = exact
+                var searchLine = exact && !regex
                     ? ExactSourceSearchNormalizer.Normalize(lineText, fileLang, out rawIndexMap)
                     : lineText;
                 var snippetStart = Math.Max(1, lineNumber - before);
@@ -60,19 +65,37 @@ public partial class DbReader
                 if (snippetLineNumbers.Count == 0)
                     continue;
 
+                if (regexMatcher != null)
+                {
+                    foreach (Match match in regexMatcher.Matches(searchLine))
+                    {
+                        if (!match.Success || results.Count >= limit)
+                            break;
+                        TryAddMatch(match.Index, Math.Max(1, match.Length));
+                    }
+                    continue;
+                }
+
                 for (int searchStart = 0; searchStart < searchLine.Length && results.Count < limit;)
                 {
                     var matchColumn = searchLine.IndexOf(searchQuery, searchStart, comparison);
                     if (matchColumn < 0)
                         break;
+                    TryAddMatch(matchColumn, searchQuery.Length);
+                    searchStart = matchColumn + 1;
+                }
 
+                bool TryAddMatch(int matchColumn, int matchLength)
+                {
                     var rawMatchColumn = rawIndexMap == null ? matchColumn : rawIndexMap[matchColumn];
-                    var rawMatchLength = searchQuery.Length;
-                    if (rawIndexMap != null && rawMatchLength > 0)
+                    var rawMatchLength = matchLength;
+                    if (rawIndexMap != null && matchLength > 0)
                     {
-                        var rawMatchEndIndex = rawIndexMap[matchColumn + rawMatchLength - 1];
+                        var rawMatchEndIndex = rawIndexMap[matchColumn + matchLength - 1];
                         rawMatchLength = rawMatchEndIndex - rawMatchColumn + 1;
                     }
+                    if (focusColumn.HasValue && (focusColumn.Value < rawMatchColumn + 1 || focusColumn.Value > rawMatchColumn + rawMatchLength))
+                        return false;
 
                     var snippetLines = snippetLineNumbers.Select(line => lineMap[line]).ToList();
                     var clampedSnippet = LineWidthFormatter.ClampLines(
@@ -93,8 +116,7 @@ public partial class DbReader
                         Snippet = clampedSnippet.Text,
                         SnippetTruncated = clampedSnippet.Truncated,
                     });
-
-                    searchStart = matchColumn + 1;
+                    return true;
                 }
             }
         }
@@ -120,12 +142,15 @@ public partial class DbReader
         return Convert.ToInt32(fileCmd.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
-    public QueryCountResult CountFindInFiles(string query, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public QueryCountResult CountFindInFiles(string query, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int? focusLine = null, int? focusColumn = null, bool regex = false)
     {
         if (string.IsNullOrWhiteSpace(query) || pathPatterns == null || pathPatterns.Count == 0)
             return new QueryCountResult(0, 0);
 
         var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var regexMatcher = regex
+            ? new Regex(query, exact ? RegexOptions.None : RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(500))
+            : null;
         using var fileCmd = _conn.CreateCommand();
         var sql = "SELECT f.path, f.lang, f.lines FROM files f WHERE 1=1";
         if (lang != null)
@@ -148,22 +173,54 @@ public partial class DbReader
             if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap) || lineMap.Count == 0)
                 continue;
 
-            var searchQuery = exact ? ExactSourceSearchNormalizer.Normalize(query, fileLang) : query;
+            var searchQuery = exact && !regex ? ExactSourceSearchNormalizer.Normalize(query, fileLang) : query;
             var fileMatches = 0;
             for (int lineNumber = 1; lineNumber <= totalLines; lineNumber++)
             {
+                if (focusLine.HasValue && lineNumber != focusLine.Value)
+                    continue;
                 if (!lineMap.TryGetValue(lineNumber, out var lineText))
                     continue;
 
-                var searchLine = exact ? ExactSourceSearchNormalizer.Normalize(lineText, fileLang) : lineText;
+                int[]? rawIndexMap = null;
+                var searchLine = exact && !regex
+                    ? ExactSourceSearchNormalizer.Normalize(lineText, fileLang, out rawIndexMap)
+                    : lineText;
+                if (regexMatcher != null)
+                {
+                    foreach (Match match in regexMatcher.Matches(searchLine))
+                    {
+                        if (!match.Success)
+                            continue;
+                        if (IsFocusedMatch(match.Index, Math.Max(1, match.Length)))
+                            fileMatches++;
+                    }
+                    continue;
+                }
+
                 for (int searchStart = 0; searchStart < searchLine.Length;)
                 {
                     var matchColumn = searchLine.IndexOf(searchQuery, searchStart, comparison);
                     if (matchColumn < 0)
                         break;
 
-                    fileMatches++;
+                    if (IsFocusedMatch(matchColumn, searchQuery.Length))
+                        fileMatches++;
                     searchStart = matchColumn + 1;
+                }
+
+                bool IsFocusedMatch(int matchColumn, int matchLength)
+                {
+                    if (!focusColumn.HasValue)
+                        return true;
+                    var rawMatchColumn = rawIndexMap == null ? matchColumn : rawIndexMap[matchColumn];
+                    var rawMatchLength = matchLength;
+                    if (rawIndexMap != null && matchLength > 0)
+                    {
+                        var rawMatchEndIndex = rawIndexMap[matchColumn + matchLength - 1];
+                        rawMatchLength = rawMatchEndIndex - rawMatchColumn + 1;
+                    }
+                    return focusColumn.Value >= rawMatchColumn + 1 && focusColumn.Value <= rawMatchColumn + rawMatchLength;
                 }
             }
 
@@ -437,6 +494,30 @@ public partial class DbReader
                 langs[reader.GetString(0)] = reader.GetInt64(1);
         }
 
+        var symbolsByLanguage = new Dictionary<string, Dictionary<string, long>>(StringComparer.Ordinal);
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = @"
+                SELECT COALESCE(f.lang, 'unknown'), s.kind, COUNT(*)
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                GROUP BY COALESCE(f.lang, 'unknown'), s.kind
+                ORDER BY COALESCE(f.lang, 'unknown'), COUNT(*) DESC, s.kind";
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+            {
+                var lang = reader.GetString(0);
+                var kind = reader.GetString(1);
+                if (!symbolsByLanguage.TryGetValue(lang, out var kinds))
+                {
+                    kinds = new Dictionary<string, long>(StringComparer.Ordinal);
+                    symbolsByLanguage[lang] = kinds;
+                }
+
+                kinds[kind] = reader.GetInt64(2);
+            }
+        }
+
         // #1509: pull persisted HEAD metadata while the SHARED snapshot is open so the
         // recorded SHA / branch / timestamp can't drift relative to the counts and freshness
         // reported by the same status call.
@@ -450,6 +531,9 @@ public partial class DbReader
         // #1546: case-sensitivity stamp も同 snapshot で読む。stamp 無し旧 DB は null。
         var pathCaseSensitive = ParseMetaBool(TryGetMetaStringInternal(DbContext.WorkspacePathCaseSensitiveMetaKey));
         var dbPragmaSettings = GetDbPragmaSettings();
+        var dbSizeBytes = TryGetDatabaseFileSize();
+        var walSizeBytes = TryGetWalFileSize();
+        var lastIndexRun = GetLastIndexRun();
         var batchInProgress = string.Equals(
             TryGetMetaStringInternal(DbContext.BatchInProgressMetaKey),
             "true",
@@ -468,6 +552,7 @@ public partial class DbReader
             IndexedHeadBranch = indexedHeadBranch,
             IndexedHeadTimestamp = indexedHeadTimestamp,
             Languages = langs,
+            SymbolsByLanguage = symbolsByLanguage.Count > 0 ? symbolsByLanguage : null,
             GraphTableAvailable = _hasReferencesTable,
             IssuesTableAvailable = _hasIssuesPhysicalTable,
             FileIssuesDataCurrent = _hasIssuesTable,
@@ -486,6 +571,10 @@ public partial class DbReader
             IndexNewerThanReaderReason = _indexNewerThanReaderReason,
             PathCaseSensitive = pathCaseSensitive,
             DbPragmaSettings = dbPragmaSettings,
+            DbSizeBytes = dbSizeBytes,
+            WalSizeBytes = walSizeBytes,
+            Process = StatusProcessMetrics.Capture(),
+            LastIndexRun = lastIndexRun,
             ReadOnlyFallback = _readOnlyFallback,
             WalCheckpointAttempted = _walCheckpointAttempted,
             WalCheckpointSucceeded = _walCheckpointSucceeded,
@@ -522,6 +611,73 @@ public partial class DbReader
         FreelistCount = ExecuteNullableLong("PRAGMA freelist_count"),
         PageSize = ExecuteNullableLong("PRAGMA page_size"),
     };
+
+    private long? TryGetDatabaseFileSize()
+    {
+        var path = _conn.DataSource;
+        if (string.IsNullOrWhiteSpace(path) || path.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        try
+        {
+            var info = new FileInfo(path);
+            return info.Exists ? info.Length : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private long? TryGetWalFileSize()
+    {
+        var path = _conn.DataSource;
+        if (string.IsNullOrWhiteSpace(path) || path.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        try
+        {
+            var info = new FileInfo(path + "-wal");
+            return info.Exists ? info.Length : 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private StatusLastIndexRun? GetLastIndexRun()
+    {
+        var mode = TryGetMetaStringInternal(DbContext.LastIndexRunModeMetaKey);
+        var startedAt = ParseMetaDateTime(TryGetMetaStringInternal(DbContext.LastIndexRunStartedAtMetaKey));
+        var durationMs = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunDurationMsMetaKey));
+        var filesScanned = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunFilesScannedMetaKey));
+        var filesSkipped = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunFilesSkippedMetaKey));
+        var parseErrors = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunParseErrorsMetaKey));
+        var bytesRead = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunBytesReadMetaKey));
+        var rowsUpserted = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunRowsUpsertedMetaKey));
+        var rowsDeleted = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunRowsDeletedMetaKey));
+        var peakMemoryMb = ParseMetaLong(TryGetMetaStringInternal(DbContext.LastIndexRunPeakMemoryMbMetaKey));
+        if (mode == null && startedAt == null && durationMs == null && filesScanned == null && filesSkipped == null
+            && parseErrors == null && bytesRead == null && rowsUpserted == null && rowsDeleted == null && peakMemoryMb == null)
+        {
+            return null;
+        }
+
+        return new StatusLastIndexRun
+        {
+            Mode = mode,
+            StartedAt = startedAt,
+            DurationMs = durationMs,
+            FilesScanned = filesScanned,
+            FilesSkipped = filesSkipped,
+            ParseErrors = parseErrors,
+            BytesRead = bytesRead,
+            RowsUpserted = rowsUpserted,
+            RowsDeleted = rowsDeleted,
+            PeakMemoryMb = peakMemoryMb,
+        };
+    }
 
     private string? ExecuteScalarString(string sql)
     {
