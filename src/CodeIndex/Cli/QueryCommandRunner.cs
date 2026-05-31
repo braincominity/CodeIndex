@@ -179,6 +179,8 @@ public static class QueryCommandRunner
         "--bytes",
         "--profile",
         "--check-updates",
+        "--read-only",
+        "--immutable",
     ];
     private const string OutputFormatText = "text";
     private const string OutputFormatJson = "json";
@@ -2614,6 +2616,7 @@ public static class QueryCommandRunner
             status.DataDir = options.DataDir;
             status.DataDirSource = options.DataDirSource;
             status.DataDirMode = DataDirectorySecurity.GetUnixModeString(GetDataDirectoryPath(options.DbPath));
+            status.DbFileMode = DbContext.GetUnixFileModeString(options.DbPath);
             status.MacProfile = MacProfileDetector.DetectCurrent();
             if (options.CheckWorkspace)
             {
@@ -4404,6 +4407,7 @@ public static class QueryCommandRunner
         bool exactName = false;
         bool exactSubstring = false;
         bool dbPathExplicit = false;
+        bool readOnly = false;
         bool checkWorkspace = false;
         TimeSpan? staleAfter = null;
         HashSet<string>? statusCheckScopes = null;
@@ -4520,6 +4524,10 @@ public static class QueryCommandRunner
                     }
                     else
                         AddParseError(dbPathError!);
+                    break;
+                case "--read-only":
+                case "--immutable":
+                    readOnly = true;
                     break;
                 case "--workspace-db":
                     if (TryReadStringOptionValue(args, ref i, "--workspace-db", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var workspaceDbPath, out var workspaceDbError))
@@ -5041,11 +5049,13 @@ public static class QueryCommandRunner
             AddParseError(defaultMaxLineWidthError);
 
         var dbResolution = DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, dbPath, dataDir);
+        var resolvedDbPath = readOnly ? DbContext.ToReadOnlyUri(dbResolution.DbPath) : dbResolution.DbPath;
 
         return new QueryCommandOptions
         {
-            DbPath = dbResolution.DbPath,
+            DbPath = resolvedDbPath,
             DbPathExplicit = dbPathExplicit,
+            ReadOnly = readOnly,
             DataDir = dbResolution.DataDir,
             DataDirSource = dbResolution.DataDirSource,
             Json = json ?? jsonDefault,
@@ -7596,6 +7606,7 @@ public sealed class QueryCommandOptions
 {
     public string DbPath { get; init; } = Path.Combine(".cdidx", "codeindex.db");
     public bool DbPathExplicit { get; init; }
+    public bool ReadOnly { get; init; }
     public string? DataDir { get; init; }
     public string? DataDirSource { get; init; }
     public bool Json { get; init; }
