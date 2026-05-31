@@ -168,9 +168,12 @@ internal static class ExportImportCommandRunner
                 Directory.CreateDirectory(outputDirectory);
 
             CreateDatabaseSnapshot(normalizedDbPath, snapshotPath);
-            using var snapshotConnection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = snapshotPath }.ConnectionString);
-            snapshotConnection.Open();
-            var manifest = BuildManifest(snapshotConnection, snapshotPath, appVersion);
+            ExportManifest manifest;
+            using (var snapshotConnection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = snapshotPath }.ConnectionString))
+            {
+                snapshotConnection.Open();
+                manifest = BuildManifest(snapshotConnection, snapshotPath, appVersion);
+            }
             if (File.Exists(outputPath))
                 File.Delete(outputPath);
 
