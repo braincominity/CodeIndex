@@ -20,7 +20,7 @@ public partial class McpServer
         {
             CreateToolDefinition(
                 "search",
-                "Full-text search across indexed code chunks using FTS5. Returns compact match-centered snippets with line metadata. Non-empty responses include `next_step_suggestion` for the obvious follow-up read, and empty responses include `recovery_hint`. The literal-safe path quotes each whitespace-separated token as an FTS5 phrase and combines multiple tokens with implicit AND semantics (`foo bar` requires both terms). For CJK that means `search 計算` no longer also matches `計算する`/`計算機`, because unicode61 keeps adjacent CJK codepoints in one token. Two opt-ins enable FTS5 prefix expansion: (1) trailing `*` on a single token in the `query` string (`search 計算*` to match `計算する`); (2) the `prefix` flag, which promotes every token in the query to a prefix phrase. Use `exactSubstring` for case-sensitive exact-substring matching that bypasses FTS5 entirely; `exact` is the backward-compatible alias documented in USER_GUIDE.md's flag compatibility table. Non-CJK tokens follow the same rule — ASCII identifiers also no longer auto-prefix, so use `--prefix` or trailing `*` to widen. Emoji-mixed tokens cannot be distinguished from their plain ASCII counterpart at the FTS layer (unicode61 drops the emoji on both index and query side — `foo🎉` is FTS-equivalent to `foo`), and pure emoji substring search is 0-result for the same reason; use `exactSubstring` when emoji identity matters. Examples: `search {\"query\":\"handleRequest\",\"lang\":\"csharp\"}`; `search {\"query\":\"Authenticate\",\"lang\":\"csharp\",\"path\":\"src/Auth\",\"prefix\":true}`. / FTS5を使ったコードチャンクの全文検索。一致中心の軽量スニペットと行メタデータを返す。非空レスポンスには自然な次の読み取りを示す `next_step_suggestion`、空レスポンスには `recovery_hint` を含める。literal-safe 経路は空白区切りの各トークンを FTS5 phrase として引用し、複数 token は implicit AND として結合する（`foo bar` は両方の term を要求する）。CJK の場合、unicode61 は隣接 CJK コードポイントを一語として扱うため、`search 計算` は `計算する`/`計算機` にはマッチしない。FTS5 prefix への昇格は 2 通りでオプトイン: (1) `query` 文字列内のトークン末尾に `*` を付ける（`search 計算*` で `計算する` にマッチ）。(2) `prefix` フラグで、クエリの全トークンを prefix phrase に昇格させる。`exactSubstring` を使うと FTS5 を経由せず大小文字区別の厳密部分文字列マッチになり、`exact` は USER_GUIDE.md の flag compatibility table に記載された後方互換 alias。CJK 以外（ASCII 識別子等）も同じルールで、自動 prefix は行わないため、広げたい場合は `--prefix` か末尾 `*` を使う。絵文字混在トークンは、unicode61 が indexing とクエリの両側で絵文字を削ぐため FTS 層で素の ASCII トークンと区別できず（`foo🎉` は FTS 上 `foo` と等価）、絵文字単独の部分一致も同じ理由で 0 件になる。絵文字の同一性が必要な場合は `exactSubstring` を使う。例: `search {\"query\":\"handleRequest\",\"lang\":\"csharp\"}`; `search {\"query\":\"Authenticate\",\"lang\":\"csharp\",\"path\":\"src/Auth\",\"prefix\":true}`。",
+                "Full-text search across indexed code chunks. Returns match-centered snippets with line metadata plus `next_step_suggestion` or `recovery_hint`. Use `prefix` or trailing `*` to widen token matching, `rawQuery` for FTS5 syntax, and `exactSubstring` for case-sensitive text identity. Details and examples: USER_GUIDE.md#search. / インデックス済みコードチャンクの全文検索。`prefix` / 末尾 `*` / `rawQuery` / `exactSubstring` の詳細と例は USER_GUIDE.md#search を参照。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -486,10 +486,11 @@ public partial class McpServer
                 + "Call this when you notice a gap (e.g. missing language support, poor ranking) or encounter an unexpected error. "
                 + "Never include source code — describe the gap in natural language only. "
                 + "The tool writes to the resolved .cdidx directory, which must be writable; responses include cdidx_dir for diagnostics. "
+                + "Responses also include github_submission_reason: submitted, token_not_configured, repo_not_configured, network_error, or api_error. "
                 + "/ cdidxへの構造化された改善提案またはエラー報告を送信する。"
                 + "ギャップ（言語サポート不足、ランキング不良等）に気づいたとき、または予期せぬエラーに遭遇したときに呼び出す。"
                 + "ソースコードを含めないこと — 自然言語でのみギャップを記述する。"
-                + "解決された .cdidx ディレクトリへ書き込むため、そのディレクトリは書き込み可能である必要がある。応答には診断用の cdidx_dir が含まれる。",
+                + "解決された .cdidx ディレクトリへ書き込むため、そのディレクトリは書き込み可能である必要がある。応答には診断用の cdidx_dir と github_submission_reason が含まれる。",
                 new JsonObject
                 {
                     ["type"] = "object",

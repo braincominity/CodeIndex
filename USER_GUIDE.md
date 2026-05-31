@@ -286,6 +286,8 @@ sections below show examples and option details for the most common workflows.
 | Diagnostics | `db --integrity-check` | Run SQLite `PRAGMA integrity_check` against the DB | -- |
 | Diagnostics | `report --output <path>` | Build a redacted bug-report bundle | -- |
 | Feedback | `suggestions` | List, inspect, and export local suggestion history | -- |
+| Portability | `export ctags` | Write a native `tags` file for Vim, Emacs, Sublime, and other ctags consumers | -- |
+| Portability | `export` / `import` | Share a built CodeIndex database as a portable archive | -- |
 | MCP | `mcp` | Start the MCP server for AI tools | server transport |
 | Legal | `license` | Show the license and commercial-use summary | -- |
 
@@ -311,6 +313,31 @@ For `cdidx find --count --json`, `files` is the canonical matched-file count.
 The older `file_count` field remains as a deprecated compatibility alias with
 the same value and is not scheduled for removal before the next major release;
 new consumers should read `files`.
+
+## Editor and index portability
+
+Use `cdidx export ctags` when an editor wants the traditional ctags file format
+instead of querying `cdidx` directly:
+
+```bash
+cdidx export ctags --output tags
+cdidx export ctags --db .cdidx/codeindex.db --output .tags
+```
+
+Use `cdidx export <archive>` to package the current `codeindex.db` with a
+manifest, and `cdidx import <archive>` to restore it on another checkout or CI
+job:
+
+```bash
+cdidx export codeindex.cdidx.zip
+cdidx import codeindex.cdidx.zip
+cdidx import codeindex.cdidx.zip --db /tmp/codeindex.db --prune-paths
+```
+
+The archive path is intended for trusted CodeIndex databases. Import validates
+that the embedded SQLite file is a CodeIndex DB before replacing the destination
+database. `--prune-paths` rewrites the imported `indexed_project_root` metadata
+to the current checkout.
 
 ## Flag compatibility and migrations
 
@@ -1895,6 +1922,8 @@ The MCP `tools/list` response includes an `examples` array for every registered 
 | `backfill_fold` | Upgrade folded-name keys in an existing DB without reparsing source files |
 | `suggest_improvement` | Submit structured improvement suggestions or error reports |
 
+`suggest_improvement` always stores accepted suggestions locally. Its response includes `submitted_to_github` and `github_submission_reason` so clients can distinguish `submitted`, `token_not_configured`, `repo_not_configured`, `network_error`, and `api_error`; failed GitHub attempts also include `github_submission_error`.
+
 For `callers`, `impact_analysis`, and `deps`, the [`reference_kind` filtering matrix](DEVELOPER_GUIDE.md#reference-kind-filtering-matrix) explains which edge kinds each command walks and how to reconcile count differences with `references <Name> --kind attribute` or `--kind annotation`.
 
 No CLAUDE.md hacks or SQL templates needed — the AI interacts with cdidx natively.
@@ -2359,6 +2388,8 @@ cdidx index . --quiet
 | Diagnostics | `db --integrity-check` | DB に対して SQLite `PRAGMA integrity_check` を実行 | -- |
 | Diagnostics | `report --output <path>` | redact 済み bug-report bundle を作成 | -- |
 | Feedback | `suggestions` | local suggestion history を list / inspect / export | -- |
+| Portability | `export ctags` | Vim、Emacs、Sublime など ctags consumer 向けに `tags` file を出力 | -- |
+| Portability | `export` / `import` | build 済み CodeIndex database を portable archive として共有 | -- |
 | MCP | `mcp` | AI tools 向け MCP server を起動 | server transport |
 | Legal | `license` | license と commercial-use summary を表示 | -- |
 
@@ -2379,6 +2410,29 @@ newline-delimited JSON (ndjson) として出力し、最後に `{"done":true,...
 cdidx search authenticate --json          # ndjson stream、1 行 1 result
 cdidx search authenticate --json=array    # 単一 JSON array
 ```
+
+## Editor / index portability
+
+Editor が `cdidx` を直接 query するのではなく従来の ctags file を読む場合は、
+`cdidx export ctags` を使います。
+
+```bash
+cdidx export ctags --output tags
+cdidx export ctags --db .cdidx/codeindex.db --output .tags
+```
+
+`cdidx export <archive>` は現在の `codeindex.db` と manifest を archive 化します。
+別 checkout や CI job では `cdidx import <archive>` で復元できます。
+
+```bash
+cdidx export codeindex.cdidx.zip
+cdidx import codeindex.cdidx.zip
+cdidx import codeindex.cdidx.zip --db /tmp/codeindex.db --prune-paths
+```
+
+archive は信頼できる CodeIndex database の共有向けです。Import は埋め込まれた
+SQLite file が CodeIndex DB であることを検証してから destination database を置き換えます。
+`--prune-paths` は import した `indexed_project_root` metadata を現在の checkout に書き換えます。
 
 ## フラグ互換性と移行
 
@@ -3969,6 +4023,8 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `index` | プロジェクトのインデックス作成・更新 |
 | `backfill_fold` | 既存 DB の folded-name key をソース再解析なしで更新 |
 | `suggest_improvement` | 構造化された改善提案またはエラー報告を送信 |
+
+`suggest_improvement` は受理した提案を常にローカル保存します。応答には `submitted_to_github` と `github_submission_reason` が含まれ、クライアントは `submitted`、`token_not_configured`、`repo_not_configured`、`network_error`、`api_error` を区別できます。GitHub 送信に失敗した場合は `github_submission_error` も含まれます。
 
 `callers`、`impact_analysis`、`deps` については、[`reference_kind` フィルタの対応表](DEVELOPER_GUIDE.md#reference-kind-filtering-matrix)で各コマンドが辿る edge kind と、`references <Name> --kind attribute` または `--kind annotation` による件数差の照合方法を確認できます。
 

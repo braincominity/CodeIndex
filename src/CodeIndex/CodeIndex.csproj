@@ -7,9 +7,9 @@
     <RootNamespace>CodeIndex</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <IsTrimmable>true</IsTrimmable>
-    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
-    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <IsTrimmable Condition="'$(PublishTrimmed)' == 'true' or '$(PublishAot)' == 'true'">true</IsTrimmable>
+    <EnableTrimAnalyzer Condition="'$(PublishTrimmed)' == 'true'">true</EnableTrimAnalyzer>
+    <EnableAotAnalyzer Condition="'$(PublishAot)' == 'true'">true</EnableAotAnalyzer>
     <TrimmerSingleWarn>false</TrimmerSingleWarn>
     <Deterministic>true</Deterministic>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
