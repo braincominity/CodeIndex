@@ -21470,6 +21470,39 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CommonLisp_DoesNotTreatQuotedReaderMacroFormsAsDefinitions()
+    {
+        var content = """
+            '(defun quoted-function () nil)
+            `(let ((x 1)) ,x)
+            ,(expand-macro)
+            (quote (defun nested-quoted () nil))
+            (defun real-function () nil)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "commonlisp", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "real-function");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "quoted-function");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "nested-quoted");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "let");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "expand-macro");
+    }
+
+    [Fact]
+    public void Extract_CommonLisp_PreservesDefinitionsInsideEvalWhen()
+    {
+        var content = """
+            (eval-when (:compile-toplevel :load-toplevel :execute)
+              (defun real-wrapper-function () nil))
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "commonlisp", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "real-wrapper-function");
+    }
+
+    [Fact]
     public void Extract_Racket_DetectsModuleAndDefinitions()
     {
         // Racket: module, define, define-syntaxes, struct, require / Racket: module、define、define-syntaxes、struct、require
@@ -25262,6 +25295,33 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "cached_helper");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "dispatch");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normalize");
+    }
+
+    [Fact]
+    public void Extract_PerlHashConstants_NormalizesQuotedKeysAndDeduplicates()
+    {
+        var content = """
+            use constant {
+                "foo " => 1,
+                foo => 2,
+                "naïve" => 3,
+                "naïve" => 4,
+                "hex\xEF" => 5,
+                "hexï" => 6,
+                "braced\x{00EF}" => 7,
+                "bracedï" => 8,
+                "   " => 9,
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "perl", content);
+
+        Assert.Equal(4, symbols.Count(symbol => symbol.Kind == "function"));
+        Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "foo"));
+        Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "naïve"));
+        Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "hexï"));
+        Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "bracedï"));
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "foo ");
     }
 
     [Fact]
