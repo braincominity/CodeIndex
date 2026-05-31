@@ -1,0 +1,12 @@
+{
+  "members": [
+    "src/CodeIndex",
+    "tests/CodeIndex.Tests"
+  ],
+  "index_strategy": "per_member",
+  "default_db_name": "codeindex.db",
+  "shared_ignores": [
+    "bin/",
+    "obj/"
+  ]
+}

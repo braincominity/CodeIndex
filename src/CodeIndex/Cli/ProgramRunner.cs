@@ -252,6 +252,10 @@ internal static class ProgramRunner
                     "optimize" => IndexCommandRunner.RunOptimizeFts(subArgs, jsonOptions),
                     "vacuum" => QueryCommandRunner.RunVacuum(subArgs, jsonOptions),
                     "validate-config" => CdidxConfigFile.RunValidate(subArgs, jsonOptions),
+                    "config" => subArgs.Length > 0 && subArgs[0] == "show"
+                        ? CdidxConfigFile.RunShow(subArgs[1..], jsonOptions)
+                        : ShowError(args, "Unknown config command: use `cdidx config show`."),
+                    "workspace" => WorkspaceCommandRunner.Run(subArgs, jsonOptions),
                     "db" => DbCommandRunner.RunIntegrityCheck(subArgs, jsonOptions),
                     "report" => ReportCommandRunner.Run(subArgs, jsonOptions, appVersion),
                     _ when IsProjectPathArg(commandName)

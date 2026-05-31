@@ -82,6 +82,8 @@ public static class ConsoleUi
         ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]"),
         ("outline", "cdidx outline <path> [--db <path>] [--json] [--verbose]"),
         ("status", "cdidx status [--db <path>] [--json] [--verbose] [--check[=workspace,fold,graph,issues,hotspot,csharp,sql,newer]] [--stale-after <duration>] [--explain <field>] [--log-path] [--config] [--check-updates]"),
+        ("workspace", "cdidx workspace <list|status|use|current> [name] [--json]"),
+        ("config", "cdidx config show [--json]"),
         ("validate-config", "cdidx validate-config"),
         ("db", "cdidx db --integrity-check [--db <path>] [--json]"),
         ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n>]"),
@@ -744,6 +746,8 @@ public static class ConsoleUi
         Console.WriteLine("  inspect <query>            Bundle definition, graph, and nearby symbol context");
         Console.WriteLine("  outline <path>             Show a file outline ordered by line, start column, kind, and name");
         Console.WriteLine("  status                     Show database statistics; add --check for freshness, --config for effective config, --explain <field> for readiness, or --log-path for logs");
+        Console.WriteLine("  workspace                  List manifest members and manage the active workspace");
+        Console.WriteLine("  config show                Show resolved workspace config and precedence");
         Console.WriteLine("  upgrade                    Check for and install the latest release via install.sh");
         Console.WriteLine("  validate-config            Validate .cdidx/config.json or .cdidxrc.json");
         Console.WriteLine("  db --integrity-check       Run SQLite `PRAGMA integrity_check` and report findings");

@@ -344,6 +344,32 @@ internal static class CdidxConfigFile
         return CommandExitCodes.Success;
     }
 
+    internal static int RunShow(string[] args, JsonSerializerOptions jsonOptions)
+    {
+        var json = args.Contains("--json", StringComparer.Ordinal);
+        args = args.Where(a => a != "--json").ToArray();
+        if (args.Length > 0)
+            return CommandErrorWriter.Write("config show does not accept positional arguments.", CommandExitCodes.UsageError, "run `cdidx config show` from the workspace whose config should be shown.");
+
+        var path = FindConfigFile(Environment.CurrentDirectory);
+        var active = ActiveWorkspace.Load();
+        var payload = new ConfigShowJsonResult(
+            path,
+            active,
+            ["cli", "env", "config_file", "active_workspace", "cwd_default"],
+            [ProjectConfigRelativePath, FileName]);
+        if (json)
+            Console.WriteLine(JsonSerializer.Serialize(payload, jsonOptions));
+        else
+        {
+            Console.WriteLine($"Config path      : {path ?? "(none)"}");
+            Console.WriteLine($"Active workspace : {(active == null ? "(none)" : active.Name + " -> " + active.DbPath)}");
+            Console.WriteLine("Precedence       : CLI > env > config file > active workspace > CWD default");
+        }
+
+        return CommandExitCodes.Success;
+    }
+
     private static bool ValidateOptionalObject(JsonElement root, string key, IReadOnlyList<string> knownKeys, string path, out string? error)
     {
         error = null;

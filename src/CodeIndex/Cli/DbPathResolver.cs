@@ -14,6 +14,7 @@ public static class DbPathResolver
     public const string DataDirEnvironmentVariable = "CDIDX_DATA_DIR";
     public const string DataDirSourceFlag = "flag";
     public const string DataDirSourceEnv = "env";
+    public const string DataDirSourceActiveWorkspace = "active_workspace";
     public const string DataDirSourceXdg = "xdg";
     public const string DataDirSourceWorkspace = "workspace";
 
@@ -50,6 +51,10 @@ public static class DbPathResolver
 
         if (!string.IsNullOrWhiteSpace(environmentDataDir))
             return BuildDataDirResolution(environmentDataDir, DataDirSourceEnv);
+
+        var active = ActiveWorkspace.Load();
+        if (active != null)
+            return new DbPathResolution(active.DbPath, Path.GetDirectoryName(active.DbPath), DataDirSourceActiveWorkspace);
 
         if (!string.IsNullOrWhiteSpace(xdgDataHome))
         {
