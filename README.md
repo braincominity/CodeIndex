@@ -57,6 +57,12 @@ cdidx search "Handle" --project MyApp
 cdidx mcp
 ```
 
+Custom language loops can stay out of tree: put extension aliases in
+`.cdidx-langmap.yaml`, put regex symbol patterns in `.cdidx/patterns/*.yaml`,
+and run `cdidx test-extractor --language <lang> --file <path> --json` to test
+an extractor fixture without building a full index. See
+[Custom Language Extraction](DEVELOPER_GUIDE.md#custom-language-extraction).
+
 After the first command, use these cues and follow-up commands:
 
 | Situation | What to expect or run |
@@ -273,6 +279,12 @@ cdidx definition UserService
 cdidx search "Handle" --project MyApp
 cdidx mcp
 ```
+
+カスタム言語の開発ループは out-of-tree で回せます。拡張子 alias は
+`.cdidx-langmap.yaml`、regex シンボルパターンは `.cdidx/patterns/*.yaml` に置き、
+`cdidx test-extractor --language <lang> --file <path> --json` で full index を作らずに
+extractor fixture を確認できます。詳細は
+[Custom Language Extraction](DEVELOPER_GUIDE.md#custom-language-extraction) を参照してください。
 
 初回実行後は、次の見方と追加コマンドをよく使います。
 
