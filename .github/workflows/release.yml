@@ -44,6 +44,9 @@ jobs:
           - os: macos-latest
             rid: osx-arm64
     runs-on: ${{ matrix.os }}
+    env:
+      WIN_SIGNING_CERT_BASE64: ${{ secrets.WIN_SIGNING_CERT_BASE64 }}
+      WIN_SIGNING_CERT_PASSWORD: ${{ secrets.WIN_SIGNING_CERT_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -268,12 +271,15 @@ jobs:
         shell: pwsh
         run: Get-ChildItem publish -Filter *.pdb -Recurse | Remove-Item
 
-      - name: Authenticode sign Windows executable
-        if: runner.os == 'Windows'
+      - name: Warn when Windows Authenticode signing is not configured
+        if: runner.os == 'Windows' && (env.WIN_SIGNING_CERT_BASE64 == '' || env.WIN_SIGNING_CERT_PASSWORD == '')
         shell: pwsh
-        env:
-          WIN_SIGNING_CERT_BASE64: ${{ secrets.WIN_SIGNING_CERT_BASE64 }}
-          WIN_SIGNING_CERT_PASSWORD: ${{ secrets.WIN_SIGNING_CERT_PASSWORD }}
+        run: |
+          Write-Warning "Windows Authenticode signing secrets are not configured; publishing unsigned Windows release binary."
+
+      - name: Authenticode sign Windows executable
+        if: runner.os == 'Windows' && env.WIN_SIGNING_CERT_BASE64 != '' && env.WIN_SIGNING_CERT_PASSWORD != ''
+        shell: pwsh
         run: |
           if ([string]::IsNullOrWhiteSpace($env:WIN_SIGNING_CERT_BASE64)) {
             throw "WIN_SIGNING_CERT_BASE64 secret is required to Authenticode-sign Windows release binaries."
