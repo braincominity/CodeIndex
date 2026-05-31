@@ -101,7 +101,7 @@ public class GlobalToolLogTests
                 appVersion: "test",
                 beforeDispatchForTesting: ThrowForGlobalToolLogTest));
 
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(CommandExitCodes.UnhandledException, exitCode);
             Assert.Contains("Run `cdidx report`", stderr);
             var logPath = Path.Combine(logRoot, $"stderr-{DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}.log");
             var log = File.ReadAllText(logPath);

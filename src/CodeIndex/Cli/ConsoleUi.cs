@@ -784,6 +784,7 @@ public static class ConsoleUi
         Console.WriteLine();
         Console.WriteLine("Index and update options:");
         Console.WriteLine("  --db <path>                Database file path (default for index: <projectPath>/.cdidx/codeindex.db)");
+        WriteHelpLine("  .cdidxignore               Optional project-local ignore file; loaded after .gitignore in each directory");
         Console.WriteLine("  --rebuild                  Delete existing DB and rebuild from scratch");
         Console.WriteLine("  --verbose                  Show per-file status ([OK  ]/[SKIP]/[DEL ]/[ERR ])");
         Console.WriteLine("  --dry-run                  Scan files without writing to the database");

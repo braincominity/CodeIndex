@@ -3323,8 +3323,13 @@ public partial class McpServer
         //    .cdidx ディレクトリを解決し、必要に応じて作成
         var cdidxDir = Path.GetDirectoryName(_dbPath);
         if (string.IsNullOrEmpty(cdidxDir))
+            cdidxDir = Path.GetDirectoryName(Path.GetFullPath(_dbPath));
+        if (string.IsNullOrEmpty(cdidxDir))
             cdidxDir = Path.Combine(Path.GetFullPath("."), ".cdidx");
         DataDirectorySecurity.CreatePrivateDirectory(cdidxDir);
+        cdidxDir = Path.GetFullPath(cdidxDir);
+        if (!TryProbeCdidxDirectoryWritable(cdidxDir, out var probeError))
+            return CreateToolErrorResponse(id, probeError!);
 
         // 6. Store locally, reserve a submission attempt under the file lock,
         //    then call GitHub outside the lock so slow remote I/O does not block
@@ -3376,6 +3381,7 @@ public partial class McpServer
                         : "This suggestion has already been recorded.",
                 ["submitted_to_github"] = result.AlreadySubmitted || result.UpstreamUrl != null,
                 ["lifecycle_status"] = JsonNamingPolicy.SnakeCaseLower.ConvertName(result.Status.ToString()),
+                ["cdidx_dir"] = cdidxDir,
             };
             if (result.DuplicateOfHash != null)
                 dupPayload["duplicate_of"] = result.DuplicateOfHash;
@@ -3399,6 +3405,7 @@ public partial class McpServer
             ["stored_locally"] = true,
             ["submitted_to_github"] = result.UpstreamUrl != null,
             ["lifecycle_status"] = JsonNamingPolicy.SnakeCaseLower.ConvertName(result.Status.ToString()),
+            ["cdidx_dir"] = cdidxDir,
         };
         if (result.UpstreamUrl != null)
         {
@@ -3406,6 +3413,25 @@ public partial class McpServer
             payload["github_issue_url"] = result.UpstreamUrl;
         }
         return CreateToolResult(id, "Suggestion recorded. Thank you for the feedback.", payload);
+    }
+
+    private static bool TryProbeCdidxDirectoryWritable(string cdidxDir, out string? error)
+    {
+        var probePath = Path.Combine(cdidxDir, $".write_probe.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            using (new FileStream(probePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+            }
+            File.Delete(probePath);
+            error = null;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            error = $"Cannot write to .cdidx directory {cdidxDir}; check directory ownership, permissions, and read-only mounts. {ex.Message}";
+            return false;
+        }
     }
 
     private static CSharpStaticInterfaceWorkspaceSymbols BuildMcpCSharpStaticInterfaceWorkspaceSymbols(

@@ -7,6 +7,7 @@ namespace CodeIndex.Tests;
 /// Tests for SuggestionStore (local JSON storage with deduplication).
 /// SuggestionStoreのテスト（ローカルJSON蓄積 + 重複排除）。
 /// </summary>
+[Collection("SQLite pool sensitive")]
 public class SuggestionStoreTests : IDisposable
 {
     private readonly string _tempDir;
@@ -294,6 +295,29 @@ public class SuggestionStoreTests : IDisposable
         Assert.Equal(0, r.SubmitAttemptCount);
         Assert.Null(r.SubmittedToGitHub);
         Assert.Null(r.GitHubIssueUrl);
+    }
+
+    [Fact]
+    public void TryAdd_RedactsSensitiveTextBeforePersistence()
+    {
+        var record = MakeRecord(
+            "other",
+            null,
+            "AWS AKIA1234567890ABCDEF and password=swordfish and Bearer AbCdEfGhIjKlMnOpQrStUvWxYz123456 should not persist");
+        record.Context = "token aaBB11ccDD22eeFF33ggHH44iiJJ55kk";
+        record.ToolInvocationContext = "secret=hunter2";
+
+        Assert.True(_store.TryAdd(record));
+
+        var stored = Assert.Single(_store.LoadAll());
+        Assert.Contains("[REDACTED:aws_access_key]", stored.Description);
+        Assert.Contains("password=[REDACTED:credential]", stored.Description);
+        Assert.Contains("[REDACTED:bearer_token]", stored.Description);
+        Assert.Contains("[REDACTED:high_entropy_token]", stored.Context);
+        Assert.Contains("secret=[REDACTED:credential]", stored.ToolInvocationContext);
+        Assert.DoesNotContain("AKIA1234567890ABCDEF", stored.Description);
+        Assert.DoesNotContain("swordfish", stored.Description);
+        Assert.DoesNotContain("hunter2", stored.ToolInvocationContext);
     }
 
     [Fact]
@@ -756,6 +780,65 @@ public class SuggestionStoreTests : IDisposable
         var all = _store.LoadAll();
         Assert.Single(all);
         Assert.Equal("Post-corruption suggestion", all[0].Description);
+    }
+
+    [Fact]
+    public void TryAdd_PrunesStaleRecordsToArchive()
+    {
+        var old = MakeRecord("other", null, "Old suggestion");
+        old.CreatedAt = DateTime.UtcNow.AddDays(-400);
+        Assert.True(_store.TryAdd(old));
+
+        var fresh = MakeRecord("other", null, "Fresh suggestion");
+        Assert.True(_store.TryAdd(fresh));
+
+        var all = _store.LoadAll();
+        Assert.Single(all);
+        Assert.Equal("Fresh suggestion", all[0].Description);
+
+        var archivePath = Path.Combine(_tempDir, "suggestions-codeindex.archive.jsonl");
+        Assert.True(File.Exists(archivePath));
+        var archive = File.ReadAllText(archivePath);
+        Assert.Contains("Old suggestion", archive);
+    }
+
+    [Fact]
+    public void TryAdd_PrunesOldestRecordsOverConfiguredMaxCount()
+    {
+        using var env = EnvironmentVariableScope.Capture(SuggestionStore.MaxCountEnvironmentVariable);
+        env.Set(SuggestionStore.MaxCountEnvironmentVariable, "2");
+        var first = MakeRecord("other", null, "First suggestion");
+        first.CreatedAt = DateTime.UtcNow.AddMinutes(-3);
+        var second = MakeRecord("other", null, "Second suggestion");
+        second.CreatedAt = DateTime.UtcNow.AddMinutes(-2);
+        var third = MakeRecord("other", null, "Third suggestion");
+        third.CreatedAt = DateTime.UtcNow.AddMinutes(-1);
+
+        Assert.True(_store.TryAdd(first));
+        Assert.True(_store.TryAdd(second));
+        Assert.True(_store.TryAdd(third));
+
+        var all = _store.LoadAll();
+        Assert.Equal(new[] { "Second suggestion", "Third suggestion" }, all.Select(record => record.Description));
+        Assert.Contains("First suggestion", File.ReadAllText(Path.Combine(_tempDir, "suggestions-codeindex.archive.jsonl")));
+    }
+
+    [Fact]
+    public void TryAdd_DuplicateStillPersistsPrunedRecords()
+    {
+        var old = MakeRecord("other", null, "Old suggestion");
+        old.CreatedAt = DateTime.UtcNow.AddDays(-400);
+        var duplicate = MakeRecord("other", null, "Duplicate suggestion");
+        Assert.True(_store.TryAdd(old));
+        Assert.True(_store.TryAdd(duplicate));
+
+        Assert.False(_store.TryAdd(MakeRecord("other", null, "Duplicate suggestion")));
+
+        var all = _store.LoadAll();
+        Assert.Single(all);
+        Assert.Equal("Duplicate suggestion", all[0].Description);
+        var archivePath = Path.Combine(_tempDir, "suggestions-codeindex.archive.jsonl");
+        Assert.Equal(1, File.ReadAllText(archivePath).Split("Old suggestion").Length - 1);
     }
 
     [Fact]

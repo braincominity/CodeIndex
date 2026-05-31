@@ -297,6 +297,24 @@ public class GitHubIssueReporterTests : IDisposable
     }
 
     [Fact]
+    public void BuildIssueTitle_StripsMarkdownSyntaxFromTitleSource()
+    {
+        var title = GitHubIssueReporter.BuildIssueTitle(
+            "other](https://example.com/very-long-category-name-that-should-not-expand-forever)",
+            "   ](https://example.com/x) ![spoofed](https://example.com/y) `secret()` gap");
+
+        Assert.StartsWith("[AI Suggestion] otherhttps://example.com/very-long-categ: ", title);
+        var titleSource = title["[AI Suggestion] ".Length..];
+        Assert.DoesNotContain("[", titleSource);
+        Assert.DoesNotContain("]", titleSource);
+        Assert.DoesNotContain("(", titleSource);
+        Assert.DoesNotContain(")", titleSource);
+        Assert.DoesNotContain("`", titleSource);
+        Assert.DoesNotContain("secret", titleSource);
+        Assert.DoesNotContain("  :", titleSource);
+    }
+
+    [Fact]
     public async Task TryCreateIssueAsync_PostPayloadTitleDoesNotExceedGitHubLimit()
     {
         _env.Set("CDIDX_GITHUB_TOKEN", "ghp_title_length_test");

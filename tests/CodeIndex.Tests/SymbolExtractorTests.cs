@@ -45,6 +45,41 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_ConfiguredPatternYaml_HandlesOutOfTreeLanguage()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_{Guid.NewGuid():N}");
+            var originalDirectory = Environment.CurrentDirectory;
+            try
+            {
+                Directory.CreateDirectory(Path.Combine(tempDir, ".cdidx", "patterns"));
+                File.WriteAllText(
+                    Path.Combine(tempDir, ".cdidx", "patterns", "toydsl.yaml"),
+                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+                var outsideDir = Path.Combine(tempDir, "outside");
+                Directory.CreateDirectory(outsideDir);
+                Environment.CurrentDirectory = outsideDir;
+                ExtractorPluginRegistry.ReloadForTests();
+
+                var symbols = SymbolExtractor.Extract(2, "toydsl", "entity Widget", "demo.toy", tempDir);
+
+                var symbol = Assert.Single(symbols);
+                Assert.Equal("class", symbol.Kind);
+                Assert.Equal("Widget", symbol.Name);
+                Assert.Equal("toydsl", FileIndexer.DetectLanguage("demo.toy"));
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                Environment.CurrentDirectory = originalDirectory;
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void Extract_CsharpFileScopedNamespace_DoesNotEnterMemberHeaderMerge()
     {
         const string content = """
@@ -24397,6 +24432,28 @@ public class SymbolExtractorTests
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"InstallScriptTests.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
+    }
+
+    [Fact]
+    public void Extract_CSharp_ReferenceExtractorFixture_CompletesWithinPracticalBudget()
+    {
+        // issue #2710/#2711/#2717 regression: full self-indexing could spend minutes
+        // repeatedly rebuilding the same multi-line C# member candidate while scanning large
+        // extractor sources. Keep this as a broad runaway guard for the realistic file that
+        // reproduced the stall on origin/main.
+        var path = Path.Combine(GetRepositoryRoot(), "src", "CodeIndex", "Indexer", "References", "ReferenceExtractor.cs");
+        var content = File.ReadAllText(path);
+
+        var stopwatch = Stopwatch.StartNew();
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        stopwatch.Stop();
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ReferenceExtractor");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Extract");
+        var runawayBudget = TimeSpan.FromSeconds(30);
+        Assert.True(
+            stopwatch.Elapsed < runawayBudget,
+            $"ReferenceExtractor.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
     }
 
     [Fact]

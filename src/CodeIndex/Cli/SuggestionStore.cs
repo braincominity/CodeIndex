@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
 
@@ -22,11 +23,24 @@ public class SuggestionStore
     private readonly string _filePath;
     private readonly string _lockPath;
     private readonly TimeProvider _timeProvider;
+    private readonly string _archivePath;
     private static readonly TimeSpan s_inFlightSubmitRetryDelay = TimeSpan.FromMinutes(1);
     internal const FileShare StreamingReadFileShare = FileShare.ReadWrite | FileShare.Delete;
     internal const string DedupThresholdEnvironmentVariable = "CDIDX_SUGGESTION_DEDUP_THRESHOLD";
+    internal const string MaxAgeDaysEnvironmentVariable = "CDIDX_SUGGESTION_MAX_AGE_DAYS";
+    internal const string MaxCountEnvironmentVariable = "CDIDX_SUGGESTION_MAX_COUNT";
     internal const double DefaultDedupThreshold = 0.85;
+    internal const int DefaultMaxAgeDays = 365;
+    internal const int DefaultMaxCount = 5000;
     private const int FuzzyDedupRecentLimit = 100;
+    private const string RedactedAwsAccessKey = "[REDACTED:aws_access_key]";
+    private const string RedactedBearerToken = "[REDACTED:bearer_token]";
+    private const string RedactedCredential = "[REDACTED:credential]";
+    private const string RedactedHighEntropyToken = "[REDACTED:high_entropy_token]";
+    private static readonly Regex s_awsAccessKeyRegex = new(@"\bAKIA[0-9A-Z]{16}\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex s_bearerTokenRegex = new(@"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex s_namedSecretRegex = new(@"(?i)\b(password|secret)=([^&\s]{1,200})", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex s_highEntropyTokenRegex = new(@"\b(?=[A-Za-z0-9._~+/=-]{32,}\b)(?=.*[A-Z])(?=.*[a-z])(?=.*\d)[A-Za-z0-9._~+/=-]+\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly HashSet<string> s_dedupStopWords = new(StringComparer.Ordinal)
     {
@@ -95,6 +109,7 @@ public class SuggestionStore
         _filePath = Path.Combine(cdidxDir, $"suggestions-{safeName}.json");
         _lockPath = Path.Combine(cdidxDir, $"suggestions-{safeName}.lock");
         _timeProvider = timeProvider;
+        _archivePath = Path.Combine(cdidxDir, $"suggestions-{safeName}.archive.jsonl");
     }
 
     /// <summary>
@@ -124,14 +139,21 @@ public class SuggestionStore
     /// </summary>
     public bool TryAdd(SuggestionRecord record)
     {
+        record = RedactRecordForPersistence(record);
         return WithFileLock(() =>
         {
             var existing = ReadUnlocked();
+            var prunedBeforeDuplicateCheck = PruneUnlocked(existing);
             if (FindDuplicate(existing, record, ResolveDedupThreshold()).Record != null)
+            {
+                if (prunedBeforeDuplicateCheck)
+                    SaveUnlocked(existing);
                 return false;
+            }
 
             StampCreatedAt(record);
             existing.Add(record);
+            PruneUnlocked(existing);
             SaveUnlocked(existing);
             return true;
         });
@@ -193,9 +215,11 @@ public class SuggestionStore
         SuggestionRecord record,
         Func<SuggestionRecord, Task<SubmitAttemptResult>>? submitToGitHub)
     {
+        record = RedactRecordForPersistence(record);
         var reservation = WithFileLock(() =>
         {
             var existing = ReadUnlocked();
+            var prunedBeforeDuplicateCheck = PruneUnlocked(existing);
             var duplicate = FindDuplicate(existing, record, ResolveDedupThreshold());
             var found = duplicate.Record;
 
@@ -206,6 +230,7 @@ public class SuggestionStore
             {
                 StampCreatedAt(record);
                 existing.Add(record);
+                PruneUnlocked(existing);
                 SaveUnlocked(existing);
                 found = record;
             }
@@ -227,6 +252,9 @@ public class SuggestionStore
                     isNew ? null : current.Hash,
                     isNew ? null : duplicate.Score);
             }
+
+            if (prunedBeforeDuplicateCheck)
+                SaveUnlocked(existing);
 
             return new SubmitReservation(
                 isNew,
@@ -749,6 +777,73 @@ public class SuggestionStore
 
     private DateTime GetUtcNow() => _timeProvider.GetUtcNow().UtcDateTime;
 
+    private bool PruneUnlocked(List<SuggestionRecord> records)
+    {
+        var maxAge = ResolveMaxAge();
+        var maxCount = ResolveMaxCount();
+        var cutoff = DateTime.UtcNow.Subtract(maxAge);
+        var pruned = records
+            .Where(record => record.CreatedAt != default && record.CreatedAt < cutoff)
+            .ToList();
+
+        foreach (var record in pruned)
+            records.Remove(record);
+
+        var overflow = records.Count - maxCount;
+        if (overflow > 0)
+        {
+            var excess = records
+                .OrderBy(record => record.CreatedAt == default ? DateTime.MinValue : record.CreatedAt)
+                .Take(overflow)
+                .ToList();
+            pruned.AddRange(excess);
+            foreach (var record in excess)
+                records.Remove(record);
+        }
+
+        if (pruned.Count == 0)
+            return false;
+
+        ArchivePrunedRecords(pruned);
+        try
+        {
+            Console.Error.WriteLine($"[cdidx] Pruned {pruned.Count} stale suggestion record(s) to {_archivePath}.");
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        return true;
+    }
+
+    private void ArchivePrunedRecords(IEnumerable<SuggestionRecord> records)
+    {
+        var dir = Path.GetDirectoryName(_archivePath);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+
+        using var stream = new FileStream(_archivePath, FileMode.Append, FileAccess.Write, FileShare.Read);
+        using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        foreach (var record in records)
+            writer.WriteLine(JsonSerializer.Serialize(record, s_jsonOptions));
+    }
+
+    internal static TimeSpan ResolveMaxAge()
+    {
+        var raw = Environment.GetEnvironmentVariable(MaxAgeDaysEnvironmentVariable);
+        return int.TryParse(raw, out var days) && days > 0
+            ? TimeSpan.FromDays(days)
+            : TimeSpan.FromDays(DefaultMaxAgeDays);
+    }
+
+    internal static int ResolveMaxCount()
+    {
+        var raw = Environment.GetEnvironmentVariable(MaxCountEnvironmentVariable);
+        return int.TryParse(raw, out var count) && count > 0
+            ? count
+            : DefaultMaxCount;
+    }
+
     private static void StampSubmitAttempt(SuggestionRecord record, DateTime timestamp, string? error, DateTime? nextRetryAt)
     {
         record.LastSubmitAttempt = timestamp;
@@ -792,6 +887,77 @@ public class SuggestionStore
         SubmittedToGitHub = record.SubmittedToGitHub,
         GitHubIssueUrl = record.GitHubIssueUrl,
     };
+
+    internal static string RedactSensitiveText(string text, out IReadOnlyCollection<string> redactedTypes)
+    {
+        var types = new SortedSet<string>(StringComparer.Ordinal);
+        var redacted = s_awsAccessKeyRegex.Replace(text, match =>
+        {
+            types.Add("aws_access_key");
+            return RedactedAwsAccessKey;
+        });
+        redacted = s_bearerTokenRegex.Replace(redacted, match =>
+        {
+            types.Add("bearer_token");
+            return RedactedBearerToken;
+        });
+        redacted = s_namedSecretRegex.Replace(redacted, match =>
+        {
+            types.Add("credential");
+            return $"{match.Groups[1].Value}={RedactedCredential}";
+        });
+        redacted = s_highEntropyTokenRegex.Replace(redacted, match =>
+        {
+            if (match.Value.StartsWith("[REDACTED:", StringComparison.Ordinal))
+                return match.Value;
+            types.Add("high_entropy_token");
+            return RedactedHighEntropyToken;
+        });
+
+        redactedTypes = types;
+        return redacted;
+    }
+
+    private static SuggestionRecord RedactRecordForPersistence(SuggestionRecord record)
+    {
+        var redactedDescription = RedactNullable(record.Description, out var descriptionTypes) ?? string.Empty;
+        var redactedContext = RedactNullable(record.Context, out var contextTypes);
+        var redactedToolInvocationContext = RedactNullable(record.ToolInvocationContext, out var toolInvocationTypes);
+        var allTypes = descriptionTypes.Concat(contextTypes).Concat(toolInvocationTypes).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+
+        if (allTypes.Length == 0)
+            return record;
+
+        WriteRedactionWarning(allTypes);
+        var copy = CloneForSubmit(record);
+        copy.Description = redactedDescription;
+        copy.Context = redactedContext;
+        copy.ToolInvocationContext = redactedToolInvocationContext;
+        copy.Hash = ComputeHash(copy.Category, copy.Language, copy.Description);
+        return copy;
+    }
+
+    private static string? RedactNullable(string? value, out IReadOnlyCollection<string> redactedTypes)
+    {
+        if (value == null)
+        {
+            redactedTypes = Array.Empty<string>();
+            return null;
+        }
+
+        return RedactSensitiveText(value, out redactedTypes);
+    }
+
+    private static void WriteRedactionWarning(IReadOnlyCollection<string> redactedTypes)
+    {
+        try
+        {
+            Console.Error.WriteLine($"[cdidx] Redacted sensitive suggestion text before local persistence/GitHub submission: {string.Join(", ", redactedTypes)}.");
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
 
     private sealed record SubmitReservation(
         bool IsNew,
