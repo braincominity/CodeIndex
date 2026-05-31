@@ -467,9 +467,11 @@ public partial class McpServer
                 "Submit a structured improvement suggestion or error report for cdidx. "
                 + "Call this when you notice a gap (e.g. missing language support, poor ranking) or encounter an unexpected error. "
                 + "Never include source code — describe the gap in natural language only. "
+                + "The tool writes to the resolved .cdidx directory, which must be writable; responses include cdidx_dir for diagnostics. "
                 + "/ cdidxへの構造化された改善提案またはエラー報告を送信する。"
                 + "ギャップ（言語サポート不足、ランキング不良等）に気づいたとき、または予期せぬエラーに遭遇したときに呼び出す。"
-                + "ソースコードを含めないこと — 自然言語でのみギャップを記述する。",
+                + "ソースコードを含めないこと — 自然言語でのみギャップを記述する。"
+                + "解決された .cdidx ディレクトリへ書き込むため、そのディレクトリは書き込み可能である必要がある。応答には診断用の cdidx_dir が含まれる。",
                 new JsonObject
                 {
                     ["type"] = "object",
