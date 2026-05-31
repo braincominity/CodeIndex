@@ -5525,27 +5525,29 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_Excerpt_BeforeAboveCapReturnsError()
+    public void ToolsCall_Excerpt_BeforeAboveCapClampsContext()
     {
         InsertIndexedFile("dist/data-before-overflow.txt", "text", "line one\nline two");
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-before-overflow.txt","startLine":1,"before":2147483647}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("before must be in [0, 1000]", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1000, structured["before"]!.GetValue<int>());
+        Assert.True(structured["contextTruncated"]!.GetValue<bool>());
     }
 
     [Fact]
-    public void ToolsCall_Excerpt_AfterAboveCapReturnsError()
+    public void ToolsCall_Excerpt_AfterAboveCapClampsContext()
     {
         InsertIndexedFile("dist/data-after-overflow.txt", "text", "line one\nline two");
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-after-overflow.txt","startLine":1,"after":2147483647}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("after must be in [0, 1000]", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1000, structured["after"]!.GetValue<int>());
+        Assert.True(structured["contextTruncated"]!.GetValue<bool>());
     }
 
     [Fact]
@@ -5671,6 +5673,71 @@ public class McpServerTests : IDisposable
 
         Assert.True(response["result"]!["isError"]!.GetValue<bool>());
         Assert.Equal("after must be greater than or equal to 0", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_FindInFile_BeforeAfterAboveCapClampContext()
+    {
+        InsertIndexedFile("dist/search-context-overflow.txt", "text", "target");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"target","path":"dist/search-context-overflow.txt","before":2147483647,"after":2147483647}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal(1000, structured["before"]!.GetValue<int>());
+        Assert.Equal(1000, structured["after"]!.GetValue<int>());
+        Assert.True(structured["contextTruncated"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ToolsCall_FindInFile_SnippetLinesControlsMatchContext()
+    {
+        InsertIndexedFile("dist/search-snippet-lines.txt", "text", "line one\nline two\ntarget\nline four\nline five");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"target","path":"dist/search-snippet-lines.txt","snippetLines":5}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+        var structured = response["result"]!["structuredContent"]!;
+        var result = structured["results"]![0]!;
+
+        Assert.Equal(2, structured["before"]!.GetValue<int>());
+        Assert.Equal(2, structured["after"]!.GetValue<int>());
+        Assert.Equal(5, structured["snippetLines"]!.GetValue<int>());
+        Assert.Equal(1, result["startLine"]!.GetValue<int>());
+        Assert.Equal(5, result["endLine"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_FindInFile_FocusLineAndColumnRestrictMatch()
+    {
+        InsertIndexedFile("dist/search-focus.txt", "text", "target here\nno match\nother target");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"target","path":"dist/search-focus.txt","focusLine":3,"focusColumn":8}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var result = structured["results"]![0]!;
+
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal(3, result["line"]!.GetValue<int>());
+        Assert.Equal(7, result["column"]!.GetValue<int>());
+        Assert.Equal(3, structured["focusLine"]!.GetValue<int>());
+        Assert.Equal(8, structured["focusColumn"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_FindInFile_RegexMatchesAnchors()
+    {
+        InsertIndexedFile("dist/search-regex.txt", "text", "alpha\ntarget()\nnot target()");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"^target","path":"dist/search-regex.txt","regex":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var result = structured["results"]![0]!;
+
+        Assert.True(structured["regex"]!.GetValue<bool>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal(2, result["line"]!.GetValue<int>());
+        Assert.Equal(1, result["column"]!.GetValue<int>());
     }
 
     [Fact]

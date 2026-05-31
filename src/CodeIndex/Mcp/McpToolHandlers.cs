@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -374,7 +375,7 @@ public partial class McpServer
         "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "project", "solution" },
         "symbols" => new HashSet<string>(StringComparer.Ordinal) { "query", "names", "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "project", "solution" },
         "files" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since" },
-        "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "maxLineWidth", "exact" },
+        "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "snippetLines", "focusLine", "focusColumn", "maxLineWidth", "exact", "regex" },
         "excerpt" => new HashSet<string>(StringComparer.Ordinal) { "path", "startLine", "endLine", "before", "after", "focusLine", "focusColumn", "focusLength", "maxLineWidth" },
         "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "project", "solution" },
         "analyze_symbol" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "includeBody", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "maxLineWidth", "project", "solution" },
@@ -1787,14 +1788,15 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "endLine must be greater than or equal to startLine");
 
         var beforeValue = args?["before"]?.GetValue<int>();
-        if (beforeValue.HasValue && (beforeValue.Value < 0 || beforeValue.Value > MaxContextLines))
+        if (beforeValue.HasValue && beforeValue.Value < 0)
             return CreateToolErrorResponse(id, $"before must be in [0, {MaxContextLines}]");
-        var before = beforeValue ?? 0;
+        var before = ClampContextLines(beforeValue ?? 0);
 
         var afterValue = args?["after"]?.GetValue<int>();
-        if (afterValue.HasValue && (afterValue.Value < 0 || afterValue.Value > MaxContextLines))
+        if (afterValue.HasValue && afterValue.Value < 0)
             return CreateToolErrorResponse(id, $"after must be in [0, {MaxContextLines}]");
-        var after = afterValue ?? 0;
+        var after = ClampContextLines(afterValue ?? 0);
+        var contextTruncated = beforeValue > MaxContextLines || afterValue > MaxContextLines;
 
         var focusLine = args?["focusLine"]?.GetValue<int>();
         var focusColumn = args?["focusColumn"]?.GetValue<int>();
@@ -1865,6 +1867,9 @@ public partial class McpServer
             }
 
             var payload = JsonSerializer.SerializeToNode(excerpt, _jsonOptions)!.AsObject();
+            payload["before"] = before;
+            payload["after"] = after;
+            payload["contextTruncated"] = contextTruncated;
             payload["maxLineWidth"] = maxLineWidth;
             if (focusLine.HasValue)
                 payload["focusLine"] = focusLine.Value;
@@ -1899,19 +1904,46 @@ public partial class McpServer
         var beforeValue = args?["before"]?.GetValue<int>();
         if (beforeValue.HasValue && beforeValue.Value < 0)
             return CreateToolErrorResponse(id, "before must be greater than or equal to 0");
-        var before = beforeValue ?? 0;
+        var before = ClampContextLines(beforeValue ?? 0);
 
         var afterValue = args?["after"]?.GetValue<int>();
         if (afterValue.HasValue && afterValue.Value < 0)
             return CreateToolErrorResponse(id, "after must be greater than or equal to 0");
-        var after = afterValue ?? 0;
+        var after = ClampContextLines(afterValue ?? 0);
+        var contextTruncated = beforeValue > MaxContextLines || afterValue > MaxContextLines;
+        var snippetLinesValue = args?["snippetLines"]?.GetValue<int>();
+        if (snippetLinesValue.HasValue && (snippetLinesValue.Value <= 0 || snippetLinesValue.Value > SearchSnippetFormatter.MaxSnippetLines))
+            return CreateToolErrorResponse(id, $"snippetLines must be in [1, {SearchSnippetFormatter.MaxSnippetLines}]");
+        if (snippetLinesValue.HasValue)
+        {
+            var surroundingLines = snippetLinesValue.Value - 1;
+            if (!beforeValue.HasValue)
+                before = surroundingLines / 2;
+            if (!afterValue.HasValue)
+                after = surroundingLines - before;
+        }
+        var focusLine = args?["focusLine"]?.GetValue<int>();
+        if (focusLine.HasValue && focusLine.Value <= 0)
+            return CreateToolErrorResponse(id, "focusLine must be greater than or equal to 1");
+        var focusColumn = args?["focusColumn"]?.GetValue<int>();
+        if (focusColumn.HasValue && focusColumn.Value <= 0)
+            return CreateToolErrorResponse(id, "focusColumn must be greater than or equal to 1");
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        var regex = args?["regex"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth);
+            List<FileFindResult> results;
+            try
+            {
+                results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth, focusLine, focusColumn, regex);
+            }
+            catch (Exception ex) when (regex && (ex is ArgumentException || ex is RegexMatchTimeoutException))
+            {
+                return CreateToolErrorResponse(id, $"invalid regular expression: {ex.Message}");
+            }
             var structured = new JsonObject
             {
                 ["query"] = query,
@@ -1919,12 +1951,20 @@ public partial class McpServer
                 ["excludeTests"] = excludeTests,
                 ["before"] = before,
                 ["after"] = after,
+                ["contextTruncated"] = contextTruncated,
                 ["maxLineWidth"] = maxLineWidth,
                 ["exact"] = exact,
+                ["regex"] = regex,
                 ["count"] = results.Count,
                 ["fileCount"] = results.Select(r => r.Path).Distinct().Count(),
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions),
             };
+            if (snippetLinesValue.HasValue)
+                structured["snippetLines"] = snippetLinesValue.Value;
+            if (focusLine.HasValue)
+                structured["focusLine"] = focusLine.Value;
+            if (focusColumn.HasValue)
+                structured["focusColumn"] = focusColumn.Value;
             if (results.Count == 0)
             {
                 AddFreshnessHint(structured, reader);
@@ -1934,6 +1974,11 @@ public partial class McpServer
             var fileCount = structured["fileCount"]!.GetValue<int>();
             return CreateToolResult(id, $"Found {ConsoleUi.Counted(results.Count, "in-file match", "in-file matches")} across {ConsoleUi.Counted(fileCount, "file")}.", structured);
         });
+    }
+
+    private static int ClampContextLines(int value)
+    {
+        return Math.Min(value, MaxContextLines);
     }
 
     private JsonNode ExecuteBatchQuery(JsonNode? id, JsonNode? args)
