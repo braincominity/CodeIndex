@@ -18305,6 +18305,10 @@ public class ReferenceExtractorTests
                 Write-Host $Value
             }
 
+            filter Select-Valid {
+                process { if ($_.IsValid) { return $_ } }
+            }
+
             function Process-Items {
                 param([array]$Items)
                 $Items | ForEach-Object { Process-One $_ }
@@ -18337,6 +18341,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Invoke-RestMethod" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "ForEach-Object" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "Where-Object" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName is "function" or "filter" or "if" or "return");
         Assert.DoesNotContain(references, r => r.SymbolName == "lt");
     }
 

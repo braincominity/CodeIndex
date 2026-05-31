@@ -224,7 +224,11 @@ public static partial class ReferenceExtractor
         // PowerShell keywords / PowerShell キーワード
         ["powershell"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "param", "begin", "process", "Write", "trap", "finally", "elseif",
+            "function", "filter", "configuration", "workflow", "class", "enum",
+            "param", "begin", "process", "end", "dynamicparam",
+            "if", "else", "elseif", "for", "foreach", "while", "do", "until", "switch",
+            "try", "catch", "finally", "trap", "return", "throw", "break", "continue",
+            "using", "data", "in", "Write",
         },
         // Shell keywords / Shell キーワード
         ["shell"] = new HashSet<string>(StringComparer.Ordinal)
