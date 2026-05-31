@@ -11522,7 +11522,9 @@ public class ReferenceExtractorTests
             class User {
                 public string $displayName {
                     get => $this->firstName . ' ' . $this->lastName;
-                    set => $this->_displayName = strtoupper($value);
+                    set {
+                        $this->_displayName = strtoupper($value);
+                    }
                 }
             }
             ?>

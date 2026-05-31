@@ -13749,7 +13749,9 @@ public class SymbolExtractorTests
             class User {
                 public string $displayName {
                     get => $this->firstName . ' ' . $this->lastName;
-                    set => $this->_displayName = strtoupper($value);
+                    set {
+                        $this->_displayName = strtoupper($value);
+                    }
                 }
             }
             """;
@@ -13759,11 +13761,11 @@ public class SymbolExtractorTests
         var property = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "displayName");
         Assert.Equal("php_property_hook", property.SubKind);
         Assert.Equal(3, property.StartLine);
-        Assert.Equal(6, property.EndLine);
+        Assert.Equal(8, property.EndLine);
         Assert.Equal(3, property.BodyStartLine);
-        Assert.Equal(6, property.BodyEndLine);
+        Assert.Equal(8, property.BodyEndLine);
         Assert.Contains(symbols, s => s.Kind == "accessor" && s.Name == "displayName.get" && s.ContainerKind == "property" && s.ContainerName == "displayName");
-        Assert.Contains(symbols, s => s.Kind == "accessor" && s.Name == "displayName.set" && s.ContainerKind == "property" && s.ContainerName == "displayName");
+        Assert.Contains(symbols, s => s.Kind == "accessor" && s.Name == "displayName.set" && s.ContainerKind == "property" && s.ContainerName == "displayName" && s.BodyEndLine == 7);
     }
 
     [Fact]

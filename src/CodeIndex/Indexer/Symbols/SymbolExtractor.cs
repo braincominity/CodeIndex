@@ -4899,6 +4899,16 @@ public static partial class SymbolExtractor
                 if (!existing.Add(key))
                     continue;
 
+                var accessorBodyEndLine = accessorLine;
+                var accessorNameEnd = accessorMatch.Groups["name"].Index + accessorMatch.Groups["name"].Length;
+                var accessorOpenBraceColumn = structuralLines[accessorLine].IndexOf('{', accessorNameEnd);
+                if (accessorOpenBraceColumn >= 0)
+                {
+                    var accessorCloseBraceLine = FindBraceRangeEndLine(structuralLines, accessorLine, accessorOpenBraceColumn);
+                    if (accessorCloseBraceLine > accessorLine && accessorCloseBraceLine <= closeBraceLine)
+                        accessorBodyEndLine = accessorCloseBraceLine;
+                }
+
                 sawAccessor = true;
                 symbols.Add(new SymbolRecord
                 {
@@ -4908,9 +4918,9 @@ public static partial class SymbolExtractor
                     Line = accessorLine + 1,
                     StartLine = accessorLine + 1,
                     StartColumn = accessorMatch.Groups["name"].Index,
-                    EndLine = accessorLine + 1,
+                    EndLine = accessorBodyEndLine + 1,
                     BodyStartLine = accessorLine + 1,
-                    BodyEndLine = accessorLine + 1,
+                    BodyEndLine = accessorBodyEndLine + 1,
                     Signature = lines[accessorLine].Trim(),
                     ContainerKind = "property",
                     ContainerName = property.Name,
