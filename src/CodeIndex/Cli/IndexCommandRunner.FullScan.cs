@@ -33,6 +33,15 @@ public static partial class IndexCommandRunner
         return $"Index extraction made no progress for {ConsoleUi.FormatDuration(ex.Timeout)}.{pathSuffix}";
     }
 
+    private static FileIssue BuildSymbolCountExceededIssue(string path, int symbolCount, int maxSymbolsPerFile) =>
+        new()
+        {
+            Path = path,
+            Kind = "symbol_count_exceeded",
+            Line = 0,
+            Message = $"Symbol extraction produced {symbolCount:N0} symbols, exceeding the --max-symbols-per-file limit of {maxSymbolsPerFile:N0}; file content, symbols, and references were not indexed. Exclude the generated/pathological file or raise --max-symbols-per-file if this is expected.",
+        };
+
     internal static string FormatIndexPhasePath(string path, string phase) =>
         $"{path} ({phase})";
 
@@ -191,7 +200,7 @@ public static partial class IndexCommandRunner
             jsonOptions,
             $"Index extraction made no progress for {ConsoleUi.FormatDuration(ex.Timeout)} ({ex.FilesProcessed:N0}{totalSuffix} files processed).{pathSuffix}",
             CommandExitCodes.CancelledBySignal,
-            "Rerun with `--verbose` to inspect progress, lower `--parallelism`, or file a bug with the reported active phase.",
+            "Rerun with `--verbose` to inspect progress, lower `--parallelism`, exclude the reported file, or lower `--max-symbols-per-file` to skip pathological symbol output.",
             CommandErrorCodes.IndexExtractionStalled);
     }
 
@@ -865,6 +874,14 @@ public static partial class IndexCommandRunner
                                     Path.GetFullPath(options.ProjectPath!),
                                     activeJsonExtractionPhases[workerIndex],
                                     extractionCancellationToken);
+                                if (symbols.Count > options.MaxSymbolsPerFile)
+                                {
+                                    var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                                    extractionResults.Add(
+                                        FullScanFileWorkItem.Success(filePath, record, string.Empty, rawBytes, issue.Message, [], [], [], [issue]),
+                                        extractionCancellationToken);
+                                    continue;
+                                }
                                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                                 activeJsonExtractionPhases[workerIndex] = FormatIndexPhasePath(record.Path, "references");
                                 references = ReferenceExtractor.Extract(
@@ -1026,6 +1043,14 @@ public static partial class IndexCommandRunner
                     }
                     if (existingId != null)
                     {
+                        if (writer.CountSymbolsForFile(existingId.Value) > options.MaxSymbolsPerFile
+                            || writer.HasIssueForFile(existingId.Value, "symbol_count_exceeded"))
+                        {
+                            existingId = null;
+                        }
+                    }
+                    if (existingId != null)
+                    {
                         writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
                         skipped++;
                         processed++;
@@ -1058,7 +1083,6 @@ public static partial class IndexCommandRunner
                     var chunks = item.Chunks == null
                         ? ChunkSplitter.Split(fileId, item.Content!)
                         : ReassignChunkFileIds(item.Chunks, fileId);
-                    writer.InsertChunks(chunks);
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "symbols");
                     var symbols = item.Symbols == null
                         ? ExtractSymbolsWithStallTimeout(
@@ -1070,6 +1094,26 @@ public static partial class IndexCommandRunner
                             currentJsonIndexFile,
                             cancellationToken)
                         : ReassignSymbolFileIds(item.Symbols, fileId);
+                    if (symbols.Count > options.MaxSymbolsPerFile)
+                    {
+                        var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                        writer.InsertSymbols([]);
+                        writer.InsertReferences([]);
+                        writer.InsertIssues(fileId, [issue]);
+                        if (options.Verbose)
+                            WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
+                        txn.Commit();
+                        processed++;
+                        if (!options.Json && !options.Quiet)
+                        {
+                            PauseIndexSpinnerForConsoleWrite();
+                            ConsoleUi.PrintProgress(processed, files.Count);
+                            ResumeIndexSpinnerAfterConsoleWrite();
+                        }
+                        ReportJsonIndexProgressIfNeeded();
+                        currentJsonIndexFile = null;
+                        continue;
+                    }
                     if (item.Symbols == null)
                         SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(item.FilePath, record.Lang));
                     var fileContext = new FileContext(projectRoot, record.Path, item.FilePath, record.Lang);
@@ -1077,6 +1121,27 @@ public static partial class IndexCommandRunner
                     postExtractionHooks.OnSymbolsExtracted(fileContext, mutableSymbols);
                     symbolsDroppedByKindFilter += options.SymbolKindFilter.Apply(mutableSymbols);
                     symbols = (IReadOnlyList<SymbolRecord>)mutableSymbols;
+                    if (symbols.Count > options.MaxSymbolsPerFile)
+                    {
+                        var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                        writer.InsertSymbols([]);
+                        writer.InsertReferences([]);
+                        writer.InsertIssues(fileId, [issue]);
+                        if (options.Verbose)
+                            WriteIndexVerboseStatus($"  [SKIP] {record.Path} ({issue.Message})");
+                        txn.Commit();
+                        processed++;
+                        if (!options.Json && !options.Quiet)
+                        {
+                            PauseIndexSpinnerForConsoleWrite();
+                            ConsoleUi.PrintProgress(processed, files.Count);
+                            ResumeIndexSpinnerAfterConsoleWrite();
+                        }
+                        ReportJsonIndexProgressIfNeeded();
+                        currentJsonIndexFile = null;
+                        continue;
+                    }
+                    writer.InsertChunks(chunks);
                     FileIndexer.ValidateSymbolLineRanges(record, symbols);
                     writer.InsertSymbols(symbols);
                     currentJsonIndexFile = FormatIndexPhasePath(record.Path, "references");
