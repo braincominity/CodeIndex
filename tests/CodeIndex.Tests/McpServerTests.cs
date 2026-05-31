@@ -984,6 +984,23 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolCall_TypeMismatch_ReturnsInvalidParams_Issue1417()
+    {
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Run","limit":"not-an-int"}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["result"]);
+        var error = response["error"]!;
+        Assert.Equal(-32602, error["code"]!.GetValue<int>());
+        Assert.Equal("invalid_argument", error["data"]!["category"]!.GetValue<string>());
+        Assert.Equal("limit", error["data"]!["parameter"]!.GetValue<string>());
+        Assert.Equal("integer", error["data"]!["expected"]!.GetValue<string>());
+        Assert.Equal("string", error["data"]!["actual"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void Initialize_ReturnsInstructions()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""")!;

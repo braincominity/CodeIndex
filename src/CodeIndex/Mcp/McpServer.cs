@@ -2143,11 +2143,25 @@ public partial class McpServer : IDisposable
             if (ValidateToolArguments(toolName, args) is JsonObject argumentError)
             {
                 metricsError = "invalid_argument";
-                response = CreateToolErrorResponse(id, argumentError["message"]!.GetValue<string>(),
-                    category: McpErrorEnvelope.CategoryInvalidArgument,
-                    suggestion: "Use exactly the argument names advertised by tools/list for this tool.",
-                    retrySafe: false,
-                    extraData: argumentError);
+                if (argumentError["jsonrpc_invalid_params"] is JsonValue invalidParamsMarker
+                    && invalidParamsMarker.TryGetValue<bool>(out var invalidParams)
+                    && invalidParams)
+                {
+                    argumentError.Remove("jsonrpc_invalid_params");
+                    response = CreateErrorResponse(hasId: true, id: id, code: -32602, message: argumentError["message"]!.GetValue<string>(),
+                        category: McpErrorEnvelope.CategoryInvalidArgument,
+                        suggestion: "Use the JSON types advertised by tools/list for this tool.",
+                        retrySafe: false,
+                        extraData: argumentError);
+                }
+                else
+                {
+                    response = CreateToolErrorResponse(id, argumentError["message"]!.GetValue<string>(),
+                        category: McpErrorEnvelope.CategoryInvalidArgument,
+                        suggestion: "Use exactly the argument names advertised by tools/list for this tool.",
+                        retrySafe: false,
+                        extraData: argumentError);
+                }
             }
             else if (ValidateCommonListArguments(args) is JsonObject listArgumentError)
             {
