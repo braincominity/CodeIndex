@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
+using System.Text.RegularExpressions;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Mcp;
@@ -545,7 +546,8 @@ public class ProgramRunnerTests
             var expectedMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
             Assert.Equal(expectedMode, File.GetUnixFileMode(oldLogPath));
 
-            var currentLogPath = Directory.GetFiles(logDir, $"stderr-{DateTime.UtcNow:yyyyMMdd}.log", SearchOption.TopDirectoryOnly).Single();
+            var currentLogPath = Directory.GetFiles(logDir, "stderr-*.log", SearchOption.TopDirectoryOnly)
+                .Single(path => Regex.IsMatch(Path.GetFileName(path), $@"^stderr-{DateTime.UtcNow:yyyyMMdd}-p\d+-\d{{6}}\.log$"));
             Assert.Equal(expectedMode, File.GetUnixFileMode(currentLogPath));
         }
         finally
@@ -631,7 +633,7 @@ public class ProgramRunnerTests
             Assert.Equal(30, logs.Count);
             Assert.DoesNotContain("stderr-20240101.log", logs);
             Assert.DoesNotContain("stderr-20240105.log", logs);
-            Assert.Contains($"stderr-{DateTime.UtcNow:yyyyMMdd}.log", logs);
+            Assert.Contains(logs, name => Regex.IsMatch(name ?? string.Empty, $@"^stderr-{DateTime.UtcNow:yyyyMMdd}-p\d+-\d{{6}}\.log$"));
         }
         finally
         {
@@ -650,10 +652,13 @@ public class ProgramRunnerTests
             "CDIDX_GLOBAL_TOOL_LOG_DIR",
             GlobalToolLog.LogFormatEnvironmentVariable,
             GlobalToolLog.LogRetainEnvironmentVariable,
-            GlobalToolLog.LogMaxSizeMbEnvironmentVariable);
+            GlobalToolLog.LogMaxSizeMbEnvironmentVariable,
+            GlobalToolLog.GlobalToolLogMaxBytesEnvironmentVariable);
 
         try
         {
+            var fixedNow = new DateTimeOffset(2026, 5, 31, 12, 34, 56, TimeSpan.Zero);
+            GlobalToolLog.TimeProvider = new ManualTimeProvider(fixedNow);
             for (var i = 0; i < 4; i++)
             {
                 var path = Path.Combine(logDir, $"stderr-2024010{i + 1}.log");
@@ -661,7 +666,7 @@ public class ProgramRunnerTests
                 File.SetLastWriteTimeUtc(path, new DateTime(2024, 1, i + 1, 0, 0, 0, DateTimeKind.Utc));
             }
 
-            var currentPath = Path.Combine(logDir, $"stderr-{DateTime.UtcNow:yyyyMMdd}.log");
+            var currentPath = Path.Combine(logDir, $"stderr-{fixedNow:yyyyMMdd}-p{Environment.ProcessId}-{fixedNow:HHmmss}.log");
             File.WriteAllBytes(currentPath, new byte[1024 * 1024]);
             File.SetLastWriteTimeUtc(currentPath, DateTime.UtcNow);
 
@@ -681,10 +686,54 @@ public class ProgramRunnerTests
                 .OrderBy(name => name, StringComparer.Ordinal)
                 .ToArray();
             Assert.Equal(2, logs.Length);
-            Assert.Contains($"stderr-{DateTime.UtcNow:yyyyMMdd}-1.log", logs);
+            Assert.Contains(logs, name => Regex.IsMatch(name ?? string.Empty, $@"^stderr-{fixedNow:yyyyMMdd}-p\d+-{fixedNow:HHmmss}-1\.log$"));
         }
         finally
         {
+            GlobalToolLog.TimeProvider = TimeProvider.System;
+            TestProjectHelper.DeleteDirectory(logDir);
+        }
+    }
+
+    [Fact]
+    public void Run_ForcedGlobalToolLogging_RotatesByDefaultMaxBytesEnvironmentVariable()
+    {
+        var logDir = Path.Combine(Path.GetTempPath(), $"cdidx_global_tool_log_max_bytes_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(logDir);
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+            "CDIDX_DISABLE_PERSISTENT_LOG",
+            "CDIDX_GLOBAL_TOOL_LOG_DIR",
+            GlobalToolLog.LogMaxSizeMbEnvironmentVariable,
+            GlobalToolLog.GlobalToolLogMaxBytesEnvironmentVariable);
+
+        try
+        {
+            var fixedNow = new DateTimeOffset(2026, 5, 31, 12, 35, 56, TimeSpan.Zero);
+            GlobalToolLog.TimeProvider = new ManualTimeProvider(fixedNow);
+            var currentPrefix = $"stderr-{fixedNow:yyyyMMdd}-p{Environment.ProcessId}-{fixedNow:HHmmss}";
+            File.WriteAllBytes(Path.Combine(logDir, $"{currentPrefix}.log"), new byte[64]);
+
+            env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+            env.Set(GlobalToolLog.GlobalToolLogMaxBytesEnvironmentVariable, "64");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["definitely-not-a-command"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("Unknown command: definitely-not-a-command", stderr);
+
+            var logs = Directory.GetFiles(logDir, "stderr-*.log", SearchOption.TopDirectoryOnly)
+                .Select(Path.GetFileName)
+                .ToArray();
+            Assert.Contains(logs, name => Regex.IsMatch(name ?? string.Empty, $@"^stderr-{fixedNow:yyyyMMdd}-p\d+-{fixedNow:HHmmss}-1\.log$"));
+        }
+        finally
+        {
+            GlobalToolLog.TimeProvider = TimeProvider.System;
             TestProjectHelper.DeleteDirectory(logDir);
         }
     }
