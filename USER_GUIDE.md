@@ -240,7 +240,7 @@ sections below show examples and option details for the most common workflows.
 | Index | `backfill-fold` | Upgrade Unicode folded-name metadata in an existing DB | `backfill_fold` |
 | Index | `hooks` | Install, remove, or inspect the optional git pre-commit hook | -- |
 | Search | `search` | Full-text search across indexed chunks | `search` |
-| Search | `find` | Literal substring search inside one known indexed file | `find_in_file` |
+| Search | `find` | Literal or opt-in regex search inside one known indexed file; use context and focus controls to target a position | `find_in_file` |
 | Search | `excerpt` | Reconstruct a focused line range from indexed chunks | `excerpt` |
 | Navigation | `definition` | Resolve symbol definitions and optional bodies | `definition` |
 | Navigation | `symbols` | Search extracted symbols by name, kind, language, and path | `symbols` |
@@ -2273,7 +2273,7 @@ cdidx index . --quiet
 | Index | `backfill-fold` | 既存 DB の Unicode folded-name metadata を更新 | `backfill_fold` |
 | Index | `hooks` | 任意の git pre-commit hook を install / remove / inspect | -- |
 | Search | `search` | indexed chunk の全文検索 | `search` |
-| Search | `find` | 既知の indexed file 内で literal substring 検索 | `find_in_file` |
+| Search | `find` | 既知の indexed file 内で literal または opt-in regex 検索。文脈と focus 指定で位置を絞り込み | `find_in_file` |
 | Search | `excerpt` | indexed chunk から指定行範囲を復元 | `excerpt` |
 | Navigation | `definition` | symbol definition と任意の body を解決 | `definition` |
 | Navigation | `symbols` | name / kind / language / path で symbol を検索 | `symbols` |

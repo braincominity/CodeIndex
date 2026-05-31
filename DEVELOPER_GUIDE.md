@@ -63,6 +63,13 @@ archive contains `manifest.json` plus `codeindex.db`; import validates the
 embedded SQLite file as a CodeIndex database before replacing the destination
 DB.
 
+`backfill-fold --dry-run` previews the folded-key rows that would be rewritten
+without mutating the DB or stamping FoldReady. The MCP `backfill_fold` tool
+accepts the same preview as `dry_run: true`, and also accepts `force: true` to
+rewrite all folded keys when an operator needs to recover from suspicious fold
+metadata or row state even though the stored version/fingerprint appears
+current.
+
 ## Filesystem Permissions
 
 On POSIX filesystems, cdidx creates `.cdidx/` with mode `0700` and applies mode
@@ -149,6 +156,8 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
 Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. Before scanning a nested project root, `FileIndexer` loads ignore files from the resolved ignore-rule root through each existing ancestor directory down to the project root's parent, then loads the project directory's own rules during the normal walk. Within each directory, `FileIndexer` loads `.gitignore` before `.cdidxignore`, appends both rule sets in that order, and honors later `!` patterns as re-includes. If an ancestor ignore directory cannot be read, scanning fails closed with a scan error instead of silently skipping those rules; `ScanFilesResult.AncestorIgnoreDirectories` records the resolved ancestor list for troubleshooting. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. Directory symlinks default to `--follow-symlinks none`; `internal` follows only targets that resolve under the workspace root, and `all` preserves the broad historical behavior. Dangling symlinks are counted and warned separately. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
 
 Incremental refreshes that mutate `fts_chunks` increment `codeindex_meta.fts_incremental_writes_since_optimize`. When the counter reaches `DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold`, the update path runs `INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')`, resets the counter, and stamps `fts_last_optimized_at`. Users can run the same maintenance directly with `cdidx optimize --db <path>` or `cdidx index <projectPath> --optimize`; this may briefly hold the writer lock on large indexes.
+
+Successful writer sessions attempt `PRAGMA wal_checkpoint(TRUNCATE)` before closing a writable `DbContext`, so large WAL files are reclaimed after index, backfill, optimize, prune, and other DB-writing commands. `cdidx db schema [--json]` dumps `sqlite_master` entries plus `PRAGMA user_version` for schema inspection, and `cdidx db prune --dry-run|--apply [--json]` counts or deletes orphaned `symbol_references`, `reference_lines`, and `symbols` rows before running `PRAGMA optimize` on apply.
 
 ### Extending the indexer
 
