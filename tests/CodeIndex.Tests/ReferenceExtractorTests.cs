@@ -5802,6 +5802,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptTypeAliasWithGenericDefault_EmitsUnderlyingTypeReference()
+    {
+        const string content = """
+            class DefaultKey {}
+            class SomeType {}
+            type MyAlias<T = DefaultKey> = SomeType;
+            class Derived extends MyAlias {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "DefaultKey"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context == "type MyAlias<T = DefaultKey> = SomeType;");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "SomeType"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived"
+            && reference.Context == "class Derived extends MyAlias {}");
+    }
+
+    [Fact]
     public void Extract_TypeScriptTypeAliasShadowedByScope_UsesActiveAliasBinding()
     {
         const string content = """

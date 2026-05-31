@@ -48,7 +48,7 @@ internal static class TypeScriptReferenceExtractor
         "readonly",
     };
     private static readonly Regex TypeAliasRegex = new(
-        @"^\s*(?:export\s+)?type\s+(?<alias>[A-Za-z_$][\w$]*)(?:\s*<[^=;]+>)?\s*=\s*(?<target>[^;]+)",
+        @"^\s*(?:export\s+)?type\s+(?<alias>[A-Za-z_$][\w$]*)(?:\s*<[^;]*>)?\s*=\s*(?<target>[^;]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static IReadOnlyList<NamespaceAliasBinding> BuildNamespaceAliasBindings(
