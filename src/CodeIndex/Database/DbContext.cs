@@ -1456,8 +1456,8 @@ public class DbContext : IDisposable
             _activeMigrationTransaction = transaction;
             try
             {
-            // Files table / ファイルテーブル
-            Execute(@"
+                // Files table / ファイルテーブル
+                Execute(@"
             CREATE TABLE IF NOT EXISTS files (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 path        TEXT    NOT NULL UNIQUE,
@@ -1470,8 +1470,8 @@ public class DbContext : IDisposable
                 indexed_at  DATETIME DEFAULT CURRENT_TIMESTAMP
             )");
 
-        // Chunks table / チャンクテーブル
-        Execute(@"
+                // Chunks table / チャンクテーブル
+                Execute(@"
             CREATE TABLE IF NOT EXISTS chunks (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
@@ -1482,8 +1482,8 @@ public class DbContext : IDisposable
                 UNIQUE(file_id, chunk_index)
             )");
 
-        // Shared reference-line context table / 参照行コンテキスト共有テーブル
-        Execute(@"
+                // Shared reference-line context table / 参照行コンテキスト共有テーブル
+                Execute(@"
             CREATE TABLE IF NOT EXISTS reference_lines (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
@@ -1492,11 +1492,11 @@ public class DbContext : IDisposable
                 UNIQUE(file_id, line, context)
             )");
 
-        var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
-        var referenceKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.ReferenceKinds);
+                var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
+                var referenceKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.ReferenceKinds);
 
-        // Symbols table / シンボルテーブル
-        Execute(@"
+                // Symbols table / シンボルテーブル
+                Execute(@"
             CREATE TABLE IF NOT EXISTS symbols (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
@@ -1519,8 +1519,8 @@ public class DbContext : IDisposable
                 is_metadata_target INTEGER
             )");
 
-        // Indexed references table / 参照インデックステーブル
-        Execute(@"
+                // Indexed references table / 参照インデックステーブル
+                Execute(@"
             CREATE TABLE IF NOT EXISTS symbol_references (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
@@ -1534,8 +1534,8 @@ public class DbContext : IDisposable
                 container_name  TEXT
             )");
 
-        // File validation issues table / ファイル検証問題テーブル
-        Execute(@"
+                // File validation issues table / ファイル検証問題テーブル
+                Execute(@"
             CREATE TABLE IF NOT EXISTS file_issues (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
@@ -1544,137 +1544,137 @@ public class DbContext : IDisposable
                 message         TEXT NOT NULL
             )");
 
-        // Key-value metadata: fold algorithm version, future per-subsystem schema markers
-        // that don't fit in PRAGMA user_version's 3-bit readiness bitmap. See
-        // NameFold.Version and DbReader fold-ready gate.
-        // メタデータ用 key-value: fold のアルゴリズム版数など、user_version bitmap に収まらない情報。
-        Execute(@"
+                // Key-value metadata: fold algorithm version, future per-subsystem schema markers
+                // that don't fit in PRAGMA user_version's 3-bit readiness bitmap. See
+                // NameFold.Version and DbReader fold-ready gate.
+                // メタデータ用 key-value: fold のアルゴリズム版数など、user_version bitmap に収まらない情報。
+                Execute(@"
             CREATE TABLE IF NOT EXISTS codeindex_meta (
                 key    TEXT PRIMARY KEY NOT NULL,
                 value  TEXT
             )");
-        NormalizeCodeIndexMetaKeys();
+                NormalizeCodeIndexMetaKeys();
 
-        // Schema migrations for existing DBs / 既存DB向けスキーマ移行
-        EnsureColumn("files", "checksum", "TEXT");
-        EnsureColumn("files", "modified", "DATETIME");
-        EnsureColumn("files", "generated", "INTEGER NOT NULL DEFAULT 0");
-        EnsureColumn("files", "indexed_at", "DATETIME");
-        EnsureColumn("symbols", "start_line", "INTEGER");
-        EnsureColumn("symbols", "sub_kind", "TEXT");
-        EnsureColumn("symbols", "start_column", "INTEGER");
-        EnsureColumn("symbols", "end_line", "INTEGER");
-        EnsureColumn("symbols", "body_start_line", "INTEGER");
-        EnsureColumn("symbols", "body_end_line", "INTEGER");
-        EnsureColumn("symbols", "signature", "TEXT");
-        EnsureColumn("symbols", "container_kind", "TEXT");
-        EnsureColumn("symbols", "container_name", "TEXT");
-        EnsureColumn("symbols", "container_qualified_name", "TEXT");
-        EnsureColumn("symbols", "family_key", "TEXT");
-        EnsureColumn("symbols", "visibility", "TEXT");
-        EnsureColumn("symbols", "return_type", "TEXT");
-        EnsureColumn("symbols", "is_metadata_target", "INTEGER");
-        var rebuildsSymbolReferences = !ColumnIsNotNull("symbol_references", "file_id");
-        EnsureColumn(
-            "symbol_references",
-            "reference_line_id",
-            rebuildsSymbolReferences ? "INTEGER" : "INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL");
-        // #86: Unicode-aware folded name columns for `--exact` name matching across all
-        // `--exact` command variants. Populated by the writer via NameFold.Fold; NULL on
-        // legacy rows until a full reindex, in which case the reader falls back to the
-        // COLLATE NOCASE path (correct for ASCII, misses non-ASCII casing — #86 fix).
-        // #86: --exact 用の Unicode 折り畳み列。レガシー行は NULL のまま、再 index で埋まる。
-        EnsureColumn("symbols", "name_folded", "TEXT");
-        EnsureColumn("symbol_references", "symbol_name_folded", "TEXT");
-        EnsureColumn("symbol_references", "container_name_folded", "TEXT");
-        EnsureColumn("symbol_references", "is_self_reference", "INTEGER NOT NULL DEFAULT 0");
-        EnsureColumn("symbol_references", "is_mutual_recursion", "INTEGER NOT NULL DEFAULT 0");
-        EnforceRequiredFileIdConstraints();
-        EnforceReferenceLineSetNullConstraint();
-        EnsureReferenceLinesContextKey();
-        EnsureKindCheckConstraintsCurrent();
+                // Schema migrations for existing DBs / 既存DB向けスキーマ移行
+                EnsureColumn("files", "checksum", "TEXT");
+                EnsureColumn("files", "modified", "DATETIME");
+                EnsureColumn("files", "generated", "INTEGER NOT NULL DEFAULT 0");
+                EnsureColumn("files", "indexed_at", "DATETIME");
+                EnsureColumn("symbols", "start_line", "INTEGER");
+                EnsureColumn("symbols", "sub_kind", "TEXT");
+                EnsureColumn("symbols", "start_column", "INTEGER");
+                EnsureColumn("symbols", "end_line", "INTEGER");
+                EnsureColumn("symbols", "body_start_line", "INTEGER");
+                EnsureColumn("symbols", "body_end_line", "INTEGER");
+                EnsureColumn("symbols", "signature", "TEXT");
+                EnsureColumn("symbols", "container_kind", "TEXT");
+                EnsureColumn("symbols", "container_name", "TEXT");
+                EnsureColumn("symbols", "container_qualified_name", "TEXT");
+                EnsureColumn("symbols", "family_key", "TEXT");
+                EnsureColumn("symbols", "visibility", "TEXT");
+                EnsureColumn("symbols", "return_type", "TEXT");
+                EnsureColumn("symbols", "is_metadata_target", "INTEGER");
+                var rebuildsSymbolReferences = !ColumnIsNotNull("symbol_references", "file_id");
+                EnsureColumn(
+                    "symbol_references",
+                    "reference_line_id",
+                    rebuildsSymbolReferences ? "INTEGER" : "INTEGER REFERENCES reference_lines(id) ON DELETE SET NULL");
+                // #86: Unicode-aware folded name columns for `--exact` name matching across all
+                // `--exact` command variants. Populated by the writer via NameFold.Fold; NULL on
+                // legacy rows until a full reindex, in which case the reader falls back to the
+                // COLLATE NOCASE path (correct for ASCII, misses non-ASCII casing — #86 fix).
+                // #86: --exact 用の Unicode 折り畳み列。レガシー行は NULL のまま、再 index で埋まる。
+                EnsureColumn("symbols", "name_folded", "TEXT");
+                EnsureColumn("symbol_references", "symbol_name_folded", "TEXT");
+                EnsureColumn("symbol_references", "container_name_folded", "TEXT");
+                EnsureColumn("symbol_references", "is_self_reference", "INTEGER NOT NULL DEFAULT 0");
+                EnsureColumn("symbol_references", "is_mutual_recursion", "INTEGER NOT NULL DEFAULT 0");
+                EnforceRequiredFileIdConstraints();
+                EnforceReferenceLineSetNullConstraint();
+                EnsureReferenceLinesContextKey();
+                EnsureKindCheckConstraintsCurrent();
 
-        // Indexes / インデックス
-        Execute("CREATE INDEX IF NOT EXISTS idx_files_lang     ON files(lang)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_files_modified ON files(modified)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_files_generated ON files(generated)");
-        // idx_files_path is not needed: the UNIQUE constraint on path already creates an implicit index
-        // idx_files_path は不要: path の UNIQUE 制約が暗黙的にインデックスを作成済み
-        Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file    ON chunks(file_id)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name   ON symbols(name)");
-        // Case-insensitive exact-match index for `symbols --exact` (and MCP `symbols` exact=true).
-        // Without this, `name = @q COLLATE NOCASE` falls back to a full symbols scan per query name,
-        // which on multi-name exact lookups becomes O(names × symbols).
-        // `symbols --exact` 用の大文字小文字無視 index。無いと multi-name exact でフルスキャンが N 回走る。
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_nocase ON symbols(name COLLATE NOCASE)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file   ON symbols(file_id)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_start  ON symbols(start_line)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name      ON symbol_references(symbol_name)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_file      ON symbol_references(file_id)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container ON symbol_references(container_name)");
-        // Compound indexes for common query patterns / よくあるクエリパターン用の複合インデックス
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file_kind      ON symbols(file_id, kind)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_files_lang_modified     ON files(lang, modified)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_kind ON symbol_references(container_name, reference_kind)");
-        // Indexes for new query patterns: --kind filter, visibility ranking, hotspot/unused analysis
-        // 新しいクエリパターン用: --kind フィルタ、可視性ランキング、ホットスポット/未使用分析
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_kind            ON symbols(kind)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_visibility      ON symbols(visibility)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_kind   ON symbol_references(symbol_name, reference_kind)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_file   ON symbol_references(symbol_name, file_id)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_mutual_folded ON symbol_references(container_name_folded, symbol_name_folded, reference_kind, is_self_reference)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_reference_lines_file_line ON reference_lines(file_id, line)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_reference_line ON symbol_references(reference_line_id)");
-        // Case-insensitive exact-match indexes for `references --exact` / `callers --exact` / `callees --exact` (#83).
-        // Mirror idx_symbols_name_nocase so `= @q COLLATE NOCASE` stays O(log n) per name across graph commands.
-        // `references / callers / callees --exact` 用の NOCASE index。idx_symbols_name_nocase と対になる。
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_nocase      ON symbol_references(symbol_name COLLATE NOCASE)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_nocase ON symbol_references(container_name COLLATE NOCASE)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_nocase_kind ON symbol_references(symbol_name COLLATE NOCASE, reference_kind)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_nocase_file ON symbol_references(symbol_name COLLATE NOCASE, file_id)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_nocase_kind ON symbol_references(container_name COLLATE NOCASE, reference_kind)");
-        // #86: Indexes on the Unicode-folded columns. Used when FoldReadyFlag is set on the
-        // DB (= the write path filled every folded column). Legacy / partial DBs keep using
-        // the NOCASE indexes above. Both sets coexist so mixed-state DBs cannot regress.
-        // #86: 折り畳み列のインデックス。FoldReadyFlag が立っている DB でだけ使う。
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded                ON symbols(name_folded)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded     ON symbol_references(symbol_name_folded)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_name_folded  ON symbol_references(container_name_folded)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded_kind ON symbol_references(symbol_name_folded, reference_kind)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded_file ON symbol_references(symbol_name_folded, file_id)");
-        Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_name_folded_kind ON symbol_references(container_name_folded, reference_kind)");
+                // Indexes / インデックス
+                Execute("CREATE INDEX IF NOT EXISTS idx_files_lang     ON files(lang)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_files_modified ON files(modified)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_files_generated ON files(generated)");
+                // idx_files_path is not needed: the UNIQUE constraint on path already creates an implicit index
+                // idx_files_path は不要: path の UNIQUE 制約が暗黙的にインデックスを作成済み
+                Execute("CREATE INDEX IF NOT EXISTS idx_chunks_file    ON chunks(file_id)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name   ON symbols(name)");
+                // Case-insensitive exact-match index for `symbols --exact` (and MCP `symbols` exact=true).
+                // Without this, `name = @q COLLATE NOCASE` falls back to a full symbols scan per query name,
+                // which on multi-name exact lookups becomes O(names × symbols).
+                // `symbols --exact` 用の大文字小文字無視 index。無いと multi-name exact でフルスキャンが N 回走る。
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_nocase ON symbols(name COLLATE NOCASE)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file   ON symbols(file_id)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbols_start  ON symbols(start_line)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name      ON symbol_references(symbol_name)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_file      ON symbol_references(file_id)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container ON symbol_references(container_name)");
+                // Compound indexes for common query patterns / よくあるクエリパターン用の複合インデックス
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file_kind      ON symbols(file_id, kind)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_files_lang_modified     ON files(lang, modified)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_kind ON symbol_references(container_name, reference_kind)");
+                // Indexes for new query patterns: --kind filter, visibility ranking, hotspot/unused analysis
+                // 新しいクエリパターン用: --kind フィルタ、可視性ランキング、ホットスポット/未使用分析
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbols_kind            ON symbols(kind)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbols_visibility      ON symbols(visibility)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_kind   ON symbol_references(symbol_name, reference_kind)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_file   ON symbol_references(symbol_name, file_id)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_mutual_folded ON symbol_references(container_name_folded, symbol_name_folded, reference_kind, is_self_reference)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_reference_lines_file_line ON reference_lines(file_id, line)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_reference_line ON symbol_references(reference_line_id)");
+                // Case-insensitive exact-match indexes for `references --exact` / `callers --exact` / `callees --exact` (#83).
+                // Mirror idx_symbols_name_nocase so `= @q COLLATE NOCASE` stays O(log n) per name across graph commands.
+                // `references / callers / callees --exact` 用の NOCASE index。idx_symbols_name_nocase と対になる。
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_nocase      ON symbol_references(symbol_name COLLATE NOCASE)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_nocase ON symbol_references(container_name COLLATE NOCASE)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_nocase_kind ON symbol_references(symbol_name COLLATE NOCASE, reference_kind)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_nocase_file ON symbol_references(symbol_name COLLATE NOCASE, file_id)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_nocase_kind ON symbol_references(container_name COLLATE NOCASE, reference_kind)");
+                // #86: Indexes on the Unicode-folded columns. Used when FoldReadyFlag is set on the
+                // DB (= the write path filled every folded column). Legacy / partial DBs keep using
+                // the NOCASE indexes above. Both sets coexist so mixed-state DBs cannot regress.
+                // #86: 折り畳み列のインデックス。FoldReadyFlag が立っている DB でだけ使う。
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded                ON symbols(name_folded)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded     ON symbol_references(symbol_name_folded)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_name_folded  ON symbol_references(container_name_folded)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded_kind ON symbol_references(symbol_name_folded, reference_kind)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded_file ON symbol_references(symbol_name_folded, file_id)");
+                Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_name_folded_kind ON symbol_references(container_name_folded, reference_kind)");
 
-            // Full-text search / 全文検索
-            Execute(@"
+                // Full-text search / 全文検索
+                Execute(@"
             CREATE VIRTUAL TABLE IF NOT EXISTS fts_chunks USING fts5(
                 content,
                 content='chunks',
                 content_rowid='id'
             )");
-        if (_rebuildFtsAfterSchemaMigration)
-        {
-            Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('rebuild')");
-            _rebuildFtsAfterSchemaMigration = false;
-        }
+                if (_rebuildFtsAfterSchemaMigration)
+                {
+                    Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('rebuild')");
+                    _rebuildFtsAfterSchemaMigration = false;
+                }
 
-        // FTS5 content-synced triggers — keep fts_chunks in sync with chunks table.
-        // Without these, CASCADE DELETEs on chunks leave orphan entries in fts_chunks.
-        // FTS5 content-synced トリガー — fts_chunksをchunksテーブルと同期する。
-        // これがないとchunksのCASCADE DELETEでfts_chunksに孤立エントリが残る。
-        Execute(@"
+                // FTS5 content-synced triggers — keep fts_chunks in sync with chunks table.
+                // Without these, CASCADE DELETEs on chunks leave orphan entries in fts_chunks.
+                // FTS5 content-synced トリガー — fts_chunksをchunksテーブルと同期する。
+                // これがないとchunksのCASCADE DELETEでfts_chunksに孤立エントリが残る。
+                Execute(@"
             CREATE TRIGGER IF NOT EXISTS fts_chunks_ai AFTER INSERT ON chunks BEGIN
                 INSERT INTO fts_chunks(rowid, content) VALUES (new.id, new.content);
             END");
-        Execute(@"
+                Execute(@"
             CREATE TRIGGER IF NOT EXISTS fts_chunks_ad AFTER DELETE ON chunks BEGIN
                 INSERT INTO fts_chunks(fts_chunks, rowid, content) VALUES('delete', old.id, old.content);
             END");
-        Execute(@"
+                Execute(@"
             CREATE TRIGGER IF NOT EXISTS fts_chunks_au AFTER UPDATE ON chunks BEGIN
                 INSERT INTO fts_chunks(fts_chunks, rowid, content) VALUES('delete', old.id, old.content);
                 INSERT INTO fts_chunks(rowid, content) VALUES (new.id, new.content);
             END");
-            transaction.Commit();
+                transaction.Commit();
             }
             finally
             {
@@ -2356,30 +2356,30 @@ public class DbContext : IDisposable
         yield return ("CREATE INDEX idx_symbol_refs_container_nocase_kind",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_nocase_kind ON symbol_references(container_name COLLATE NOCASE, reference_kind)"));
 
-        yield return ("EnsureColumn files.checksum",   () => EnsureColumn("files", "checksum", "TEXT"));
-        yield return ("EnsureColumn files.modified",   () => EnsureColumn("files", "modified", "DATETIME"));
+        yield return ("EnsureColumn files.checksum", () => EnsureColumn("files", "checksum", "TEXT"));
+        yield return ("EnsureColumn files.modified", () => EnsureColumn("files", "modified", "DATETIME"));
         yield return ("EnsureColumn files.indexed_at", () => EnsureColumn("files", "indexed_at", "DATETIME"));
-        yield return ("EnsureColumn symbols.start_line",               () => EnsureColumn("symbols", "start_line", "INTEGER"));
-        yield return ("EnsureColumn symbols.end_line",                 () => EnsureColumn("symbols", "end_line", "INTEGER"));
-        yield return ("EnsureColumn symbols.body_start_line",          () => EnsureColumn("symbols", "body_start_line", "INTEGER"));
-        yield return ("EnsureColumn symbols.body_end_line",            () => EnsureColumn("symbols", "body_end_line", "INTEGER"));
-        yield return ("EnsureColumn symbols.signature",                () => EnsureColumn("symbols", "signature", "TEXT"));
-        yield return ("EnsureColumn symbols.container_kind",           () => EnsureColumn("symbols", "container_kind", "TEXT"));
-        yield return ("EnsureColumn symbols.container_name",           () => EnsureColumn("symbols", "container_name", "TEXT"));
+        yield return ("EnsureColumn symbols.start_line", () => EnsureColumn("symbols", "start_line", "INTEGER"));
+        yield return ("EnsureColumn symbols.end_line", () => EnsureColumn("symbols", "end_line", "INTEGER"));
+        yield return ("EnsureColumn symbols.body_start_line", () => EnsureColumn("symbols", "body_start_line", "INTEGER"));
+        yield return ("EnsureColumn symbols.body_end_line", () => EnsureColumn("symbols", "body_end_line", "INTEGER"));
+        yield return ("EnsureColumn symbols.signature", () => EnsureColumn("symbols", "signature", "TEXT"));
+        yield return ("EnsureColumn symbols.container_kind", () => EnsureColumn("symbols", "container_kind", "TEXT"));
+        yield return ("EnsureColumn symbols.container_name", () => EnsureColumn("symbols", "container_name", "TEXT"));
         yield return ("EnsureColumn symbols.container_qualified_name", () => EnsureColumn("symbols", "container_qualified_name", "TEXT"));
-        yield return ("EnsureColumn symbols.family_key",               () => EnsureColumn("symbols", "family_key", "TEXT"));
-        yield return ("EnsureColumn symbols.visibility",               () => EnsureColumn("symbols", "visibility", "TEXT"));
-        yield return ("EnsureColumn symbols.return_type",              () => EnsureColumn("symbols", "return_type", "TEXT"));
-        yield return ("EnsureColumn symbols.is_metadata_target",       () => EnsureColumn("symbols", "is_metadata_target", "INTEGER"));
+        yield return ("EnsureColumn symbols.family_key", () => EnsureColumn("symbols", "family_key", "TEXT"));
+        yield return ("EnsureColumn symbols.visibility", () => EnsureColumn("symbols", "visibility", "TEXT"));
+        yield return ("EnsureColumn symbols.return_type", () => EnsureColumn("symbols", "return_type", "TEXT"));
+        yield return ("EnsureColumn symbols.is_metadata_target", () => EnsureColumn("symbols", "is_metadata_target", "INTEGER"));
         yield return ("CREATE INDEX idx_symbols_name_nocase",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_nocase ON symbols(name COLLATE NOCASE)"));
 
         // #86: fold columns must be ensured BEFORE the folded indexes so CREATE INDEX does
         // not fail on legacy DBs where the column did not exist yet.
         // #86: folded 列を追加してから folded index を作らないと legacy DB でクラッシュする。
-        yield return ("EnsureColumn symbols.name_folded",                       () => EnsureColumn("symbols", "name_folded", "TEXT"));
-        yield return ("EnsureColumn symbol_references.symbol_name_folded",      () => EnsureColumn("symbol_references", "symbol_name_folded", "TEXT"));
-        yield return ("EnsureColumn symbol_references.container_name_folded",   () => EnsureColumn("symbol_references", "container_name_folded", "TEXT"));
+        yield return ("EnsureColumn symbols.name_folded", () => EnsureColumn("symbols", "name_folded", "TEXT"));
+        yield return ("EnsureColumn symbol_references.symbol_name_folded", () => EnsureColumn("symbol_references", "symbol_name_folded", "TEXT"));
+        yield return ("EnsureColumn symbol_references.container_name_folded", () => EnsureColumn("symbol_references", "container_name_folded", "TEXT"));
         yield return ("CREATE INDEX idx_symbols_name_folded",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded                ON symbols(name_folded)"));
         yield return ("CREATE INDEX idx_symbol_refs_symbol_name_folded",

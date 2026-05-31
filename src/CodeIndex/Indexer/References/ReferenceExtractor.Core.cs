@@ -589,21 +589,21 @@ public static partial class ReferenceExtractor
                     ref pendingCSharpMultiLineTypePattern);
             }
 
-              bool ShouldSuppressDefinitionCall(string resolvedName, int callIndex)
-              {
-                  if (definitionNames == null)
-                      return false;
+            bool ShouldSuppressDefinitionCall(string resolvedName, int callIndex)
+            {
+                if (definitionNames == null)
+                    return false;
 
-                  if (language == "csharp")
-                  {
-                      if (context.Contains("when", StringComparison.Ordinal))
-                          return false;
-                  }
+                if (language == "csharp")
+                {
+                    if (context.Contains("when", StringComparison.Ordinal))
+                        return false;
+                }
 
-                  if (language != "sql")
-                      return definitionNameIndices != null
-                          && definitionNameIndices.TryGetValue(resolvedName, out var definitionIndex)
-                          && callIndex == definitionIndex;
+                if (language != "sql")
+                    return definitionNameIndices != null
+                        && definitionNameIndices.TryGetValue(resolvedName, out var definitionIndex)
+                        && callIndex == definitionIndex;
 
                 return SqlReferenceExtractor.ShouldSuppressDefinitionCall(sqlDefinitionLeafSpans, resolvedName, callIndex);
             }
@@ -1498,6 +1498,15 @@ public static partial class ReferenceExtractor
                     ScalaReferenceExtractor.EmitTrailingBlockCallReferences(
                         preparedLine,
                         AddCallLikeReference);
+                    ScalaReferenceExtractor.EmitAdditionalReferences(
+                        preparedLine,
+                        references,
+                        seen,
+                        fileId,
+                        context,
+                        lineNumber,
+                        ResolveContainerForCall,
+                        AddCallLikeReference);
                 }
                 else if (language == "gradle")
                 {
@@ -2067,6 +2076,15 @@ public static partial class ReferenceExtractor
                     container,
                     definitionNames);
                 RReferenceExtractor.EmitNamespaceDirectiveReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+                RReferenceExtractor.EmitS4DispatchReferences(
                     preparedLine,
                     originalLine,
                     references,

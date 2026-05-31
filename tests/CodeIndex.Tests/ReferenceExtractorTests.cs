@@ -2933,6 +2933,18 @@ public class ReferenceExtractorTests
             output "instance_ids" {
               value = aws_instance.web[*].id
             }
+
+            resource "aws:s3_bucket" "data" {
+              bucket = "example-data"
+            }
+
+            output "endpoint" {
+              value = module.network.outputs.endpoint
+            }
+
+            output "bucket" {
+              value = aws:s3_bucket.data.id
+            }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "terraform", content);
@@ -2950,7 +2962,7 @@ public class ReferenceExtractorTests
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "ubuntu"
             && reference.ReferenceKind == "reference"));
-        Assert.Equal(2, references.Count(reference =>
+        Assert.Equal(3, references.Count(reference =>
             reference.SymbolName == "network"
             && reference.ReferenceKind == "reference"));
         Assert.Single(references.Where(reference =>
@@ -2959,9 +2971,15 @@ public class ReferenceExtractorTests
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "foo"
             && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "endpoint"
+            && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "data"
+            && reference.ReferenceKind == "reference"));
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
-            && reference.SymbolName is "region" or "instance_count" or "common_tags" or "ubuntu" or "network" or "web" or "foo");
+            && reference.SymbolName is "region" or "instance_count" or "common_tags" or "ubuntu" or "network" or "web" or "foo" or "endpoint" or "data");
     }
 
     [Fact]
@@ -13398,6 +13416,11 @@ public class ReferenceExtractorTests
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """
+            sealed class Shape {}
+            sealed class Circle extends Shape with Paintable, Serializable {}
+            extension ShapeFormatting on Shape {
+              String label() => Shape.label();
+            }
             class Screen extends BaseScreen with Trackable implements RouteAware {
               @override
               Widget build(BuildContext context) {
@@ -13419,11 +13442,19 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "BaseScreen" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Trackable" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "RouteAware" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "sealed_subtype");
+        Assert.DoesNotContain(references, r => r.SymbolName == "BaseScreen" && r.ReferenceKind == "sealed_subtype");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "extension_of");
+        Assert.Contains(references, r => r.SymbolName == "Paintable" && r.ReferenceKind == "mixin_in");
+        Assert.Contains(references, r => r.SymbolName == "Serializable" && r.ReferenceKind == "mixin_in");
+        Assert.Contains(references, r => r.SymbolName == "Trackable" && r.ReferenceKind == "mixin_in");
+        Assert.Contains(references, r => r.SymbolName == "Shape.label" && r.ReferenceKind == "named_ctor_call");
         Assert.Contains(references, r => r.SymbolName == "BuildContext" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "override" && r.ReferenceKind == "annotation");
         Assert.Contains(references, r => r.SymbolName == "UserCard" && r.ReferenceKind == "instantiate");
         Assert.Contains(references, r => r.SymbolName == "User.fromJson" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "User.fromJson" && r.ReferenceKind == "named_ctor_call");
         Assert.Contains(references, r => r.SymbolName == "afterRaw" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Phantom");
         Assert.DoesNotContain(references, r => r.SymbolName == "fromJson" && r.ReferenceKind == "instantiate");
@@ -14768,6 +14799,44 @@ public class ReferenceExtractorTests
             && r.ReferenceKind == "call"
             && r.ContainerKind == "object"
             && r.ContainerName == "Main");
+    }
+
+    [Fact]
+    public void Extract_ScalaForImplicitGivenUsingReferences_AreIndexed()
+    {
+        const string content = """
+            trait Encoder[T]
+            class User
+            class UserDto
+
+            object Main {
+              implicit def userToDto(user: User): UserDto = UserDto()
+              implicit class UserOps(user: User) {
+                def active: Boolean = true
+              }
+              given userEncoder: Encoder[User] = Encoder.instance
+              def render(value: User)(using encoder: Encoder[User]): String =
+                for {
+                  raw <- users
+                  user <- loadUsers()
+                  dto <- convert(user)
+                  if dto.active
+                } yield dto.toString
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.Contains(symbols, symbol => symbol.Name == "userToDto" && symbol.Kind == "implicit");
+        Assert.Contains(symbols, symbol => symbol.Name == "UserOps" && symbol.Kind == "implicit");
+        Assert.Contains(symbols, symbol => symbol.Name == "userEncoder" && symbol.Kind == "given");
+        Assert.Contains(references, reference => reference.SymbolName == "users" && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference => reference.SymbolName == "loadUsers" && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference => reference.SymbolName == "convert" && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "UserDto" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Encoder[User]" && reference.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -18313,6 +18382,38 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_R_DetectsS4DispatchReferences()
+    {
+        const string content = """
+            setClass("ExpressionSet", slots = c(assayData = "AssayData"))
+            setGeneric("exprs", function(object) standardGeneric("exprs"))
+            setMethod("exprs", signature(object = "ExpressionSet"), function(object) object@assayData)
+            methods::setMethod("show", signature("ExpressionSet"), function(object) show(object))
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(symbols, symbol => symbol.Name == "ExpressionSet" && symbol.Kind == "class");
+        Assert.Contains(symbols, symbol => symbol.Name == "exprs" && symbol.Kind == "function");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ExpressionSet"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "exprs"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "exprs.ExpressionSet"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "show.ExpressionSet"
+            && reference.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "function" or "exprs.function" or "show.function"
+            && reference.ReferenceKind is "type_reference" or "reference");
+    }
+
+    [Fact]
     public void Extract_R_PreservesQualifiedBacktickNamespaceReferencesWhenLeafIsDefinedLocally()
     {
         const string content = """
@@ -21514,11 +21615,11 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
     }
 
-      [Fact]
-      public void Extract_CsharpMultilinePositionalPatterns_CaptureTypeReferences()
-      {
-          // issue #969: multiline positional `case` / `is` heads must behave the same as
-          // the same-line forms and keep the real `type_reference` without phantom calls.
+    [Fact]
+    public void Extract_CsharpMultilinePositionalPatterns_CaptureTypeReferences()
+    {
+        // issue #969: multiline positional `case` / `is` heads must behave the same as
+        // the same-line forms and keep the real `type_reference` without phantom calls.
         // issue #969: 改行をまたぐ positional `case` / `is` head も同一行版と同様に
         // 本物の `type_reference` を残し、phantom な call を出してはならない。
         const string content = """
@@ -21631,15 +21732,15 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
-          Assert.Equal(2, pointRefs.Count);
-          Assert.All(pointRefs, r => Assert.Equal("Match", r.ContainerName));
-          Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
-      }
+        Assert.Equal(2, pointRefs.Count);
+        Assert.All(pointRefs, r => Assert.Equal("Match", r.ContainerName));
+        Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
+    }
 
-      [Fact]
-      public void Extract_CsharpCaseLogicalAndNegatedTypePatterns_CaptureTypeReferences()
-      {
-          // issues #668/#670: logical/negated type patterns must keep the left-hand type
+    [Fact]
+    public void Extract_CsharpCaseLogicalAndNegatedTypePatterns_CaptureTypeReferences()
+    {
+        // issues #668/#670: logical/negated type patterns must keep the left-hand type
         // dependency for both unqualified and qualified heads without reclassifying enum
         // member labels such as `Color.Red or Probe.Color.Blue` as type dependencies.
         // issues #668/#670: logical/negated な型パターンは unqualified / qualified の両方で

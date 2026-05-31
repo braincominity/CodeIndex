@@ -250,7 +250,11 @@ public class PreparedCommandCacheTests : IDisposable
         using var outerTxn = writer.BeginTransaction();
         writer.UpsertFile(new FileRecord
         {
-            Path = "src/outer.py", Lang = "python", Size = 1, Lines = 1, Checksum = "o",
+            Path = "src/outer.py",
+            Lang = "python",
+            Size = 1,
+            Lines = 1,
+            Checksum = "o",
             Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
@@ -260,7 +264,11 @@ public class PreparedCommandCacheTests : IDisposable
             // インナー savepoint 内で同じ cached command を再借用する。
             writer.UpsertFile(new FileRecord
             {
-                Path = "src/inner.py", Lang = "python", Size = 1, Lines = 1, Checksum = "i",
+                Path = "src/inner.py",
+                Lang = "python",
+                Size = 1,
+                Lines = 1,
+                Checksum = "i",
                 Modified = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc),
             });
             Assert.True(writer.HasFileAtPath("src/inner.py"));
@@ -273,7 +281,11 @@ public class PreparedCommandCacheTests : IDisposable
         // 再借用は outer txn にバインドされる。
         writer.UpsertFile(new FileRecord
         {
-            Path = "src/outer2.py", Lang = "python", Size = 1, Lines = 1, Checksum = "o2",
+            Path = "src/outer2.py",
+            Lang = "python",
+            Size = 1,
+            Lines = 1,
+            Checksum = "o2",
             Modified = new DateTime(2025, 1, 3, 0, 0, 0, DateTimeKind.Utc),
         });
         outerTxn.Commit();
@@ -291,12 +303,20 @@ public class PreparedCommandCacheTests : IDisposable
 
         writer.UpsertFile(new FileRecord
         {
-            Path = "src/x.py", Lang = "python", Size = 1, Lines = 1, Checksum = "k1",
+            Path = "src/x.py",
+            Lang = "python",
+            Size = 1,
+            Lines = 1,
+            Checksum = "k1",
             Modified = modified,
         });
         writer.UpsertFile(new FileRecord
         {
-            Path = "src/y.py", Lang = "python", Size = 1, Lines = 1, Checksum = "k2",
+            Path = "src/y.py",
+            Lang = "python",
+            Size = 1,
+            Lines = 1,
+            Checksum = "k2",
             Modified = modified,
         });
 
@@ -320,8 +340,12 @@ public class PreparedCommandCacheTests : IDisposable
 
         writer.UpsertFile(new FileRecord
         {
-            Path = "src/touched.py", Lang = "python", Size = 1, Lines = 1,
-            Checksum = "same_checksum", Modified = initial,
+            Path = "src/touched.py",
+            Lang = "python",
+            Size = 1,
+            Lines = 1,
+            Checksum = "same_checksum",
+            Modified = initial,
         });
 
         // First call with a new timestamp + identical checksum triggers the touch.
@@ -355,8 +379,12 @@ public class PreparedCommandCacheTests : IDisposable
 
         writer.UpsertFile(new FileRecord
         {
-            Path = "src/drift.py", Lang = "python", Size = 1, Lines = 1,
-            Checksum = "old_checksum", Modified = initial,
+            Path = "src/drift.py",
+            Lang = "python",
+            Size = 1,
+            Lines = 1,
+            Checksum = "old_checksum",
+            Modified = initial,
         });
 
         Assert.Null(writer.GetUnchangedFileId("src/drift.py", touched, "new_checksum"));

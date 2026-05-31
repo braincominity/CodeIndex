@@ -31,7 +31,10 @@ public class ConcurrencyTests : IDisposable
         var writer = new DbWriter(_db.Connection);
         var fileId = writer.UpsertFile(new FileRecord
         {
-            Path = "src/app.cs", Lang = "csharp", Size = 100, Lines = 10,
+            Path = "src/app.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 10,
             Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
             Checksum = "abc",
         });
@@ -63,7 +66,10 @@ public class ConcurrencyTests : IDisposable
         // Pre-seed a file so reads have something to find
         writer.UpsertFile(new FileRecord
         {
-            Path = "src/seed.cs", Lang = "csharp", Size = 50, Lines = 5,
+            Path = "src/seed.cs",
+            Lang = "csharp",
+            Size = 50,
+            Lines = 5,
             Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             Checksum = "seed",
         });
@@ -77,7 +83,10 @@ public class ConcurrencyTests : IDisposable
                 var w = new DbWriter(writeDb.Connection);
                 w.UpsertFile(new FileRecord
                 {
-                    Path = $"src/file{i}.cs", Lang = "csharp", Size = 100, Lines = 10,
+                    Path = $"src/file{i}.cs",
+                    Lang = "csharp",
+                    Size = 100,
+                    Lines = 10,
                     Modified = DateTime.UtcNow,
                     Checksum = $"hash{i}",
                 });
@@ -125,7 +134,10 @@ public class ConcurrencyTests : IDisposable
         {
             var fileId = writer.UpsertFile(new FileRecord
             {
-                Path = $"src/seed{seedIndex}.cs", Lang = "csharp", Size = 100, Lines = 10,
+                Path = $"src/seed{seedIndex}.cs",
+                Lang = "csharp",
+                Size = 100,
+                Lines = 10,
                 Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
                 Checksum = $"seed{seedIndex}",
             });
@@ -154,7 +166,10 @@ public class ConcurrencyTests : IDisposable
                 using var txn = w.BeginTransaction();
                 var fileId = w.UpsertFile(new FileRecord
                 {
-                    Path = $"src/added{extra}.cs", Lang = "csharp", Size = 100, Lines = 10,
+                    Path = $"src/added{extra}.cs",
+                    Lang = "csharp",
+                    Size = 100,
+                    Lines = 10,
                     Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
                     Checksum = $"added{extra}",
                 });
@@ -222,7 +237,10 @@ public class ConcurrencyTests : IDisposable
         var writer = new DbWriter(_db.Connection);
         var fileAId = writer.UpsertFile(new FileRecord
         {
-            Path = "src/A.cs", Lang = "csharp", Size = 100, Lines = 20,
+            Path = "src/A.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 20,
             Modified = fileAModified,
             Checksum = "A",
         });
@@ -272,7 +290,10 @@ public class ConcurrencyTests : IDisposable
                 {
                     var fileBId = w.UpsertFile(new FileRecord
                     {
-                        Path = "src/B.cs", Lang = "csharp", Size = 80, Lines = 10,
+                        Path = "src/B.cs",
+                        Lang = "csharp",
+                        Size = 80,
+                        Lines = 10,
                         Modified = fileBModified,
                         Checksum = "B",
                     });
@@ -367,7 +388,10 @@ public class ConcurrencyTests : IDisposable
         {
             writer.UpsertFile(new FileRecord
             {
-                Path = $"src/seed{seedIndex}.cs", Lang = "csharp", Size = 100, Lines = 10,
+                Path = $"src/seed{seedIndex}.cs",
+                Lang = "csharp",
+                Size = 100,
+                Lines = 10,
                 Modified = baselineModified,
                 Checksum = $"seed{seedIndex}",
             });
@@ -398,7 +422,10 @@ public class ConcurrencyTests : IDisposable
                 {
                     var fileId = w.UpsertFile(new FileRecord
                     {
-                        Path = toggledPath, Lang = "csharp", Size = 120, Lines = 12,
+                        Path = toggledPath,
+                        Lang = "csharp",
+                        Size = 120,
+                        Lines = 12,
                         Modified = newerModified,
                         Checksum = "newer",
                     });

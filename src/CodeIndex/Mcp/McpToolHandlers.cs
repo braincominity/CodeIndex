@@ -3125,8 +3125,8 @@ public partial class McpServer
 
         // Add graph-support metadata for AI trust decisions
         // AI の信頼判断のためにグラフ対応メタデータを追加
-            bool? graphSupported = lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null;
-            var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported);
+        bool? graphSupported = lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null;
+        var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported);
 
         return WithDbReader(id, args, reader =>
         {
