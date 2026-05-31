@@ -1710,14 +1710,15 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "endLine must be greater than or equal to startLine");
 
         var beforeValue = args?["before"]?.GetValue<int>();
-        if (beforeValue.HasValue && (beforeValue.Value < 0 || beforeValue.Value > MaxContextLines))
+        if (beforeValue.HasValue && beforeValue.Value < 0)
             return CreateToolErrorResponse(id, $"before must be in [0, {MaxContextLines}]");
-        var before = beforeValue ?? 0;
+        var before = ClampContextLines(beforeValue ?? 0);
 
         var afterValue = args?["after"]?.GetValue<int>();
-        if (afterValue.HasValue && (afterValue.Value < 0 || afterValue.Value > MaxContextLines))
+        if (afterValue.HasValue && afterValue.Value < 0)
             return CreateToolErrorResponse(id, $"after must be in [0, {MaxContextLines}]");
-        var after = afterValue ?? 0;
+        var after = ClampContextLines(afterValue ?? 0);
+        var contextTruncated = beforeValue > MaxContextLines || afterValue > MaxContextLines;
 
         var focusLine = args?["focusLine"]?.GetValue<int>();
         var focusColumn = args?["focusColumn"]?.GetValue<int>();
@@ -1782,6 +1783,9 @@ public partial class McpServer
             }
 
             var payload = JsonSerializer.SerializeToNode(excerpt, _jsonOptions)!.AsObject();
+            payload["before"] = before;
+            payload["after"] = after;
+            payload["contextTruncated"] = contextTruncated;
             payload["maxLineWidth"] = maxLineWidth;
             if (focusLine.HasValue)
                 payload["focusLine"] = focusLine.Value;
@@ -1812,12 +1816,13 @@ public partial class McpServer
         var beforeValue = args?["before"]?.GetValue<int>();
         if (beforeValue.HasValue && beforeValue.Value < 0)
             return CreateToolErrorResponse(id, "before must be greater than or equal to 0");
-        var before = beforeValue ?? 0;
+        var before = ClampContextLines(beforeValue ?? 0);
 
         var afterValue = args?["after"]?.GetValue<int>();
         if (afterValue.HasValue && afterValue.Value < 0)
             return CreateToolErrorResponse(id, "after must be greater than or equal to 0");
-        var after = afterValue ?? 0;
+        var after = ClampContextLines(afterValue ?? 0);
+        var contextTruncated = beforeValue > MaxContextLines || afterValue > MaxContextLines;
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var exact = args?["exact"]?.GetValue<bool>() ?? false;
@@ -1832,6 +1837,7 @@ public partial class McpServer
                 ["excludeTests"] = excludeTests,
                 ["before"] = before,
                 ["after"] = after,
+                ["contextTruncated"] = contextTruncated,
                 ["maxLineWidth"] = maxLineWidth,
                 ["exact"] = exact,
                 ["count"] = results.Count,
@@ -1847,6 +1853,11 @@ public partial class McpServer
             var fileCount = structured["fileCount"]!.GetValue<int>();
             return CreateToolResult(id, $"Found {ConsoleUi.Counted(results.Count, "in-file match", "in-file matches")} across {ConsoleUi.Counted(fileCount, "file")}.", structured);
         });
+    }
+
+    private static int ClampContextLines(int value)
+    {
+        return Math.Min(value, MaxContextLines);
     }
 
     private JsonNode ExecuteBatchQuery(JsonNode? id, JsonNode? args)

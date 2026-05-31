@@ -5440,27 +5440,29 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_Excerpt_BeforeAboveCapReturnsError()
+    public void ToolsCall_Excerpt_BeforeAboveCapClampsContext()
     {
         InsertIndexedFile("dist/data-before-overflow.txt", "text", "line one\nline two");
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-before-overflow.txt","startLine":1,"before":2147483647}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("before must be in [0, 1000]", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1000, structured["before"]!.GetValue<int>());
+        Assert.True(structured["contextTruncated"]!.GetValue<bool>());
     }
 
     [Fact]
-    public void ToolsCall_Excerpt_AfterAboveCapReturnsError()
+    public void ToolsCall_Excerpt_AfterAboveCapClampsContext()
     {
         InsertIndexedFile("dist/data-after-overflow.txt", "text", "line one\nline two");
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-after-overflow.txt","startLine":1,"after":2147483647}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("after must be in [0, 1000]", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1000, structured["after"]!.GetValue<int>());
+        Assert.True(structured["contextTruncated"]!.GetValue<bool>());
     }
 
     [Fact]
@@ -5586,6 +5588,20 @@ public class McpServerTests : IDisposable
 
         Assert.True(response["result"]!["isError"]!.GetValue<bool>());
         Assert.Equal("after must be greater than or equal to 0", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_FindInFile_BeforeAfterAboveCapClampContext()
+    {
+        InsertIndexedFile("dist/search-context-overflow.txt", "text", "target");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"target","path":"dist/search-context-overflow.txt","before":2147483647,"after":2147483647}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal(1000, structured["before"]!.GetValue<int>());
+        Assert.Equal(1000, structured["after"]!.GetValue<int>());
+        Assert.True(structured["contextTruncated"]!.GetValue<bool>());
     }
 
     [Fact]
