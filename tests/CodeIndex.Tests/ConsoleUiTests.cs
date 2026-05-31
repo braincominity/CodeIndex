@@ -26,6 +26,51 @@ public class ConsoleUiTests
         .ToDictionary(opCode => (short)(opCode.Value & 0xff));
 
     [Fact]
+    public void TryWriteErrorLine_IgnoresClosedErrorWriter()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            var closedError = new StringWriter();
+            closedError.Dispose();
+            Console.SetError(closedError);
+            try
+            {
+                ConsoleUi.TryWriteErrorLine("diagnostic");
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
+    public void TryWriteErrorLine_IgnoresErrorWriterIoFailures()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            Console.SetError(new ThrowingTextWriter());
+            try
+            {
+                ConsoleUi.TryWriteErrorLine("diagnostic");
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    private sealed class ThrowingTextWriter : TextWriter
+    {
+        public override Encoding Encoding => Encoding.UTF8;
+
+        public override void WriteLine(string? value) => throw new IOException("closed pipe");
+    }
+
+    [Fact]
     public void StartSpinner_BackgroundLoop_DoesNotBlockOnTaskWait()
     {
         var methods = typeof(ConsoleUi).GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)

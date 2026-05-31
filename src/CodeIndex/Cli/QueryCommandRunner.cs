@@ -22,8 +22,11 @@ public static class QueryCommandRunner
     internal const string DefaultMaxLineWidthEnvironmentVariable = "CDIDX_DEFAULT_MAX_LINE_WIDTH";
     internal const string StaleAfterEnvironmentVariable = "CDIDX_STALE_AFTER";
     internal static readonly TimeSpan DefaultStaleAfter = TimeSpan.FromHours(24);
+    internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
     [ThreadStatic]
     private static DbReader? s_batchReader;
+
+    private static DateTime GetUtcNow() => TimeProvider.GetUtcNow().UtcDateTime;
 
     // Cap OR-joined `symbols` names well below SQLite's 1000 expression-tree depth so oversized
     // batches fail fast with a clear usage error instead of a confusing SQLite exception.
@@ -2688,7 +2691,7 @@ public static class QueryCommandRunner
                     : null;
                 status.StaleAfterSeconds = (long)Math.Round(staleAfter.Value.TotalSeconds, MidpointRounding.AwayFromZero);
                 if (status.IndexedAt.HasValue)
-                    status.IndexAgeSeconds = Math.Max(0, (long)Math.Round((DateTime.UtcNow - status.IndexedAt.Value).TotalSeconds, MidpointRounding.AwayFromZero));
+                    status.IndexAgeSeconds = Math.Max(0, (long)Math.Round((GetUtcNow() - status.IndexedAt.Value).TotalSeconds, MidpointRounding.AwayFromZero));
             }
             // Attach runtime metadata / ランタイムメタデータを付加
             status.SymbolKinds = reader.GetSymbolKindCounts();
@@ -6205,7 +6208,7 @@ public static class QueryCommandRunner
 
         if (freshness.IndexedAt.HasValue)
         {
-            var age = DateTime.UtcNow - freshness.IndexedAt.Value;
+            var age = GetUtcNow() - freshness.IndexedAt.Value;
             if (age > staleAfter.Value)
                 Console.Error.WriteLine($"Hint: the index is {FormatDuration(age)} old (threshold: {FormatDuration(staleAfter.Value)}). Run 'cdidx index <projectPath>' to refresh.");
         }
@@ -6740,7 +6743,7 @@ public static class QueryCommandRunner
         if (!status.IndexedAt.HasValue)
             return;
 
-        var age = DateTime.UtcNow - status.IndexedAt.Value;
+        var age = GetUtcNow() - status.IndexedAt.Value;
         if (age < TimeSpan.Zero)
             age = TimeSpan.Zero;
 

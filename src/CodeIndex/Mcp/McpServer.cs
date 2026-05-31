@@ -33,6 +33,7 @@ public partial class McpServer : IDisposable
     private readonly Func<JsonNode, string> _serializeResponse;
     private readonly IMcpAuthenticator _authenticator;
     private readonly McpToolFilter _toolFilter;
+    private readonly TimeProvider _timeProvider;
     // Bounds the number of MCP tool calls in flight at once so an unbounded burst of
     // requests cannot exhaust memory or wedge the SQLite reader lock (#1567). The
     // stdio / HTTP loop today only ever has one frame in flight, but the gate
@@ -173,17 +174,17 @@ public partial class McpServer : IDisposable
     internal static readonly TimeSpan DefaultEofPostCancelDrainTimeout = TimeSpan.FromSeconds(5);
 
     public McpServer(string dbPath, string version, bool dbPathExplicit = false)
-        : this(dbPath, version, dbPathExplicit, null, null, null, null, DefaultMaxConcurrency)
+        : this(dbPath, version, dbPathExplicit, null, null, null, null, DefaultMaxConcurrency, null)
     {
     }
 
     public McpServer(string dbPath, string version, bool dbPathExplicit, IMcpAuthenticator authenticator)
-        : this(dbPath, version, dbPathExplicit, null, authenticator, null, null, DefaultMaxConcurrency)
+        : this(dbPath, version, dbPathExplicit, null, authenticator, null, null, DefaultMaxConcurrency, null)
     {
     }
 
     public McpServer(string dbPath, string version, bool dbPathExplicit, McpToolFilter? toolFilter)
-        : this(dbPath, version, dbPathExplicit, null, null, toolFilter, null, DefaultMaxConcurrency)
+        : this(dbPath, version, dbPathExplicit, null, null, toolFilter, null, DefaultMaxConcurrency, null)
     {
     }
 
@@ -191,22 +192,22 @@ public partial class McpServer : IDisposable
     // do not need a custom authenticator or tool filter.
     // serializer 注入だけが必要な既存テスト向けの内部互換 entry。
     internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse)
-        : this(dbPath, version, dbPathExplicit, serializeResponse, null, null, null, DefaultMaxConcurrency)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, null, null, null, DefaultMaxConcurrency, null)
     {
     }
 
     internal McpServer(string dbPath, string version, bool dbPathExplicit, AuditLogSink? auditLog)
-        : this(dbPath, version, dbPathExplicit, null, null, null, auditLog, DefaultMaxConcurrency)
+        : this(dbPath, version, dbPathExplicit, null, null, null, auditLog, DefaultMaxConcurrency, null)
     {
     }
 
     internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator)
-        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, null, null, DefaultMaxConcurrency)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, null, null, DefaultMaxConcurrency, null)
     {
     }
 
     internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator, McpToolFilter? toolFilter)
-        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, toolFilter, null, DefaultMaxConcurrency)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, toolFilter, null, DefaultMaxConcurrency, null)
     {
     }
 
@@ -214,7 +215,7 @@ public partial class McpServer : IDisposable
     // with a null AuditLogSink so the maxConcurrency tests do not need to thread an audit log.
     // #1567 由来の maxConcurrency 注入用 overload。auditLog は null 固定で master に流す。
     internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator, McpToolFilter? toolFilter, int maxConcurrency)
-        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, toolFilter, null, maxConcurrency)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, toolFilter, null, maxConcurrency, null)
     {
     }
 
@@ -224,16 +225,21 @@ public partial class McpServer : IDisposable
     // ProgramRunner が authenticator (#1559) と audit log (#1562) を同時に注入できる
     // 経路。それ以外の組み合わせは上の個別 overload で済む。
     internal McpServer(string dbPath, string version, bool dbPathExplicit, IMcpAuthenticator? authenticator, AuditLogSink? auditLog)
-        : this(dbPath, version, dbPathExplicit, null, authenticator, null, auditLog, DefaultMaxConcurrency)
+        : this(dbPath, version, dbPathExplicit, null, authenticator, null, auditLog, DefaultMaxConcurrency, null)
     {
     }
 
     internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator, McpToolFilter? toolFilter, AuditLogSink? auditLog)
-        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, toolFilter, auditLog, DefaultMaxConcurrency)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, toolFilter, auditLog, DefaultMaxConcurrency, null)
     {
     }
 
     internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator, McpToolFilter? toolFilter, AuditLogSink? auditLog, int maxConcurrency)
+        : this(dbPath, version, dbPathExplicit, serializeResponse, authenticator, toolFilter, auditLog, maxConcurrency, null)
+    {
+    }
+
+    internal McpServer(string dbPath, string version, bool dbPathExplicit, Func<JsonNode, string>? serializeResponse, IMcpAuthenticator? authenticator, McpToolFilter? toolFilter, AuditLogSink? auditLog, int maxConcurrency, TimeProvider? timeProvider)
     {
         if (maxConcurrency < 1)
             throw new ArgumentOutOfRangeException(nameof(maxConcurrency), maxConcurrency, "MCP concurrency cap must be at least 1.");
@@ -249,6 +255,7 @@ public partial class McpServer : IDisposable
         _serializeResponse = serializeResponse ?? (node => node.ToJsonString(_jsonOptions));
         _authenticator = authenticator ?? LocalStdioAuthenticator.Instance;
         _toolFilter = toolFilter ?? McpToolFilter.FromEnvironment();
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _auditLog = auditLog;
         RateLimiter = new RateLimiter(RateLimiterOptions.FromEnvironment());
         _concurrencyGate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
@@ -303,6 +310,8 @@ public partial class McpServer : IDisposable
     /// 現在設定されている in-flight ツール呼び出し上限 (#1567)。テスト向けに公開。
     /// </summary>
     internal int MaxConcurrency { get; }
+
+    private DateTime GetUtcNow() => _timeProvider.GetUtcNow().UtcDateTime;
 
     internal TimeSpan RequestTimeout
     {
@@ -427,7 +436,7 @@ public partial class McpServer : IDisposable
 
         // Use stderr for logging so stdout stays clean for JSON-RPC
         // stdoutをJSON-RPC用にクリーンに保つため、ログはstderrに出力
-        Console.Error.WriteLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {_dbPath}, transport: {transport.Name} @ {transport.Endpoint}, max in-flight: {MaxConcurrency})");
+        ConsoleUi.TryWriteErrorLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {_dbPath}, transport: {transport.Name} @ {transport.Endpoint}, max in-flight: {MaxConcurrency})");
 
         if (transport is HttpMcpTransport httpTransport)
         {
