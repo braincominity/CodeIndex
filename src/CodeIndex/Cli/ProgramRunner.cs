@@ -7,6 +7,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
+using CodeIndex.Lsp;
 using CodeIndex.Mcp;
 using Microsoft.Data.Sqlite;
 
@@ -205,6 +207,14 @@ internal static class ProgramRunner
                 return mcpExitCode;
             }
 
+            if (args[0] is "lsp" or "--lsp")
+            {
+                var lspExitCode = RunLsp(args[1..], appVersion, jsonOptions);
+                GlobalToolLog.Info($"command_complete exit_code={lspExitCode} command=lsp");
+                EmitCommandMetric("lsp", args, commandStartTimestamp, commandStopwatch, lspExitCode);
+                return lspExitCode;
+            }
+
             var commandName = args[0];
             var subArgs = args[1..];
             Func<string[], int>? queryRunner = commandName switch
@@ -257,6 +267,8 @@ internal static class ProgramRunner
                 {
                     "upgrade" => RunUpgrade(subArgs, jsonOptions, appVersion),
                     "index" => IndexCommandRunner.Run(subArgs, jsonOptions),
+                    "export" => ExportImportCommandRunner.RunExport(subArgs, jsonOptions, appVersion),
+                    "import" => ExportImportCommandRunner.RunImport(subArgs, jsonOptions),
                     "diff" => DiffCommandRunner.Run(subArgs, jsonOptions),
                     "hooks" => HookCommandRunner.Run(subArgs, jsonOptions),
                     "backfill-fold" => IndexCommandRunner.RunBackfillFold(subArgs, jsonOptions),
@@ -1469,6 +1481,84 @@ internal static class ProgramRunner
 
     private const string DefaultMcpHttpListen = "127.0.0.1:38080";
     private const string McpHttpTokenEnvVar = "CDIDX_MCP_HTTP_TOKEN";
+
+    private static int RunLsp(string[] cmdArgs, string appVersion, JsonSerializerOptions jsonOptions)
+    {
+        var options = QueryCommandRunner.ParseArgs(cmdArgs, jsonDefault: true);
+        if (options.ParseError != null)
+        {
+            Console.Error.WriteLine(options.ParseError);
+            PrintLspUsage();
+            return CommandExitCodes.UsageError;
+        }
+
+        for (var i = 0; i < cmdArgs.Length; i++)
+        {
+            if (cmdArgs[i].StartsWith("--db=", StringComparison.Ordinal))
+                continue;
+            if (cmdArgs[i] == "--db")
+            {
+                i++;
+                continue;
+            }
+
+            Console.Error.WriteLine($"Error: {cmdArgs[i]} is not supported for lsp.");
+            Console.Error.WriteLine("Hint: use `--db <path>` to point at a specific index.");
+            PrintLspUsage();
+            return CommandExitCodes.UsageError;
+        }
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(options.DbPath))
+            {
+                Console.Error.WriteLine("Error: database path could not be resolved.");
+                PrintLspUsage();
+                return CommandExitCodes.UsageError;
+            }
+
+            if (!options.DbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+                && !File.Exists(LongPath.EnsureWindowsPrefix(options.DbPath)))
+            {
+                var resolvedPath = Path.GetFullPath(options.DbPath);
+                Console.Error.WriteLine($"Error [{CommandErrorCodes.DbNotFound}]: database not found at {resolvedPath}");
+                Console.Error.WriteLine("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun `cdidx lsp`.");
+                return CommandExitCodes.DatabaseError;
+            }
+
+            using var db = new DbContext(options.DbPath);
+            if (!db.TryValidateIsCodeIndexDb(out var validationReason))
+            {
+                Console.Error.WriteLine($"Error [{CommandErrorCodes.DbError}]: invalid CodeIndex database: {validationReason}");
+                return CommandExitCodes.DatabaseError;
+            }
+
+            db.TryMigrateForRead();
+            using var server = new LspServer(new DbReader(db), appVersion, jsonOptions, db.GetMetaString(DbContext.IndexedProjectRootMetaKey));
+            server.Run(Console.OpenStandardInput(), Console.OpenStandardOutput());
+            return CommandExitCodes.Success;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Out.Flush();
+            Console.Error.Flush();
+            return CommandExitCodes.CancelledBySignal;
+        }
+        catch (Exception ex)
+        {
+            GlobalToolLog.Error("lsp_server_failed " + GlobalToolLog.FormatExceptionChain(ex));
+            Console.Error.WriteLine($"Error: LSP server failed ({ex.GetType().Name}: {ex.Message}).");
+            Console.Out.Flush();
+            Console.Error.Flush();
+            return CommandExitCodes.DatabaseError;
+        }
+    }
+
+    private static void PrintLspUsage()
+    {
+        Console.Error.WriteLine("Usage: cdidx lsp [--db <path>]");
+        Console.Error.WriteLine("Runs a read-only Language Server Protocol server over stdio using an existing CodeIndex database.");
+    }
 
     private static int RunMcp(string[] cmdArgs, string appVersion)
     {

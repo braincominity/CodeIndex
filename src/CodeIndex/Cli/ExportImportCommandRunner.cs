@@ -1,0 +1,388 @@
+using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using CodeIndex.Database;
+using Microsoft.Data.Sqlite;
+
+namespace CodeIndex.Cli;
+
+internal static class ExportImportCommandRunner
+{
+    private const string ManifestEntryName = "manifest.json";
+    private const string DatabaseEntryName = "codeindex.db";
+    private static readonly DateTimeOffset DeterministicZipTimestamp = new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+    public static int RunExport(string[] args, JsonSerializerOptions jsonOptions, string appVersion)
+    {
+        if (args.Length > 0 && args[0] == "ctags")
+            return RunExportCtags(args[1..]);
+
+        return RunExportArchive(args, jsonOptions, appVersion);
+    }
+
+    public static int RunImport(string[] args, JsonSerializerOptions jsonOptions)
+    {
+        string? archivePath = null;
+        string? dbPath = null;
+        var wantsJson = false;
+        var prunePaths = false;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg == "--json")
+            {
+                wantsJson = true;
+                continue;
+            }
+            if (arg == "--prune-paths")
+            {
+                prunePaths = true;
+                continue;
+            }
+
+            if (TryReadValueOption(args, ref i, "--db", arg, out var dbValue, out var dbError))
+            {
+                if (dbError != null)
+                    return WriteError(dbError, "use `cdidx import <archive> --db <path>`.", "cdidx import <archive> [--db <path>] [--json]");
+                dbPath = dbValue;
+                continue;
+            }
+
+            if (arg.StartsWith("-", StringComparison.Ordinal))
+                return WriteError($"unknown import option `{arg}`.", "use `cdidx import <archive> [--db <path>]`.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
+
+            if (archivePath != null)
+                return WriteError($"import accepts exactly one archive path, got extra `{arg}`.", "remove the extra argument.", "cdidx import <archive> [--db <path>] [--json]");
+            archivePath = arg;
+        }
+
+        if (string.IsNullOrWhiteSpace(archivePath))
+            return WriteError("import requires an archive path.", "pass an archive produced by `cdidx export <archive>`.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
+
+        dbPath ??= DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null).DbPath;
+        var fullDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(dbPath));
+        var dbDirectory = Path.GetDirectoryName(fullDbPath);
+        if (string.IsNullOrWhiteSpace(dbDirectory))
+            return WriteError($"could not resolve destination DB directory for `{dbPath}`.", "pass an explicit `--db <path>`.", "cdidx import <archive> [--db <path>] [--json]");
+
+        var tempPath = Path.Combine(dbDirectory, $".codeindex-import-{Guid.NewGuid():N}.db");
+        try
+        {
+            Directory.CreateDirectory(dbDirectory);
+            using (var archive = ZipFile.OpenRead(archivePath))
+            {
+                if (archive.GetEntry(ManifestEntryName) == null)
+                    return WriteError("archive is missing manifest.json.", "use an archive produced by `cdidx export <archive>`.", "cdidx import <archive> [--db <path>] [--json]");
+
+                var dbEntry = archive.GetEntry(DatabaseEntryName);
+                if (dbEntry == null)
+                    return WriteError("archive is missing codeindex.db.", "use an archive produced by `cdidx export <archive>`.", "cdidx import <archive> [--db <path>] [--json]");
+
+                dbEntry.ExtractToFile(tempPath, overwrite: true);
+            }
+
+            if (!DbContext.TryValidateExistingCodeIndexDb(tempPath, out var validationMessage, out _))
+                return WriteError($"archive database is invalid: {validationMessage}.", "re-export from a compatible CodeIndex database.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
+            SqliteConnection.ClearAllPools();
+
+            if (prunePaths)
+            {
+                RewriteImportedProjectRoot(tempPath, Environment.CurrentDirectory);
+                SqliteConnection.ClearAllPools();
+            }
+
+            DeleteSqliteSidecars(fullDbPath);
+            File.Move(tempPath, fullDbPath, overwrite: true);
+            DeleteSqliteSidecars(fullDbPath);
+            if (wantsJson)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(new ImportResult("1", fullDbPath, prunePaths), jsonOptions));
+            }
+            else
+            {
+                Console.WriteLine($"Imported CodeIndex database to {fullDbPath}");
+            }
+            return CommandExitCodes.Success;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or SqliteException)
+        {
+            return WriteError($"import failed: {ex.Message}", "check the archive path and destination database permissions.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
+        }
+        finally
+        {
+            try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+        }
+    }
+
+    private static int RunExportArchive(string[] args, JsonSerializerOptions jsonOptions, string appVersion)
+    {
+        string? outputPath = null;
+        string? dbPath = null;
+        var wantsJson = false;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg == "--json")
+            {
+                wantsJson = true;
+                continue;
+            }
+
+            if (TryReadValueOption(args, ref i, "--db", arg, out var dbValue, out var dbError))
+            {
+                if (dbError != null)
+                    return WriteError(dbError, "use `cdidx export <archive> --db <path>`.", "cdidx export <archive> [--db <path>] [--json]");
+                dbPath = dbValue;
+                continue;
+            }
+
+            if (arg.StartsWith("-", StringComparison.Ordinal))
+                return WriteError($"unknown export option `{arg}`.", "use `cdidx export <archive> [--db <path>]` or `cdidx export ctags`.", "cdidx export <archive> [--db <path>] [--json]");
+
+            if (outputPath != null)
+                return WriteError($"export accepts exactly one archive path, got extra `{arg}`.", "remove the extra argument.", "cdidx export <archive> [--db <path>] [--json]");
+            outputPath = arg;
+        }
+
+        if (string.IsNullOrWhiteSpace(outputPath))
+            return WriteError("export requires an output archive path.", "pass a destination such as `codeindex.cdidx.zip`, or use `cdidx export ctags`.", "cdidx export <archive> [--db <path>] [--json]");
+
+        dbPath ??= DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null).DbPath;
+        var normalizedDbPath = DbPathResolver.NormalizeDbPath(dbPath);
+        if (!DbContext.TryValidateExistingCodeIndexDb(normalizedDbPath, out var validationMessage, out _))
+            return WriteError(validationMessage, "run `cdidx index <projectPath>` first or pass `--db <path>`.", "cdidx export <archive> [--db <path>] [--json]");
+
+        var fullSourceDbPath = Path.GetFullPath(normalizedDbPath);
+        var fullOutputPath = Path.GetFullPath(outputPath);
+        if (IsSamePath(fullOutputPath, fullSourceDbPath)
+            || IsSamePath(fullOutputPath, fullSourceDbPath + "-wal")
+            || IsSamePath(fullOutputPath, fullSourceDbPath + "-shm"))
+        {
+            return WriteError("export archive path must not be the source database or a SQLite sidecar.", "choose a separate archive path, for example `codeindex.cdidx.zip`.", "cdidx export <archive> [--db <path>] [--json]");
+        }
+
+        var snapshotPath = Path.Combine(Path.GetTempPath(), $"codeindex-export-{Guid.NewGuid():N}.db");
+        try
+        {
+            var outputDirectory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+            if (!string.IsNullOrWhiteSpace(outputDirectory))
+                Directory.CreateDirectory(outputDirectory);
+
+            CreateDatabaseSnapshot(normalizedDbPath, snapshotPath);
+            ExportManifest manifest;
+            using (var snapshotConnection = new SqliteConnection(CreateUnpooledConnectionString(snapshotPath)))
+            {
+                snapshotConnection.Open();
+                manifest = BuildManifest(snapshotConnection, appVersion);
+            }
+            SqliteConnection.ClearAllPools();
+            manifest = manifest with { DatabaseSha256 = ComputeSha256(snapshotPath) };
+            if (File.Exists(outputPath))
+                File.Delete(outputPath);
+
+            using (var archive = ZipFile.Open(outputPath, ZipArchiveMode.Create))
+            {
+                AddTextEntry(archive, ManifestEntryName, JsonSerializer.Serialize(manifest, jsonOptions));
+                var dbEntry = archive.CreateEntry(DatabaseEntryName, CompressionLevel.SmallestSize);
+                dbEntry.LastWriteTime = DeterministicZipTimestamp;
+                using var source = File.OpenRead(snapshotPath);
+                using var target = dbEntry.Open();
+                source.CopyTo(target);
+            }
+
+            if (wantsJson)
+                Console.WriteLine(JsonSerializer.Serialize(new ExportArchiveResult("1", Path.GetFullPath(outputPath), fullSourceDbPath), jsonOptions));
+            else
+                Console.WriteLine($"Exported CodeIndex archive to {outputPath}");
+            return CommandExitCodes.Success;
+        }
+        catch (Exception ex)
+        {
+            return WriteError($"export failed: {ex.Message}", "check the database and output archive paths.", "cdidx export <archive> [--db <path>] [--json]");
+        }
+        finally
+        {
+            try { if (File.Exists(snapshotPath)) File.Delete(snapshotPath); } catch { }
+            try { DeleteSqliteSidecars(snapshotPath); } catch { }
+        }
+    }
+
+    private static int RunExportCtags(string[] args)
+    {
+        var outputPath = "tags";
+        string? dbPath = null;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (TryReadValueOption(args, ref i, "--output", arg, out var outputValue, out var outputError))
+            {
+                if (outputError != null)
+                    return WriteError(outputError, "use `cdidx export ctags --output tags`.", "cdidx export ctags [--output <path>] [--db <path>]");
+                outputPath = outputValue!;
+                continue;
+            }
+
+            if (TryReadValueOption(args, ref i, "--db", arg, out var dbValue, out var dbError))
+            {
+                if (dbError != null)
+                    return WriteError(dbError, "use `cdidx export ctags --db <path>`.", "cdidx export ctags [--output <path>] [--db <path>]");
+                dbPath = dbValue;
+                continue;
+            }
+
+            return WriteError($"unknown ctags export option `{arg}`.", "use `--output <path>` or `--db <path>`.", "cdidx export ctags [--output <path>] [--db <path>]");
+        }
+
+        dbPath ??= DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null).DbPath;
+        var normalizedDbPath = DbPathResolver.NormalizeDbPath(dbPath);
+        if (!DbContext.TryValidateExistingCodeIndexDb(normalizedDbPath, out var validationMessage, out _))
+            return WriteError(validationMessage, "run `cdidx index <projectPath>` first or pass `--db <path>`.", "cdidx export ctags [--output <path>] [--db <path>]");
+
+        try
+        {
+            using var db = new DbContext(normalizedDbPath);
+            db.TryMigrateForRead();
+            var outputDirectory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+            if (!string.IsNullOrWhiteSpace(outputDirectory))
+                Directory.CreateDirectory(outputDirectory);
+
+            using var writer = new StreamWriter(outputPath, append: false, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            writer.WriteLine("!_TAG_FILE_FORMAT\t2\t/extended format/");
+            writer.WriteLine("!_TAG_FILE_SORTED\t1\t/0=unsorted, 1=sorted, 2=foldcase/");
+
+            using var cmd = db.Connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT s.name, f.path, COALESCE(s.start_line, s.line, 1), s.kind
+                FROM symbols s
+                JOIN files f ON s.file_id = f.id
+                WHERE s.name IS NOT NULL AND s.name != ''
+                ORDER BY s.name COLLATE NOCASE, f.path, COALESCE(s.start_line, s.line, 1)";
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var name = SanitizeCtagsField(reader.GetString(0));
+                var path = SanitizeCtagsField(reader.GetString(1));
+                var line = Math.Max(1, reader.GetInt32(2));
+                var kind = SanitizeCtagsField(reader.GetString(3));
+                writer.WriteLine($"{name}\t{path}\t{line};\"\tkind:{kind}\tline:{line}");
+            }
+
+            Console.WriteLine($"Exported ctags to {outputPath}");
+            return CommandExitCodes.Success;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
+        {
+            return WriteError($"ctags export failed: {ex.Message}", "check the database and output paths.", "cdidx export ctags [--output <path>] [--db <path>]");
+        }
+    }
+
+    private static ExportManifest BuildManifest(SqliteConnection connection, string appVersion)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "PRAGMA user_version";
+        var userVersion = Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+        cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'indexed_project_root' LIMIT 1";
+        var projectRoot = cmd.ExecuteScalar() as string;
+        cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'indexed_head_sha' LIMIT 1";
+        var indexedHead = cmd.ExecuteScalar() as string;
+        return new ExportManifest("1", appVersion, userVersion, projectRoot, indexedHead, string.Empty);
+    }
+
+    private static void AddTextEntry(ZipArchive archive, string name, string content)
+    {
+        var entry = archive.CreateEntry(name, CompressionLevel.SmallestSize);
+        entry.LastWriteTime = DeterministicZipTimestamp;
+        using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        writer.Write(content);
+    }
+
+    private static string ComputeSha256(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+    }
+
+    private static void RewriteImportedProjectRoot(string dbPath, string projectRoot)
+    {
+        using var connection = new SqliteConnection(CreateUnpooledConnectionString(dbPath));
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO codeindex_meta(key, value)
+            VALUES ('indexed_project_root', @projectRoot)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+        cmd.Parameters.AddWithValue("@projectRoot", Path.GetFullPath(projectRoot));
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void CreateDatabaseSnapshot(string sourceDbPath, string snapshotPath)
+    {
+        using var source = new SqliteConnection(CreateUnpooledConnectionString(sourceDbPath));
+        using var destination = new SqliteConnection(CreateUnpooledConnectionString(snapshotPath));
+        source.Open();
+        destination.Open();
+        source.BackupDatabase(destination);
+    }
+
+    private static string CreateUnpooledConnectionString(string dbPath)
+        => new SqliteConnectionStringBuilder { DataSource = dbPath, Pooling = false }.ConnectionString;
+
+    private static void DeleteSqliteSidecars(string dbPath)
+    {
+        TryDeleteFile(dbPath + "-wal");
+        TryDeleteFile(dbPath + "-shm");
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        if (File.Exists(path))
+            File.Delete(path);
+    }
+
+    private static bool IsSamePath(string left, string right)
+        => string.Equals(
+            Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+    private static string SanitizeCtagsField(string value)
+        => value.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
+
+    private static bool TryReadValueOption(string[] args, ref int index, string optionName, string arg, out string? value, out string? error)
+    {
+        value = null;
+        error = null;
+        if (arg == optionName)
+        {
+            if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+            {
+                error = $"{optionName} requires a non-empty value.";
+                return true;
+            }
+            value = args[++index];
+            return true;
+        }
+
+        var prefix = optionName + "=";
+        if (arg.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            value = arg[prefix.Length..];
+            if (string.IsNullOrWhiteSpace(value))
+                error = $"{optionName} requires a non-empty value.";
+            return true;
+        }
+
+        return false;
+    }
+
+    private static int WriteError(string message, string hint, string usage)
+        => CommandErrorWriter.Write(message, CommandExitCodes.UsageError, hint, usage);
+
+    internal sealed record ExportManifest(string FormatVersion, string CdidxVersion, int UserVersion, string? ProjectRoot, string? IndexedHeadSha, string DatabaseSha256);
+    internal sealed record ExportArchiveResult(string ApiVersion, string ArchivePath, string DbPath);
+    internal sealed record ImportResult(string ApiVersion, string DbPath, bool PrunedPaths);
+}
