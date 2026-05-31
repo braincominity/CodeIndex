@@ -871,6 +871,21 @@ jobs:
 
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
+      - name: Compute container tags
+        id: image-tags
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          {
+            echo "tags<<EOF"
+            echo "ghcr.io/widthdom/codeindex:${version}"
+            case "$version" in
+              *-*) ;;
+              *) echo "ghcr.io/widthdom/codeindex:latest" ;;
+            esac
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -887,9 +902,7 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/widthdom/codeindex:${{ steps.version.outputs.version }}
-            ghcr.io/widthdom/codeindex:latest
+          tags: ${{ steps.image-tags.outputs.tags }}
 
   publish-homebrew:
     if: github.repository == 'Widthdom/CodeIndex'
