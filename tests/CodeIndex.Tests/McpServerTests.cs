@@ -8737,6 +8737,7 @@ public class McpServerTests : IDisposable
         Assert.Equal("draft", structured["lifecycle_status"]!.GetValue<string>());
         Assert.NotNull(structured["hash"]);
         Assert.True(structured["stored_locally"]!.GetValue<bool>());
+        Assert.Equal(Path.GetFullPath(Path.GetDirectoryName(_dbPath)!), structured["cdidx_dir"]!.GetValue<string>());
     }
 
     [Fact]
@@ -8817,6 +8818,65 @@ public class McpServerTests : IDisposable
         var structured = response2["result"]!["structuredContent"]!;
         Assert.Equal("duplicate", structured["status"]!.GetValue<string>());
         Assert.Equal("draft", structured["lifecycle_status"]!.GetValue<string>());
+        Assert.Equal(Path.GetFullPath(Path.GetDirectoryName(_dbPath)!), structured["cdidx_dir"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SuggestImprovement_UnwritableCdidxDir_ReturnsActionableError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var dir = TestProjectHelper.CreateTempProject("cdidx_mcp_readonly");
+        var originalMode = File.GetUnixFileMode(dir);
+        try
+        {
+            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+            using var server = new McpServer(Path.Combine(dir, "codeindex.db"), ConsoleUi.LoadVersion());
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"suggest_improvement","arguments":{"category":"other","description":"Permission probe regression"}}}""")!;
+
+            var response = server.HandleMessage(request)!;
+
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+            var message = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+            Assert.Contains("Cannot write to .cdidx directory", message);
+            Assert.Contains(Path.GetFullPath(dir), message);
+            Assert.Contains("check directory ownership, permissions, and read-only mounts", message);
+        }
+        finally
+        {
+            try { File.SetUnixFileMode(dir, originalMode); } catch { }
+            TestProjectHelper.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public void SuggestImprovement_WriteProbePreservesExistingProbeFile()
+    {
+        var cdidxDir = Path.GetDirectoryName(_dbPath)!;
+        var existingProbe = Path.Combine(cdidxDir, ".write_probe");
+        File.WriteAllText(existingProbe, "keep me");
+        var uniqueDesc = $"Probe preservation regression {Guid.NewGuid():N}";
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        Assert.Equal("keep me", File.ReadAllText(existingProbe));
     }
 
     [Fact]
