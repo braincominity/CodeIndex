@@ -6468,6 +6468,7 @@ public class McpServerTests : IDisposable
             Assert.Equal(0, structured["metadata"]!["errors"]!.GetValue<int>());
             Assert.Equal("cascading", structured["failure_scope"]!.GetValue<string>());
             Assert.NotNull(structured["cascade_started_at_index"]);
+            Assert.True(structured["partial_failure"]!.GetValue<bool>());
 
             var truncatedQueries = structured["truncated_queries"]!.AsArray();
             Assert.NotEmpty(truncatedQueries);

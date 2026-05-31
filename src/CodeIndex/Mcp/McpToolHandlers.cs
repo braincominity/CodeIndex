@@ -2452,7 +2452,7 @@ public partial class McpServer
             ["total_count"] = queries.Count,
             ["success_count"] = successCount,
             ["failure_count"] = failureCount,
-            ["partial_failure"] = failureCount > 0,
+            ["partial_failure"] = failureCount > 0 || cascadeStartedAtIndex.HasValue,
             ["failure_scope"] = GetBatchFailureScope(queries.Count, successCount, failureCount, cascadeStartedAtIndex),
             ["cascade_started_at_index"] = cascadeStartedAtIndex,
             ["metadata"] = new JsonObject
@@ -2539,7 +2539,7 @@ public partial class McpServer
             ["total_count"] = submittedCount,
             ["success_count"] = successCount,
             ["failure_count"] = failureCount,
-            ["partial_failure"] = failureCount > 0,
+            ["partial_failure"] = failureCount > 0 || cascadeStartedAtIndex.HasValue,
             ["failure_scope"] = failureScope,
             ["cascade_started_at_index"] = cascadeStartedAtIndex,
             ["metadata"] = new JsonObject
