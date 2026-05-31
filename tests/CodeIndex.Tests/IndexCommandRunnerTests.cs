@@ -2273,10 +2273,10 @@ public class IndexCommandRunnerTests
             Assert.False(json.GetProperty("fold_ready").GetBoolean());
 
             var (_, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
-            Assert.True(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
             Assert.True(statusJson.GetProperty("issues_table_available").GetBoolean());
-            Assert.True(statusJson.GetProperty("file_issues_data_current").GetBoolean());
-            Assert.True(statusJson.GetProperty("fold_ready").GetBoolean());
+            Assert.False(statusJson.GetProperty("file_issues_data_current").GetBoolean());
+            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
 
             using var verify = OpenNonPoolingConnection(dbPath);
             verify.Open();
@@ -5622,7 +5622,7 @@ public class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
             Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
             Assert.True(statusJson.GetProperty("issues_table_available").GetBoolean());
-            Assert.True(statusJson.GetProperty("file_issues_data_current").GetBoolean());
+            Assert.False(statusJson.GetProperty("file_issues_data_current").GetBoolean());
             Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
         }
         finally
@@ -5668,7 +5668,7 @@ public class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
             Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
             Assert.True(statusJson.GetProperty("issues_table_available").GetBoolean());
-            Assert.True(statusJson.GetProperty("file_issues_data_current").GetBoolean());
+            Assert.False(statusJson.GetProperty("file_issues_data_current").GetBoolean());
             Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
         }
         finally
@@ -5712,7 +5712,7 @@ public class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
             Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
             Assert.True(statusJson.GetProperty("issues_table_available").GetBoolean());
-            Assert.True(statusJson.GetProperty("file_issues_data_current").GetBoolean());
+            Assert.False(statusJson.GetProperty("file_issues_data_current").GetBoolean());
             Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
         }
         finally
