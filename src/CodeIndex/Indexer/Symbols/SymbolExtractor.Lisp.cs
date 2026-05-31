@@ -4,6 +4,15 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    private static readonly HashSet<string> LispNonDefinitionHeads = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "quote",
+        "quasiquote",
+        "unquote",
+        "unquote-splicing",
+        "function",
+    };
+
     internal static string[] MaskLispCodeLines(IReadOnlyList<string> lines)
     {
         var maskedLines = new string[lines.Count];
@@ -96,6 +105,12 @@ public static partial class SymbolExtractor
 
                 if (!TryReadLispListHead(maskedLine, cursor, out var head, out _, out var afterHead))
                     continue;
+                if (LispNonDefinitionHeads.Contains(head))
+                {
+                    MaskLispForm(maskedLines, lineIndex, cursor);
+                    maskedLine = maskedLines[lineIndex];
+                    continue;
+                }
 
                 if (!TryCreateLispSymbol(language, maskedLine, head, afterHead, out var kind, out var name, out var nameIndex))
                     continue;
@@ -279,6 +294,43 @@ public static partial class SymbolExtractor
         }
 
         return BuildLispRange(startLineIndex, maskedLines.Count - 1, kind);
+    }
+
+    private static void MaskLispForm(string[] maskedLines, int startLineIndex, int startColumn)
+    {
+        var depth = 0;
+        var started = false;
+
+        for (var lineIndex = startLineIndex; lineIndex < maskedLines.Length; lineIndex++)
+        {
+            var chars = maskedLines[lineIndex].ToCharArray();
+            var column = lineIndex == startLineIndex ? startColumn : 0;
+            for (; column < chars.Length; column++)
+            {
+                if (chars[column] == '(')
+                {
+                    depth++;
+                    started = true;
+                }
+                else if (chars[column] == ')' && started)
+                {
+                    depth--;
+                    chars[column] = ' ';
+                    if (depth == 0)
+                    {
+                        maskedLines[lineIndex] = new string(chars);
+                        return;
+                    }
+
+                    continue;
+                }
+
+                if (started)
+                    chars[column] = ' ';
+            }
+
+            maskedLines[lineIndex] = new string(chars);
+        }
     }
 
     private static (int EndLine, int? BodyStartLine, int? BodyEndLine) BuildLispRange(
