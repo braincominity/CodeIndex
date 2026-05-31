@@ -607,6 +607,66 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("allow-list at least one artifact host path", stderr);
     }
 
+    [Fact]
+    public void VerifyReleaseAttestation_GhAvailable_VerifiesArtifactWithRepository()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var logPath = Path.Combine(_tempRoot, "gh_attestation.log");
+        var artifactPath = Path.Combine(_tempRoot, "CodeIndex-linux-x64.tar.gz");
+        File.WriteAllText(artifactPath, "archive");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            gh() {
+                printf '%s\n' "$*" >> "{{logPath}}"
+                return 0
+            }
+
+            verify_release_attestation "{{artifactPath}}" "CodeIndex-linux-x64.tar.gz"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_TEST_ENABLE_ATTESTATION"] = "1",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Empty(stderr);
+        Assert.Contains("Verifying GitHub provenance attestation for CodeIndex-linux-x64.tar.gz", stdout);
+        Assert.Equal($"attestation verify {artifactPath} -R Widthdom/CodeIndex{Environment.NewLine}", File.ReadAllText(logPath));
+    }
+
+    [Fact]
+    public void VerifyReleaseAttestation_RequiredAndGhFails_Aborts()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var artifactPath = Path.Combine(_tempRoot, "sha256sums.txt");
+        File.WriteAllText(artifactPath, "checksums");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            gh() {
+                return 1
+            }
+
+            verify_release_attestation "{{artifactPath}}" "sha256sums.txt"
+            echo "UNREACHABLE"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_REQUIRE_ATTESTATION"] = "1",
+                ["CDIDX_TEST_ENABLE_ATTESTATION"] = "1",
+            });
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Verifying GitHub provenance attestation for sha256sums.txt", stdout);
+        Assert.DoesNotContain("UNREACHABLE", stdout);
+        Assert.Contains("GitHub provenance attestation verification failed for sha256sums.txt", stderr);
+    }
+
     [Theory]
     [InlineData("curl: (56) CONNECT tunnel failed, response 403")]
     [InlineData("curl: (56) Received HTTP code 403 from proxy after CONNECT")]
