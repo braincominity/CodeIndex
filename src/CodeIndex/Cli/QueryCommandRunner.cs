@@ -206,9 +206,13 @@ public static class QueryCommandRunner
     private const string OutputFormatLsp = "lsp";
     private const string OutputFormatQf = "qf";
     private const string OutputFormatSarif = "sarif";
+    private const string OutputFormatCount = "count";
+    private const string OutputFormatCompact = "compact";
+    private const string OutputFormatCsv = "csv";
+    private const string OutputFormatTsv = "tsv";
     private static readonly HashSet<string> InlineValueOptions =
         new(ValueTakingOptions.Concat(["--json"]), StringComparer.Ordinal);
-    private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
+    private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
 
     public static int RunBatch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -454,6 +458,11 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
+                if (TryWriteFormattedLocations(
+                    options,
+                    results.Select(r => new FormattedLocation(r.Path, r.StartLine, null, $"search match: {options.Query}")),
+                    jsonOptions))
+                    return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
                 {
                     WriteLspLocations(results.Select(ToLspLocation), jsonOptions);
@@ -583,6 +592,21 @@ public static class QueryCommandRunner
 
     private static bool TryWriteEmptyFormattedResult(QueryCommandOptions options, JsonSerializerOptions jsonOptions)
     {
+        if (options.OutputFormat == OutputFormatCount)
+        {
+            WriteFormattedCount(0, jsonOptions);
+            return true;
+        }
+        if (options.OutputFormat == OutputFormatCompact)
+        {
+            WriteCompactLocations([], jsonOptions);
+            return true;
+        }
+        if (options.OutputFormat == OutputFormatCsv || options.OutputFormat == OutputFormatTsv)
+        {
+            WriteDelimitedLocations([], options.OutputFormat);
+            return true;
+        }
         if (options.OutputFormat == OutputFormatLsp)
         {
             WriteLspLocations([], jsonOptions);
@@ -596,6 +620,81 @@ public static class QueryCommandRunner
             return true;
         }
         return false;
+    }
+
+    private sealed record FormattedLocation(string File, int Line, int? Column = null, string? Label = null);
+
+    private static bool TryWriteFormattedLocations(QueryCommandOptions options, IEnumerable<FormattedLocation> locations, JsonSerializerOptions jsonOptions)
+    {
+        if (options.OutputFormat == OutputFormatCount)
+        {
+            WriteFormattedCount(locations.Count(), jsonOptions);
+            return true;
+        }
+        if (options.OutputFormat == OutputFormatCompact)
+        {
+            WriteCompactLocations(locations, jsonOptions);
+            return true;
+        }
+        if (options.OutputFormat == OutputFormatCsv || options.OutputFormat == OutputFormatTsv)
+        {
+            WriteDelimitedLocations(locations, options.OutputFormat);
+            return true;
+        }
+        return false;
+    }
+
+    private static void WriteFormattedCount(int count, JsonSerializerOptions jsonOptions)
+        => Console.WriteLine(new JsonObject
+        {
+            ["count"] = count,
+            ["total_estimated"] = count,
+        }.ToJsonString(jsonOptions));
+
+    private static void WriteCompactLocations(IEnumerable<FormattedLocation> locations, JsonSerializerOptions jsonOptions)
+    {
+        var rows = new JsonArray();
+        foreach (var location in locations)
+        {
+            var row = new JsonObject
+            {
+                ["file"] = location.File,
+                ["line"] = location.Line,
+            };
+            if (location.Column.HasValue)
+                row["column"] = location.Column.Value;
+            rows.Add(row);
+        }
+        Console.WriteLine(rows.ToJsonString(jsonOptions));
+    }
+
+    private static void WriteDelimitedLocations(IEnumerable<FormattedLocation> locations, string outputFormat)
+    {
+        var delimiter = outputFormat == OutputFormatTsv ? "\t" : ",";
+        Console.WriteLine(string.Join(delimiter, ["file", "line", "column", "label"]));
+        foreach (var location in locations)
+        {
+            var values = new[]
+            {
+                location.File,
+                location.Line.ToString(CultureInfo.InvariantCulture),
+                location.Column?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+                location.Label ?? string.Empty,
+            };
+            Console.WriteLine(string.Join(delimiter, values.Select(value => EscapeDelimitedValue(value, outputFormat))));
+        }
+    }
+
+    private static string EscapeDelimitedValue(string value, string outputFormat)
+    {
+        if (outputFormat == OutputFormatTsv)
+            return value.Replace("\t", " ", StringComparison.Ordinal).Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal);
+        if (!value.Contains('"', StringComparison.Ordinal) &&
+            !value.Contains(',', StringComparison.Ordinal) &&
+            !value.Contains('\r', StringComparison.Ordinal) &&
+            !value.Contains('\n', StringComparison.Ordinal))
+            return value;
+        return "\"" + value.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
     }
 
     private static void WriteQuickfix(IEnumerable<(string Path, int Line, int Column, string Message)> items)
@@ -771,6 +870,11 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
+                if (TryWriteFormattedLocations(
+                    options,
+                    results.Select(r => new FormattedLocation(r.Path, r.StartLine, null, $"{r.Kind} {r.Name}")),
+                    jsonOptions))
+                    return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
                 {
                     WriteLspLocations(results.Select(ToLspLocation), jsonOptions);
@@ -1005,6 +1109,11 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
+                if (TryWriteFormattedLocations(
+                    options,
+                    results.Select(r => new FormattedLocation(r.Path, r.Line, r.Column, $"{r.ReferenceKind} {r.SymbolName}")),
+                    jsonOptions))
+                    return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
                 {
                     WriteLspLocations(results.Select(ToLspLocation), jsonOptions);
@@ -1151,6 +1260,11 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
+                if (TryWriteFormattedLocations(
+                    options,
+                    results.Select(r => new FormattedLocation(r.Path, r.FirstLine, null, $"{r.CallerName ?? "<top-level>"} -> {r.CalleeName}")),
+                    jsonOptions))
+                    return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
                 {
                     WriteLspLocations(results.Select(ToLspLocation), jsonOptions);
@@ -1295,6 +1409,11 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
+                if (TryWriteFormattedLocations(
+                    options,
+                    results.Select(r => new FormattedLocation(r.Path, r.FirstLine, null, $"{r.CallerName ?? "<top-level>"} -> {r.CalleeName}")),
+                    jsonOptions))
+                    return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
                 {
                     WriteLspLocations(results.Select(ToLspLocation), jsonOptions);
@@ -2028,6 +2147,11 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
+                if (TryWriteFormattedLocations(
+                    options,
+                    results.Select(r => new FormattedLocation(r.Path, r.Line, r.Column, $"find match: {options.Query}")),
+                    jsonOptions))
+                    return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
                 {
                     WriteLspLocations(results.Select(ToLspLocation), jsonOptions);
@@ -4297,6 +4421,11 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
+                if (TryWriteFormattedLocations(
+                    options,
+                    issues.Select(i => new FormattedLocation(i.Path, i.Line, null, $"{i.Kind}: {i.Message}")),
+                    jsonOptions))
+                    return CommandExitCodes.Success;
                 if (options.OutputFormat == OutputFormatLsp)
                 {
                     WriteLspLocations(issues.Select(ToLspLocation), jsonOptions);
@@ -4631,7 +4760,7 @@ public static class QueryCommandRunner
                         }
                         else
                         {
-                            AddParseError($"Error: --format must be one of text, json, lsp, qf, or sarif; got '{formatValue}'.");
+                            AddParseError($"Error: --format must be one of text, json, count, compact, csv, tsv, lsp, qf, or sarif; got '{formatValue}'.");
                         }
                     }
                     else
@@ -5213,6 +5342,10 @@ public static class QueryCommandRunner
         {
             case OutputFormatText:
             case OutputFormatJson:
+            case OutputFormatCount:
+            case OutputFormatCompact:
+            case OutputFormatCsv:
+            case OutputFormatTsv:
             case OutputFormatLsp:
             case OutputFormatQf:
             case OutputFormatSarif:

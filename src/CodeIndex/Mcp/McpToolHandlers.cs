@@ -227,6 +227,38 @@ public partial class McpServer
     private static int ReadOffset(JsonNode? args)
         => Math.Max(0, args?["offset"]?.GetValue<int>() ?? 0);
 
+    private static string ReadResponseFormat(JsonNode? args)
+        => args?["format"]?.GetValue<string>()?.Trim().ToLowerInvariant() ?? "full";
+
+    private static string? ValidateResponseFormat(string format)
+        => format is "full" or "count" or "compact"
+            ? null
+            : "format must be one of full, count, compact";
+
+    private static void ApplyCompactResults<T>(
+        JsonObject payload,
+        IEnumerable<T> results,
+        Func<T, string> pathSelector,
+        Func<T, int> lineSelector,
+        Func<T, int?>? columnSelector = null)
+    {
+        var compact = new JsonArray();
+        foreach (var result in results)
+        {
+            var row = new JsonObject
+            {
+                ["file"] = pathSelector(result),
+                ["line"] = lineSelector(result),
+            };
+            var column = columnSelector?.Invoke(result);
+            if (column.HasValue)
+                row["column"] = column.Value;
+            compact.Add(row);
+        }
+        payload["results"] = compact;
+        payload["format"] = "compact";
+    }
+
     private static bool AddLimitMetadata<T>(JsonObject payload, List<T> results, int limit, int offset = 0, bool includePagination = false)
     {
         var truncated = results.Count > limit;
@@ -370,10 +402,10 @@ public partial class McpServer
 
     private static IReadOnlySet<string> GetAllowedToolArguments(string toolName) => toolName switch
     {
-        "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "limit", "lang", "snippetLines", "maxLineWidth", "rawQuery", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "exact", "prefix", "countOnly", "project", "solution" },
-        "definition" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "includeBody", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "project", "solution" },
-        "references" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "offset", "maxLineWidth", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "project", "solution" },
-        "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "project", "solution" },
+        "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "limit", "lang", "snippetLines", "maxLineWidth", "rawQuery", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "exact", "prefix", "countOnly", "format", "project", "solution" },
+        "definition" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "includeBody", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "format", "project", "solution" },
+        "references" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "offset", "maxLineWidth", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
+        "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
         "symbols" => new HashSet<string>(StringComparer.Ordinal) { "query", "names", "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "project", "solution" },
         "files" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since" },
         "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "snippetLines", "focusLine", "focusColumn", "maxLineWidth", "exact", "regex" },
@@ -803,7 +835,10 @@ public partial class McpServer
                 return CreateToolErrorResponse(id, $"Invalid 'since' timestamp: '{sinceStr}'. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
         }
         var deduplicate = !(args?["noDedup"]?.GetValue<bool>() ?? false);
-        var countOnly = ReadCountOnly(args);
+        var format = ReadResponseFormat(args);
+        if (ValidateResponseFormat(format) is string formatError)
+            return CreateToolErrorResponse(id, formatError);
+        var countOnly = ReadCountOnly(args) || format == "count";
         if (!TryResolveSearchExactArgument(args, out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
         var prefix = args?["prefix"]?.GetValue<bool>() ?? false;
@@ -860,6 +895,8 @@ public partial class McpServer
                 ["results"] = ToJsonArray(SearchSnippetFormatter.ToCompactResults(results, query, snippetLines, exact, maxLineWidth))
             };
             AddResultEnvelope(structured, results.Count, truncated ? null : results.Count, truncated);
+            if (format == "compact")
+                ApplyCompactResults(structured, results, result => result.Path, result => result.StartLine);
             var topResult = results[0];
             AddNextStepSuggestion(
                 structured,
@@ -1006,11 +1043,27 @@ public partial class McpServer
             since = parsedDefSince;
         if (!TryResolveNameExactArgument(args, "definition", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
+        var format = ReadResponseFormat(args);
+        if (ValidateResponseFormat(format) is string formatError)
+            return CreateToolErrorResponse(id, formatError);
 
         return WithDbReader(id, args, reader =>
         {
             var results = reader.GetDefinitions(query, FetchLimitForEnvelope(limit), kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact);
             var truncated = TrimToRequestedLimit(results, limit);
+            if (format == "count")
+            {
+                var total = truncated
+                    ? reader.CountDefinitionsTotal(query, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact).Count
+                    : results.Count;
+                var countPayload = BuildCountOnlyPayload(total, total, truncated: false, results, result => result.Path);
+                countPayload["query"] = query;
+                countPayload["kind"] = kind;
+                countPayload["lang"] = lang;
+                countPayload["path"] = PathEcho(pathPatterns);
+                countPayload["excludeTests"] = excludeTests;
+                return CreateToolResult(id, $"Counted {ConsoleUi.Counted(total, "definition")}.", countPayload);
+            }
             if (lspCompatible)
                 QueryCommandRunner.AttachLspLocations(results);
             var exactSignal = reader.GetDefinitionExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, since);
@@ -1032,6 +1085,8 @@ public partial class McpServer
                 ["results"] = ToJsonArray(results)
             };
             AddResultEnvelope(payload, results.Count, truncated ? null : results.Count, truncated);
+            if (format == "compact")
+                ApplyCompactResults(payload, results, result => result.Path, result => result.StartLine);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             if (results.Count == 0)
@@ -1065,7 +1120,10 @@ public partial class McpServer
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var countOnly = ReadCountOnly(args);
+        var format = ReadResponseFormat(args);
+        if (ValidateResponseFormat(format) is string formatError)
+            return CreateToolErrorResponse(id, formatError);
+        var countOnly = ReadCountOnly(args) || format == "count";
         if (!TryResolveNameExactArgument(args, "references", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
 
@@ -1121,6 +1179,8 @@ public partial class McpServer
                 ["results"] = ToJsonArray(results)
             };
             AddPaginatedResultEnvelope(payload, results.Count, total, truncated, offset);
+            if (format == "compact")
+                ApplyCompactResults(payload, results, result => result.Path, result => result.Line, result => result.Column);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
@@ -1166,7 +1226,10 @@ public partial class McpServer
             return CreateToolErrorResponse(id, exactError!);
         if (!TryReadReferenceRankMode(args, out var rankMode, out var rankModeError))
             return CreateToolErrorResponse(id, rankModeError!);
-        var countOnly = ReadCountOnly(args);
+        var format = ReadResponseFormat(args);
+        if (ValidateResponseFormat(format) is string formatError)
+            return CreateToolErrorResponse(id, formatError);
+        var countOnly = ReadCountOnly(args) || format == "count";
 
         return WithDbReader(id, args, reader =>
         {
@@ -1217,6 +1280,8 @@ public partial class McpServer
                 ["results"] = ToJsonArray(results)
             };
             AddPaginatedResultEnvelope(payload, results.Count, total, truncated, offset);
+            if (format == "compact")
+                ApplyCompactResults(payload, results, result => result.Path, result => result.FirstLine);
             payload["aggregate_truncated"] = results.Any(result => result.AggregateTruncated);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
@@ -1255,7 +1320,10 @@ public partial class McpServer
             return CreateToolErrorResponse(id, exactError!);
         if (!TryReadReferenceRankMode(args, out var rankMode, out var rankModeError))
             return CreateToolErrorResponse(id, rankModeError!);
-        var countOnly = ReadCountOnly(args);
+        var format = ReadResponseFormat(args);
+        if (ValidateResponseFormat(format) is string formatError)
+            return CreateToolErrorResponse(id, formatError);
+        var countOnly = ReadCountOnly(args) || format == "count";
 
         return WithDbReader(id, args, reader =>
         {
@@ -1306,6 +1374,8 @@ public partial class McpServer
                 ["results"] = ToJsonArray(results)
             };
             AddPaginatedResultEnvelope(payload, results.Count, total, truncated, offset);
+            if (format == "compact")
+                ApplyCompactResults(payload, results, result => result.Path, result => result.FirstLine);
             payload["aggregate_truncated"] = results.Any(result => result.AggregateTruncated);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);

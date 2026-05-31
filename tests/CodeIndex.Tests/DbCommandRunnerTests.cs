@@ -27,6 +27,25 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_SchemaSubcommandSetsFlag()
+    {
+        var options = DbCommandRunner.ParseArgs(["schema"]);
+
+        Assert.True(options.Schema);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_PruneSubcommandSetsApplyFlag()
+    {
+        var options = DbCommandRunner.ParseArgs(["prune", "--apply"]);
+
+        Assert.True(options.Prune);
+        Assert.True(options.PruneApply);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_HelpFlagSetsShowHelp()
     {
         var options = DbCommandRunner.ParseArgs(["--help"]);
@@ -146,6 +165,70 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_Schema_JsonIncludesTablesAndUserVersion()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_schema_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var (exitCode, json) = RunAndCaptureJson(["schema", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(Path.GetFullPath(dbPath), json.GetProperty("db_path").GetString());
+            Assert.True(json.TryGetProperty("user_version", out _));
+            Assert.Contains(json.GetProperty("entries").EnumerateArray(), entry =>
+                entry.GetProperty("type").GetString() == "table" &&
+                entry.GetProperty("name").GetString() == "files");
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_Prune_DryRunCountsAndApplyDeletesOrphans()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_prune_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SeedOrphans(dbPath);
+            SqliteConnection.ClearAllPools();
+
+            var (dryRunExit, dryRunJson) = RunAndCaptureJson(["prune", "--dry-run", "--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, dryRunExit);
+            Assert.True(dryRunJson.GetProperty("dry_run").GetBoolean());
+            Assert.Equal(4, dryRunJson.GetProperty("total").GetInt32());
+
+            var checkpointAttempted = false;
+            DbContext.WalCheckpointTruncateExecutedForTesting = _ => checkpointAttempted = true;
+            var (applyExit, applyJson) = RunAndCaptureJson(["prune", "--apply", "--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, applyExit);
+            Assert.False(applyJson.GetProperty("dry_run").GetBoolean());
+            Assert.Equal(4, applyJson.GetProperty("total").GetInt32());
+            Assert.True(checkpointAttempted);
+
+            var (secondExit, secondJson) = RunAndCaptureJson(["prune", "--dry-run", "--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, secondExit);
+            Assert.Equal(0, secondJson.GetProperty("total").GetInt32());
+        }
+        finally
+        {
+            DbContext.WalCheckpointTruncateExecutedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void Run_CorruptedDb_ReturnsDatabaseError()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_corrupt_{Guid.NewGuid():N}.db");
@@ -190,5 +273,33 @@ public class DbCommandRunnerTests
         var exitCode = DbCommandRunner.RunIntegrityCheck(args, _jsonOptions);
         using var document = JsonDocument.Parse(capture.Out!.ToString()!);
         return (exitCode, document.RootElement.Clone());
+    }
+
+    private static void SeedOrphans(string dbPath)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+        }.ConnectionString);
+        connection.Open();
+        using (var pragma = connection.CreateCommand())
+        {
+            pragma.CommandText = "PRAGMA foreign_keys=OFF";
+            pragma.ExecuteNonQuery();
+        }
+
+        Execute(connection, "INSERT INTO symbols(file_id, kind, name, line) VALUES (9001, 'function', 'Orphan', 1)");
+        Execute(connection, "INSERT INTO reference_lines(file_id, line, context) VALUES (9002, 1, 'missing file')");
+        Execute(connection, "INSERT INTO symbol_references(file_id, symbol_name, reference_kind, reference_line_id) VALUES (9003, 'Orphan', 'call', 9004)");
+        Execute(connection, "INSERT INTO files(id, path, lang, size, lines, modified, checksum) VALUES (1, 'src/live.cs', 'csharp', 1, 1, '2026-01-01T00:00:00Z', 'live')");
+        Execute(connection, "INSERT INTO symbol_references(file_id, symbol_name, reference_kind, reference_line_id) VALUES (1, 'Live', 'call', 1)");
+    }
+
+    private static void Execute(SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
     }
 }
