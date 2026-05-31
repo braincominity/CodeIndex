@@ -13,7 +13,7 @@ public static partial class IndexCommandRunner
     private static readonly string[] AcceptedIndexFlags =
     [
         "--db", "--data-dir", "--rebuild", "--verbose", "--json", "--quiet", "--dry-run", "--force",
-        "--yes", "--watch", "--debounce", "--duration-format", "--max-file-bytes",
+        "--yes", "--watch", "--debounce", "--duration-format", "--max-file-bytes", "--max-symbols-per-file",
         "--notify",
         "--parallelism", "--memory-trace", "--follow-symlinks",
         "--commits", "--changed-between", "--files", "--solution", "--project",
@@ -43,6 +43,7 @@ public static partial class IndexCommandRunner
         var durationFormat = DurationOutputFormat.Auto;
         var notifyMode = ReadCompletionNotificationModeFromEnvironment();
         long? maxFileSizeBytes = ReadMaxFileSizeBytesFromEnvironment();
+        var maxSymbolsPerFile = DefaultMaxSymbolsPerFile;
         var parallelism = ReadIndexParallelismFromEnvironment();
         var symlinkPolicy = FileIndexer.SymlinkPolicy.None;
         string? easterEgg = null;
@@ -150,6 +151,12 @@ public static partial class IndexCommandRunner
                     break;
                 case var option when option.StartsWith("--max-file-bytes=", StringComparison.Ordinal):
                     maxFileSizeBytes = ParseMaxFileBytes(option["--max-file-bytes=".Length..], maxFileSizeBytes);
+                    break;
+                case "--max-symbols-per-file" when i + 1 < args.Length:
+                    maxSymbolsPerFile = ParseMaxSymbolsPerFile(args[++i], maxSymbolsPerFile, "--max-symbols-per-file");
+                    break;
+                case var option when option.StartsWith("--max-symbols-per-file=", StringComparison.Ordinal):
+                    maxSymbolsPerFile = ParseMaxSymbolsPerFile(option["--max-symbols-per-file=".Length..], maxSymbolsPerFile, "--max-symbols-per-file");
                     break;
                 case "--parallelism" when i + 1 < args.Length:
                     parallelism = ParseIndexParallelism(args[++i], parallelism, "--parallelism");
@@ -309,6 +316,7 @@ public static partial class IndexCommandRunner
             DurationFormat = durationFormat,
             NotifyMode = notifyMode,
             MaxFileSizeBytes = maxFileSizeBytes,
+            MaxSymbolsPerFile = maxSymbolsPerFile,
             Parallelism = parallelism,
             SymlinkPolicy = symlinkPolicy,
             SymbolKindFilter = SymbolKindFilter.Create(includeSymbolKinds, excludeSymbolKinds, symbolKindFilterError),
@@ -404,6 +412,15 @@ public static partial class IndexCommandRunner
             return parsed;
 
         Console.Error.WriteLine($"Warning: invalid --max-file-bytes value '{value}' (ignored; use positive bytes or K/M/G suffixes) / 不正な --max-file-bytes 値 '{value}'（無視。正の byte 数または K/M/G 接尾辞を指定）");
+        return fallback;
+    }
+
+    private static int ParseMaxSymbolsPerFile(string value, int fallback, string source)
+    {
+        if (int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
+            return parsed;
+
+        Console.Error.WriteLine($"Warning: invalid {source} value '{value}' (ignored; use a positive integer) / 不正な {source} 値 '{value}'（無視。正の整数を指定）");
         return fallback;
     }
 

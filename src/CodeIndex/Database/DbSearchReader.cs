@@ -99,7 +99,7 @@ public partial class DbReader
     /// Full-text search across indexed chunks using FTS5.
     /// FTS5を使ったチャンク全文検索。
     /// </summary>
-    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true)
+    public List<SearchResult> Search(string query, int limit = 20, string? lang = null, bool rawQuery = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool deduplicate = true, DateTime? since = null, bool exact = false, bool prefix = false, bool visibilityRank = true, SearchCursor? cursor = null)
     {
         // Guard against empty/whitespace queries that would match everything
         // 空白のみのクエリが全件マッチするのを防止
@@ -119,7 +119,8 @@ public partial class DbReader
             sql = $@"
                 SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
                        0.0 AS rank,
-                       {GetSearchVisibilitySql()} AS visibility
+                       {GetSearchVisibilitySql()} AS visibility,
+                       c.id AS chunk_id
                 FROM chunks c
                 JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}
                 WHERE instr(
@@ -135,7 +136,8 @@ public partial class DbReader
             sql = $@"
                 SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
                        rank,
-                       {GetSearchVisibilitySql()} AS visibility
+                       {GetSearchVisibilitySql()} AS visibility,
+                       c.id AS chunk_id
                 FROM fts_chunks
                 JOIN chunks c ON fts_chunks.rowid = c.id
                 JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}";
@@ -146,9 +148,10 @@ public partial class DbReader
             sql += " AND f.lang = @lang";
         if (since != null && _fileColumns.Contains("modified"))
             sql += " AND f.modified >= @since";
-
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count)} LIMIT @limit";
+        if (cursor is { })
+            sql += " OFFSET @cursorOffset";
 
         cmd.CommandText = sql;
         if (exact)
@@ -162,14 +165,20 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
             cmd.Parameters.AddWithValue("@since", since.Value);
+        if (cursor is { } searchCursorParameter)
+        {
+            cmd.Parameters.AddWithValue("@cursorOffset", searchCursorParameter.Offset);
+        }
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var raw = new List<SearchResult>();
+        var nextOffset = cursor?.Offset ?? 0;
         try
         {
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
+                nextOffset++;
                 raw.Add(new SearchResult
                 {
                     Path = reader.GetString(0),
@@ -179,6 +188,8 @@ public partial class DbReader
                     Content = reader.GetString(4),
                     Score = reader.GetDouble(5),
                     Visibility = GetNullableString(reader, 6),
+                    ChunkId = reader.GetInt64(7),
+                    NextOffset = nextOffset,
                 });
             }
         }

@@ -268,6 +268,8 @@ internal static class ProgramRunner
                 {
                     "upgrade" => RunUpgrade(subArgs, jsonOptions, appVersion),
                     "index" => IndexCommandRunner.Run(subArgs, jsonOptions),
+                    "export" => ExportImportCommandRunner.RunExport(subArgs, jsonOptions, appVersion),
+                    "import" => ExportImportCommandRunner.RunImport(subArgs, jsonOptions),
                     "diff" => DiffCommandRunner.Run(subArgs, jsonOptions),
                     "hooks" => HookCommandRunner.Run(subArgs, jsonOptions),
                     "backfill-fold" => IndexCommandRunner.RunBackfillFold(subArgs, jsonOptions),

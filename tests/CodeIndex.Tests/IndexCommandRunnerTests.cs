@@ -252,6 +252,53 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FileAboveMaxSymbolsPerFile_PersistsSymbolCountExceededIssueOnly()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var filePath = Path.Combine(projectRoot, "generated.py");
+            File.WriteAllText(filePath, string.Join('\n', Enumerable.Range(0, 4).Select(i => $"def f{i}(): pass")));
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--max-symbols-per-file", "10", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--max-symbols-per-file", "2", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            Assert.Equal(1, CountRows(dbPath, "files"));
+            Assert.Equal(0, CountRows(dbPath, "chunks"));
+            Assert.Equal(0, CountRows(dbPath, "symbols"));
+            Assert.Equal(0, CountRows(dbPath, "symbol_references"));
+
+            using var db = new DbContext(dbPath);
+            db.TryMigrateForRead();
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
+            var issue = Assert.Single(reader.GetIssues("symbol_count_exceeded"));
+            Assert.Equal("generated.py", issue.Path);
+            Assert.Equal(0, issue.Line);
+            Assert.Contains("--max-symbols-per-file", issue.Message);
+
+            var (raisedExitCode, raisedJson) = RunAndCaptureJson([projectRoot, "--max-symbols-per-file", "10", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, raisedExitCode);
+            Assert.Equal("success", raisedJson.GetProperty("status").GetString());
+            Assert.True(CountRows(dbPath, "chunks") > 0);
+            Assert.True(CountRows(dbPath, "symbols") > 0);
+            Assert.Empty(reader.GetIssues("symbol_count_exceeded"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFiles_FileAboveMaxFileBytes_PersistsFileTooLargeIssue()
     {
         var projectRoot = CreateTempProject();
@@ -1135,6 +1182,22 @@ public class IndexCommandRunnerTests
         var options = IndexCommandRunner.ParseArgs([".", "--max-file-bytes=12345"]);
 
         Assert.Equal(12345, options.MaxFileSizeBytes);
+    }
+
+    [Fact]
+    public void ParseArgs_MaxSymbolsPerFileFlag_ParsesPositiveValue()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--max-symbols-per-file", "42"]);
+
+        Assert.Equal(42, options.MaxSymbolsPerFile);
+    }
+
+    [Fact]
+    public void ParseArgs_MaxSymbolsPerFileInlineFlag_ParsesPositiveValue()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--max-symbols-per-file=43"]);
+
+        Assert.Equal(43, options.MaxSymbolsPerFile);
     }
 
     [Fact]
@@ -3261,7 +3324,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void BackfillFoldedColumns_CancelledDuringSymbolLoop_RollsBackTransaction()
+    public void BackfillFoldedColumns_CancelledDuringSymbolLoop_KeepsCompletedRowsForResume()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_cancel_symbols_{Guid.NewGuid():N}.db");
         var cts = new CancellationTokenSource();
@@ -3296,7 +3359,7 @@ public class IndexCommandRunnerTests
 
                 using var count = db.Connection.CreateCommand();
                 count.CommandText = "SELECT COUNT(*) FROM symbols WHERE name_folded IS NOT NULL";
-                Assert.Equal(0L, (long)count.ExecuteScalar()!);
+                Assert.Equal(1L, (long)count.ExecuteScalar()!);
             }
         }
         finally
@@ -3310,7 +3373,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void BackfillFoldedColumns_CancelledDuringReferenceLoop_RollsBackTransaction()
+    public void BackfillFoldedColumns_CancelledDuringReferenceLoop_KeepsCompletedRowsForResume()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_cancel_refs_{Guid.NewGuid():N}.db");
         var cts = new CancellationTokenSource();
@@ -3345,7 +3408,100 @@ public class IndexCommandRunnerTests
 
                 using var count = db.Connection.CreateCommand();
                 count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE symbol_name_folded IS NOT NULL OR container_name_folded IS NOT NULL";
-                Assert.Equal(0L, (long)count.ExecuteScalar()!);
+                Assert.Equal(1L, (long)count.ExecuteScalar()!);
+            }
+        }
+        finally
+        {
+            DbWriter.FoldBackfillRowUpdatedForTesting = null;
+            cts.Dispose();
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void BackfillFoldedColumns_RewriteAllResumesAfterCheckpoint()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_rewrite_resume_{Guid.NewGuid():N}.db");
+        var cts = new CancellationTokenSource();
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "first", Line = 1, StartLine = 1, EndLine = 1 },
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "second", Line = 2, StartLine = 2, EndLine = 2 },
+                ]);
+
+                DbWriter.FoldBackfillRowUpdatedForTesting = cts.Cancel;
+                Assert.Throws<OperationCanceledException>(() => writer.BackfillFoldedColumns(rewriteAll: true, cts.Token));
+
+                DbWriter.FoldBackfillRowUpdatedForTesting = null;
+                var resumed = writer.BackfillFoldedColumns(rewriteAll: true);
+
+                Assert.Equal(1, resumed.Symbols);
+                using var count = db.Connection.CreateCommand();
+                count.CommandText = "SELECT COUNT(*) FROM symbols WHERE name_folded IS NOT NULL";
+                Assert.Equal(2L, (long)count.ExecuteScalar()!);
+            }
+        }
+        finally
+        {
+            DbWriter.FoldBackfillRowUpdatedForTesting = null;
+            cts.Dispose();
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void BackfillFoldedColumns_RewriteAllResumesReferencePhaseCheckpoint()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_rewrite_refs_resume_{Guid.NewGuid():N}.db");
+        var cts = new CancellationTokenSource();
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertReferences([
+                    new ReferenceRecord { FileId = fileId, SymbolName = "first", ReferenceKind = "call", Line = 1, Column = 1, Context = "first()" },
+                    new ReferenceRecord { FileId = fileId, SymbolName = "second", ReferenceKind = "call", Line = 2, Column = 1, Context = "second()" },
+                ]);
+
+                DbWriter.FoldBackfillRowUpdatedForTesting = cts.Cancel;
+                Assert.Throws<OperationCanceledException>(() => writer.BackfillFoldedColumns(rewriteAll: true, cts.Token));
+
+                DbWriter.FoldBackfillRowUpdatedForTesting = null;
+                var resumed = writer.BackfillFoldedColumns(rewriteAll: true);
+
+                Assert.Equal(0, resumed.Symbols);
+                Assert.Equal(1, resumed.SymbolReferences);
+                using var count = db.Connection.CreateCommand();
+                count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE symbol_name_folded IS NOT NULL";
+                Assert.Equal(2L, (long)count.ExecuteScalar()!);
             }
         }
         finally

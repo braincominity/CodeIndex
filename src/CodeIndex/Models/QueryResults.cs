@@ -18,7 +18,13 @@ public class SearchResult
     public string Content { get; set; } = string.Empty;
     public double Score { get; set; }
     public string? Visibility { get; set; }
+    [JsonIgnore]
+    public long ChunkId { get; set; }
+    [JsonIgnore]
+    public int NextOffset { get; set; }
 }
+
+public readonly record struct SearchCursor(double Score, long ChunkId, int Offset);
 
 public readonly record struct QueryCountResult(int Count, int FileCount, bool IncludesSql = false);
 

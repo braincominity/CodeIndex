@@ -209,7 +209,50 @@ public class McpServerTests : IDisposable
 
         Assert.True(structured["count_only"]!.GetValue<bool>());
         Assert.True(structured["count"]!.GetValue<int>() > 0);
+        Assert.NotNull(structured["result_stable_at"]);
         Assert.Empty(structured["results"]!.AsArray());
+    }
+
+    [Fact]
+    public void ToolsCall_SearchReturnsStableAtAndCursorContinuesAfterAnchor_Issue1462()
+    {
+        InsertIndexedFile("src/other.cs", "csharp", "public class Other { public void Run() { } }");
+        var firstRequest = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Run","limit":1}}}""")!;
+
+        var firstResponse = _server.HandleMessage(firstRequest)!;
+        var first = firstResponse["result"]!["structuredContent"]!;
+        var cursor = first["next_cursor"]!.GetValue<string>();
+        var stableAt = first["result_stable_at"]!.GetValue<DateTime>();
+
+        Assert.Single(first["results"]!.AsArray());
+        Assert.False(string.IsNullOrWhiteSpace(cursor));
+
+        var secondRequest = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 2,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "search",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "Run",
+                    ["limit"] = 1,
+                    ["cursor"] = cursor,
+                },
+            },
+        };
+
+        var secondResponse = _server.HandleMessage(secondRequest)!;
+        var second = secondResponse["result"]!["structuredContent"]!;
+
+        Assert.Single(second["results"]!.AsArray());
+        Assert.Equal(stableAt, second["result_stable_at"]!.GetValue<DateTime>());
+        Assert.NotEqual(
+            first["results"]!.AsArray()[0]!["path"]!.GetValue<string>(),
+            second["results"]!.AsArray()[0]!["path"]!.GetValue<string>());
     }
 
     [Fact]
@@ -2573,6 +2616,20 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_IndexAllowsAdvertisedMaxFileBytesArgument()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"index","arguments":{"path":"/","maxFileBytes":1024}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.DoesNotContain("Unknown argument 'maxFileBytes'", text, StringComparison.Ordinal);
+        Assert.Contains("Path must be within the current working directory", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ToolsList_SearchIncludesPathFilterParams()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
@@ -2585,6 +2642,20 @@ public class McpServerTests : IDisposable
         Assert.NotNull(properties["path"]);
         Assert.NotNull(properties["excludePaths"]);
         Assert.NotNull(properties["excludeTests"]);
+    }
+
+    [Fact]
+    public void ToolsList_SearchDescriptionStaysCompact()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        var searchTool = tools.First(t => t!["name"]!.GetValue<string>() == "search")!;
+        var description = searchTool["description"]!.GetValue<string>();
+
+        Assert.True(description.Length < 1000);
+        Assert.Contains("USER_GUIDE.md#search", description, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2634,7 +2705,7 @@ public class McpServerTests : IDisposable
         var tools = response["result"]!["tools"]!.AsArray();
         var expectedExamples = new Dictionary<string, string[]>
         {
-            ["search"] = ["Examples:", "例:", "search {\"query\":\"handleRequest\",\"lang\":\"csharp\"}", "\"prefix\":true"],
+            ["search"] = ["USER_GUIDE.md#search", "prefix", "exactSubstring"],
             ["definition"] = ["Examples:", "例:", "definition {\"query\":\"McpServer\"}", "\"includeBody\":true", "\"exactName\":true"],
             ["references"] = ["Examples:", "例:", "references {\"query\":\"Run\"}", "\"kind\":\"type_reference\""],
             ["callers"] = ["Examples:", "例:", "callers {\"query\":\"HandleRequest\"}", "\"rankBy\":\"weighted\""],
@@ -6993,6 +7064,9 @@ public class McpServerTests : IDisposable
         Assert.Equal(3, structured["user_version_before"]!.GetValue<int>());
         Assert.Equal(7, structured["user_version_after"]!.GetValue<int>());
         Assert.True(structured["fold_ready"]!.GetValue<bool>());
+        Assert.Equal(2, structured["progress"]!["rows_done"]!.GetValue<int>());
+        Assert.Equal(2, structured["progress"]!["rows_total"]!.GetValue<int>());
+        Assert.Equal(1.0, structured["progress"]!["fraction"]!.GetValue<double>());
 
         using var verifyDb = new DbContext(_dbPath);
         verifyDb.TryMigrateForRead();
@@ -7015,6 +7089,7 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
         Assert.True(structured["dry_run"]!.GetValue<bool>());
         Assert.Equal(2, structured["symbols"]!.GetValue<int>());
+        Assert.Equal(2, structured["progress"]!["rows_total"]!.GetValue<int>());
         Assert.False(structured["verified"]!.GetValue<bool>());
         Assert.False(structured["fold_ready_before"]!.GetValue<bool>());
         Assert.False(structured["fold_ready_after"]!.GetValue<bool>());
@@ -7037,6 +7112,7 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal(0, structured["symbols"]!.GetValue<int>());
         Assert.Equal(0, structured["symbol_references"]!.GetValue<int>());
+        Assert.Equal(0, structured["progress"]!["rows_total"]!.GetValue<int>());
         Assert.False(structured["rewrite_all"]!.GetValue<bool>());
         Assert.True(structured["was_already_complete"]!.GetValue<bool>());
         Assert.True(structured["fold_ready_before"]!.GetValue<bool>());
@@ -9179,6 +9255,8 @@ public class McpServerTests : IDisposable
     [Fact]
     public void SuggestImprovement_ValidInput_ReturnsSuccess()
     {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_GITHUB_TOKEN");
+        env.Set("CDIDX_GITHUB_TOKEN", null);
         // Use unique description to avoid dedup collision with other test runs
         // 他テスト実行との重複排除衝突を避けるため一意な description を使用
         var uniqueDesc = $"Arrow functions are not detected as symbols {Guid.NewGuid():N}";
@@ -9201,6 +9279,8 @@ public class McpServerTests : IDisposable
         Assert.Equal("draft", structured["lifecycle_status"]!.GetValue<string>());
         Assert.NotNull(structured["hash"]);
         Assert.True(structured["stored_locally"]!.GetValue<bool>());
+        Assert.False(structured["submitted_to_github"]!.GetValue<bool>());
+        Assert.Equal("token_not_configured", structured["github_submission_reason"]!.GetValue<string>());
         Assert.Equal(Path.GetFullPath(Path.GetDirectoryName(_dbPath)!), structured["cdidx_dir"]!.GetValue<string>());
     }
 

@@ -158,6 +158,26 @@ public class IndexWatchRunnerTests
     }
 
     [Fact]
+    public void BuildSubRunArgs_MaxSymbolsPerFile_PreservesWatchOverride()
+    {
+        var options = new IndexCommandOptions
+        {
+            ProjectPath = "/repo",
+            Json = true,
+            Watch = true,
+            MaxSymbolsPerFile = 42,
+        };
+        var method = typeof(IndexWatchRunner).GetMethod("BuildSubRunArgs", BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(method);
+        var args = Assert.IsType<List<string>>(method.Invoke(null, [options]));
+
+        var flagIndex = args.IndexOf("--max-symbols-per-file");
+        Assert.True(flagIndex >= 0);
+        Assert.Equal("42", args[flagIndex + 1]);
+    }
+
+    [Fact]
     public void RunCore_CancellationToken_StopsImmediately()
     {
         var projectRoot = CreateTempProject();
