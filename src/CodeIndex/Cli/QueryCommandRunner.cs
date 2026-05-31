@@ -173,6 +173,7 @@ public static class QueryCommandRunner
         "--body",
         "--count",
         "--strict-not-found",
+        "--strict",
         "--no-dedup",
         "--no-visibility-rank",
         "--exact",
@@ -3220,6 +3221,7 @@ public static class QueryCommandRunner
                                 zeroPayload["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult);
                                 if (analysis.ZeroResultReason != null)
                                     zeroPayload["zero_result_reason"] = analysis.ZeroResultReason;
+                                AddImpactFailureJsonFields(zeroPayload, analysis, jsonOptions);
                                 if (analysis.Suggestion != null)
                                     zeroPayload["suggestion"] = analysis.Suggestion;
                                 AddSqlGraphContractJsonFields(zeroPayload, sqlGraphSignal);
@@ -3233,7 +3235,7 @@ public static class QueryCommandRunner
                         WriteImpactResolutionHint(analysis);
                         WriteGraphSupportHint(options.Lang);
                     }
-                    return CommandExitCodes.Success;
+                    return StrictImpactExitCode(options, analysis, CommandExitCodes.Success);
                 }
 
                 if (options.CountOnly)
@@ -3263,6 +3265,7 @@ public static class QueryCommandRunner
                         AddImpactTerminationJsonFields(payload, analysis, jsonOptions);
                         if (analysis.ZeroResultReason != null)
                             payload["zero_result_reason"] = analysis.ZeroResultReason;
+                        AddImpactFailureJsonFields(payload, analysis, jsonOptions);
                         if (analysis.Suggestion != null)
                             payload["suggestion"] = analysis.Suggestion;
                         if (!analysis.GraphTableAvailable)
@@ -3314,6 +3317,7 @@ public static class QueryCommandRunner
                             zeroPayload["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, CliJsonSerializerContextFactory.Create(jsonOptions).ListSymbolResult);
                             if (analysis.ZeroResultReason != null)
                                 zeroPayload["zero_result_reason"] = analysis.ZeroResultReason;
+                            AddImpactFailureJsonFields(zeroPayload, analysis, jsonOptions);
                             if (analysis.Suggestion != null)
                                 zeroPayload["suggestion"] = analysis.Suggestion;
                             AddSqlGraphContractJsonFields(zeroPayload, sqlGraphSignal);
@@ -3330,7 +3334,7 @@ public static class QueryCommandRunner
                     WriteGraphSupportHint(options.Lang);
                     WriteDegradedGraphZeroResult(reader, "callers", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
-                return ZeroResultExitCode(options);
+                return StrictImpactExitCode(options, analysis, ZeroResultExitCode(options));
             }
 
             if (options.CountOnly)
@@ -3397,6 +3401,7 @@ public static class QueryCommandRunner
                     payload["truncated_reason"] = analysis.TruncatedReason;
                 if (analysis.Suggestion != null)
                     payload["suggestion"] = analysis.Suggestion;
+                AddImpactFailureJsonFields(payload, analysis, jsonOptions);
                 AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                 AddImpactOptionWarnings(payload, options);
                 Console.WriteLine(payload.ToJsonString(jsonOptions));
@@ -3445,8 +3450,25 @@ public static class QueryCommandRunner
                 else
                     Console.Error.WriteLine($"\n({confirmedCount} callers across {confirmedFileCount} files, max depth {maxDepth}{truncNote})");
             }
-            return CommandExitCodes.Success;
+            return StrictImpactExitCode(options, analysis, CommandExitCodes.Success);
         });
+    }
+
+    private static void AddImpactFailureJsonFields(JsonObject payload, ImpactAnalysisResult analysis, JsonSerializerOptions jsonOptions)
+    {
+        if (analysis.ImpactFailureChain is { Count: > 0 })
+            payload["impact_failure_chain"] = JsonSerializer.SerializeToNode(analysis.ImpactFailureChain, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        if (analysis.SuggestionType != null)
+            payload["suggestion_type"] = analysis.SuggestionType;
+    }
+
+    private static int StrictImpactExitCode(QueryCommandOptions options, ImpactAnalysisResult analysis, int defaultExitCode)
+    {
+        if (!options.Strict || analysis.ImpactFailureChain is not { Count: > 0 })
+            return defaultExitCode;
+        return analysis.ImpactFailureChain.Any(code => code != "no_callers")
+            ? CommandExitCodes.FeatureUnavailable
+            : defaultExitCode;
     }
 
     private static void AddImpactTerminationJsonFields(JsonObject payload, ImpactAnalysisResult analysis, JsonSerializerOptions jsonOptions)
@@ -4610,6 +4632,7 @@ public static class QueryCommandRunner
         bool limitExplicit = false;
         bool snippetLinesExplicit = false;
         bool maxLineWidthExplicit = false;
+        bool strict = false;
         var rankMode = ReferenceRankMode.Weighted;
         var extraNames = new List<string>();
         bool impactDeprecatedDepthUsed = false;
@@ -4858,6 +4881,9 @@ public static class QueryCommandRunner
                     break;
                 case "--strict-not-found":
                     strictNotFound = true;
+                    break;
+                case "--strict":
+                    strict = true;
                     break;
                 case "--by-bucket":
                     break;
@@ -5277,6 +5303,7 @@ public static class QueryCommandRunner
             IncludeGenerated = includeGenerated,
             CountOnly = countOnly,
             StrictNotFound = strictNotFound,
+            Strict = strict,
             Since = since,
             NoDedup = noDedup,
             NoVisibilityRank = noVisibilityRank,
@@ -7906,6 +7933,7 @@ public sealed class QueryCommandOptions
     public bool IncludeGenerated { get; init; }
     public bool CountOnly { get; init; }
     public bool StrictNotFound { get; init; }
+    public bool Strict { get; init; }
     public DateTime? Since { get; init; }
     public bool NoDedup { get; init; }
     public bool NoVisibilityRank { get; init; }

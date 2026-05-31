@@ -5271,7 +5271,9 @@ public class DbReaderTests : IDisposable
         Assert.Empty(analysis.Callers);
         Assert.Empty(analysis.FileImpacts);
         Assert.Equal("none", analysis.ImpactMode);
-        Assert.Equal("depth_zero", analysis.ZeroResultReason);
+        Assert.Equal("depth_requested_zero", analysis.ZeroResultReason);
+        Assert.Equal(["depth_requested_zero"], analysis.ImpactFailureChain);
+        Assert.Equal("precondition", analysis.SuggestionType);
         Assert.Contains("--max-hops 1", analysis.Suggestion, StringComparison.Ordinal);
     }
 
@@ -9588,6 +9590,8 @@ public class DbReaderTests : IDisposable
         Assert.Equal("@missing", miss.ResolvedName);
         Assert.Equal(0, miss.DefinitionCount);
         Assert.Equal("no_matching_definition", miss.ZeroResultReason);
+        Assert.Equal(["definition_not_found"], miss.ImpactFailureChain);
+        Assert.Equal("resolution", miss.SuggestionType);
     }
 
     [Fact]
@@ -11372,7 +11376,9 @@ public class DbReaderTests : IDisposable
         Assert.False(analysis.Truncated);
         Assert.Null(analysis.TruncatedReason);
         Assert.Equal(ImpactTerminationReasons.Completed, analysis.TerminationReason);
-        Assert.Equal("depth_zero", analysis.ZeroResultReason);
+        Assert.Equal("depth_requested_zero", analysis.ZeroResultReason);
+        Assert.Equal(["depth_requested_zero"], analysis.ImpactFailureChain);
+        Assert.Equal("precondition", analysis.SuggestionType);
         Assert.False(analysis.CycleDetected);
         Assert.Null(analysis.Cycles);
     }

@@ -413,6 +413,10 @@ public class ImpactAnalysisResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ZeroResultReason { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? ImpactFailureChain { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SuggestionType { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Suggestion { get; set; }
 }
 
