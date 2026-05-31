@@ -181,6 +181,36 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_SearchFormatCompactEmitsFileLineOnly_Issue1642()
+    {
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Run","format":"compact"}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var row = Assert.Single(structured["results"]!.AsArray());
+
+        Assert.Equal("compact", structured["format"]!.GetValue<string>());
+        Assert.Equal("src/app.cs", row!["file"]!.GetValue<string>());
+        Assert.Equal(1, row["line"]!.GetValue<int>());
+        Assert.Null(row["snippet"]);
+    }
+
+    [Fact]
+    public void ToolsCall_SearchFormatCountAliasesCountOnly_Issue1642()
+    {
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Run","format":"count"}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.True(structured["count_only"]!.GetValue<bool>());
+        Assert.True(structured["count"]!.GetValue<int>() > 0);
+        Assert.Empty(structured["results"]!.AsArray());
+    }
+
+    [Fact]
     public void ToolsCall_Callers_TruncatedResponseIncludesNextOffsetAndPages()
     {
         InsertIndexedFile(
