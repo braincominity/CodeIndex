@@ -86,6 +86,82 @@ public class QueryCommandRunnerTests
         Assert.Equal(0, options.MaxLineWidth);
     }
 
+    [Theory]
+    [InlineData("count")]
+    [InlineData("compact")]
+    [InlineData("csv")]
+    [InlineData("tsv")]
+    public void ParseArgs_AcceptsLightweightOutputFormats(string format)
+    {
+        var options = QueryCommandRunner.ParseArgs(["RunSearch", "--format", format], jsonDefault: false, allowNamedQuery: true);
+
+        Assert.True(options.Json);
+        Assert.Equal(format, options.OutputFormat);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void RunSearch_FormatCompactEmitsFileLineOnly_Issue1642()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_format_compact");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App { void Run() { Authenticate(); } }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Authenticate", "--db", dbPath, "--format", "compact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            Assert.Equal("src/app.cs", row.GetProperty("file").GetString());
+            Assert.True(row.GetProperty("line").GetInt32() > 0);
+            Assert.False(row.TryGetProperty("snippet", out _));
+            Assert.False(row.TryGetProperty("name", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_FormatCsvEmitsDelimitedRows_Issue1941()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_format_csv");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App { void Run() { Authenticate(); } }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Authenticate", "--db", dbPath, "--format", "csv"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var lines = stdout.Trim().Split(Environment.NewLine);
+            Assert.Equal("file,line,column,label", lines[0]);
+            Assert.Contains("src/app.cs", lines[1]);
+            Assert.Contains("search match: Authenticate", lines[1]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void ParseArgs_UsesNumericDefaultEnvironmentVariables()
     {

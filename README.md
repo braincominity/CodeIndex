@@ -83,7 +83,7 @@ Output controls:
 | ASCII-only terminal output | Use `--ascii`, `CDIDX_ASCII=1`, `NO_UNICODE`, `TERM=dumb`, accessibility env hints, or a non-UTF-8 locale. Spinners use pipe, slash, dash, and backslash frames; progress bars use `#` / `-`; very narrow terminals fall back to percentage-only progress. |
 | Color and terminal capability | `--color auto` emits ANSI only for capable interactive terminals; `TERM=dumb`, `CI=true`, missing Unix terminal hints, `NO_COLOR`, or `CLICOLOR=0` disable ANSI/progress control sequences. `--palette basic|256|truecolor` can override the `COLORTERM` / `TERM` color-depth detection. |
 | UTF-8 JSON pipelines | CLI `--json` output is written as UTF-8 without a BOM and never includes ANSI escape sequences, even when color is forced for human output. |
-| Script-friendly query pipelines | Use `--quiet`, `-q`, `--silent`, or `CDIDX_QUIET=1` to suppress informational stderr text while preserving errors. `--quiet` takes precedence over `--verbose`. |
+| Script-friendly query pipelines | Use `--quiet`, `-q`, `--silent`, or `CDIDX_QUIET=1` to suppress informational stderr text while preserving errors. `--quiet` takes precedence over `--verbose`. Read commands that support `--format` can emit `count`, `compact`, `csv`, or `tsv` output when callers need smaller or table-shaped payloads instead of full excerpts. |
 
 Use `cdidx` when a repository will be searched repeatedly from terminals,
 scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
@@ -111,7 +111,7 @@ See [DISTRIBUTION.md](DISTRIBUTION.md) for the full channel matrix and
 
 ### Validate
 
-Run `cdidx validate [--db <path>] [--json] [--verbose] [--kind <kind>] [--path <glob>]`
+Run `cdidx validate [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--kind <kind>] [--path <glob>]`
 to report indexed file issues such as replacement characters (`U+FFFD`), BOMs,
 NUL bytes, mixed line endings, UTF-16 BOMs, and likely non-UTF8 content.
 Validation findings are reported in the output and do not by themselves make
@@ -132,7 +132,7 @@ downgrading `cdidx`.
 
 | Area | What cdidx provides |
 |---|---|
-| Search surfaces | CLI-first output for humans and machines; full-text, symbol, reference, caller/callee, dependency, map, inspect, and excerpt commands. |
+| Search surfaces | CLI-first output for humans and machines; full-text, symbol, reference, caller/callee, dependency, map, inspect, and excerpt commands. `search`, `definition`, `references`, `callers`, `callees`, `find`, and `validate` support `--format count|compact|csv|tsv|lsp|qf|sarif` for token-budgeted agents, scripts, editors, and CI reports. |
 | Ranking and filters | Public/exported symbol matches rank ahead of protected, internal, and private matches. Use `--no-visibility-rank` for legacy order, and `--visibility` / `--exclude-visibility` with `symbols`, `definition`, `unused`, and `hotspots`. Query defaults can be adjusted with `CDIDX_DEFAULT_LIMIT`, `CDIDX_DEFAULT_SNIPPET_LINES`, and `CDIDX_DEFAULT_MAX_LINE_WIDTH`; explicit CLI flags still win. |
 | Project scoping | `.sln` / `.csproj`-aware <code>--project &lt;name&#124;path&gt;</code> filters for indexing and queries, plus `--solution <path>` when a workspace has multiple solution files. |
 | MCP integration | MCP server support for AI clients such as Claude Code, Cursor, and Windsurf, including tools, indexed-file resources, starter prompts, schema constraints for local argument validation, `mimeType` on text content blocks, logging, a compatibility server-side `notifications/initialized` ready signal on stdio or HTTP `/events` streams, and `Language support:` descriptions sourced from the same registries as `cdidx languages`. Tool schemas reject unknown arguments with `-32602`, advertise `x-stability`, and use snake_case structured JSON keys to match the CLI JSON contract. |
