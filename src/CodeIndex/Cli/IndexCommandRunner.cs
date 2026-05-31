@@ -365,8 +365,16 @@ public static partial class IndexCommandRunner
             && matchesCurrent;
     }
 
-    private static bool IsOutsideProjectRoot(string relativePath) =>
-        relativePath == ".." || relativePath.StartsWith("../", StringComparison.Ordinal);
+    internal static bool IsOutsideProjectRoot(string relativePath)
+    {
+        if (Path.IsPathRooted(relativePath))
+            return true;
+
+        var normalized = OperatingSystem.IsWindows()
+            ? relativePath.Replace('\\', '/')
+            : relativePath;
+        return normalized == ".." || normalized.StartsWith("../", StringComparison.Ordinal);
+    }
 
     private static bool ContainsIgnoreFilePath(IEnumerable<string> paths)
         => paths.Any(FileIndexer.IsIgnoreFilePath);
