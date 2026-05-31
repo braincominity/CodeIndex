@@ -205,12 +205,12 @@ public class DbCommandRunnerTests
             var (dryRunExit, dryRunJson) = RunAndCaptureJson(["prune", "--dry-run", "--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, dryRunExit);
             Assert.True(dryRunJson.GetProperty("dry_run").GetBoolean());
-            Assert.Equal(3, dryRunJson.GetProperty("total").GetInt32());
+            Assert.Equal(4, dryRunJson.GetProperty("total").GetInt32());
 
             var (applyExit, applyJson) = RunAndCaptureJson(["prune", "--apply", "--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, applyExit);
             Assert.False(applyJson.GetProperty("dry_run").GetBoolean());
-            Assert.Equal(3, applyJson.GetProperty("total").GetInt32());
+            Assert.Equal(4, applyJson.GetProperty("total").GetInt32());
 
             var (secondExit, secondJson) = RunAndCaptureJson(["prune", "--dry-run", "--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, secondExit);
@@ -288,6 +288,8 @@ public class DbCommandRunnerTests
         Execute(connection, "INSERT INTO symbols(file_id, kind, name, line) VALUES (9001, 'function', 'Orphan', 1)");
         Execute(connection, "INSERT INTO reference_lines(file_id, line, context) VALUES (9002, 1, 'missing file')");
         Execute(connection, "INSERT INTO symbol_references(file_id, symbol_name, reference_kind, reference_line_id) VALUES (9003, 'Orphan', 'call', 9004)");
+        Execute(connection, "INSERT INTO files(id, path, lang, size, lines, modified, checksum) VALUES (1, 'src/live.cs', 'csharp', 1, 1, '2026-01-01T00:00:00Z', 'live')");
+        Execute(connection, "INSERT INTO symbol_references(file_id, symbol_name, reference_kind, reference_line_id) VALUES (1, 'Live', 'call', 1)");
     }
 
     private static void Execute(SqliteConnection connection, string sql)

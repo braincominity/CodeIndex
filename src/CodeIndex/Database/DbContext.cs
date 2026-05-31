@@ -44,6 +44,7 @@ public class DbContext : IDisposable
 
     internal static Action<string>? OptimizePragmaExecutedForTesting { get; set; }
     internal static Action<string, string>? PlannerStatisticsCommandExecutedForTesting { get; set; }
+    internal static Action<string>? WalCheckpointTruncateExecutedForTesting { get; set; }
 
     public SqliteConnection Connection => _connection;
     public bool IsReadOnly => _isReadOnly;
@@ -372,6 +373,7 @@ public class DbContext : IDisposable
         {
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+            WalCheckpointTruncateExecutedForTesting?.Invoke(_connection.DataSource);
             cmd.ExecuteNonQuery();
             _walCheckpointSucceeded = true;
             return true;
@@ -2457,8 +2459,9 @@ public class DbContext : IDisposable
         // connection teardown の競合を防ぐ。
         _preparedCommands?.Dispose();
         _preparedCommands = null;
+        var hadWriteWork = _hasWriteWork;
         RunOptimizeOnCloseIfNeeded();
-        if (_hasWriteWork)
+        if (hadWriteWork)
             TryCheckpointWalTruncate();
         _connection.Dispose();
     }

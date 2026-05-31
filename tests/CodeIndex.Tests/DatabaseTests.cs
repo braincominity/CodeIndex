@@ -444,6 +444,31 @@ public class DatabaseTests : IDisposable
         Assert.True(_db.WalCheckpointSucceeded);
     }
 
+    [Fact]
+    public void Dispose_AfterWriteWork_AttemptsWalCheckpoint()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_checkpoint_{Guid.NewGuid():N}.db");
+        var checkpointAttempted = false;
+        DbContext.WalCheckpointTruncateExecutedForTesting = _ => checkpointAttempted = true;
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                db.MarkWriteWork();
+            }
+
+            Assert.True(checkpointAttempted);
+        }
+        finally
+        {
+            DbContext.WalCheckpointTruncateExecutedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
     private long UpsertTestFile(string path, string checksum)
         => _writer.UpsertFile(new FileRecord
         {

@@ -304,8 +304,9 @@ public static class DbCommandRunner
             FROM symbol_references sr
             LEFT JOIN files f ON f.id = sr.file_id
             LEFT JOIN reference_lines rl ON rl.id = sr.reference_line_id
+            LEFT JOIN files rlf ON rlf.id = rl.file_id
             WHERE f.id IS NULL
-               OR (sr.reference_line_id IS NOT NULL AND rl.id IS NULL)");
+               OR (sr.reference_line_id IS NOT NULL AND (rl.id IS NULL OR rlf.id IS NULL))");
         var orphanReferenceLines = Count(connection, transaction, @"
             SELECT COUNT(*)
             FROM reference_lines rl
@@ -322,7 +323,11 @@ public static class DbCommandRunner
             Execute(connection, transaction, @"
                 DELETE FROM symbol_references
                 WHERE file_id NOT IN (SELECT id FROM files)
-                   OR (reference_line_id IS NOT NULL AND reference_line_id NOT IN (SELECT id FROM reference_lines))");
+                   OR (reference_line_id IS NOT NULL AND reference_line_id NOT IN (
+                       SELECT rl.id
+                       FROM reference_lines rl
+                       INNER JOIN files f ON f.id = rl.file_id
+                   ))");
             Execute(connection, transaction, "DELETE FROM reference_lines WHERE file_id NOT IN (SELECT id FROM files)");
             Execute(connection, transaction, "DELETE FROM symbols WHERE file_id NOT IN (SELECT id FROM files)");
             transaction!.Commit();
