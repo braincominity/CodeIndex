@@ -3064,6 +3064,67 @@ public partial class McpServer
     }
 
     private JsonNode ExecuteIndex(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
+        => ExecuteIndexAsync(id, args, progressToken).GetAwaiter().GetResult();
+
+    private async Task RefreshClientRootsIfNeededAsync()
+    {
+        if (!_clientRootsStale || !HasClientCapability("roots"))
+            return;
+
+        var result = await SendClientRequestAsync("roots/list", null, _currentRequestToken.Value).ConfigureAwait(false);
+        if (result?["roots"] is not JsonArray roots)
+            return;
+
+        var refreshed = new JsonArray();
+        foreach (var root in roots)
+        {
+            var uri = TryReadStringValue(root?["uri"]) ?? TryReadStringValue(root);
+            if (!string.IsNullOrWhiteSpace(uri))
+                refreshed.Add(uri);
+        }
+        _clientRoots = refreshed;
+        _clientRootsStale = false;
+    }
+
+    private bool IsPathWithinClientRoots(string path)
+    {
+        if (!HasClientCapability("roots"))
+            return true;
+
+        var rootPaths = _clientRoots
+            .Select(root => TryReadStringValue(root))
+            .Select(TryResolveRootPath)
+            .Where(root => !string.IsNullOrWhiteSpace(root))
+            .Cast<string>()
+            .ToArray();
+        if (rootPaths.Length == 0)
+            return false;
+
+        var fullPath = Path.GetFullPath(path);
+        return rootPaths.Any(root => IsPathWithinDirectory(root, fullPath));
+    }
+
+    private static string? TryResolveRootPath(string? root)
+    {
+        if (string.IsNullOrWhiteSpace(root))
+            return null;
+        if (Uri.TryCreate(root, UriKind.Absolute, out var uri))
+        {
+            if (!string.Equals(uri.Scheme, Uri.UriSchemeFile, StringComparison.OrdinalIgnoreCase))
+                return null;
+            return Path.GetFullPath(Uri.UnescapeDataString(uri.LocalPath));
+        }
+        try
+        {
+            return Path.GetFullPath(root);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+    }
+
+    private async Task<JsonNode> ExecuteIndexAsync(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
         if (!TryReadRequiredStringParameter(args, "path", out var path, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
@@ -3092,6 +3153,9 @@ public partial class McpServer
         var cwd = Path.GetFullPath(".");
         if (!IsPathWithinDirectory(cwd, projectPath))
             return CreateToolErrorResponse(id, "Path must be within the current working directory");
+        await RefreshClientRootsIfNeededAsync().ConfigureAwait(false);
+        if (!IsPathWithinClientRoots(projectPath))
+            return CreateToolErrorResponse(id, "Path must be within an MCP client root");
 
         if (!Directory.Exists(projectPath))
             return CreateToolErrorResponse(id, "Directory not found");

@@ -71,6 +71,7 @@ public partial class McpServer : IDisposable
     private volatile bool _running = true;
     private bool _initializedNotificationPending;
     private bool _initializedNotificationSent;
+    private bool _clientRootsStale = true;
     // Per-session DbContext reused across MCP tool calls. Holding the connection open
     // avoids reopening SQLite, reapplying pragmas, and re-registering every SQL function
     // on each invocation (issue #1494).
@@ -493,6 +494,8 @@ public partial class McpServer : IDisposable
                         _currentOutOfBandFrameWriter.Value = transport is IOutOfBandMcpTransport outOfBandTransport
                             ? frameToWrite => outOfBandTransport.WriteOutOfBandFrameAsync(frameToWrite, loopToken).GetAwaiter().GetResult()
                             : null;
+                        _canAwaitClientResponses.Value = transport is IOutOfBandMcpTransport
+                            && (transport is not HttpMcpTransport httpResponseTransport || httpResponseTransport.HasEventStreams);
                         BeginDeferredFrameLogs();
                         response = await ProcessFrameAsync(frame).ConfigureAwait(false);
                     }
@@ -500,6 +503,7 @@ public partial class McpServer : IDisposable
                     {
                         _currentRequestToken.Value = CancellationToken.None;
                         _currentOutOfBandFrameWriter.Value = null;
+                        _canAwaitClientResponses.Value = false;
                         _concurrencyGate.Release();
                     }
 
@@ -1003,6 +1007,10 @@ public partial class McpServer : IDisposable
             writer(request.ToJsonString(_jsonOptions));
             return await pending.Task.ConfigureAwait(false);
         }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
         catch (OperationCanceledException)
         {
             return null;
@@ -1218,6 +1226,12 @@ public partial class McpServer : IDisposable
         // Notifications (no id) don't get a response / 通知（idなし）にはレスポンスなし
         if (method == "notifications/initialized")
             return null;
+
+        if (method == "notifications/roots/list_changed")
+        {
+            _clientRootsStale = true;
+            return null;
+        }
 
         // Graceful shutdown via JSON-RPC notification (#1567). Without this, the only way to
         // stop a long-lived `cdidx mcp` server was to close the transport (stdin EOF / HTTP
@@ -1714,6 +1728,10 @@ public partial class McpServer : IDisposable
                     ["listChanged"] = false
                 },
                 ["logging"] = new JsonObject(),
+                ["roots"] = new JsonObject
+                {
+                    ["listChanged"] = true
+                },
                 ["sampling"] = new JsonObject()
             },
             ["serverInfo"] = new JsonObject
@@ -1765,6 +1783,7 @@ public partial class McpServer : IDisposable
         _clientVersion = null;
         if (initializeParams is not JsonObject obj)
             return;
+        _clientRootsStale = true;
         if (obj["clientInfo"] is not JsonObject info)
             return;
         _clientName = TryReadStringMember(info, "name");
@@ -2324,7 +2343,7 @@ public partial class McpServer : IDisposable
                         "unused_symbols" => ExecuteUnusedSymbols(id, args),
                         "symbol_hotspots" => ExecuteSymbolHotspots(id, args),
                         "ping" => ExecutePing(id),
-                        "index" => ExecuteIndex(id, args, progressToken),
+                        "index" => await ExecuteIndexAsync(id, args, progressToken).ConfigureAwait(false),
                         "backfill_fold" => ExecuteBackfillFold(id, args, progressToken),
                         "suggest_improvement" => await ExecuteSuggestImprovementAsync(id, args).ConfigureAwait(false),
                         _ => CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown tool: {toolName}",

@@ -81,6 +81,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     internal Func<string>? KeepAliveFrameProvider { get; set; }
 
+    internal bool HasEventStreams => !_eventStreams.IsEmpty;
+
     /// <summary>
     /// Resolve a `host:port` listen spec into the corresponding HTTP prefix. Ephemeral ports
     /// (port `0`) are resolved up-front by binding a temporary <see cref="TcpListener"/> so the
@@ -289,7 +291,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     private bool TryHandleOutOfBandFrame(PendingRequest request, string body)
     {
-        if (OutOfBandFrameHandler is null || !IsCancellationNotification(body))
+        if (OutOfBandFrameHandler is null || (!IsCancellationNotification(body) && !IsJsonRpcResponse(body)))
             return false;
 
         var context = request.Context;
@@ -331,6 +333,22 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             var method = obj["method"]?.GetValue<string>();
             return string.Equals(method, "$/cancelRequest", StringComparison.Ordinal)
                 || string.Equals(method, "notifications/cancelled", StringComparison.Ordinal);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsJsonRpcResponse(string body)
+    {
+        try
+        {
+            var node = JsonNode.Parse(body);
+            return node is JsonObject obj
+                && obj.ContainsKey("id")
+                && obj["method"] is null
+                && (obj.ContainsKey("result") || obj.ContainsKey("error"));
         }
         catch
         {
