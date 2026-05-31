@@ -386,7 +386,86 @@ public partial class McpServer
             }
         }
 
+        if (ValidateToolArgumentTypes(toolName, obj) is JsonObject typeError)
+            return typeError;
+
         return null;
+    }
+
+    private static JsonObject? ValidateToolArgumentTypes(string toolName, JsonObject args)
+    {
+        foreach (var property in args)
+        {
+            if (TryGetExpectedJsonType(toolName, property.Key, out var expected)
+                && !MatchesExpectedJsonType(property.Value, expected))
+            {
+                return new JsonObject
+                {
+                    ["message"] = $"Invalid type for argument '{property.Key}' on tool '{toolName}'. Expected {expected}.",
+                    ["tool"] = toolName,
+                    ["parameter"] = property.Key,
+                    ["expected"] = expected,
+                    ["actual"] = DescribeJsonType(property.Value),
+                    ["jsonrpc_invalid_params"] = true,
+                };
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryGetExpectedJsonType(string toolName, string argumentName, out string expected)
+    {
+        if (argumentName is "path" or "project" or "excludePaths" or "names")
+        {
+            expected = string.Empty;
+            return false;
+        }
+
+        expected = argumentName switch
+        {
+            "limit" or "offset" or "snippetLines" or "maxLineWidth" or "before" or "after" or
+                "focusLine" or "focusColumn" or "focusLength" or "startLine" or "endLine" or
+                "maxHops" or "maxDepth" or "depth" or "parallelism" => "integer",
+            "excludeTests" or "includeGenerated" or "rawQuery" or "noDedup" or "exactSubstring" or
+                "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
+                "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or "optimize" => "boolean",
+            "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "path" or "project" or
+                "solution" or "symbol" or "direction" or "groupBy" or "category" or "language" or
+                "description" or "context" or "toolInvocationContext" or "db" => "string",
+            "queries" => "array",
+            _ => string.Empty,
+        };
+
+        if (expected.Length == 0)
+            return false;
+
+        return true;
+    }
+
+    private static bool MatchesExpectedJsonType(JsonNode? node, string expected) => expected switch
+    {
+        "integer" => node is JsonValue value && value.TryGetValue<int>(out _),
+        "boolean" => node is JsonValue value && value.TryGetValue<bool>(out _),
+        "string" => node is JsonValue value && value.TryGetValue<string>(out _),
+        "array" => node is JsonArray,
+        _ => true,
+    };
+
+    private static string DescribeJsonType(JsonNode? node)
+    {
+        if (node is null)
+            return "null";
+        return node.GetValueKind() switch
+        {
+            JsonValueKind.String => "string",
+            JsonValueKind.Number => "number",
+            JsonValueKind.True or JsonValueKind.False => "boolean",
+            JsonValueKind.Array => "array",
+            JsonValueKind.Object => "object",
+            JsonValueKind.Null => "null",
+            _ => "unknown",
+        };
     }
 
     private static bool IsKnownToolName(string toolName) => toolName switch

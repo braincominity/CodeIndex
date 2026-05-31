@@ -12,8 +12,9 @@ public static partial class IndexCommandRunner
     // easter egg や random-spinner は意図的に未公開なので除外する。
     private static readonly string[] AcceptedIndexFlags =
     [
-        "--db", "--data-dir", "--rebuild", "--verbose", "--json", "--dry-run", "--force",
+        "--db", "--data-dir", "--rebuild", "--verbose", "--json", "--quiet", "--dry-run", "--force",
         "--yes", "--watch", "--debounce", "--duration-format", "--max-file-bytes",
+        "--notify",
         "--parallelism", "--memory-trace", "--follow-symlinks",
         "--commits", "--changed-between", "--files", "--solution", "--project",
         "--include-symbol-kind", "--exclude-symbol-kind", "--optimize", "--help",
@@ -40,6 +41,7 @@ public static partial class IndexCommandRunner
         bool memoryTrace = false;
         int? watchDebounceMs = null;
         var durationFormat = DurationOutputFormat.Auto;
+        var notifyMode = ReadCompletionNotificationModeFromEnvironment();
         long? maxFileSizeBytes = ReadMaxFileSizeBytesFromEnvironment();
         var parallelism = ReadIndexParallelismFromEnvironment();
         var symlinkPolicy = FileIndexer.SymlinkPolicy.None;
@@ -136,6 +138,12 @@ public static partial class IndexCommandRunner
                     break;
                 case var option when option.StartsWith("--duration-format=", StringComparison.Ordinal):
                     durationFormat = ParseDurationFormat(option["--duration-format=".Length..], durationFormat);
+                    break;
+                case "--notify" when i + 1 < args.Length:
+                    notifyMode = ParseCompletionNotificationMode(args[++i], notifyMode, ref parseError);
+                    break;
+                case var option when option.StartsWith("--notify=", StringComparison.Ordinal):
+                    notifyMode = ParseCompletionNotificationMode(option["--notify=".Length..], notifyMode, ref parseError);
                     break;
                 case "--max-file-bytes" when i + 1 < args.Length:
                     maxFileSizeBytes = ParseMaxFileBytes(args[++i], maxFileSizeBytes);
@@ -299,6 +307,7 @@ public static partial class IndexCommandRunner
             MemoryTrace = memoryTrace,
             WatchDebounceMs = watchDebounceMs,
             DurationFormat = durationFormat,
+            NotifyMode = notifyMode,
             MaxFileSizeBytes = maxFileSizeBytes,
             Parallelism = parallelism,
             SymlinkPolicy = symlinkPolicy,
@@ -412,6 +421,35 @@ public static partial class IndexCommandRunner
     private static DurationOutputFormat WarnInvalidDurationFormat(string value, DurationOutputFormat fallback)
     {
         Console.Error.WriteLine($"Warning: invalid --duration-format value '{value}' (ignored; use auto, seconds, or hms) / 不正な --duration-format 値 '{value}'（無視。auto, seconds, hms のいずれかを指定）");
+        return fallback;
+    }
+
+    private static CompletionNotificationMode ReadCompletionNotificationModeFromEnvironment()
+    {
+        var value = Environment.GetEnvironmentVariable("CDIDX_NOTIFY");
+        if (string.IsNullOrWhiteSpace(value))
+            return CompletionNotificationMode.Auto;
+
+        string? ignored = null;
+        return ParseCompletionNotificationMode(value, CompletionNotificationMode.Auto, ref ignored);
+    }
+
+    private static CompletionNotificationMode ParseCompletionNotificationMode(string value, CompletionNotificationMode fallback, ref string? parseError)
+    {
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "auto" => CompletionNotificationMode.Auto,
+            "none" => CompletionNotificationMode.None,
+            "bell" => CompletionNotificationMode.Bell,
+            "osc9" => CompletionNotificationMode.Osc9,
+            "desktop" => CompletionNotificationMode.Osc9,
+            _ => WarnInvalidCompletionNotificationMode(value, fallback, ref parseError),
+        };
+    }
+
+    private static CompletionNotificationMode WarnInvalidCompletionNotificationMode(string value, CompletionNotificationMode fallback, ref string? parseError)
+    {
+        parseError ??= $"invalid --notify value '{value}': expected auto, bell, osc9, desktop, or none";
         return fallback;
     }
 
