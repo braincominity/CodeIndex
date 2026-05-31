@@ -18308,6 +18308,7 @@ public class ReferenceExtractorTests
             filter Select-Valid {
                 process { if ($_.IsValid) { return $_ } }
             }
+            IF ($true) { RETURN "ok" }
 
             function Process-Items {
                 param([array]$Items)
@@ -18341,7 +18342,7 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Invoke-RestMethod" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "ForEach-Object" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "Where-Object" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName is "function" or "filter" or "if" or "return");
+        Assert.DoesNotContain(references, r => r.SymbolName is "function" or "filter" or "if" or "IF" or "return" or "RETURN");
         Assert.DoesNotContain(references, r => r.SymbolName == "lt");
     }
 
