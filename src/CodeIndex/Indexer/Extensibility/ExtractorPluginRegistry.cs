@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Text.RegularExpressions;
 
 namespace CodeIndex.Indexer.Extensibility;
 
@@ -87,6 +88,16 @@ public static class ExtractorPluginRegistry
         }
     }
 
+    internal static void ReloadForTests()
+    {
+        lock (Gate)
+        {
+            SymbolExtractors.Clear();
+            ReferenceExtractors.Clear();
+            pluginsLoaded = false;
+        }
+    }
+
     private static void EnsurePluginsLoaded()
     {
         if (Volatile.Read(ref pluginsLoaded))
@@ -99,6 +110,8 @@ public static class ExtractorPluginRegistry
 
             foreach (var pluginPath in EnumeratePluginAssemblyPaths())
                 TryLoadPlugin(pluginPath);
+            foreach (var patternPath in EnumeratePatternConfigPaths())
+                TryLoadPatternConfig(patternPath);
 
             pluginsLoaded = true;
         }
@@ -123,6 +136,83 @@ public static class ExtractorPluginRegistry
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (!string.IsNullOrWhiteSpace(home))
             yield return Path.Combine(home, ".cdidx", "plugins");
+    }
+
+    private static IEnumerable<string> EnumeratePatternConfigPaths()
+    {
+        foreach (var directory in EnumeratePatternDirectories())
+        {
+            if (!Directory.Exists(directory))
+                continue;
+
+            foreach (var path in Directory.EnumerateFiles(directory, "*.yaml", SearchOption.TopDirectoryOnly))
+                yield return path;
+            foreach (var path in Directory.EnumerateFiles(directory, "*.yml", SearchOption.TopDirectoryOnly))
+                yield return path;
+        }
+    }
+
+    private static IEnumerable<string> EnumeratePatternDirectories()
+    {
+        yield return Path.Combine(Environment.CurrentDirectory, ".cdidx", "patterns");
+
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(home))
+            yield return Path.Combine(home, ".config", "cdidx", "patterns");
+    }
+
+    private static void TryLoadPatternConfig(string path)
+    {
+        try
+        {
+            var language = string.Empty;
+            var extensions = new List<string>();
+            var patterns = new List<ConfiguredSymbolExtractor.PatternRule>();
+            string? pendingKind = null;
+            foreach (var rawLine in File.ReadLines(path))
+            {
+                var line = rawLine.Trim();
+                if (line.Length == 0 || line.StartsWith('#'))
+                    continue;
+
+                if (TryReadScalar(line, "language", out var value))
+                {
+                    language = NormalizePluginLanguage(value);
+                }
+                else if (TryReadScalar(line.TrimStart('-').Trim(), "extension", out value))
+                {
+                    extensions.Add(NormalizePluginExtension(value) ?? value);
+                }
+                else if (TryReadScalar(line.TrimStart('-').Trim(), "kind", out value))
+                {
+                    pendingKind = value.Trim();
+                }
+                else if (TryReadScalar(line.TrimStart('-').Trim(), "regex", out value) && pendingKind != null)
+                {
+                    patterns.Add(new ConfiguredSymbolExtractor.PatternRule(
+                        pendingKind,
+                        new Regex(value, RegexOptions.Compiled | RegexOptions.CultureInvariant)));
+                    pendingKind = null;
+                }
+            }
+
+            if (language.Length > 0 && patterns.Count > 0)
+                Register(new ConfiguredSymbolExtractor(language, extensions, patterns));
+        }
+        catch
+        {
+            // Pattern sidecars are best-effort like binary plugins.
+        }
+    }
+
+    private static bool TryReadScalar(string line, string key, out string value)
+    {
+        value = string.Empty;
+        var prefix = key + ":";
+        if (!line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return false;
+        value = line[prefix.Length..].Trim().Trim('"', '\'').Replace("\\\\", "\\", StringComparison.Ordinal);
+        return value.Length > 0;
     }
 
     private static void TryLoadPlugin(string pluginPath)

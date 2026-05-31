@@ -45,6 +45,39 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_ConfiguredPatternYaml_HandlesOutOfTreeLanguage()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_patterns_{Guid.NewGuid():N}");
+            var originalDirectory = Environment.CurrentDirectory;
+            try
+            {
+                Directory.CreateDirectory(Path.Combine(tempDir, ".cdidx", "patterns"));
+                File.WriteAllText(
+                    Path.Combine(tempDir, ".cdidx", "patterns", "toydsl.yaml"),
+                    "language: \"toydsl\"\nextensions:\n  - extension: \".toy\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+                Environment.CurrentDirectory = tempDir;
+                ExtractorPluginRegistry.ReloadForTests();
+
+                var symbols = SymbolExtractor.Extract(2, "toydsl", "entity Widget", "demo.toy");
+
+                var symbol = Assert.Single(symbols);
+                Assert.Equal("class", symbol.Kind);
+                Assert.Equal("Widget", symbol.Name);
+                Assert.Equal("toydsl", FileIndexer.DetectLanguage("demo.toy"));
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                Environment.CurrentDirectory = originalDirectory;
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void Extract_CsharpFileScopedNamespace_DoesNotEnterMemberHeaderMerge()
     {
         const string content = """
