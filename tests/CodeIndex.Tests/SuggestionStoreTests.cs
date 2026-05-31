@@ -93,7 +93,7 @@ public class SuggestionStoreTests : IDisposable
     public void TryAdd_StampsCreatedAtFromInjectedClockWhenPersisted()
     {
         var clock = new ManualTimeProvider(new DateTimeOffset(2030, 2, 3, 4, 5, 6, TimeSpan.Zero));
-        var store = new SuggestionStore(_tempDir, timeProvider: clock);
+        var store = new SuggestionStore(_tempDir, null, clock);
         var record = MakeRecord("symbol_extraction", "csharp", "Missing record support");
         record.CreatedAt = new DateTime(1999, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
@@ -158,7 +158,7 @@ public class SuggestionStoreTests : IDisposable
     public void TryAddAndSubmit_UsesInjectedClockForRetryAndSubmissionTimestamps()
     {
         var clock = new ManualTimeProvider(new DateTimeOffset(2031, 3, 4, 5, 6, 7, TimeSpan.Zero));
-        var store = new SuggestionStore(_tempDir, timeProvider: clock);
+        var store = new SuggestionStore(_tempDir, null, clock);
         var record = MakeRecord("other", null, "submit me");
 
         var result = store.TryAddAndSubmit(record, _ => SuggestionStore.SubmitAttemptResult.Success("https://github.com/Widthdom/CodeIndex/issues/1"));
@@ -488,7 +488,7 @@ public class SuggestionStoreTests : IDisposable
     public void LoadSince_ReturnsSuggestionsAtOrAfterThreshold()
     {
         var clock = new ManualTimeProvider(ManualTimeProvider.FixtureUtcNow);
-        var store = new SuggestionStore(_tempDir, timeProvider: clock);
+        var store = new SuggestionStore(_tempDir, null, clock);
         var older = MakeRecord("other", null, "Older suggestion");
         var boundary = MakeRecord("other", null, "Boundary suggestion");
         var newer = MakeRecord("other", null, "Newer suggestion");

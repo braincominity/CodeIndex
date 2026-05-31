@@ -82,14 +82,19 @@ public class SuggestionStore
     /// Database filename without extension (optional, defaults to "codeindex").
     /// 拡張子なしのデータベースファイル名（任意、デフォルトは "codeindex"）。
     /// </param>
-    public SuggestionStore(string cdidxDir, string? dbName = null, TimeProvider? timeProvider = null)
+    public SuggestionStore(string cdidxDir, string? dbName = null)
+        : this(cdidxDir, dbName, TimeProvider.System)
+    {
+    }
+
+    internal SuggestionStore(string cdidxDir, string? dbName, TimeProvider timeProvider)
     {
         // Derive a safe store filename from the DB identity.
         // DB固有の安全なストアファイル名を導出する。
         var safeName = string.IsNullOrWhiteSpace(dbName) ? "codeindex" : dbName;
         _filePath = Path.Combine(cdidxDir, $"suggestions-{safeName}.json");
         _lockPath = Path.Combine(cdidxDir, $"suggestions-{safeName}.lock");
-        _timeProvider = timeProvider ?? TimeProvider.System;
+        _timeProvider = timeProvider;
     }
 
     /// <summary>
