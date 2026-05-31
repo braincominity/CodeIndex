@@ -373,6 +373,7 @@ public static partial class IndexCommandRunner
         string? currentHeadCommit,
         string? priorSymbolKindFilterSignature,
         string? initialCwd,
+        bool showNextSteps,
         CancellationToken cancellationToken)
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
@@ -1313,6 +1314,11 @@ public static partial class IndexCommandRunner
         }
         warnings += AddPostExtractionHookWarnings(postExtractionHooks, warningList);
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
+        var languageCounts = files
+            .Select(static file => FileIndexer.TryDetectLanguage(file))
+            .Where(static detection => detection.Status == FileIndexer.FileProbeStatus.Supported && detection.Language != null)
+            .GroupBy(static detection => detection.Language!, StringComparer.Ordinal)
+            .ToDictionary(static group => group.Key, static group => group.Count(), StringComparer.Ordinal);
         var signalReader = new DbReader(writer.Connection);
         var sqlGraphContractSignalAfter = signalReader.GetSqlGraphContractSignal(lang: null);
         var hotspotFamilySignalAfter = signalReader.GetHotspotFamilySignal(lang: null);
