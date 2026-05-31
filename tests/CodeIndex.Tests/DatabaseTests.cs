@@ -2429,6 +2429,45 @@ public class DatabaseTests : IDisposable
         Assert.Equal("0600", DbContext.GetUnixFileModeString(_dbPath));
     }
 
+    [Fact]
+    public void SetMeta_InsideWriterTransaction_RollsBackWithDependentRows_Issue1753()
+    {
+        using (var transaction = _writer.BeginTransaction())
+        {
+            _writer.SetMeta("schema_phase", "new");
+            _writer.UpsertFile(new FileRecord
+            {
+                Path = "src/partial.cs",
+                Lang = "csharp",
+                Size = 12,
+                Lines = 1,
+                Modified = new DateTime(2026, 5, 31, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = "partial",
+            });
+        }
+
+        Assert.Null(ReadMeta("schema_phase"));
+        Assert.False(_writer.HasFileAtPath("src/partial.cs"));
+    }
+
+    [Fact]
+    public void SetMeta_InsideRawSqlTransaction_UsesSavepointWithoutNestedBegin_Issue1753()
+    {
+        ExecuteNonQuery(_db.Connection, "BEGIN IMMEDIATE");
+        try
+        {
+            _writer.SetMeta("raw_phase", "new");
+            ExecuteNonQuery(_db.Connection, "ROLLBACK");
+        }
+        catch
+        {
+            ExecuteNonQuery(_db.Connection, "ROLLBACK");
+            throw;
+        }
+
+        Assert.Null(ReadMeta("raw_phase"));
+    }
+
     private void DeleteDbPath()
     {
         DeleteDbFiles(_dbPath);
@@ -2475,6 +2514,14 @@ public class DatabaseTests : IDisposable
 
     private long ExecuteScalarLong(string sql)
         => ExecuteScalarLong(_db.Connection, sql);
+
+    private string? ReadMeta(string key)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
+        cmd.Parameters.AddWithValue("@key", key);
+        return cmd.ExecuteScalar() as string;
+    }
 
     private static long ExecuteScalarLong(SqliteConnection connection, string sql)
     {

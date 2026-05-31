@@ -157,6 +157,16 @@ Incremental refreshes that mutate `fts_chunks` increment `codeindex_meta.fts_inc
 
 Successful writer sessions attempt `PRAGMA wal_checkpoint(TRUNCATE)` before closing a writable `DbContext`, so large WAL files are reclaimed after index, backfill, optimize, prune, and other DB-writing commands. `cdidx db schema [--json]` dumps `sqlite_master` entries plus `PRAGMA user_version` for schema inspection, and `cdidx db prune --dry-run|--apply [--json]` counts or deletes orphaned `symbol_references`, `reference_lines`, and `symbols` rows before running `PRAGMA optimize` on apply.
 
+### Metadata invariants
+
+`DbWriter.SetMeta` participates in the caller's writer transaction when one is
+active. When no writer transaction is active, it wraps the metadata UPSERT in a
+SQLite savepoint so standalone stamps still have a commit boundary and calls
+from raw SQL transactions do not attempt a nested `BEGIN`. Dependent metadata
+and row rewrites that must succeed or fail together should be placed inside the
+same `DbWriter.BeginTransaction()` scope; do not stamp readiness or schema
+trust metadata before the dependent rows are written.
+
 ### Extending the indexer
 
 Out-of-tree post-extraction hooks can implement `CodeIndex.Indexer.Hooks.IPostExtractionHook` in a `.dll` placed under `~/.config/cdidx/hooks/` (or the directory named by `CDIDX_HOOKS_DIR`). Hook assemblies are discovered in path order. Each concrete hook type is instantiated with a public parameterless constructor, then called after built-in symbol extraction and again after built-in reference extraction, before rows are persisted. Hooks receive a `FileContext` plus mutable `IList<SymbolRecord>` / `IList<ReferenceRecord>` values, so they can annotate extracted records, add synthetic symbols, or add domain-specific references.

@@ -3025,7 +3025,30 @@ public class DbWriter
         if (!HasMetaTable())
             return;
 
+        if (!IsInTransaction())
+        {
+            Execute("SAVEPOINT set_meta_atomic");
+            try
+            {
+                SetMetaCore(key, value);
+                Execute("RELEASE SAVEPOINT set_meta_atomic");
+            }
+            catch
+            {
+                try { Execute("ROLLBACK TO SAVEPOINT set_meta_atomic"); } catch (SqliteException) { /* best effort */ }
+                try { Execute("RELEASE SAVEPOINT set_meta_atomic"); } catch (SqliteException) { /* best effort */ }
+                throw;
+            }
+            return;
+        }
+
+        SetMetaCore(key, value);
+    }
+
+    private void SetMetaCore(string key, string? value)
+    {
         using var cmd = _conn.CreateCommand();
+        cmd.Transaction = _activeTransaction;
         cmd.CommandText = @"INSERT INTO codeindex_meta (key, value) VALUES (@key, @value)
                             ON CONFLICT(key) DO UPDATE SET value = excluded.value";
         cmd.Parameters.AddWithValue("@key", key);
