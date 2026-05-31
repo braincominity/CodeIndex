@@ -39,6 +39,13 @@ failures from pass-on-retry flakes. For test suite structure, shared helpers,
 state-isolation rules, timeout diagnostics, and test-writing conventions, see
 [TESTING_GUIDE.md](TESTING_GUIDE.md).
 
+The weekly `Mutation testing` workflow runs Stryker.NET against
+`src/CodeIndex/Database/DbWriter.cs` using `stryker-config.json`. Keep this
+scope focused on transaction, savepoint, rollback, and batch-write behavior
+unless the runtime budget is intentionally expanded. The mutation score gates
+are high 75, low 70, and break 65 so changes that weaken rollback or savepoint
+coverage fail outside the regular PR test path.
+
 ## CI / Artifact Distribution
 
 Query commands accept `--read-only` (alias `--immutable`) to open an existing
@@ -149,6 +156,16 @@ Scoped `--files` / `--commits` refreshes reuse the same path filter as full scan
 Incremental refreshes that mutate `fts_chunks` increment `codeindex_meta.fts_incremental_writes_since_optimize`. When the counter reaches `DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold`, the update path runs `INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')`, resets the counter, and stamps `fts_last_optimized_at`. Users can run the same maintenance directly with `cdidx optimize --db <path>` or `cdidx index <projectPath> --optimize`; this may briefly hold the writer lock on large indexes.
 
 Successful writer sessions attempt `PRAGMA wal_checkpoint(TRUNCATE)` before closing a writable `DbContext`, so large WAL files are reclaimed after index, backfill, optimize, prune, and other DB-writing commands. `cdidx db schema [--json]` dumps `sqlite_master` entries plus `PRAGMA user_version` for schema inspection, and `cdidx db prune --dry-run|--apply [--json]` counts or deletes orphaned `symbol_references`, `reference_lines`, and `symbols` rows before running `PRAGMA optimize` on apply.
+
+### Metadata invariants
+
+`DbWriter.SetMeta` participates in the caller's writer transaction when one is
+active. When no writer transaction is active, it wraps the metadata UPSERT in a
+SQLite savepoint so standalone stamps still have a commit boundary and calls
+from raw SQL transactions do not attempt a nested `BEGIN`. Dependent metadata
+and row rewrites that must succeed or fail together should be placed inside the
+same `DbWriter.BeginTransaction()` scope; do not stamp readiness or schema
+trust metadata before the dependent rows are written.
 
 ### Extending the indexer
 
