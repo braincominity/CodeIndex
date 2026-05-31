@@ -2258,6 +2258,9 @@ public class FileIndexer
             }
             catch (UnauthorizedAccessException)
             {
+                if (!File.Exists(prefixedIgnorePath))
+                    throw;
+
                 errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName} due to permissions.", ScanIssueSeverity.Warning));
             }
             catch (FileNotFoundException)
@@ -2340,6 +2343,9 @@ public class FileIndexer
         }
         catch (UnauthorizedAccessException)
         {
+            if (!File.Exists(prefixedIgnorePath))
+                throw;
+
             errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName} due to permissions.", ScanIssueSeverity.Warning));
             return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: true);
         }

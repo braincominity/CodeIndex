@@ -4257,15 +4257,16 @@ public class IndexCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "secret.py", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("partial", json.GetProperty("status").GetString());
-            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.Equal(".gitignore", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.Equal(".gitignore", json.GetProperty("warnings")[0].GetProperty("file").GetString());
 
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
-            Assert.DoesNotContain("secret.py", indexedPaths);
+            Assert.Contains("secret.py", indexedPaths);
         }
         finally
         {
@@ -4311,15 +4312,16 @@ public class IndexCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", commitId, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
-            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
-            Assert.False(json.GetProperty("fold_ready").GetBoolean());
-            Assert.Equal(".gitignore", json.GetProperty("errors")[0].GetProperty("file").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(".gitignore", json.GetProperty("warnings")[0].GetProperty("file").GetString());
 
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.Contains("secret.py", indexedPaths);
@@ -4327,9 +4329,9 @@ public class IndexCommandRunnerTests
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
-            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
-            Assert.False(statusJson.GetProperty("issues_table_available").GetBoolean());
-            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+            Assert.True(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(statusJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(statusJson.GetProperty("fold_ready").GetBoolean());
         }
         finally
         {
@@ -4366,21 +4368,22 @@ public class IndexCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "keep.py", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.Equal(".gitignore", json.GetProperty("errors")[0].GetProperty("file").GetString());
-            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
-            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
-            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.Equal(".gitignore", json.GetProperty("warnings")[0].GetProperty("file").GetString());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
 
             var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
-            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
-            Assert.False(statusJson.GetProperty("issues_table_available").GetBoolean());
-            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+            Assert.True(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(statusJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(statusJson.GetProperty("fold_ready").GetBoolean());
         }
         finally
         {
@@ -4417,22 +4420,23 @@ public class IndexCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "a.cs", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.Equal(".gitignore", json.GetProperty("errors")[0].GetProperty("file").GetString());
-            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
-            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
-            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.Equal(".gitignore", json.GetProperty("warnings")[0].GetProperty("file").GetString());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
             Assert.Contains("a.cs", ReadIndexedPaths(dbPath));
 
             var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
-            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
-            Assert.False(statusJson.GetProperty("issues_table_available").GetBoolean());
-            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+            Assert.True(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(statusJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(statusJson.GetProperty("fold_ready").GetBoolean());
         }
         finally
         {
@@ -4471,21 +4475,22 @@ public class IndexCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "keep.py", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("partial", json.GetProperty("status").GetString());
-            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.Equal(".gitignore", json.GetProperty("errors")[0].GetProperty("file").GetString());
-            Assert.False(json.GetProperty("graph_table_available").GetBoolean());
-            Assert.False(json.GetProperty("issues_table_available").GetBoolean());
-            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.Equal(".gitignore", json.GetProperty("warnings")[0].GetProperty("file").GetString());
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
 
             var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
-            Assert.False(statusJson.GetProperty("graph_table_available").GetBoolean());
-            Assert.False(statusJson.GetProperty("issues_table_available").GetBoolean());
-            Assert.False(statusJson.GetProperty("fold_ready").GetBoolean());
+            Assert.True(statusJson.GetProperty("graph_table_available").GetBoolean());
+            Assert.True(statusJson.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(statusJson.GetProperty("fold_ready").GetBoolean());
         }
         finally
         {
