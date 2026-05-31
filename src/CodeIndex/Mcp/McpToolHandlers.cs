@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -163,6 +164,59 @@ public partial class McpServer
             payload["exact_zero_hint"]!["relaxed_count"] = exactZeroHint.RelaxedCount.Value;
     }
 
+    private static void AddRecoveryHint(JsonObject payload, string reason, string suggestedAction, string? tool = null, JsonObject? args = null)
+    {
+        var hint = new JsonObject
+        {
+            ["reason"] = reason,
+            ["suggested_action"] = suggestedAction,
+        };
+        if (tool != null)
+            hint["tool"] = tool;
+        if (args != null)
+            hint["args"] = args;
+        payload["recovery_hint"] = hint;
+    }
+
+    private static void AddSymbolRecoveryHint(JsonObject payload, string query, string toolName, string? lang, string? kind, JsonNode? path)
+    {
+        var args = new JsonObject
+        {
+            ["query"] = query,
+            ["limit"] = 5,
+        };
+        if (lang != null)
+            args["lang"] = lang;
+        if (kind != null)
+            args["kind"] = kind;
+        if (path != null)
+            args["path"] = path.DeepClone();
+
+        AddRecoveryHint(
+            payload,
+            "no_results",
+            $"{toolName} returned no rows; check whether the symbol is indexed, whether filters are too narrow, or whether a broader symbol lookup finds a nearby name.",
+            "symbols",
+            args);
+    }
+
+    private static void AddNextStepSuggestion(JsonObject payload, string tool, JsonObject args)
+    {
+        payload["next_step_suggestion"] = new JsonObject
+        {
+            ["tool"] = tool,
+            ["args"] = args,
+        };
+    }
+
+    private static JsonObject BuildExcerptArgs(string path, int startLine, int endLine)
+        => new()
+        {
+            ["path"] = path,
+            ["startLine"] = startLine,
+            ["endLine"] = endLine,
+        };
+
     /// <summary>
     /// Clamp limit to a safe range to prevent resource exhaustion.
     /// リソース枯渇を防ぐためlimitを安全な範囲にクランプ。
@@ -171,6 +225,38 @@ public partial class McpServer
 
     private static int ReadOffset(JsonNode? args)
         => Math.Max(0, args?["offset"]?.GetValue<int>() ?? 0);
+
+    private static string ReadResponseFormat(JsonNode? args)
+        => args?["format"]?.GetValue<string>()?.Trim().ToLowerInvariant() ?? "full";
+
+    private static string? ValidateResponseFormat(string format)
+        => format is "full" or "count" or "compact"
+            ? null
+            : "format must be one of full, count, compact";
+
+    private static void ApplyCompactResults<T>(
+        JsonObject payload,
+        IEnumerable<T> results,
+        Func<T, string> pathSelector,
+        Func<T, int> lineSelector,
+        Func<T, int?>? columnSelector = null)
+    {
+        var compact = new JsonArray();
+        foreach (var result in results)
+        {
+            var row = new JsonObject
+            {
+                ["file"] = pathSelector(result),
+                ["line"] = lineSelector(result),
+            };
+            var column = columnSelector?.Invoke(result);
+            if (column.HasValue)
+                row["column"] = column.Value;
+            compact.Add(row);
+        }
+        payload["results"] = compact;
+        payload["format"] = "compact";
+    }
 
     private static bool AddLimitMetadata<T>(JsonObject payload, List<T> results, int limit, int offset = 0, bool includePagination = false)
     {
@@ -315,13 +401,13 @@ public partial class McpServer
 
     private static IReadOnlySet<string> GetAllowedToolArguments(string toolName) => toolName switch
     {
-        "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "limit", "lang", "snippetLines", "maxLineWidth", "rawQuery", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "exact", "prefix", "countOnly", "project", "solution" },
-        "definition" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "includeBody", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "project", "solution" },
-        "references" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "offset", "maxLineWidth", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "project", "solution" },
-        "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "project", "solution" },
+        "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "limit", "lang", "snippetLines", "maxLineWidth", "rawQuery", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "exact", "prefix", "countOnly", "format", "project", "solution" },
+        "definition" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "includeBody", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "format", "project", "solution" },
+        "references" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "offset", "maxLineWidth", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
+        "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
         "symbols" => new HashSet<string>(StringComparer.Ordinal) { "query", "names", "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "project", "solution" },
         "files" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since" },
-        "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "maxLineWidth", "exact" },
+        "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "snippetLines", "focusLine", "focusColumn", "maxLineWidth", "exact", "regex" },
         "excerpt" => new HashSet<string>(StringComparer.Ordinal) { "path", "startLine", "endLine", "before", "after", "focusLine", "focusColumn", "focusLength", "maxLineWidth" },
         "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "project", "solution" },
         "analyze_symbol" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "includeBody", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "maxLineWidth", "project", "solution" },
@@ -333,6 +419,7 @@ public partial class McpServer
         "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "project", "solution" },
         "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
         "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "db", "rebuild", "parallelism", "files", "commits", "changedBetween", "dryRun", "optimize" },
+        "backfill_fold" => new HashSet<string>(StringComparer.Ordinal) { "dry_run", "dryRun", "force" },
         "suggest_improvement" => new HashSet<string>(StringComparer.Ordinal) { "category", "language", "description", "context", "toolInvocationContext" },
         _ => new HashSet<string>(StringComparer.Ordinal),
     };
@@ -747,7 +834,10 @@ public partial class McpServer
                 return CreateToolErrorResponse(id, $"Invalid 'since' timestamp: '{sinceStr}'. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
         }
         var deduplicate = !(args?["noDedup"]?.GetValue<bool>() ?? false);
-        var countOnly = ReadCountOnly(args);
+        var format = ReadResponseFormat(args);
+        if (ValidateResponseFormat(format) is string formatError)
+            return CreateToolErrorResponse(id, formatError);
+        var countOnly = ReadCountOnly(args) || format == "count";
         if (!TryResolveSearchExactArgument(args, out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
         var prefix = args?["prefix"]?.GetValue<bool>() ?? false;
@@ -783,6 +873,12 @@ public partial class McpServer
                     ["results"] = new JsonArray()
                 };
                 AddResultEnvelope(payload, 0, 0, truncated: false);
+                AddRecoveryHint(
+                    payload,
+                    "no_results",
+                    "search returned no rows; try removing lang/path filters, using prefix for token-prefix matches, or using exactSubstring for literal punctuation or emoji.",
+                    "search",
+                    new JsonObject { ["query"] = query, ["limit"] = 5 });
                 AddFreshnessHint(payload, reader);
                 return CreateToolResult(id, "No results found.", payload);
             }
@@ -798,6 +894,13 @@ public partial class McpServer
                 ["results"] = ToJsonArray(SearchSnippetFormatter.ToCompactResults(results, query, snippetLines, exact, maxLineWidth))
             };
             AddResultEnvelope(structured, results.Count, truncated ? null : results.Count, truncated);
+            if (format == "compact")
+                ApplyCompactResults(structured, results, result => result.Path, result => result.StartLine);
+            var topResult = results[0];
+            AddNextStepSuggestion(
+                structured,
+                "excerpt",
+                BuildExcerptArgs(topResult.Path, topResult.StartLine, topResult.EndLine));
             // Include top file paths in summary for quick AI orientation
             // AIが素早く位置把握できるよう、サマリにトップファイルパスを含める
             var topPaths = results.Select(r => r.Path).Distinct().Take(3);
@@ -939,11 +1042,27 @@ public partial class McpServer
             since = parsedDefSince;
         if (!TryResolveNameExactArgument(args, "definition", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
+        var format = ReadResponseFormat(args);
+        if (ValidateResponseFormat(format) is string formatError)
+            return CreateToolErrorResponse(id, formatError);
 
         return WithDbReader(id, args, reader =>
         {
             var results = reader.GetDefinitions(query, FetchLimitForEnvelope(limit), kind, lang, includeBody, pathPatterns, excludePaths, excludeTests, since, exact);
             var truncated = TrimToRequestedLimit(results, limit);
+            if (format == "count")
+            {
+                var total = truncated
+                    ? reader.CountDefinitionsTotal(query, kind, lang, pathPatterns, excludePaths, excludeTests, since, exact).Count
+                    : results.Count;
+                var countPayload = BuildCountOnlyPayload(total, total, truncated: false, results, result => result.Path);
+                countPayload["query"] = query;
+                countPayload["kind"] = kind;
+                countPayload["lang"] = lang;
+                countPayload["path"] = PathEcho(pathPatterns);
+                countPayload["excludeTests"] = excludeTests;
+                return CreateToolResult(id, $"Counted {ConsoleUi.Counted(total, "definition")}.", countPayload);
+            }
             if (lspCompatible)
                 QueryCommandRunner.AttachLspLocations(results);
             var exactSignal = reader.GetDefinitionExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, since);
@@ -965,11 +1084,14 @@ public partial class McpServer
                 ["results"] = ToJsonArray(results)
             };
             AddResultEnvelope(payload, results.Count, truncated ? null : results.Count, truncated);
+            if (format == "compact")
+                ApplyCompactResults(payload, results, result => result.Path, result => result.StartLine);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
+                AddSymbolRecoveryHint(payload, query, "definition", lang, kind, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
@@ -997,7 +1119,10 @@ public partial class McpServer
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
-        var countOnly = ReadCountOnly(args);
+        var format = ReadResponseFormat(args);
+        if (ValidateResponseFormat(format) is string formatError)
+            return CreateToolErrorResponse(id, formatError);
+        var countOnly = ReadCountOnly(args) || format == "count";
         if (!TryResolveNameExactArgument(args, "references", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
 
@@ -1053,13 +1178,24 @@ public partial class McpServer
                 ["results"] = ToJsonArray(results)
             };
             AddPaginatedResultEnvelope(payload, results.Count, total, truncated, offset);
+            if (format == "compact")
+                ApplyCompactResults(payload, results, result => result.Path, result => result.Line, result => result.Column);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
+                AddSymbolRecoveryHint(payload, query, "references", lang, kind, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
+            }
+            else
+            {
+                var topReference = results[0];
+                AddNextStepSuggestion(
+                    payload,
+                    "excerpt",
+                    BuildExcerptArgs(topReference.Path, topReference.Line, topReference.Line));
             }
             return CreateToolResult(id,
                 BuildGraphSummary("reference", "references", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason),
@@ -1089,7 +1225,10 @@ public partial class McpServer
             return CreateToolErrorResponse(id, exactError!);
         if (!TryReadReferenceRankMode(args, out var rankMode, out var rankModeError))
             return CreateToolErrorResponse(id, rankModeError!);
-        var countOnly = ReadCountOnly(args);
+        var format = ReadResponseFormat(args);
+        if (ValidateResponseFormat(format) is string formatError)
+            return CreateToolErrorResponse(id, formatError);
+        var countOnly = ReadCountOnly(args) || format == "count";
 
         return WithDbReader(id, args, reader =>
         {
@@ -1140,6 +1279,8 @@ public partial class McpServer
                 ["results"] = ToJsonArray(results)
             };
             AddPaginatedResultEnvelope(payload, results.Count, total, truncated, offset);
+            if (format == "compact")
+                ApplyCompactResults(payload, results, result => result.Path, result => result.FirstLine);
             payload["aggregate_truncated"] = results.Any(result => result.AggregateTruncated);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
@@ -1147,6 +1288,7 @@ public partial class McpServer
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
+                AddSymbolRecoveryHint(payload, query, "callers", lang, kind, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
@@ -1177,7 +1319,10 @@ public partial class McpServer
             return CreateToolErrorResponse(id, exactError!);
         if (!TryReadReferenceRankMode(args, out var rankMode, out var rankModeError))
             return CreateToolErrorResponse(id, rankModeError!);
-        var countOnly = ReadCountOnly(args);
+        var format = ReadResponseFormat(args);
+        if (ValidateResponseFormat(format) is string formatError)
+            return CreateToolErrorResponse(id, formatError);
+        var countOnly = ReadCountOnly(args) || format == "count";
 
         return WithDbReader(id, args, reader =>
         {
@@ -1228,6 +1373,8 @@ public partial class McpServer
                 ["results"] = ToJsonArray(results)
             };
             AddPaginatedResultEnvelope(payload, results.Count, total, truncated, offset);
+            if (format == "compact")
+                ApplyCompactResults(payload, results, result => result.Path, result => result.FirstLine);
             payload["aggregate_truncated"] = results.Any(result => result.AggregateTruncated);
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
@@ -1235,6 +1382,7 @@ public partial class McpServer
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
+                AddSymbolRecoveryHint(payload, query, "callees", lang, kind, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
@@ -1710,14 +1858,15 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "endLine must be greater than or equal to startLine");
 
         var beforeValue = args?["before"]?.GetValue<int>();
-        if (beforeValue.HasValue && (beforeValue.Value < 0 || beforeValue.Value > MaxContextLines))
+        if (beforeValue.HasValue && beforeValue.Value < 0)
             return CreateToolErrorResponse(id, $"before must be in [0, {MaxContextLines}]");
-        var before = beforeValue ?? 0;
+        var before = ClampContextLines(beforeValue ?? 0);
 
         var afterValue = args?["after"]?.GetValue<int>();
-        if (afterValue.HasValue && (afterValue.Value < 0 || afterValue.Value > MaxContextLines))
+        if (afterValue.HasValue && afterValue.Value < 0)
             return CreateToolErrorResponse(id, $"after must be in [0, {MaxContextLines}]");
-        var after = afterValue ?? 0;
+        var after = ClampContextLines(afterValue ?? 0);
+        var contextTruncated = beforeValue > MaxContextLines || afterValue > MaxContextLines;
 
         var focusLine = args?["focusLine"]?.GetValue<int>();
         var focusColumn = args?["focusColumn"]?.GetValue<int>();
@@ -1777,17 +1926,30 @@ public partial class McpServer
                     ["path"] = path,
                     ["count"] = 0
                 };
+                AddRecoveryHint(
+                    emptyPayload,
+                    "file_or_range_not_indexed",
+                    "excerpt found no indexed content for the requested range; verify the path with files or outline, then retry with an indexed line range.",
+                    "outline",
+                    new JsonObject { ["path"] = path });
                 AddFreshnessHint(emptyPayload, reader);
                 return CreateToolResult(id, "No excerpt found.", emptyPayload);
             }
 
             var payload = JsonSerializer.SerializeToNode(excerpt, _jsonOptions)!.AsObject();
+            payload["before"] = before;
+            payload["after"] = after;
+            payload["contextTruncated"] = contextTruncated;
             payload["maxLineWidth"] = maxLineWidth;
             if (focusLine.HasValue)
                 payload["focusLine"] = focusLine.Value;
             if (focusColumn.HasValue)
                 payload["focusColumn"] = focusColumn.Value;
             payload["focusLength"] = focusLength;
+            AddNextStepSuggestion(
+                payload,
+                "outline",
+                new JsonObject { ["path"] = excerpt.Path });
             return CreateToolResult(id, "Excerpt returned.", payload);
         });
     }
@@ -1812,19 +1974,46 @@ public partial class McpServer
         var beforeValue = args?["before"]?.GetValue<int>();
         if (beforeValue.HasValue && beforeValue.Value < 0)
             return CreateToolErrorResponse(id, "before must be greater than or equal to 0");
-        var before = beforeValue ?? 0;
+        var before = ClampContextLines(beforeValue ?? 0);
 
         var afterValue = args?["after"]?.GetValue<int>();
         if (afterValue.HasValue && afterValue.Value < 0)
             return CreateToolErrorResponse(id, "after must be greater than or equal to 0");
-        var after = afterValue ?? 0;
+        var after = ClampContextLines(afterValue ?? 0);
+        var contextTruncated = beforeValue > MaxContextLines || afterValue > MaxContextLines;
+        var snippetLinesValue = args?["snippetLines"]?.GetValue<int>();
+        if (snippetLinesValue.HasValue && (snippetLinesValue.Value <= 0 || snippetLinesValue.Value > SearchSnippetFormatter.MaxSnippetLines))
+            return CreateToolErrorResponse(id, $"snippetLines must be in [1, {SearchSnippetFormatter.MaxSnippetLines}]");
+        if (snippetLinesValue.HasValue)
+        {
+            var surroundingLines = snippetLinesValue.Value - 1;
+            if (!beforeValue.HasValue)
+                before = surroundingLines / 2;
+            if (!afterValue.HasValue)
+                after = surroundingLines - before;
+        }
+        var focusLine = args?["focusLine"]?.GetValue<int>();
+        if (focusLine.HasValue && focusLine.Value <= 0)
+            return CreateToolErrorResponse(id, "focusLine must be greater than or equal to 1");
+        var focusColumn = args?["focusColumn"]?.GetValue<int>();
+        if (focusColumn.HasValue && focusColumn.Value <= 0)
+            return CreateToolErrorResponse(id, "focusColumn must be greater than or equal to 1");
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var exact = args?["exact"]?.GetValue<bool>() ?? false;
+        var regex = args?["regex"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, args, reader =>
         {
-            var results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth);
+            List<FileFindResult> results;
+            try
+            {
+                results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth, focusLine, focusColumn, regex);
+            }
+            catch (Exception ex) when (regex && (ex is ArgumentException || ex is RegexMatchTimeoutException))
+            {
+                return CreateToolErrorResponse(id, $"invalid regular expression: {ex.Message}");
+            }
             var structured = new JsonObject
             {
                 ["query"] = query,
@@ -1832,12 +2021,20 @@ public partial class McpServer
                 ["excludeTests"] = excludeTests,
                 ["before"] = before,
                 ["after"] = after,
+                ["contextTruncated"] = contextTruncated,
                 ["maxLineWidth"] = maxLineWidth,
                 ["exact"] = exact,
+                ["regex"] = regex,
                 ["count"] = results.Count,
                 ["fileCount"] = results.Select(r => r.Path).Distinct().Count(),
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions),
             };
+            if (snippetLinesValue.HasValue)
+                structured["snippetLines"] = snippetLinesValue.Value;
+            if (focusLine.HasValue)
+                structured["focusLine"] = focusLine.Value;
+            if (focusColumn.HasValue)
+                structured["focusColumn"] = focusColumn.Value;
             if (results.Count == 0)
             {
                 AddFreshnessHint(structured, reader);
@@ -1847,6 +2044,11 @@ public partial class McpServer
             var fileCount = structured["fileCount"]!.GetValue<int>();
             return CreateToolResult(id, $"Found {ConsoleUi.Counted(results.Count, "in-file match", "in-file matches")} across {ConsoleUi.Counted(fileCount, "file")}.", structured);
         });
+    }
+
+    private static int ClampContextLines(int value)
+    {
+        return Math.Min(value, MaxContextLines);
     }
 
     private JsonNode ExecuteBatchQuery(JsonNode? id, JsonNode? args)
@@ -2518,6 +2720,7 @@ public partial class McpServer
 
             if (count == 0)
             {
+                AddSymbolRecoveryHint(payload, query, "impact_analysis", lang, null, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
                 var graphReason = ReferenceExtractor.BuildGraphSupportReason(lang, lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null);
                 if (graphReason != null)
@@ -2650,7 +2853,15 @@ public partial class McpServer
                 summary += " Warning: cross-file hotspot family grouping is degraded, so results may be conservative until the next successful reindex.";
             }
             if (visibleCount == 0)
+            {
+                AddRecoveryHint(
+                    payload,
+                    "no_results",
+                    "symbol_hotspots returned no rows; verify that graph references are indexed and loosen kind/lang/path filters.",
+                    "status",
+                    new JsonObject());
                 AddFreshnessHint(payload, reader);
+            }
             return CreateToolResult(id, summary, payload);
         });
     }
@@ -2707,7 +2918,15 @@ public partial class McpServer
                 summary += " Warning: symbol_references table is missing in this index; zero-result unused output is degraded, not authoritative.";
             }
             if (results.Count == 0)
+            {
+                AddRecoveryHint(
+                    payload,
+                    "no_results",
+                    "unused_symbols returned no rows; verify graph readiness and loosen kind/lang/path filters before treating this as authoritative.",
+                    "status",
+                    new JsonObject());
                 AddFreshnessHint(payload, reader);
+            }
             return CreateToolResult(id, summary, payload);
         });
     }
@@ -2717,7 +2936,7 @@ public partial class McpServer
         var payload = new JsonObject
         {
             ["version"] = _version,
-            ["timestamp"] = DateTime.UtcNow.ToString("O"),
+            ["timestamp"] = GetUtcNow().ToString("O"),
             ["db_path"] = _dbPath,
             ["db_exists"] = File.Exists(LongPath.EnsureWindowsPrefix(_dbPath)),
         };
@@ -3148,7 +3367,7 @@ public partial class McpServer
             {
                 var headBranch = GitHelper.TryGetHeadBranch(projectPath);
                 var timestamp = currentHeadCommit != null
-                    ? DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture)
+                    ? GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture)
                     : null;
                 writer.SetMeta(DbContext.IndexedHeadShaMetaKey, currentHeadCommit);
                 writer.SetMeta(DbContext.IndexedHeadBranchMetaKey, headBranch);
@@ -3250,7 +3469,7 @@ public partial class McpServer
 
     private sealed record IndexFileFailure(string Path, string Stage, string ExceptionType, string Message);
 
-    private JsonNode ExecuteBackfillFold(JsonNode? id, JsonNode? progressToken = null)
+    private JsonNode ExecuteBackfillFold(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
         if (!DbContext.TryValidateExistingCodeIndexDb(_dbPath, out var validationMessage, out var isNotFound))
         {
@@ -3272,38 +3491,75 @@ public partial class McpServer
             MarkSharedDbMigrated();
             var writer = new DbWriter(db);
             var userVersionBefore = db.GetUserVersion();
+            var foldReadyBefore = (userVersionBefore & DbContext.FoldReadyFlag) != 0;
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
             var storedFoldVersion = db.GetMetaString("fold_key_version");
             var storedFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
-            var rewriteAll = storedFoldVersion != currentFoldVersion
-                || storedFoldFingerprint != currentFoldFingerprint;
-            EmitProgressNotification(progressToken, 0, null, "Backfilling folded-name keys.");
-            var (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
-            EmitProgressNotification(progressToken, symbols + symbolReferences, null, "Verifying folded-name keys.");
-            // MarkFoldReady wraps its own re-verification in BEGIN IMMEDIATE, so a concurrent
-            // writer cannot insert NULL-folded rows between the verify and the stamp. Issue #1535.
-            // MarkFoldReady は BEGIN IMMEDIATE 内で再検証するため、concurrent writer による
-            // NULL 行差し込みで fold_ready が嘘になるのを防ぐ。Issue #1535。
-            var verified = writer.MarkFoldReady();
-            if (!verified)
-                return CreateToolErrorResponse(id, "Folded-name backfill verification failed: some rows still have NULL folded values. Re-run backfill_fold.");
+            var foldMetadataCurrentBefore = storedFoldVersion == currentFoldVersion
+                && storedFoldFingerprint == currentFoldFingerprint;
+            foldReadyBefore = foldReadyBefore && foldMetadataCurrentBefore;
+            var dryRun = args?["dry_run"]?.GetValue<bool>() ?? args?["dryRun"]?.GetValue<bool>() ?? false;
+            var force = args?["force"]?.GetValue<bool>() ?? false;
+            var rewriteAll = force
+                || !foldMetadataCurrentBefore;
+            var symbols = 0;
+            var symbolReferences = 0;
+            var verified = false;
+            var userVersionAfter = userVersionBefore;
 
-            var userVersionAfter = db.GetUserVersion();
-            EmitProgressNotification(progressToken, symbols + symbolReferences, symbols + symbolReferences, "Folded-name backfill complete.");
+            if (dryRun)
+            {
+                (symbols, symbolReferences) = writer.CountBackfillFoldedColumns(rewriteAll);
+            }
+            else
+            {
+                EmitProgressNotification(progressToken, 0, null, "Backfilling folded-name keys.");
+                using var transaction = writer.BeginTransaction();
+                (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
+                EmitProgressNotification(progressToken, symbols + symbolReferences, null, "Verifying folded-name keys.");
+                // Verify and stamp in the same transaction as the row rewrite so crash recovery
+                // never leaves current fold metadata without a matching FoldReady stamp.
+                // 行の再生成と同じ transaction で検証・stamp し、metadata だけが先に残らないようにする。
+                verified = writer.MarkFoldReady();
+                if (!verified)
+                    return CreateToolErrorResponse(id, "Folded-name backfill verification failed: some rows still have NULL folded values. Re-run backfill_fold.");
+
+                transaction.Commit();
+                userVersionAfter = db.GetUserVersion();
+                EmitProgressNotification(progressToken, symbols + symbolReferences, symbols + symbolReferences, "Folded-name backfill complete.");
+            }
+
+            var foldMetadataCurrentAfter = dryRun
+                ? foldMetadataCurrentBefore
+                : true;
+            var foldReadyAfter = (userVersionAfter & DbContext.FoldReadyFlag) != 0
+                && foldMetadataCurrentAfter;
+            var wasAlreadyComplete = foldReadyBefore && !rewriteAll && symbols == 0 && symbolReferences == 0;
 
             var payload = new JsonObject
             {
                 ["symbols"] = symbols,
                 ["symbol_references"] = symbolReferences,
                 ["rewrite_all"] = rewriteAll,
+                ["dry_run"] = dryRun,
+                ["force"] = force,
+                ["was_already_complete"] = wasAlreadyComplete,
+                ["fold_ready_before"] = foldReadyBefore,
+                ["fold_ready_after"] = foldReadyAfter,
                 ["verified"] = verified,
                 ["user_version_before"] = userVersionBefore,
                 ["user_version_after"] = userVersionAfter,
-                ["fold_ready"] = true,
+                ["fold_ready"] = foldReadyAfter,
+                ["fold_key_version_before"] = storedFoldVersion,
+                ["fold_key_version_after"] = dryRun ? storedFoldVersion : currentFoldVersion,
+                ["fold_key_fingerprint_before"] = storedFoldFingerprint,
+                ["fold_key_fingerprint_after"] = dryRun ? storedFoldFingerprint : currentFoldFingerprint,
             };
 
-            var summary = rewriteAll
+            var summary = dryRun
+                ? "Folded-name backfill preview complete."
+                : rewriteAll
                 ? "Folded-name keys refreshed and FoldReady stamped."
                 : "Missing folded-name keys backfilled and FoldReady stamped.";
             return CreateToolResult(id, summary, payload);
@@ -3402,7 +3658,7 @@ public partial class McpServer
         // Derive DB identity for scoped suggestion storage.
         // スコープ付き提案蓄積のため DB identity を導出。
         var dbName = Path.GetFileNameWithoutExtension(_dbPath);
-        var store = new SuggestionStore(cdidxDir, dbName);
+        var store = new SuggestionStore(cdidxDir, dbName, _timeProvider);
         var record = new SuggestionRecord
         {
             Category = category,
@@ -3410,7 +3666,6 @@ public partial class McpServer
             Description = description,
             Context = context,
             Hash = hash,
-            CreatedAt = DateTime.UtcNow,
             CreatedByAgent = ResolveSuggestionAgent(),
             SessionId = _sessionId,
             ClientVersion = _version,

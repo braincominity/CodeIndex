@@ -86,6 +86,82 @@ public class QueryCommandRunnerTests
         Assert.Equal(0, options.MaxLineWidth);
     }
 
+    [Theory]
+    [InlineData("count")]
+    [InlineData("compact")]
+    [InlineData("csv")]
+    [InlineData("tsv")]
+    public void ParseArgs_AcceptsLightweightOutputFormats(string format)
+    {
+        var options = QueryCommandRunner.ParseArgs(["RunSearch", "--format", format], jsonDefault: false, allowNamedQuery: true);
+
+        Assert.True(options.Json);
+        Assert.Equal(format, options.OutputFormat);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void RunSearch_FormatCompactEmitsFileLineOnly_Issue1642()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_format_compact");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App { void Run() { Authenticate(); } }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Authenticate", "--db", dbPath, "--format", "compact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var row = Assert.Single(document.RootElement.EnumerateArray());
+            Assert.Equal("src/app.cs", row.GetProperty("file").GetString());
+            Assert.True(row.GetProperty("line").GetInt32() > 0);
+            Assert.False(row.TryGetProperty("snippet", out _));
+            Assert.False(row.TryGetProperty("name", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_FormatCsvEmitsDelimitedRows_Issue1941()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_format_csv");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "public class App { void Run() { Authenticate(); } }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Authenticate", "--db", dbPath, "--format", "csv"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var lines = stdout.Trim().Split(Environment.NewLine);
+            Assert.Equal("file,line,column,label", lines[0]);
+            Assert.Contains("src/app.cs", lines[1]);
+            Assert.Contains("search match: Authenticate", lines[1]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void ParseArgs_UsesNumericDefaultEnvironmentVariables()
     {
@@ -29053,6 +29129,114 @@ jobs:
             Assert.Equal(4, json.GetProperty("end_line").GetInt32());
             Assert.Contains("void Guard()", json.GetProperty("snippet").GetString());
             Assert.Contains("void Next()", json.GetProperty("snippet").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_SnippetLinesControlsMatchContext()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_snippet_lines");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Auth.cs",
+                "csharp",
+                "line one\nline two\nvoid Guard() {}\nline four\nline five\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["Guard", "--db", dbPath, "--path", "src/Auth.cs", "--snippet-lines", "5"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("line one", stdout);
+            Assert.Contains("line five", stdout);
+            Assert.Contains("1 matches in 1 file", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_FocusLineAndColumnRestrictMatch()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_focus");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Auth.cs",
+                "csharp",
+                "target here\nno match\nother target\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["target", "--db", dbPath, "--path", "src/Auth.cs", "--focus-line", "3", "--focus-column", "8"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("src/Auth.cs:3:7", stdout);
+            Assert.DoesNotContain("src/Auth.cs:1:1", stdout);
+            Assert.Contains("1 matches in 1 file", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_RegexMatchesAnchors()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_regex");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Auth.cs", "csharp", "alpha\nGuard()\nnot Guard()\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["^Guard", "--regex", "--db", dbPath, "--path", "src/Auth.cs"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("src/Auth.cs:2:1", stdout);
+            Assert.DoesNotContain("src/Auth.cs:3:5", stdout);
+            Assert.Contains("1 matches in 1 file", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_CountOnlyRegexAndFocusUseSameMatchingSemantics()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_count_regex_focus");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Auth.cs", "csharp", "Guard()\nnot Guard()\nGuardAgain()\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["^Guard", "--regex", "--db", dbPath, "--path", "src/Auth.cs", "--focus-line", "3", "--focus-column", "5", "--json", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+            Assert.Equal(1, json.GetProperty("file_count").GetInt32());
         }
         finally
         {
