@@ -4647,6 +4647,20 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ValidateContent_OversizeFtsToken_EmitsFtsTokenTooLongIssue()
+    {
+        var token = new string('x', CodeIndex.Database.DbReader.FtsUnicode61MaxTokenLength + 1);
+        var content = "ok\nconst value = " + token + ";\n";
+        var raw = System.Text.Encoding.UTF8.GetBytes(content);
+
+        var issues = FileIndexer.ValidateContent("generated.js", raw, content);
+
+        var issue = Assert.Single(issues, i => i.Kind == "fts_token_too_long");
+        Assert.Equal(2, issue.Line);
+        Assert.Contains("not searchable through FTS", issue.Message);
+    }
+
+    [Fact]
     public void SymbolExtractor_Extract_OversizeLine_ReturnsEmpty()
     {
         // SymbolExtractor must mirror the ChunkSplitter oversize-line skip so

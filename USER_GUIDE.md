@@ -749,6 +749,11 @@ cdidx search "--open-reports" --path README.md --count  # quoted literal that st
 cdidx search --query "--path" --path README.md          # search for an option-looking literal
 ```
 
+Search normalizes literal FTS queries to Unicode NFC before matching. If every
+literal token exceeds SQLite FTS5 unicode61's 1000-character token cap,
+zero-result JSON includes `query_degraded_reason` and `tokens_dropped`. Index
+validation reports long unbroken FTS tokens as `fts_token_too_long`.
+
 ### Debugging queries
 
 Add `--verbose` to any query command (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `excerpt`, `map`, `inspect`, `outline`, `status`, `validate`, `deps`, `impact`, `unused`, or `hotspots`) to print query diagnostics to stderr without changing normal stdout:
@@ -2782,6 +2787,11 @@ cdidx search "Foo.Bar" --lang csharp --exact-substring  # Java/Kotlin/C# の exa
 cdidx search "--open-reports" --path README.md --count  # `--` で始まる引用済みリテラル
 cdidx search --query "--path" --path README.md          # オプションに見えるリテラルを検索
 ```
+
+literal FTS クエリは照合前に Unicode NFC へ正規化されます。すべての literal
+token が SQLite FTS5 unicode61 の 1000 文字 token 上限を超える場合、0 件
+JSON には `query_degraded_reason` と `tokens_dropped` が含まれます。index
+validation は長い連続 FTS token を `fts_token_too_long` として報告します。
 
 ### クエリのデバッグ
 
