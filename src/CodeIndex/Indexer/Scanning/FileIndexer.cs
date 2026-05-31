@@ -3221,6 +3221,17 @@ public class FileIndexer
     {
         var issues = new List<FileIssue>();
 
+        if (IsGitLfsPointer(rawBytes))
+        {
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "lfs_pointer_skipped",
+                Line = 1,
+                Message = "Git LFS pointer file skipped; fetch LFS objects to index real file content",
+            });
+        }
+
         // UTF-16 BOM-detected files are decoded as UTF-16 in BuildRecordWithRawBytes, so the
         // raw-byte heuristics for `bom` / `null_byte` / `mixed_line_endings` would all misfire
         // (every UTF-16 LE character ASCII point looks like a NUL byte; CRLF appears as 0D 00

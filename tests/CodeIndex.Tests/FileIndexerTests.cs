@@ -4196,6 +4196,63 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void BuildRecord_ChecksumUsesCanonicalContentAfterLineLeadingBomStrip()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var plainPath = Path.Combine(tempDir, "plain.cs");
+            var bomPath = Path.Combine(tempDir, "bom.cs");
+            File.WriteAllText(plainPath, "class Plain\n{\n}\n");
+            File.WriteAllText(bomPath, "\uFEFFclass Plain\n\uFEFF{\n}\n");
+
+            var indexer = new FileIndexer(tempDir);
+            var (plainRecord, plainContent, _) = indexer.BuildRecord(plainPath);
+            var (bomRecord, bomContent, _) = indexer.BuildRecord(bomPath);
+
+            Assert.Equal(plainContent, bomContent);
+            Assert.Equal(plainRecord.Checksum, bomRecord.Checksum);
+            Assert.Equal(plainRecord.Lines, bomRecord.Lines);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecord_GitLfsPointerIndexesEmptyBodyAndValidationIssue()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "asset.cs");
+            var pointer = """
+                version https://git-lfs.github.com/spec/v1
+                oid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+                size 12345
+                """;
+            File.WriteAllText(filePath, pointer);
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath);
+            var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+
+            Assert.Equal(string.Empty, content);
+            Assert.Equal(0, record.Lines);
+            var issue = Assert.Single(issues, i => i.Kind == "lfs_pointer_skipped");
+            Assert.Equal("asset.cs", issue.Path);
+            Assert.Equal(1, issue.Line);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void BuildRecord_ThrowsFileTooLargeSkippedExceptionForOversizedFile()
     {
         // Files exceeding the default cap should carry structured skip metadata.

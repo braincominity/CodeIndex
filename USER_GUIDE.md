@@ -341,9 +341,10 @@ cdidx validate --json --path legacy/
 
 `validate` reports indexed files that are likely to produce misleading snippets
 or symbol names: U+FFFD replacement characters, UTF-16 BOMs, null bytes, mixed or
-CR-only line endings, and likely non-UTF-8 content. Treat failures as source
-encoding or repository hygiene work; after fixing files, rerun `cdidx index .`
-and then `cdidx validate` again.
+CR-only line endings, likely non-UTF-8 content, and Git LFS pointer placeholders.
+LFS pointers are recorded as `lfs_pointer_skipped` and their placeholder body is
+not indexed; run `git lfs pull` and then `cdidx index .` to index the real file
+content.
 
 ### Find potentially unused symbols
 
@@ -2351,8 +2352,9 @@ cdidx validate --json --path legacy/
 
 `validate` は、snippet や symbol name を誤らせやすい indexed file を報告します。
 対象は U+FFFD replacement character、UTF-16 BOM、null byte、mixed / CR-only line
-ending、likely non-UTF-8 content などです。失敗は source encoding または repository
-hygiene の問題として扱い、修正後に `cdidx index .`、続いて `cdidx validate` を再実行してください。
+ending、likely non-UTF-8 content、Git LFS pointer placeholder などです。LFS pointer
+は `lfs_pointer_skipped` として記録され、placeholder 本文は index されません。
+実体を index するには `git lfs pull` の後に `cdidx index .` を再実行してください。
 
 ### 未使用の可能性がある symbols を探す
 
