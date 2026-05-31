@@ -1325,6 +1325,7 @@ public static partial class IndexCommandRunner
                     FilesScanned = files.Count,
                     FilesSkipped = skipped,
                     FilesPurged = purged,
+                    DanglingSymlinksSkipped = scanResult.DanglingSymlinks.Count,
                     Warnings = warnings,
                     Errors = errors,
                     SymbolsDroppedByKindFilter = symbolsDroppedByKindFilter,
@@ -1370,6 +1371,7 @@ public static partial class IndexCommandRunner
             Console.WriteLine(ConsoleUi.FormatSummaryLine("Symbols", $"{totalSymbols:N0}", indent: "  "));
             Console.WriteLine(ConsoleUi.FormatSummaryLine("Refs", $"{totalReferences:N0}", indent: "  "));
             if (skipped > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Skipped", $"{skipped:N0} (unchanged)", indent: "  "));
+            if (scanResult.DanglingSymlinks.Count > 0) Console.WriteLine(ConsoleUi.FormatSummaryLine("Dangling symlinks", $"{scanResult.DanglingSymlinks.Count:N0} skipped", indent: "  "));
             if (options.Verbose && scanResult.UnknownExtensionFiles.Count > 0)
             {
                 Console.WriteLine($"  Unknown extension files: {scanResult.UnknownExtensionFiles.Count:N0}");
