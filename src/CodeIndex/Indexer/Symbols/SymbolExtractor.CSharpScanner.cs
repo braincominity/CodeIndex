@@ -1798,6 +1798,14 @@ public static partial class SymbolExtractor
 
         var isPropertyHeaderPrefix = CSharpPropertyHeaderPrefixRegex.IsMatch(matchLine);
         var isMethodHeaderPrefix = CSharpMethodHeaderPrefixRegex.IsMatch(matchLine);
+        if (!isPropertyHeaderPrefix
+            && isMethodHeaderPrefix
+            && matchLine.IndexOf('(') >= 0
+            && (matchLine.IndexOf('{') >= 0 || matchLine.IndexOf(';') >= 0))
+        {
+            return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
+        }
+
         if (string.IsNullOrWhiteSpace(matchLine)
             || (!isPropertyHeaderPrefix && !isMethodHeaderPrefix)
             || HasCSharpPropertyAccessorStart(matchLine)
@@ -1928,6 +1936,7 @@ public static partial class SymbolExtractor
             || trimmed.StartsWith("using ", StringComparison.Ordinal)
             || trimmed.StartsWith("global using ", StringComparison.Ordinal)
             || trimmed.StartsWith("extern alias ", StringComparison.Ordinal)
+            || trimmed.StartsWith("var ", StringComparison.Ordinal)
             || trimmed.StartsWith("//", StringComparison.Ordinal);
     }
 
@@ -1962,6 +1971,12 @@ public static partial class SymbolExtractor
                     openBraceLineIndex,
                     openBraceExclusiveEndColumn);
             }
+
+            if (accessorProbeStatus == CSharpAccessorProbeStatus.Rejected
+                && CSharpConfirmedMethodPrefixRegex.IsMatch(normalizedCombined))
+            {
+                return new CSharpPropertyMatchCandidate(normalizedCombined, currentLineIndex, currentLineIndex);
+            }
         }
 
         for (int i = currentLineIndex + 1; i < csharpMatchLines.Length; i++)
@@ -1983,6 +1998,14 @@ public static partial class SymbolExtractor
                     openBraceExclusiveEndColumn.Value,
                     i);
                 accessorProbeStatus = ClassifyCSharpAccessorProbe(accessorProbeBuilder.ToString());
+                if (accessorProbeStatus == CSharpAccessorProbeStatus.Rejected
+                    && CSharpConfirmedMethodPrefixRegex.IsMatch(CollapseCSharpGenericTypeWhitespace(builder.ToString())))
+                {
+                    return new CSharpPropertyMatchCandidate(
+                        CollapseCSharpGenericTypeWhitespace(builder.ToString()),
+                        i,
+                        i);
+                }
             }
             else if (accessorProbeBuilder != null
                 && accessorProbeStatus == CSharpAccessorProbeStatus.Pending)
