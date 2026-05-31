@@ -8849,6 +8849,8 @@ public class IndexCommandRunnerTests
         {
             RunGit(workDir, "config", "user.name", "CodeIndex Tests");
             RunGit(workDir, "config", "user.email", "tests@codeindex.local");
+            RunGit(workDir, "config", "commit.gpgsign", "false");
+            RunGit(workDir, "config", "tag.gpgsign", "false");
         }
     }
 

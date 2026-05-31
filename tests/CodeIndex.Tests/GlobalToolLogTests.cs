@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Cli;
 
@@ -117,6 +118,52 @@ public class GlobalToolLogTests
         }
     }
 
+    [Fact]
+    public void TryStart_ErrorMirrorIgnoresDisposedOriginalConsoleWriter()
+    {
+        var logRoot = Path.Combine(Path.GetTempPath(), $"cdidx_global_log_disposed_{Guid.NewGuid():N}");
+        var originalError = Console.Error;
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+                "CDIDX_DISABLE_PERSISTENT_LOG",
+                "CDIDX_GLOBAL_TOOL_LOG_DIR");
+            env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+            env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logRoot);
+
+            using var session = GlobalToolLog.TryStartForTesting(
+                ["status"],
+                "test",
+                afterWriterCreated: () => Console.SetError(new ThrowingTextWriter()));
+
+            var exception = Record.Exception(() => Console.Error.WriteLine("mirrored error"));
+
+            Assert.NotNull(session);
+            Assert.Null(exception);
+        }
+        finally
+        {
+            Console.SetError(originalError);
+            if (Directory.Exists(logRoot))
+                Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
     private static void ThrowForGlobalToolLogTest() =>
         throw new InvalidOperationException("global log stack trace test");
+
+    private sealed class ThrowingTextWriter : TextWriter
+    {
+        public override Encoding Encoding => Encoding.UTF8;
+
+        public override void Flush() => throw new ObjectDisposedException(nameof(ThrowingTextWriter));
+
+        public override void Write(char value) => throw new ObjectDisposedException(nameof(ThrowingTextWriter));
+
+        public override void Write(string? value) => throw new ObjectDisposedException(nameof(ThrowingTextWriter));
+
+        public override void WriteLine(string? value) => throw new ObjectDisposedException(nameof(ThrowingTextWriter));
+    }
 }

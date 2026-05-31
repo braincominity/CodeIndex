@@ -699,6 +699,8 @@ public class GitHelperTests : IDisposable
         RunGit(repoDir, "init");
         RunGit(repoDir, "config", "user.name", "CodeIndex Tests");
         RunGit(repoDir, "config", "user.email", "tests@example.com");
+        RunGit(repoDir, "config", "commit.gpgsign", "false");
+        RunGit(repoDir, "config", "tag.gpgsign", "false");
 
         return repoDir;
     }

@@ -21,6 +21,8 @@ internal static class TestProjectHelper
         RunGit(projectRoot, "init");
         RunGit(projectRoot, "config", "user.name", "CodeIndex Tests");
         RunGit(projectRoot, "config", "user.email", "tests@codeindex.local");
+        RunGit(projectRoot, "config", "commit.gpgsign", "false");
+        RunGit(projectRoot, "config", "tag.gpgsign", "false");
 
         var excludePath = Path.Combine(projectRoot, ".git", "info", "exclude");
         Directory.CreateDirectory(Path.GetDirectoryName(excludePath)!);
