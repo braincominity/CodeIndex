@@ -753,6 +753,16 @@ public partial class DbReader : IDisposable
                 WHERE f.lang = @lang
                   AND s.name IS NOT NULL
                   AND s.family_key IS NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM symbols s2
+                      JOIN files f2 ON f2.id = s2.file_id
+                      WHERE f2.lang = f.lang
+                        AND s2.name = s.name
+                        AND s2.kind = s.kind
+                        AND COALESCE(s2.container_qualified_name, '') = COALESCE(s.container_qualified_name, '')
+                        AND s2.family_key IS NOT NULL
+                  )
                 LIMIT 1)";
         cmd.Parameters.AddWithValue("@lang", lang);
         var raw = cmd.ExecuteScalar();
