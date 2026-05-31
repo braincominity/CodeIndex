@@ -54,6 +54,15 @@ cdidx search AuthService --db /artifacts/codeindex.db --immutable
 Mutating commands such as `index`, `backfill-fold`, `optimize`, and `vacuum`
 require writable storage and reject read-only database opens.
 
+For CI jobs that want to publish a reusable index artifact, run
+`cdidx export codeindex.cdidx.zip` after indexing and upload that archive. A
+consumer can run `cdidx import codeindex.cdidx.zip --db <path>` before query
+commands. Use `--prune-paths` on import when the archive comes from another
+checkout and the restored DB should advertise the current workspace root. The
+archive contains `manifest.json` plus `codeindex.db`; import validates the
+embedded SQLite file as a CodeIndex database before replacing the destination
+DB.
+
 ## Filesystem Permissions
 
 On POSIX filesystems, cdidx creates `.cdidx/` with mode `0700` and applies mode

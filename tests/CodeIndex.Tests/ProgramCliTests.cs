@@ -1,4 +1,5 @@
 using CodeIndex.Cli;
+using CodeIndex.Database;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 using System.Text.Json;
@@ -290,6 +291,8 @@ public class ProgramCliTests
     [InlineData("deps", "cdidx deps")]
     [InlineData("map", "cdidx map")]
     [InlineData("status", "cdidx status")]
+    [InlineData("export", "cdidx export <archive>")]
+    [InlineData("import", "cdidx import <archive>")]
     [InlineData("completions", "cdidx completions <shell>")]
     [InlineData("license", "cdidx license")]
     public void SubcommandHelp_PrintsCommandSpecificUsage(string command, string expectedUsage)
@@ -304,6 +307,110 @@ public class ProgramCliTests
         Assert.DoesNotContain("Commands:", stdout);
         Assert.DoesNotContain("Index and update options:", stdout);
         Assert.DoesNotContain("██████╗", stdout);
+    }
+
+    [Fact]
+    public void ExportCtags_WritesTagsFileFromIndexedSymbols()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_export_ctags");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
+            var tagsPath = Path.Combine(projectRoot, "tags");
+
+            var (exitCode, stdout, stderr) = RunCliInSubprocess(["export", "ctags", "--db", dbPath, "--output", tagsPath]);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("Exported ctags", stdout);
+            var tags = File.ReadAllText(tagsPath);
+            Assert.Contains("!_TAG_FILE_FORMAT\t2", tags);
+            Assert.Contains("App\tsrc/app.cs\t1;\"", tags);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ExportImportArchive_RestoresCodeIndexDatabase()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_export_archive");
+        try
+        {
+            var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(sourceDbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
+            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+            var importedDbPath = Path.Combine(projectRoot, "imported", "codeindex.db");
+
+            var (exportExit, _, exportStderr) = RunCliInSubprocess(["export", archivePath, "--db", sourceDbPath]);
+            var (importExit, importStdout, importStderr) = RunCliInSubprocess(["import", archivePath, "--db", importedDbPath]);
+
+            Assert.True(exportExit == 0, exportStderr);
+            Assert.Equal(string.Empty, exportStderr);
+            Assert.True(importExit == 0, importStderr);
+            Assert.Equal(string.Empty, importStderr);
+            Assert.Contains("Imported CodeIndex database", importStdout);
+            Assert.True(File.Exists(importedDbPath));
+            Assert.True(DbContext.TryValidateExistingCodeIndexDb(importedDbPath, out _, out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ExportArchive_RejectsSourceDatabaseAsOutput()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_export_same_db");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
+
+            var (exitCode, _, stderr) = RunCliInSubprocess(["export", dbPath, "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("must not be the source database", stderr);
+            Assert.True(DbContext.TryValidateExistingCodeIndexDb(dbPath, out _, out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ImportArchive_RemovesStaleDestinationSidecars()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_import_sidecars");
+        try
+        {
+            var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(sourceDbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
+            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+            var destinationDbPath = Path.Combine(projectRoot, "destination", "codeindex.db");
+            Directory.CreateDirectory(Path.GetDirectoryName(destinationDbPath)!);
+            File.WriteAllText(destinationDbPath, "old");
+            File.WriteAllText(destinationDbPath + "-wal", "old wal");
+            File.WriteAllText(destinationDbPath + "-shm", "old shm");
+
+            var (exportExit, _, exportStderr) = RunCliInSubprocess(["export", archivePath, "--db", sourceDbPath]);
+            var (importExit, _, importStderr) = RunCliInSubprocess(["import", archivePath, "--db", destinationDbPath]);
+
+            Assert.True(exportExit == 0, exportStderr);
+            Assert.True(importExit == 0, importStderr);
+            Assert.False(File.Exists(destinationDbPath + "-wal"));
+            Assert.False(File.Exists(destinationDbPath + "-shm"));
+            Assert.True(DbContext.TryValidateExistingCodeIndexDb(destinationDbPath, out _, out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
