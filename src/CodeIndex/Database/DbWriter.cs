@@ -3253,6 +3253,30 @@ public class DbWriter
         return (symbols, symbolReferences);
     }
 
+    public (int Symbols, int SymbolReferences) CountBackfillFoldedColumns(bool rewriteAll = false)
+    {
+        using var symbols = _conn.CreateCommand();
+        symbols.CommandText = rewriteAll
+            ? "SELECT COUNT(*) FROM symbols WHERE name IS NOT NULL"
+            : "SELECT COUNT(*) FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL";
+
+        using var references = _conn.CreateCommand();
+        references.CommandText = rewriteAll
+            ? "SELECT COUNT(*) FROM symbol_references WHERE symbol_name IS NOT NULL OR container_name IS NOT NULL"
+            : @"SELECT COUNT(*)
+                FROM symbol_references
+                WHERE (symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
+                   OR (container_name IS NOT NULL AND container_name_folded IS NULL)";
+
+        return (ToInt32Count(symbols.ExecuteScalar()), ToInt32Count(references.ExecuteScalar()));
+    }
+
+    private static int ToInt32Count(object? value)
+    {
+        var count = value is long l ? l : (value is int i ? i : 0);
+        return count > int.MaxValue ? int.MaxValue : (int)count;
+    }
+
     private int BackfillSymbolFoldedRows(bool rewriteAll, CancellationToken cancellationToken)
     {
         var rows = new List<(long Id, string Name)>();
