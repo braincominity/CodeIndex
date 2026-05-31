@@ -12997,6 +12997,44 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetOutline_UsesQualifiedContainerPathForAmbiguousNames()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/ambiguous.cs",
+            Lang = "csharp",
+            Size = 300,
+            Lines = 20,
+            Modified = new DateTime(2025, 6, 2, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = fileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 20,
+            Content = """
+            class A { class Wrapper { } }
+            class B { class Wrapper { void Target() { } } }
+            """,
+        }]);
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = fileId, Kind = "class", Name = "A", Line = 1, StartLine = 1, EndLine = 5, BodyStartLine = 1, BodyEndLine = 5, ContainerQualifiedName = null },
+            new SymbolRecord { FileId = fileId, Kind = "class", Name = "Wrapper", Line = 2, StartLine = 2, EndLine = 4, BodyStartLine = 2, BodyEndLine = 4, ContainerKind = "class", ContainerName = "A", ContainerQualifiedName = "A" },
+            new SymbolRecord { FileId = fileId, Kind = "class", Name = "B", Line = 6, StartLine = 6, EndLine = 15, BodyStartLine = 6, BodyEndLine = 15, ContainerQualifiedName = null },
+            new SymbolRecord { FileId = fileId, Kind = "class", Name = "Wrapper", Line = 7, StartLine = 7, EndLine = 14, BodyStartLine = 7, BodyEndLine = 14, ContainerKind = "class", ContainerName = "B", ContainerQualifiedName = "B" },
+            new SymbolRecord { FileId = fileId, Kind = "function", Name = "Target", Line = 8, StartLine = 8, EndLine = 8, ContainerKind = "class", ContainerName = "Wrapper", ContainerQualifiedName = "B.Wrapper" },
+        ]);
+
+        var outline = _reader.GetOutline("src/ambiguous.cs");
+
+        Assert.NotNull(outline);
+        var target = Assert.Single(outline!.Symbols.Where(symbol => symbol.Name == "Target"));
+        Assert.Equal("B.Wrapper.Target", target.Path);
+        Assert.Equal(2, target.Depth);
+    }
+
+    [Fact]
     public void GetOutline_ComputesDepthForFileScopedNamespace()
     {
         InsertIndexedFile(
