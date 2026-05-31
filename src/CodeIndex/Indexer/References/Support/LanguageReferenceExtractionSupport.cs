@@ -4738,7 +4738,11 @@ internal static class LanguageReferenceExtractionSupport
                         if (typeParameterClose > afterName)
                         {
                             EmitGoTypeParameterConstraints(preparedLine, afterName, typeParameterClose + 1, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-                            nextParen = preparedLine.IndexOf('(', typeParameterClose + 1);
+                            var valueParameterOpen = preparedLine.IndexOf('(', typeParameterClose + 1);
+                            if (valueParameterOpen < 0)
+                                return;
+
+                            nextParen = valueParameterOpen;
                         }
                     }
 
