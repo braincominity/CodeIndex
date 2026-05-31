@@ -28,6 +28,7 @@ cdidx find "guard" --path src/Auth.cs
 cdidx deps --path src/           # File-level dependency graph
 cdidx suggestions list           # Review local AI feedback history
 cdidx mcp                        # Start MCP server for AI tools
+cdidx lsp --db .cdidx/codeindex.db  # Start read-only LSP server for editors
 ```
 
 78 languages supported. 24 registered MCP tools. Incremental updates. Zero config.
@@ -1773,6 +1774,14 @@ If the refs are not known, use `cdidx ./myproject --json` and verify with `cdidx
 
 cdidx includes a built-in **MCP (Model Context Protocol) server**. MCP is a standard protocol that lets AI coding tools communicate with external programs. When you run `cdidx mcp`, cdidx starts listening on stdin/stdout — your AI tool sends search requests as JSON, and cdidx returns results instantly from the pre-built index.
 
+### LSP Server (for LSP-native editors)
+
+`cdidx lsp --db .cdidx/codeindex.db` starts a read-only Language Server Protocol
+server over stdio. It reuses the existing CodeIndex database and exposes
+`initialize`, `workspace/symbol`, `textDocument/documentSymbol`,
+`textDocument/definition`, and `textDocument/references` for editors that can
+launch an arbitrary LSP command but do not speak MCP.
+
 Tool results include structured JSON in `structuredContent` plus a short text summary in `content`, so AI tools can parse typed data without scraping large text blocks.
 
 Capped MCP result tools report `truncated` and `more_available` in `structuredContent` when more rows exist than the requested `limit`, so clients can avoid treating a capped page as exhaustive.
@@ -2110,6 +2119,7 @@ cdidx find "guard" --path src/Auth.cs
 cdidx deps --path src/           # ファイル間依存グラフ
 cdidx suggestions list           # ローカルのAIフィードバック履歴を確認
 cdidx mcp                        # AIツール向けMCPサーバー起動
+cdidx lsp --db .cdidx/codeindex.db  # editor向けread-only LSPサーバー起動
 ```
 
 78言語対応。24 MCPツール。インクリメンタル更新。設定不要。
@@ -3840,6 +3850,14 @@ ref が分からない場合は `cdidx ./myproject --json` を使い、`cdidx st
 ### MCP サーバー（Claude Code、Cursor、Windsurf 等に対応）
 
 cdidxには**MCP（Model Context Protocol）サーバー**が組み込まれています。MCPは、AIコーディングツールが外部プログラムと通信するための標準プロトコルです。`cdidx mcp` を実行すると、cdidxがstdin/stdoutで待機し、AIツールからの検索リクエストをJSONで受け取り、構築済みインデックスから即座に結果を返します。
+
+### LSP サーバー（LSP-native editor 向け）
+
+`cdidx lsp --db .cdidx/codeindex.db` は read-only の Language Server Protocol
+サーバーを stdio で起動します。既存の CodeIndex database を再利用し、
+任意の LSP command を起動できるが MCP には対応していない editor 向けに
+`initialize`、`workspace/symbol`、`textDocument/documentSymbol`、
+`textDocument/definition`、`textDocument/references` を公開します。
 
 ツール結果は `structuredContent` に構造化JSON、`content` に短い要約テキストを返すため、AIツールは巨大なテキストをパースせずに型付きデータを扱えます。
 
