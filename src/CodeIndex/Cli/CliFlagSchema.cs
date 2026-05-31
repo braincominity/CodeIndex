@@ -119,6 +119,8 @@ internal static class CliFlagSchema
     private static readonly string[] SinceCommands = ["search", "definition", "symbols", "files"];
     private static readonly string[] ByteFormatCommands = ["files", "map"];
     private static readonly string[] EntrypointConfidenceCommands = ["map"];
+    private static readonly string[] MapSectionCommands = ["map"];
+    private static readonly string[] DependencyCycleCommands = ["deps"];
 
     // `--exact` is the legacy shorthand that every name-resolution command accepts.
     // `--exact` は名前解決系の全コマンドで受け付けるレガシー shorthand。
@@ -180,7 +182,7 @@ internal static class CliFlagSchema
 
     private static readonly string[] FormatCommands =
     [
-        "search", "definition", "references", "callers", "callees", "find", "validate",
+        "search", "definition", "references", "callers", "callees", "find", "validate", "deps",
     ];
 
     private static readonly string[] ProfileCommands =
@@ -234,6 +236,8 @@ internal static class CliFlagSchema
             new() { Name = "--since", ValuePlaceholder = "<datetime>", Description = "Filter by modified-since timestamp", Commands = Set(SinceCommands) },
             new() { Name = "--bytes", Description = "Show raw byte counts in human output", Commands = Set(ByteFormatCommands) },
             new() { Name = "--min-entrypoint-confidence", ValuePlaceholder = "<0.0..1.0>", Description = "Map: omit entrypoint candidates below this confidence", Commands = Set(EntrypointConfidenceCommands) },
+            new() { Name = "--sections", ValuePlaceholder = "<tree,languages,hotspots,metrics>", Description = "Map: comma-separated response sections to include", Commands = Set(MapSectionCommands) },
+            new() { Name = "--cycles", Description = "Deps: return dependency cycles instead of edge rows", Commands = Set(DependencyCycleCommands) },
             new() { Name = "--query", ValuePlaceholder = "<query>", Description = "Literal query", Commands = Set(QueryCommands) },
             new() { Name = "--body", Description = "Include body", Commands = Set(BodyCommands) },
             new() { Name = "--exact", Description = "Backward-compatible exact shorthand", Commands = Set(ExactCommands) },
@@ -256,7 +260,7 @@ internal static class CliFlagSchema
             new() { Name = "--focus-column", ValuePlaceholder = "<n>", Description = "Focused column to keep visible when clamping", Commands = Set("find", "excerpt") },
             new() { Name = "--focus-length", ValuePlaceholder = "<n>", Description = "Focused span width when clamping", Commands = Set("excerpt") },
             new() { Name = "--max-hops", ValuePlaceholder = "<n>", Description = "Impact: max BFS hops", Commands = Set("impact") },
-            new() { Name = "--depth", ValuePlaceholder = "<n>", Description = "Impact: deprecated alias for --max-hops", Commands = Set("impact") },
+            new() { Name = "--depth", ValuePlaceholder = "<n>", Description = "Map: cap module depth; impact: deprecated alias for --max-hops", Commands = Set("impact", "map") },
             new() { Name = "--with-paths", Description = "Impact: include shortest call chains per caller", Commands = Set("impact") },
             new() { Name = "--reverse", Description = "Reverse direction (show dependents)", Commands = Set("deps") },
             new() { Name = "--group-by", ValuePlaceholder = "<symbol|file|statement>", Description = "Hotspots: choose grouping unit", Commands = Set("hotspots") },
