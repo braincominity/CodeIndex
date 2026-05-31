@@ -234,6 +234,31 @@ class CommandGuardCoreTests(TestCase):
                 decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
                 self.assertFalse(decision.allowed)
 
+    def test_allows_forbidden_command_words_inside_gh_arguments(self) -> None:
+        root = Path("/tmp")
+        for command in (
+            'gh issue create --title "cdidx" --body "plain issue text"',
+            'gh issue create --title "find and open are issue words" --body "cdidx find appears in docs"',
+            'gh issue list --state open --search "grep in the issue body"',
+            'gh pr create --title "search: find hint" --body "users may type git grep or open here"',
+        ):
+            with self.subTest(command=command):
+                decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
+
+                self.assertTrue(decision.allowed, decision.reason)
+
+    def test_denies_forbidden_commands_inside_shell_constructs(self) -> None:
+        root = Path("/tmp")
+        for command in (
+            "if grep SymbolExtractor src; then echo yes; fi",
+            "while git grep SymbolExtractor; do break; done",
+            "until find . -name '*.cs'; do break; done",
+        ):
+            with self.subTest(command=command):
+                decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
+
+                self.assertFalse(decision.allowed)
+
     def test_denies_quote_concatenated_high_risk_commands(self) -> None:
         root = Path("/tmp")
         for command in (
@@ -370,6 +395,22 @@ class CommandGuardCoreTests(TestCase):
             decision = core.check_script_file(script, project_root=root)
 
             self.assertFalse(decision.allowed)
+
+    def test_check_script_file_denies_search_commands_inside_shell_constructs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "tools" / "guard.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+
+            for body in (
+                "if grep SymbolExtractor src; then echo yes; fi\n",
+                "if git grep SymbolExtractor; then echo yes; fi\n",
+            ):
+                with self.subTest(body=body):
+                    script.write_text(body, encoding="utf-8")
+                    decision = core.check_script_file(script, project_root=root)
+
+                    self.assertFalse(decision.allowed)
 
     def test_check_script_file_denies_quote_concatenated_forbidden_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

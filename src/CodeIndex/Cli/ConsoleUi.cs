@@ -64,6 +64,8 @@ public enum CompletionNotificationMode
 /// </summary>
 public static class ConsoleUi
 {
+    public const string DisableProgressEnvironmentVariable = "CDIDX_DISABLE_PROGRESS";
+    public const string PrefersReducedMotionEnvironmentVariable = "PREFERS_REDUCED_MOTION";
     public const int SummaryLabelWidth = 9;
 
     private static readonly (string Command, string Usage)[] CommandUsageLines =
@@ -266,7 +268,7 @@ public static class ConsoleUi
         // ブレイルフレームは1文字、テーマフレームは表示テキストを含む長い文字列
         bool isThemed = frames.Length > 0 && frames[0].Length > 2;
 
-        if (!ShouldUseInteractiveConsole())
+        if (!ShouldUseInteractiveConsole() || !ShouldUseProgressAnimation())
         {
             Console.WriteLine(message);
             return null;
@@ -312,6 +314,21 @@ public static class ConsoleUi
             }
         }
         cts.Dispose();
+    }
+
+    internal static void SetProgressAnimationEnabled(bool? enabled)
+        => _progressAnimationEnabledOverride = enabled;
+
+    internal static bool ShouldUseProgressAnimation()
+    {
+        if (_progressAnimationEnabledOverride.HasValue)
+            return _progressAnimationEnabledOverride.Value;
+
+        if (IsTruthyEnvironmentVariable(DisableProgressEnvironmentVariable))
+            return false;
+
+        var reducedMotion = Environment.GetEnvironmentVariable(PrefersReducedMotionEnvironmentVariable);
+        return string.IsNullOrWhiteSpace(reducedMotion) || !IsTruthyEnvironmentValue(reducedMotion);
     }
 
     /// <summary>
@@ -386,6 +403,7 @@ public static class ConsoleUi
     // Track last progress line length for clearing / クリア用に最後のプログレス行の長さを記録
     private static int _lastProgressLineLength;
     private static bool _asciiOutputForced;
+    private static bool? _progressAnimationEnabledOverride;
     private static bool _widthDetectionFailed;
     private static bool _widthDetectionTraceWritten;
     private static bool _traceWidthDetectionFailures;
@@ -419,7 +437,8 @@ public static class ConsoleUi
             current,
             total,
             redirected ? 80 : GetWindowWidth(),
-            ShouldUseUnicodeGlyphs());
+            ShouldUseUnicodeGlyphs(),
+            ShouldUseProgressAnimation());
 
         if (!redirected)
         {
@@ -442,7 +461,12 @@ public static class ConsoleUi
         }
     }
 
-    internal static string FormatProgressLine(int current, int total, int windowWidth, bool useUnicodeGlyphs)
+    internal static string FormatProgressLine(
+        int current,
+        int total,
+        int windowWidth,
+        bool useUnicodeGlyphs,
+        bool useProgressAnimation = true)
     {
         const int barWidth = 32;
         var pct = (double)current / total;
@@ -457,7 +481,7 @@ public static class ConsoleUi
         if (filled > barWidth) filled = barWidth;
         if (filled < 0) filled = 0;
 
-        var spinner = ResolveProgressSpinner(current, total, useUnicodeGlyphs);
+        var spinner = useProgressAnimation ? ResolveProgressSpinner(current, total, useUnicodeGlyphs) : " ";
         var bar = useUnicodeGlyphs
             ? new string('\u2588', filled) + new string('\u2591', barWidth - filled)
             : $"[{new string('#', filled)}{new string('-', barWidth - filled)}]";
@@ -897,6 +921,7 @@ public static class ConsoleUi
         WriteHelpLine("  --color <when>             Color output: `auto` (default), `always`, or `never`; flag wins over `CLICOLOR_FORCE` / `NO_COLOR` / `CLICOLOR` env vars, which win over TTY auto-detect");
         WriteHelpLine("  --palette <name>           ANSI palette: `basic` (8-color, default fallback), `256`, or `truecolor`; flag wins over `CDIDX_COLOR_PALETTE` env var, which wins over `COLORTERM` / `TERM` auto-detect");
         WriteHelpLine("  --ascii                    Use ASCII spinner/progress glyphs instead of Unicode glyphs (also honors CDIDX_ASCII=1, NO_UNICODE, TERM=dumb, accessibility env hints, and non-UTF-8 locales)");
+        WriteHelpLine("  --no-progress              Disable animated progress/spinner output (also honors CDIDX_DISABLE_PROGRESS=1 and PREFERS_REDUCED_MOTION)");
         Console.WriteLine("  --metrics <path>           Append one JSONL record per CLI command / MCP tool call to <path> (also honors CDIDX_METRICS=<path>)");
         Console.WriteLine("  --help, -h                 Show this help message");
         Console.WriteLine("  --version, -V              Show version information");
@@ -2083,6 +2108,17 @@ public static class ConsoleUi
         return IsPosixLocale(Environment.GetEnvironmentVariable("LC_ALL"))
             || IsPosixLocale(Environment.GetEnvironmentVariable("LC_CTYPE"))
             || IsPosixLocale(Environment.GetEnvironmentVariable("LANG"));
+    }
+
+    private static bool IsTruthyEnvironmentVariable(string name)
+        => IsTruthyEnvironmentValue(Environment.GetEnvironmentVariable(name));
+
+    private static bool IsTruthyEnvironmentValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        return value.Trim() is not ("0" or "false" or "False" or "FALSE" or "no" or "No" or "NO");
     }
 
     private static bool IsDumbTerminal()

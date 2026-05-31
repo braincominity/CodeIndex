@@ -5417,9 +5417,11 @@ public static class QueryCommandRunner
                         AddParseError($"Error: could not parse --since value '{sinceValue}' as a date/time. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
                     break;
                 case "--start":
-                    if (!TryReadRawOptionValue(args, ref i, "--start", inlineValue, out var startValue, out var missingStartError))
+                case "--start-line":
+                    var startFlag = normalizedArg;
+                    if (!TryReadRawOptionValue(args, ref i, startFlag, inlineValue, out var startValue, out var missingStartError))
                         AddParseError(missingStartError!);
-                    else if (TryParsePositiveInt(startValue!, "--start", out var parsedStart, out var startError))
+                    else if (TryParsePositiveInt(startValue!, startFlag, out var parsedStart, out var startError))
                     {
                         WarnIfDuplicateSingleValueOption("--start", startValue!);
                         startLine = parsedStart;
@@ -5428,9 +5430,11 @@ public static class QueryCommandRunner
                         AddParseError(startError!);
                     break;
                 case "--end":
-                    if (!TryReadRawOptionValue(args, ref i, "--end", inlineValue, out var endValue, out var missingEndError))
+                case "--end-line":
+                    var endFlag = normalizedArg;
+                    if (!TryReadRawOptionValue(args, ref i, endFlag, inlineValue, out var endValue, out var missingEndError))
                         AddParseError(missingEndError!);
-                    else if (TryParsePositiveInt(endValue!, "--end", out var parsedEnd, out var endError))
+                    else if (TryParsePositiveInt(endValue!, endFlag, out var parsedEnd, out var endError))
                     {
                         WarnIfDuplicateSingleValueOption("--end", endValue!);
                         endLine = parsedEnd;
