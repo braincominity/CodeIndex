@@ -11,6 +11,197 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.27.0] - 2026-06-01
+
+#### Added
+
+- **Progress animation can now be disabled (#1630)** - `cdidx` honors `--no-progress`, `CDIDX_DISABLE_PROGRESS=1`, and `PREFERS_REDUCED_MOTION` by printing static progress text instead of animated spinner frames.
+- **Added `cdidx doctor` for support diagnostics (#1632)** — the CLI now prints a redacted environment summary with version, RID, OS/runtime, terminal state, DB/log path resolution, config hints, and safe `CDIDX_*` variables for bug reports.
+- **`deps` can export graph-shaped output and dependency cycles (#1634)** — `deps` now accepts graph export formats and a cycle-only mode so callers can feed dependency data directly to visualization or cycle-analysis tooling.
+- **`map` can return selected sections with bounded module depth (#1635)** — `map` now accepts section selection and depth control so MCP and CLI callers can request smaller repo overviews when they do not need the full payload.
+- **Expanded status and index diagnostics (#1637, #1680, #1792, #1817)** — `status --json` now reports DB/WAL size, per-language symbol-kind counts, process heap/GC/working-set metrics, and last-index-run metadata, while `index --json --memory-trace` emits memory samples and persists the peak working set.
+- **MCP search, references, and excerpt responses now suggest the next read step (#1641)** - non-empty responses include `next_step_suggestion` so agents can follow search/reference hits into `excerpt`, or move from an excerpt to `outline`, without guessing the next tool call.
+- **Added `cdidx db schema` for on-disk schema inspection (#1646)** — the new command prints SQLite schema entries and `PRAGMA user_version`, with `--json` for automation.
+- **Added ctags export (#1649)** — `cdidx export ctags` now writes editor-native `tags` files from indexed symbols, with `--output` and `--db` options.
+- **`cdidx lsp` starts a read-only Language Server Protocol shim (#1650)** — LSP-native editors can now launch `cdidx lsp --db .cdidx/codeindex.db` over stdio for workspace symbols, document symbols, definitions, and references without needing an MCP adapter.
+- **Official container image publishing (#1651)** — releases now build a Docker image from the repository Dockerfile and push `ghcr.io/widthdom/codeindex:<version>` plus `ghcr.io/widthdom/codeindex:latest`, with usage documented for CI and containerized MCP workflows.
+- **Added opt-in ActivitySource tracing for MCP and SQLite work (#1679)** — CodeIndex now exposes a `CodeIndex` activity source, creates MCP request and SQLite query spans, and honors MCP `params._meta.traceparent` as the parent trace context.
+- **MCP `suggest_improvement` can use client sampling for triage metadata (#1686)** — when the connected client advertises sampling and `CDIDX_MCP_SAMPLING` is not disabled, cdidx asks `sampling/createMessage` for a short title and tags before storing the suggestion, while preserving the raw submission and falling back when sampling is unavailable.
+- **MCP tools now publish stability markers (#1696)** — every advertised tool includes `x-stability`, with experimental tools marked explicitly in `tools/list`.
+- Added JSON workspace manifests (`cdidx.workspace.json` / `.cdidx-workspace.json`) and `cdidx workspace list/status` for monorepo member topology.
+- Added `cdidx config show` to report discovered workspace config, active workspace state, and config precedence.
+- Added persisted active workspace state with `cdidx workspace use/current` and query DB resolution after explicit flags and environment settings.
+- **Added `--follow-symlinks none|internal|all` for directory scans (#1711)** — indexing now defaults to not following directory symlinks, can opt into workspace-internal targets, or can opt into all targets explicitly.
+- **Added DB checkpoints and restore (#1721)** — `cdidx db checkpoint`, `cdidx db checkpoints --list`, and `cdidx db restore` can snapshot and roll back `codeindex.db`, while `backfill-fold` now creates an automatic checkpoint before mutating rows unless `--no-checkpoint` is passed.
+- **Added portable index archive export/import (#1726)** — `cdidx export <archive>` and `cdidx import <archive>` now package and restore CodeIndex databases with a manifest for CI or cross-machine reuse, including `--prune-paths` on import.
+- **Added `cdidx db prune --dry-run|--apply` for stale DB rows (#1728)** — the command counts or deletes orphaned `symbol_references`, `reference_lines`, and `symbols` rows, then runs `PRAGMA optimize` after apply.
+- **Added read-only database opens for query commands (#1730)** — query commands now accept `--read-only` / `--immutable` and translate normal database paths into SQLite immutable read-only URIs.
+- **HTTP MCP event streams can now emit opt-in keep-alive notifications (#1740)** — set `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` to send `notifications/keep_alive` frames on `/events`.
+- **Added YAML-backed custom symbol patterns (#1756)** — `cdidx` now loads regex symbol extractors from `.cdidx/patterns/*.yaml` and `~/.config/cdidx/patterns/*.yaml` so lightweight language patterns can live outside the binary.
+- **Added per-user and per-workspace language-map overrides (#1757)** — extension aliases from `~/.config/cdidx/langmap.yaml` and `.cdidx-langmap.yaml` now override built-in language detection, including compound suffixes such as `.kts.in`.
+- **Added `cdidx test-extractor` (#1759)** — contributors can run symbol extraction for one file with `--language` and `--file`, emit JSON, and compare against an expected symbols fixture without building a full index.
+- **MCP health probes now expose structured liveness data (#1791)** — `ping` returns health fields and HTTP MCP serves the same JSON at `GET /healthz` for orchestrator probes.
+- **MCP empty-result responses now include recovery hints (#1812)** - empty read-tool responses add `recovery_hint` with a reason and suggested follow-up, covering search, definition, references, callers, callees, excerpt, impact analysis, unused symbols, and symbol hotspots.
+- **Added long index completion notifications (#1835)** — `cdidx index` now supports `--notify=<auto|bell|osc9|desktop|none>` plus `CDIDX_NOTIFY`, with quiet/json-safe suppression and a five-second threshold for human runs.
+- **Built-in CSV and TSV query formatters are now available (#1941)** — formatter-aware read commands accept `--format csv` and `--format tsv`, giving scripts and CI jobs table-shaped output without reserializing JSON.
+- **Added post-index next-step guidance (#1963)** — successful human full-scan output now prints concise search, definition, MCP, database, exclusion, and language-summary next steps while preserving JSON and quiet output.
+
+#### Changed
+
+- Centralized query limit defaults so CLI and MCP defaults are reviewable from shared constants.
+- **Definition JSON now includes C# disambiguator hints (#1638)** — `definition` results include overload, partial type, and extension receiver hints when indexed C# metadata can distinguish otherwise identical names.
+- Shortened the MCP `search` tool description advertised during `tools/list`, moving detailed tokenizer and ranking guidance to `USER_GUIDE.md`.
+- **Top-level help is now brief by default (#1702)** — `cdidx --help` prints a concise overview, while `--help-all` / `--help-extended` retain the full reference and `--help-flags` prints only shared flag tables.
+- **MCP structured JSON now uses snake_case payload keys (#1723)** — manually assembled SQL/exact-signal payloads now align with the CLI JSON naming convention while preserving MCP protocol envelope fields.
+- **Impact zero-result JSON now exposes structured failure routing (#2002)** — `impact` now emits `impact_failure_chain` and `suggestion_type` for zero results, and `impact --strict` exits non-zero when resolution or graph preconditions fail.
+
+#### Fixed
+
+- **MCP excerpt and find_in_file now clamp oversized context windows (#1413, #1414)** - `before` and `after` values above the MCP context cap are clamped to 1000 lines and reported with `contextTruncated`, preventing accidental multi-million-line responses.
+- Confirmed MCP `references`, `callers`, and `callees` expose truncation metadata when a result page reaches the requested limit.
+- **MCP tool argument type mismatches now return JSON-RPC invalid params (#1417)** — wrong JSON types such as a string `limit` now produce `-32602` with structured parameter details instead of falling through to an internal/tool failure.
+- **Per-command usage lines now show `--top` beside `--limit` (#1422)** — query commands that accept the result cap alias now document `[--limit <n>|--top <n>]`, matching the parser and shell-completion schema.
+- **`mcp` and `completions` help now calls out unsupported `--json` usage (#1424)** - subcommand help now documents that `--json` is not supported, and direct `--json` errors explain the command-specific output format.
+- **`excerpt` accepts MCP-style line aliases (#1429)** - `cdidx excerpt` now accepts `--start-line` and `--end-line` as aliases for `--start` and `--end`, reducing friction when moving between MCP and CLI usage.
+- **Agent bash guard no longer blocks command-name words inside GitHub arguments (#1432)** - the shared guard now applies command-name checks to executed command tokens instead of quoted title/body text, so `gh issue` and `gh pr` workflows can mention words such as `find`, `open`, `grep`, or `cdidx`.
+- **Python multi-line f-strings no longer emit references from literal text (#1438)** — triple-quoted f-string bodies are masked across physical lines while interpolation expressions still contribute real reference edges.
+- **Go generic methods now keep method type parameters in reference extraction (#1440)** - receiver methods such as `func (r *Repo) Get[T Constraint](input Input) T` no longer treat the type-parameter list as the value-parameter list, so constraints, parameter types, and returns stay attributed to the method.
+- **PHP 8.4 property hooks now expose accessor scopes and hook-body references (#1445)** - `get` and `set` hook bodies are attached to the property, so references inside hook expressions resolve under `property.get` / `property.set` accessors.
+- **Search now reports degraded overlong-token FTS queries (#1458, #1606, #1776)** — zero-result JSON now distinguishes overlong-token-only literal FTS queries, literal search normalizes Unicode input to NFC, and validation reports FTS5 unicode61 tokens longer than 1000 characters as `fts_token_too_long`.
+- **MCP index now rejects concurrent runs on the same database (#1459)** — the `index` tool acquires an exclusive per-database lock before mutating index state and returns a clear busy error with holder metadata when another run is already active.
+- Added `github_submission_reason` to MCP `suggest_improvement` responses so clients can tell why a local suggestion was not forwarded to GitHub.
+- **MCP `backfill_fold` can report progress and resume interrupted row rewrites (#1461)** — folded-key row updates are durable before the final FoldReady stamp, and MCP responses now include `progress.rows_done`, `progress.rows_total`, and `progress.fraction`.
+- **MCP search now exposes pagination stability metadata (#1462)** - `search` responses include `result_stable_at` and non-empty pages include `next_cursor`, allowing clients to detect index drift and continue from the previous page anchor.
+- **Release verification now checks RID-specific installed assets (#1463)** — the published-release install smoke test now derives the expected binary and native SQLite asset from the matrix RID instead of accepting a generic macOS native library name.
+- **Directory scans now cap recursion and skip revisited symlink targets (#1466)** — `cdidx index` now avoids repeated traversal through symlink loops when symlink following is enabled and reports a warning instead of risking unbounded recursion.
+- **Checksums now use the same BOM-stripped content stored in chunks (#1467)** — line-leading UTF-8 BOM markers are normalized before checksum calculation so incremental freshness and excerpt line metadata stay aligned.
+- **MCP startup logs no longer expose the full DB path by default (#1469)** — the startup banner now logs only a sanitized DB filename unless `CDIDX_DEBUG=unsafe` is set.
+- **MCP catch-all error responses now hide exception details by default (#1470)** — unexpected tool and loop failures return generic wire messages while preserving detailed diagnostics in stderr, with verbose responses limited to `CDIDX_DEBUG=unsafe`.
+- **MCP `batch_query` now reports failure scope (#1472)** — batch responses include `failure_scope` with `none`, `isolated`, or `cascading`, plus `cascade_started_at_index` when truncation prevents later slots from running.
+- **Lua references now cover colon method calls and table field reads (#1478)** — Lua extraction now records `obj:method(...)` calls and table field read references, with tests covering method calls, table-key definitions, and vararg signatures.
+- **Razor component tag references now preserve dotted component names (#1479)** - tags such as `<MyApp.Components.Forms.LoginButton />` emit a call reference to the fully qualified component name instead of dropping namespace segments.
+- **Terraform reference extraction now covers colon-qualified providers and module outputs (#1480)** — Terraform references now include colon-qualified provider resource types such as `aws:s3_bucket` and module output paths such as `module.web.outputs.endpoint`.
+- **Ruby DSL and metaprogramming references are no longer limited to the static command allowlist (#1481)** — Ruby extraction now records symbol-literal targets from custom DSL commands plus `send`, `public_send`, and `define_method`.
+- **PowerShell function-call extraction now covers local function names (#1482)** — PowerShell reference extraction recognizes plain user-defined function calls in addition to hyphenated cmdlet-style names.
+- **Dart reference extraction now records structural Dart 3 relationships (#1483)** — Dart references now mark sealed subtype, extension, mixin, and named-constructor relationships with dedicated reference kinds.
+- **Status readiness degradation now has structured guidance (#1484, #1931)** — `status --json` now reports `degraded_root_cause` and `readiness_degradations[]` for every degraded readiness field, including multi-degraded states.
+- **Status separates issue-table presence from issue-row freshness (#1486)** — `issues_table_available` now reports physical table presence, while `file_issues_data_current` reports whether validate issue rows are current for the index generation.
+- **Status identifies active migration/write windows (#1761)** — `status --json` now exposes `migration_in_progress` so clients can distinguish temporary writer activity from permanent readiness degradation.
+- **Hotspot family readiness now verifies row-level family keys (#1485)** - `status` and hotspot readers now degrade when current hotspot-family metadata is stamped but indexed symbols still have NULL `family_key` values.
+- **find_in_file now supports snippet line controls (#1593)** - CLI `find --snippet-lines N` and MCP `find_in_file` `snippetLines` can widen or narrow match context without a separate `excerpt` call.
+- **find now supports focus line and column targeting (#1597)** - CLI `find --focus-line` / `--focus-column` and MCP `find_in_file` focus arguments restrict matches to the requested source position.
+- **Trim and AOT analyzer warnings now surface during CodeIndex builds (#1598)** - the CLI project declares trim compatibility and enables trim/AOT analyzers with per-site trimmer warnings, so reflection-sensitive release issues are caught before publishing trimmed binaries.
+- **CodeIndex package builds now opt into deterministic Source Link metadata (#1602)** - the CLI project enables deterministic builds, CI reproducibility flags, repository URL publishing, build-only GitHub Source Link, and commit-date build metadata so release symbols can map back to stable repository sources.
+- **Indexing now caps per-file symbol output (#1604)** - `cdidx index --max-symbols-per-file N` skips file content, symbols, and references when one file emits too many symbols, leaving a `symbol_count_exceeded` issue instead of ballooning the database.
+- Added an MCP `excerpt` output byte cap that truncates content at line boundaries and reports `truncated` with `truncation_reason: output_size_cap`.
+- **Read-only fallback now verifies fold-ready rows before trusting stale ready bits (#1607)** - readers opened through the read-only fallback path now demote `fold_ready` when the ready bit is set but folded-name rows are incomplete.
+- **CI now collects coverage reports (#1608)** — the build workflow runs tests with the XPlat Code Coverage collector and uploads Cobertura reports as per-lane artifacts.
+- **CI flaky-test classification (#1610)** — Added a bounded one-time test retry in CI and a `flaky-retry.txt` artifact marker when the retry passes after an initial failure.
+- **Test parallelism audit guidance (#1612)** — Documented the shared-state inventory for test classes that need serialized execution or explicit cleanup guards.
+- **Backfill folded-key maintenance is now previewable and retry-aware (#1613, #1703, #1919)** — `backfill-fold --dry-run` and MCP `backfill_fold` `dry_run` preview affected rows without writing, MCP responses report FoldReady before/after plus already-complete state, and `force` can rewrite all keys when recovery requires bypassing metadata short-circuits.
+- **Sanitized `suggest_improvement` GitHub issue titles (#1614)** — outbound suggestion issue titles now strip markdown link/image syntax characters and defensively cap category text before posting.
+- **MCP `batch_query` now rejects type-mismatched inner arguments (#1615)** — batched tool slots validate argument JSON types before dispatch, so values such as `"limit": "twenty"` produce a slot error instead of silently using defaults.
+- **MCP `batch_query` now exposes top-level partial-failure counts (#1616)** — batch responses include `total_count`, `success_count`, `failure_count`, and `partial_failure` at the top level so clients can detect aggregate failures without scanning every slot.
+- **Time-sensitive CLI and MCP paths now use injectable clocks (#1617)** — status age calculations, query trace/log naming, MCP ping timestamps, and MCP suggestion persistence can now be driven by `TimeProvider` for deterministic tests.
+- **Suggestion `CreatedAt` is now stamped at persistence time (#1618)** — new suggestions receive their creation timestamp inside the store's locked write path, aligning the recorded time with when the suggestion enters the local store.
+- **Global tool logs are now per process (#1619)** - persistent stderr log files now include the process ID and start time in their filename, preventing concurrent `cdidx` processes from appending to the same daily file.
+- **Ignore parsing now follows leading-whitespace comment and pattern rules (#1620)** — `.gitignore` and `.cdidxignore` lines now trim leading unescaped whitespace before detecting comments or patterns, while escaped leading spaces and escaped `#` remain literal pattern characters.
+- **Git LFS pointer placeholders are no longer indexed as code (#1622)** — pointer files now emit `lfs_pointer_skipped`, keep their placeholder text out of search results, and document `git lfs pull` as the recovery path.
+- **Global tool logs now have a default size cap (#1625)** - persistent stderr logs rotate at 50 MiB by default, and operators can tune the byte cap with `CDIDX_GLOBAL_TOOL_LOG_MAX_BYTES` while retaining the existing `--log-max-size-mb` option.
+- **Console width detection no longer hides unexpected failures (#1629)** — width probing now catches only documented console exceptions, records fallback use, honors `COLUMNS` after failed probing, and emits a one-time verbose trace.
+- **Outline now surfaces language section markers (#1636)** — C# `#region`, Python module docstrings, and JavaScript/TypeScript JSDoc `@module` markers are emitted as `heading` symbols for table-of-contents style outline views.
+- **Read commands now support lightweight `count` and `compact` output formats (#1642)** — CLI `search`, `definition`, `references`, `callers`, `callees`, `find`, and `validate` can return count-only or file/line-only payloads through `--format`, while MCP search/definition/reference/caller/callee tools accept `format: "count"` or `format: "compact"` without emitting excerpts or full result metadata.
+- **Successful writer sessions now truncate-checkpoint the SQLite WAL (#1644)** — writable DB contexts attempt `PRAGMA wal_checkpoint(TRUNCATE)` after write work so large `codeindex.db-wal` sidecars are reclaimed after successful maintenance and index runs.
+- **Status now exposes per-language readiness details (#1647)** - `status --json` includes `language_readiness` so clients can distinguish language-scoped readiness from aggregate readiness fields.
+- **Ignore-file reads now avoid exists/read TOCTOU gaps (#1653)** — the scanner reads ignore files directly, treats files deleted during the read window as absent rules, and keeps other I/O failures from silently indexing with unknown local ignore state.
+- **File reads now retry once when mtime changes during indexing (#1654)** — `FileIndexer` rechecks `LastWriteTimeUtc` after reading content and retries once before persisting metadata, reducing stale mtime/content races.
+- **Mid-scan deletes remain non-fatal purge candidates (#1655)** — files that disappear during scan probing are recorded as skipped non-indexable paths with warnings, preserving directory purge authority instead of leaving orphan rows behind.
+- **Dangling symlinks are now reported distinctly (#1656)** — directory symlink targets that cannot be resolved are warned as dangling symlinks and counted as `dangling_symlinks_skipped` in full-scan JSON summaries.
+- **Permission-denied ignore files now preserve inherited rules (#1657)** — unreadable `.gitignore` / `.cdidxignore` files are reported as warnings while previously loaded ancestor rules remain active for the scan.
+- **Ignore-pattern regexes now have complexity bounds (#1658)** — ignore rules are capped in length and compiled with the non-backtracking regex engine plus a match timeout to avoid excessive regex work from malformed patterns.
+- Return the stable `UnhandledException` exit code `99` for unexpected command-dispatch failures instead of reusing the database-error exit code.
+- **Human CLI index output now uses invariant numeric formatting (#1662)** — progress and index summaries consistently use culture-independent decimal and thousands separators to match JSON-facing expectations.
+- Classify unhandled SQLite `BUSY`, `LOCKED`, and `READONLY` failures as transient database exit code `6`, while keeping permanent SQLite failures on database exit code `3`.
+- **Elixir pipe chains now preserve call targets (#1664)** — `|>` calls to both `Module.function(...)` and local `function(...)` targets are indexed as call references.
+- **R S4 dispatch calls now emit graph references (#1665)** — `setGeneric`, `setClass`, and `setMethod` calls now add generic, class, and class-qualified method binding references so S4 dispatch edges are visible to graph queries.
+- **PowerShell splatted hashtables now expose parameter references (#1666)** — simple assignments such as `$params = @{ Path = "." }` now let calls like `Get-ChildItem @params` emit `parameter` references for the hashtable keys.
+- **MCP `index` now respects client roots (#1687)** — cdidx advertises roots support, refreshes `roots/list` when available, and rejects `index` paths outside the granted client roots instead of relying only on the current working directory.
+- **Per-directory `.cdidxignore` precedence is now covered by regression tests (#1712)** - child `.cdidxignore` files can further exclude paths or re-include files without leaking those rules into sibling directories.
+- **MCP DbReader lifetimes are now disposed deterministically (#1714)** - per-request readers and the index-project signal reader release their per-reader caches when the call finishes.
+- **Ignore path normalization now respects POSIX backslashes (#1715)** — `.cdidxignore` and `.gitignore` comparisons no longer rewrite literal backslashes in POSIX filenames while Windows paths still normalize separators.
+- **MCP server startup now handles loop failures before process exit (#1716)** - stdio and HTTP MCP entry points log unexpected failures and flush stdout/stderr before returning an error exit code.
+- **Project-root escape checks now reject backslash traversal (#1717)** — commit and file-scoped indexing paths treat `..\` traversal the same as `../` before accepting a relative target.
+- **MCP index now reports per-file failures instead of silently swallowing them (#1720)** - index responses include `failed_count` and a capped failure list when individual files fail.
+- **CLI project-path detection now follows platform path syntax (#1725)** — Windows drive and UNC forms are recognized on Windows, while POSIX filenames containing literal backslashes are no longer treated as path syntax.
+- **Locked in atomic unchanged-file reuse (#1735)** — `GetUnchangedFileId` now has regression coverage ensuring checksum drift does not touch stale file metadata.
+- **Made metadata stamps participate in transaction boundaries (#1753)** — `SetMeta` now joins writer transactions or uses a SQLite savepoint for standalone writes so metadata and dependent rows can roll back together.
+- **MCP tools now reject misspelled arguments (#1778)** — `tools/list` schemas advertise `additionalProperties: false`, and `tools/call` returns an invalid-argument error when a request includes an unknown field.
+- **Partial update ignore-file changes are now covered by regression tests (#1782)** - `--files` updates that include `.gitignore` or `.cdidxignore` fall back to a full scan so newly ignored stale rows are purged from the index.
+- **Documented query profiling output for slow query diagnosis (#1786)** — query commands expose `--profile` and `--slow-query-ms` profiling so operators can inspect query timing and SQL diagnostics without patching the source.
+- **Added an environment-controlled SQLite slow-query log (#1789)** — `CDIDX_SLOW_QUERY_MS` now emits slow tracked SQLite commands to stderr without requiring source patches.
+- **Redacted sensitive suggestion text before persistence (#1796)** — `SuggestionStore` now masks common credential and token patterns before writing local suggestion history or submitting to GitHub, with stderr warnings that name only the redaction types.
+- **Checkpoint WAL before read-only fallback (#1798)** — writable-open fallback now attempts `wal_checkpoint(TRUNCATE)` first and exposes fallback/checkpoint diagnostics in `status --json`.
+- **CI test timeout and blame diagnostics (#1821)** — Added test runsettings with a session timeout and xUnit long-running diagnostics, enabled VSTest crash/hang blame capture in CI, and uploaded blame artifacts with TRX results.
+- **Elixir protocol implementations are now indexed (#1824)** — `defimpl Protocol, for: Type` blocks produce `protocol_impl` symbols and type references for both the protocol and implemented type names.
+- **GraphQL input fields and union variants are now indexed as anchors (#1825)** — `input` members are emitted as `property` symbols and `union` variants as `reference` symbols, including `extend` and multiline union declarations.
+- **File metadata queries no longer run per-row count subqueries (#1827)** — `files` and exact file lookup now use grouped count joins for symbol and reference totals, avoiding repeated correlated scans on large indexes.
+- **Validated `suggest_improvement` write targets before locking (#1921)** — the MCP tool now probes the resolved `.cdidx` directory for writability before entering the suggestion-store lock and includes `cdidx_dir` in success and duplicate payloads.
+- **find_in_file now supports opt-in regex matching (#1930)** - CLI `find --regex` and MCP `find_in_file` `regex` treat the query as a regular expression with a timeout and report invalid patterns instead of silently returning literal misses.
+- **Symbol hotspots now break ranking ties deterministically (#1934)** — hotspot results now sort equal scores and counts by path, line, name, kind, and symbol id, and the MCP tool description documents that order.
+- **Bounded live suggestion history (#1940)** — `SuggestionStore` now prunes stale or over-limit records into `.cdidx/suggestions-*.archive.jsonl`, with configurable `suggestion_max_age_days` and `suggestion_max_count` settings.
+- **Scala extractor now indexes for-comprehension and evidence-based dispatch edges (#1942)** — Scala `for` generators, `implicit` declarations, and Scala 3 `given` / `using` evidence types now produce symbols or graph references for impact analysis.
+- **Symbol query normalization now reuses normalized multi-query inputs (#1954)** — recursive symbol searches and counts skip a second normalization/materialization pass after the query list has already been normalized.
+- **Reference deduplication now keeps distinct containers (#1974)** — reference extraction now includes container kind and name in the in-memory dedupe key so same-position references from different enclosing symbols are preserved.
+- **Type alias heritage references now include the underlying type (#1976)** — TypeScript `type Alias = Target` and Swift `typealias Alias = Target` indirection now emits an additional `type_reference` from alias-mediated heritage uses to the underlying type.
+- **Lisp reader macros no longer create phantom definitions (#2004)** — quoted and quasiquoted forms are excluded from symbol definition extraction so macro templates do not appear as real functions.
+- **Perl hash constant keys are normalized and deduplicated (#2005)** — quoted keys are trimmed, escape-decoded, Unicode-normalized, and deduplicated against equivalent bareword constants.
+- **DbDebug now preserves row-read exception chains (#2010)** - debug dumps include exception chains captured while snapshotting row fields and a root-cause line for faster diagnosis.
+- **Generated completion scripts now carry the generating `cdidx` version (#2013)** — bash, zsh, fish, and PowerShell completion output includes a version marker and regeneration guidance so stale completions can be audited after upgrades.
+- **Definition symbol ordering now has a stable column tie-breaker (#2015)** — symbol searches now order same-name, same-path, same-line results by `start_column` and symbol id so definition output stays deterministic.
+- **Outline depth now disambiguates same-named containers by qualified path (#2016)** — nested symbols now attach to the matching qualified parent, preventing duplicate class names in different scopes from skewing outline depth.
+- **Time-dependent tests now use an explicit test clock (#2034)** — MCP timestamp and suggestion lifecycle coverage use `ManualTimeProvider` instead of depending on wall-clock time or hardcoded fixture dates.
+- **Full self-indexing no longer stalls while extracting C# symbols (#2710, #2711, #2717)** — C# symbol extraction now reuses the per-line multi-line member candidate during pattern matching, avoiding repeated expensive lookahead on large source files.
+- **Git-backed test fixtures no longer inherit commit signing (#2729)** — temporary repositories created by test helpers now disable commit and tag signing locally so fixture commits do not prompt for signing-key passphrases.
+- **Persistent stderr mirroring no longer cascades disposed-writer failures (#2730)** — the global tool log tee now treats closed console/log writers as best-effort failures instead of throwing `ObjectDisposedException` back into test or CLI callers.
+- **C# symbol extraction no longer repeatedly rescans method bodies as field candidates (#2740)** — large C# files such as `SymbolExtractor.JavaScriptTypeScriptSupport.cs` now avoid a quadratic property-header fallback during full indexing.
+- **Extraction-stall diagnostics now point at bounded recovery for pathological symbol output (#2744)** - `E013_INDEX_EXTRACTION_STALLED` keeps the active file/phase and now suggests using `--max-symbols-per-file` or excluding the reported file when full refresh stalls on symbol extraction.
+- **Stabilized process-global test parallelism (#2747)** — Moved `FileIndexerTests`, `CdidxConfigFileTests`, and `GlobalToolLogTests` into the existing non-parallel test collection because they temporarily change process current directory, environment, or console state.
+- Fixed the MCP `index` tool so the advertised `maxFileBytes` argument is accepted instead of rejected as unknown.
+- **NuGet release packages now normalize the random core-properties part name (#2756)** — the release workflow rewrites `.nupkg` and `.snupkg` archives so NuGet's generated `package/services/metadata/core-properties/*.psmdcp` entry uses a stable path before package validation, hashing, and publishing.
+- **net9 test runs no longer close shared console capture writers (#2775)** - console capture helpers now restore global streams without disposing captured writers, and changelog console tests run in the non-parallel test collection.
+- **Native AOT analyzer warnings no longer block ordinary test builds (#2786)** — `IL3050` diagnostics now remain warnings under the repository-wide warnings-as-errors policy, matching the existing trim analyzer treatment so targeted `dotnet test` runs can build before executing tests.
+
+#### Deprecated
+
+- **Deprecated `find --count --json` `file_count` alias (#1423)** - `files` is now documented and tested as the canonical matched-file count, while `file_count` remains as a compatibility alias with the same value and is not scheduled for removal before the next major release.
+
+#### Security
+
+- **Installer staging directories are now private (#1449)** — `install.sh` now applies `0700` permissions immediately after creating its temporary staging directory so intermediate release artifacts are not world-readable under permissive umasks.
+- **Release artifacts now receive GitHub provenance attestations (#1674)** - release archives, SBOMs, checksum manifests, and checksum signatures now get GitHub build provenance attestations so users can verify they came from the repository release workflow.
+- **Release-critical paths now have CODEOWNERS coverage (#1677)** - workflow, installer, package project, and NuGet configuration changes now route through repository-owner review once branch protection requires CODEOWNERS approval.
+- **Installer downloads can now verify GitHub provenance attestations (#1678)** - `install.sh` now verifies release archives and `sha256sums.txt` through GitHub provenance attestations when `gh` is available, and `CDIDX_REQUIRE_ATTESTATION=1` makes installs fail closed if that second-channel verification cannot complete.
+- **Restricted SQLite database file permissions on POSIX (#1794)** — cdidx now applies `0600` to `codeindex.db` and WAL/SHM sidecars and reports `db_file_mode` in `status --json`.
+- **Windows release binaries are Authenticode-signed (#1845)** — Windows release builds now import the release signing certificate from GitHub Actions secrets, sign `cdidx.exe`, and verify the signature before the ZIP artifact is uploaded.
+- **Release checksum manifests are now GPG-signed (#1847)** - the release workflow now publishes `sha256sums.txt.asc` alongside `sha256sums.txt` and documents manual verification before trusting downloaded assets.
+
+#### Documentation
+
+- Synced missing Japanese user-guide details with the English reader-error and interrupt-code documentation.
+- **Clarified CodeIndex design boundaries** — README now describes CodeIndex as a local-first code index and retrieval backend for humans and AI agents, while keeping editor, chat, autonomous change, and optional semantic-ranking layers outside the core scope.
+- **Documented `hotspots --group-by-name` count semantics (#1596)** — the help text and user guide now state that grouped JSON `count` is the returned name/kind group count, with separate fields for definition sites, references, and files.
+- **Documented project-local `.cdidxignore` semantics (#1621)** — the user guide and CLI help now describe where `.cdidxignore` is loaded, its Git-style syntax, and how it extends `.gitignore` rules.
+- **Documented `cdidx validate` in user-facing help and guides (#1694)** — `validate` now appears in the top-level command summaries, README, and developer guidance so indexed-content validation is discoverable without reading source.
+- **Documented DB compatibility policy (#1718)** — Added a bilingual compatibility contract for schema readiness bits, `codeindex_meta` stamps, upgrade/downgrade behavior, and rebuild requirements.
+
+#### Internal
+
+- **Formatting and warning drift are now gated (#1609)** — the repository has root formatting metadata, CI verifies `dotnet format`, and builds treat compiler warnings as errors with an explicit allowlist for existing trim-analysis warnings.
+- **Common developer tasks now have shared wrappers (#1611)** — contributors can run build, test, lint, format, coverage, MCP smoke, and clean tasks through `make` or `./dev.sh`, and CI verifies the wrapper path.
+- **Added CI allocation budgets for extraction hot paths (#1667)** — symbol and reference extraction now have fixed C# fixture allocation checks to catch memory-pressure regressions before indexing slows down.
+- **Added weekly DbWriter mutation testing (#1669)** — Stryker.NET now runs against the DbWriter transaction and rollback surface on a scheduled workflow with documented score gates.
+- **Native AOT analyzer diagnostics no longer fail regular CI builds (#2786)** — current IL3050 diagnostics remain visible as warnings while format verification focuses on whitespace and follow-up AOT compatibility work is tracked separately.
+
 ### [1.26.3] - 2026-05-26
 
 #### Fixed
@@ -2975,6 +3166,197 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.27.0] - 2026-06-01
+
+#### 追加
+
+- **進捗 animation を無効化できるようになりました (#1630)** - `cdidx` は `--no-progress`、`CDIDX_DISABLE_PROGRESS=1`、`PREFERS_REDUCED_MOTION` を尊重し、animated spinner frame の代わりに静的な進捗テキストを表示します。
+- **support 診断用の `cdidx doctor` を追加しました (#1632)** — CLI が bug report 向けに、version / RID / OS・runtime / terminal 状態 / DB・log path 解決 / config ヒント / 安全な `CDIDX_*` 変数を含む redacted environment summary を出力するようになりました。
+- **`deps` がグラフ形式の出力と依存サイクル検出に対応しました (#1634)** — `deps` はグラフ出力形式とサイクルのみを返すモードを受け付けるようになり、可視化やサイクル分析ツールへ依存データを直接渡せます。
+- **`map` がセクション選択とモジュール深さ制御に対応しました (#1635)** — `map` は必要なセクションと深さを指定できるようになり、MCP / CLI 呼び出し側が全体ペイロード不要時に小さなリポジトリ俯瞰を取得できます。
+- **status と index diagnostics を拡張しました (#1637, #1680, #1792, #1817)** — `status --json` は DB/WAL サイズ、言語別 symbol-kind 件数、process heap / GC / working-set metrics、直近 index 実行 metadata を返し、`index --json --memory-trace` は memory samples を出力して peak working set を保存するようになりました。
+- **MCP の search / references / excerpt レスポンスが次の読み取り手順を提案するようになりました (#1641)** - 非空レスポンスに `next_step_suggestion` を含め、エージェントが search / reference のヒットから `excerpt` へ、また excerpt から `outline` へ迷わず進めるようにしました。
+- **on-disk schema を確認する `cdidx db schema` を追加しました (#1646)** — 新しいコマンドは SQLite schema entries と `PRAGMA user_version` を出力し、自動化向けに `--json` も提供します。
+- **ctags export を追加しました (#1649)** — `cdidx export ctags` が indexed symbols から editor native の `tags` file を出力し、`--output` と `--db` options に対応しました。
+- **`cdidx lsp` が read-only の Language Server Protocol shim を起動できるようになりました (#1650)** — LSP-native editor は MCP adapter なしで `cdidx lsp --db .cdidx/codeindex.db` を stdio 起動し、workspace symbol、document symbol、definition、reference を取得できます。
+- **公式 container image の公開 (#1651)** — release は repository の Dockerfile から Docker image を build し、`ghcr.io/widthdom/codeindex:<version>` と `ghcr.io/widthdom/codeindex:latest` を push するようになりました。CI と container 化した MCP workflow 向けの利用方法も文書化しました。
+- **MCP と SQLite 処理向けの opt-in ActivitySource tracing を追加しました (#1679)** — CodeIndex は `CodeIndex` activity source を公開し、MCP request / SQLite query span を作成し、MCP `params._meta.traceparent` を親 trace context として扱うようになりました。
+- **MCP の `suggest_improvement` が triage メタデータ抽出に client sampling を使えるようになりました (#1686)** — 接続クライアントが sampling を advertise し、`CDIDX_MCP_SAMPLING` が無効化されていない場合、cdidx は保存前に `sampling/createMessage` で短いタイトルとタグを抽出し、元の投稿内容を保持したまま sampling 非対応時は従来経路にフォールバックします。
+- **MCP tool が stability marker を公開するようになりました (#1696)** — 公開される全 tool に `x-stability` を追加し、experimental な tool は `tools/list` で明示します。
+- monorepo member 構成を宣言する JSON workspace manifest (`cdidx.workspace.json` / `.cdidx-workspace.json`) と `cdidx workspace list/status` を追加しました。
+- 検出された workspace config、active workspace state、config 優先順位を表示する `cdidx config show` を追加しました。
+- `cdidx workspace use/current` による永続 active workspace state と、明示 flag / 環境設定の後に使われる query DB 解決を追加しました。
+- **directory scan 向けに `--follow-symlinks none|internal|all` を追加しました (#1711)** — indexing は既定で directory symlink を辿らず、workspace 内 target のみ、または全 target を明示 opt-in できます。
+- **DB checkpoint / restore を追加しました (#1721)** — `cdidx db checkpoint`、`cdidx db checkpoints --list`、`cdidx db restore` で `codeindex.db` を snapshot / rollback でき、`backfill-fold` は `--no-checkpoint` を渡さない限り row を変更する前に自動 checkpoint を作成します。
+- **portable index archive の export/import を追加しました (#1726)** — `cdidx export <archive>` / `cdidx import <archive>` で manifest 付きの CodeIndex database を CI や別 machine で再利用でき、import 時の `--prune-paths` に対応しました。
+- **stale DB rows を処理する `cdidx db prune --dry-run|--apply` を追加しました (#1728)** — このコマンドは orphaned `symbol_references`、`reference_lines`、`symbols` rows を集計または削除し、apply 後に `PRAGMA optimize` を実行します。
+- **クエリコマンドで読み取り専用 DB オープンを追加しました (#1730)** — クエリコマンドは `--read-only` / `--immutable` を受け付け、通常の DB パスを SQLite の immutable read-only URI に変換します。
+- **HTTP MCP event stream が opt-in の keep-alive notification を送れるようになりました (#1740)** — `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` を設定すると `/events` に `notifications/keep_alive` frame を送信します。
+- **YAML ベースのカスタムシンボルパターンを追加しました (#1756)** — `.cdidx/patterns/*.yaml` と `~/.config/cdidx/patterns/*.yaml` から regex symbol extractor を読み込めるようになり、軽量な言語パターンをバイナリ外に置けます。
+- **ユーザー単位・workspace 単位の language-map override を追加しました (#1757)** — `~/.config/cdidx/langmap.yaml` と `.cdidx-langmap.yaml` の拡張子 alias が組み込み言語判定を上書きし、`.kts.in` のような複合サフィックスにも対応します。
+- **`cdidx test-extractor` を追加しました (#1759)** — contributor は full index を作らず、`--language` と `--file` で単一ファイルの symbol extraction を実行し、JSON 出力や expected symbols fixture との比較ができます。
+- **MCP health probe が構造化された liveness 情報を返すようになりました (#1791)** — `ping` は health field を返し、HTTP MCP は orchestrator probe 向けに同じ JSON を `GET /healthz` で提供します。
+- **MCP の空結果レスポンスに復旧ヒントを追加しました (#1812)** - search、definition、references、callers、callees、excerpt、impact analysis、unused symbols、symbol hotspots の空レスポンスに、理由と次に試す操作を示す `recovery_hint` を追加しました。
+- **長い index 完了通知を追加しました (#1835)** — `cdidx index` は `--notify=<auto|bell|osc9|desktop|none>` と `CDIDX_NOTIFY` に対応し、人間向け実行では5秒以上の run だけ通知し、quiet/json では抑制します。
+- **組み込みの CSV / TSV query formatter を追加しました (#1941)** — formatter 対応の read 系コマンドで `--format csv` と `--format tsv` を指定でき、スクリプトや CI が JSON を再シリアライズせずに表形式の出力を扱えます。
+- **index 後の next-step guidance を追加しました (#1963)** — 成功した人間向け full-scan 出力に、search / definition / MCP / database / 除外設定 / language summary の簡潔な案内を出し、JSON と quiet 出力は維持します。
+
+#### 変更
+
+- CLI と MCP の query limit 既定値を共有定数へ集約し、既定値をレビューしやすくしました。
+- **definition JSON が C# disambiguator hint を返すようになりました (#1638)** — `definition` は、インデックス済み C# metadata で同名定義を区別できる場合に overload、partial type、extension receiver の hint を返します。
+- `tools/list` で公開される MCP `search` ツール説明を短縮し、tokenizer や ranking の詳細案内は `USER_GUIDE.md` に寄せました。
+- **top-level help の既定表示を短くしました (#1702)** — `cdidx --help` は簡潔な概要を表示し、完全版は `--help-all` / `--help-extended`、共有 flag 一覧は `--help-flags` で確認できます。
+- **MCP の構造化 JSON payload key を snake_case に統一しました (#1723)** — MCP protocol envelope field は維持しつつ、手組みの SQL / exact signal payload が CLI JSON の命名規則と揃いました。
+- **impact の 0 件 JSON が構造化された失敗経路を返すようになりました (#2002)** — `impact` は 0 件時に `impact_failure_chain` と `suggestion_type` を返し、`impact --strict` は解決または graph の前提条件失敗で非 0 終了します。
+
+#### 修正
+
+- **MCP の excerpt / find_in_file が過大な前後文脈をクランプするようになりました (#1413, #1414)** - MCP の `before` / `after` が上限を超えた場合は 1000 行に丸め、`contextTruncated` で通知することで、誤って数百万行のレスポンスを生成しないようにしました。
+- MCP `references`、`callers`、`callees` が要求 limit に達した結果ページで truncation metadata を返すことを確認しました。
+- **MCP ツール引数の型不一致が JSON-RPC invalid params を返すようになりました (#1417)** — 文字列の `limit` など誤った JSON 型は、internal/tool failure に落ちず `-32602` と構造化されたパラメータ詳細を返します。
+- **各 command の usage 行で `--limit` と並べて `--top` を表示するようになりました (#1422)** — result cap alias を受け付ける query command が `[--limit <n>|--top <n>]` を記載し、parser と shell-completion schema と一致します。
+- **`mcp` / `completions` の help で `--json` 非対応を明示するようになりました (#1424)** - subcommand help に `--json` が非対応であることを記載し、直接 `--json` を指定した場合のエラーも各コマンドの出力形式に合わせて説明します。
+- **`excerpt` が MCP 形式の行番号 alias を受け付けるようになりました (#1429)** - `cdidx excerpt` は `--start` / `--end` の alias として `--start-line` / `--end-line` を受け付けるようになり、MCP と CLI の間を行き来するときのつまずきを減らします。
+- **エージェント用 bash guard が GitHub 引数内のコマンド名単語で誤拒否しなくなりました (#1432)** - 共有 guard は quoted title/body ではなく実行されるコマンド token に対してコマンド名チェックを行うため、`gh issue` や `gh pr` の本文で `find`、`open`、`grep`、`cdidx` などの語を扱えます。
+- **Python の複数行 f-string がリテラル本文から参照を出さなくなりました (#1438)** — 三重引用符の f-string 本文を物理行をまたいでマスクしつつ、補間式内の実参照は引き続き抽出します。
+- **Go のジェネリックメソッドで型パラメータを参照抽出に残すようになりました (#1440)** - `func (r *Repo) Get[T Constraint](input Input) T` のような receiver メソッドで型パラメータリストを値パラメータリストと誤認せず、制約・引数型・戻り値の参照をメソッドに紐づけます。
+- **PHP 8.4 property hook が accessor scope と hook 本文の参照を公開するようになりました (#1445)** - `get` / `set` hook 本文をプロパティに紐づけ、hook 式内の参照を `property.get` / `property.set` accessor 配下で解決します。
+- **長すぎる token だけの FTS クエリに検索診断を追加しました (#1458, #1606, #1776)** — 0 件 JSON は長すぎる token のみの literal FTS クエリを区別し、literal 検索は Unicode 入力を NFC 正規化し、validation は FTS5 unicode61 の 1000 文字上限を超える token を `fts_token_too_long` として報告します。
+- **MCP index が同じデータベースへの同時実行を拒否するようになりました (#1459)** — `index` ツールは index 状態を変更する前にデータベース単位の排他ロックを取得し、別の実行中処理がある場合は保持情報付きの明確な busy error を返します。
+- MCP `suggest_improvement` の応答に `github_submission_reason` を追加し、ローカル保存された提案が GitHub に転送されなかった理由をクライアントが判別できるようにしました。
+- **MCP `backfill_fold` が進捗を返し、中断された行 rewrite を再開できるようになりました (#1461)** — folded-key 行更新は最終 FoldReady stamp の前に永続化され、MCP 応答に `progress.rows_done`、`progress.rows_total`、`progress.fraction` を含めます。
+- **MCP search がページング安定性メタデータを返すようになりました (#1462)** - `search` レスポンスに `result_stable_at` を含め、非空ページには `next_cursor` を含めることで、クライアントが index drift を検出し前ページの anchor から継続できるようにしました。
+- **release 検証が RID 別の install asset を確認するようになりました (#1463)** — 公開済み release に対する install smoke test は、汎用的な macOS native library 名ではなく matrix RID から期待 binary と native SQLite asset を決めるようになりました。
+- **ディレクトリ走査が再帰深度と symlink 再訪問を抑止するようになりました (#1466)** — symlink follow が有効な場合でも `cdidx index` は symlink loop の再走査を避け、無制限再帰の代わりに警告を記録します。
+- **checksum が chunk に保存される BOM 除去後の内容と一致するようになりました (#1467)** — 行頭の UTF-8 BOM を checksum 計算前に正規化し、incremental freshness と excerpt の行メタデータのずれを防ぎます。
+- **MCP 起動ログが既定で完全な DB パスを公開しないようになりました (#1469)** — 起動バナーは `CDIDX_DEBUG=unsafe` が設定されていない限り、サニタイズ済みの DB ファイル名だけを記録します。
+- **MCP catch-all エラー応答が既定で例外詳細を隠すようになりました (#1470)** — 予期しないツール/ループ失敗は wire 上では汎用メッセージを返し、詳細診断は stderr に残します。詳細応答は `CDIDX_DEBUG=unsafe` の場合だけ有効です。
+- **MCP `batch_query` が失敗スコープを返すようになりました (#1472)** — batch response に `failure_scope`（`none` / `isolated` / `cascading`）を追加し、truncation により後続スロットを実行できない場合は `cascade_started_at_index` も返します。
+- **Lua の参照抽出が colon メソッド呼び出しと table field 読み取りを扱うようになりました (#1478)** — Lua 抽出は `obj:method(...)` 呼び出しと table field 読み取り参照を記録し、method call、table-key 定義、vararg signature をテストで固定しました。
+- **Razor component tag 参照で dot 付き component 名を保持するようになりました (#1479)** - `<MyApp.Components.Forms.LoginButton />` のようなタグで namespace 部分を落とさず、完全修飾 component 名への call 参照を出します。
+- **Terraform の参照抽出がコロン付き provider と module output に対応しました (#1480)** — Terraform references は `aws:s3_bucket` のようなコロン付き provider resource type と `module.web.outputs.endpoint` のような module output path を抽出するようになりました。
+- **Ruby DSL と metaprogramming の参照抽出が静的 command allowlist だけに制限されなくなりました (#1481)** — Ruby 抽出は custom DSL command と `send`、`public_send`、`define_method` の symbol literal target を記録するようになりました。
+- **PowerShell の関数呼び出し抽出がローカル関数名に対応しました (#1482)** — PowerShell の参照抽出は、hyphenated な cmdlet 形式の名前に加えて、単純なユーザー定義関数呼び出しを認識します。
+- **Dart の参照抽出が Dart 3 の構造的な関係を記録するようになりました (#1483)** — Dart references は sealed subtype、extension、mixin、named constructor の関係を専用 reference kind で記録するようになりました。
+- **status readiness degradation に構造化 guidance を追加しました (#1484, #1931)** — `status --json` は multi-degraded 状態を含むすべての degraded readiness field について `degraded_root_cause` と `readiness_degradations[]` を返すようになりました。
+- **status が issue table の存在と issue row の鮮度を分離しました (#1486)** — `issues_table_available` は物理 table の存在を表し、`file_issues_data_current` が validate issue row が現在の index generation に対して current かどうかを表します。
+- **status が active migration/write window を識別するようになりました (#1761)** — `status --json` は `migration_in_progress` を公開し、クライアントが一時的な writer activity と恒久的な readiness degradation を区別できるようになりました。
+- **hotspot family readiness が行単位の family key を検証するようになりました (#1485)** - current な hotspot-family metadata が stamp 済みでも、indexed symbol に NULL の `family_key` が残っている場合は `status` と hotspot reader が degraded として扱います。
+- **find_in_file が snippet 行数指定に対応しました (#1593)** - CLI の `find --snippet-lines N` と MCP `find_in_file` の `snippetLines` で、別途 `excerpt` を呼ばずに一致箇所の前後文脈を広げたり狭めたりできます。
+- **find が focus line / column 指定に対応しました (#1597)** - CLI の `find --focus-line` / `--focus-column` と MCP `find_in_file` の focus 引数で、指定したソース位置に一致する結果へ絞り込めます。
+- **CodeIndex ビルドで trim / AOT analyzer 警告が表面化するようになりました (#1598)** - CLI プロジェクトが trim 互換性を宣言し、trim / AOT analyzer と箇所別の trimmer 警告を有効化したため、reflection に依存するリリース問題を trimmed バイナリ公開前に検出できます。
+- **CodeIndex パッケージビルドが deterministic な Source Link メタデータを有効化しました (#1602)** - CLI プロジェクトで deterministic build、CI 向け再現性フラグ、repository URL 公開、build-only の GitHub Source Link、commit date ベースのビルドメタデータを有効にし、リリースシンボルが安定したリポジトリ上のソースへ対応できるようにしました。
+- **index が 1 ファイルあたりの symbol 出力数を制限できるようになりました (#1604)** - `cdidx index --max-symbols-per-file N` は 1 ファイルが過剰な symbol を出す場合に file content / symbols / references を保存せず、DB を肥大化させる代わりに `symbol_count_exceeded` issue を残します。
+- MCP `excerpt` に出力 byte 上限を追加し、行境界で content を切り詰めて `truncated` と `truncation_reason: output_size_cap` を返すようにしました。
+- **read-only fallback が stale ready bit を信頼する前に fold-ready 行を検証するようになりました (#1607)** - read-only fallback 経路で開いた reader は、ready bit が立っていても folded-name 行が未完成なら `fold_ready` を degraded に降格します。
+- **CI が coverage report を収集するようになりました (#1608)** — build workflow は XPlat Code Coverage collector 付きでテストを実行し、Cobertura report を lane ごとの artifact としてアップロードします。
+- **CI の flaky test 分類 (#1610)** — CI テストに1回限りの bounded retry を追加し、初回失敗後の再実行で成功した場合に `flaky-retry.txt` artifact marker を残すようにしました。
+- **テスト並列実行の監査ガイド (#1612)** — 直列実行または明示的な cleanup guard が必要なテストクラス向けに、共有状態の inventory を文書化しました。
+- **folded-key の保守処理をプレビュー可能かつ再試行判定しやすくしました (#1613, #1703, #1919)** — `backfill-fold --dry-run` と MCP `backfill_fold` の `dry_run` は書き込まず対象行数を返し、MCP 応答は FoldReady の前後状態と完了済み状態を示し、復旧時には `force` で metadata の短絡判定を避けて全 key を再生成できます。
+- **`suggest_improvement` の GitHub Issue タイトルを sanitize しました (#1614)** — 外部送信用の提案 Issue タイトルから markdown のリンク/画像構文文字を除去し、category 文字列も防御的に上限を設けてから投稿します。
+- **MCP `batch_query` が内側引数の型不一致を拒否するようになりました (#1615)** — batched tool slot は dispatch 前に argument JSON の型を検証するため、`"limit": "twenty"` のような値は既定値に戻らず slot error になります。
+- **MCP `batch_query` が top-level の部分失敗件数を返すようになりました (#1616)** — batch response に top-level の `total_count`、`success_count`、`failure_count`、`partial_failure` を追加し、クライアントが全 slot を走査せず集計失敗を検出できるようにしました。
+- **時刻に依存する CLI / MCP 経路が注入可能な clock を使うようになりました (#1617)** — status の経過時間計算、query trace / log のファイル名、MCP ping の timestamp、MCP suggestion の永続化を `TimeProvider` で決定論的にテストできるようになりました。
+- **suggestion の `CreatedAt` を永続化時に記録するようになりました (#1618)** — 新規 suggestion の作成時刻は store のロックされた書き込み経路内で付与され、ローカル store に入った時刻と一致するようになりました。
+- **グローバルツールログをプロセス単位に分離しました (#1619)** - 永続 stderr ログファイル名にプロセス ID と開始時刻を含め、複数の `cdidx` プロセスが同じ日次ファイルへ同時追記しないようにしました。
+- **ignore parsing が先頭空白つきのコメントとパターン規則に従うようになりました (#1620)** — `.gitignore` / `.cdidxignore` の行はコメントやパターン判定の前に未エスケープの先頭空白を取り除き、エスケープされた先頭空白と `#` は引き続きリテラルのパターン文字として扱います。
+- **Git LFS pointer placeholder を code として index しないようになりました (#1622)** — pointer file は `lfs_pointer_skipped` を出し、placeholder 本文を検索結果から除外し、復旧手順として `git lfs pull` を案内します。
+- **グローバルツールログに既定のサイズ上限を追加しました (#1625)** - 永続 stderr ログは既定で 50 MiB に達するとローテーションし、既存の `--log-max-size-mb` に加えて `CDIDX_GLOBAL_TOOL_LOG_MAX_BYTES` でバイト単位の上限を調整できます。
+- **console width 検出が想定外の失敗を隠さないようになりました (#1629)** — 幅取得は既知の console 例外だけを捕捉し、fallback 使用を記録し、失敗時に `COLUMNS` を優先し、verbose で一度だけ trace を出します。
+- **outline が言語ごとの section marker を表示するようになりました (#1636)** — C# `#region`、Python module docstring、JavaScript/TypeScript JSDoc `@module` marker を `heading` symbol として出力し、目次型の outline で扱えるようにしました。
+- **read 系コマンドで軽量な `count` / `compact` 出力形式を使えるようになりました (#1642)** — CLI の `search`、`definition`、`references`、`callers`、`callees`、`find`、`validate` は `--format` により、MCP の search / definition / reference / caller / callee 系ツールは `format: "count"` または `format: "compact"` により、excerpt や完全な結果メタデータを出さずに count-only または file/line-only の payload を返せます。
+- **成功した writer session が SQLite WAL を truncate checkpoint するようになりました (#1644)** — 書き込みを行った DB context は `PRAGMA wal_checkpoint(TRUNCATE)` を試行し、成功した maintenance / index 実行後に肥大化した `codeindex.db-wal` sidecar を回収します。
+- **status が言語別 readiness の詳細を返すようになりました (#1647)** - `status --json` に `language_readiness` を追加し、クライアントが aggregate readiness と言語単位の readiness を区別できるようにしました。
+- **ignore file 読み込みが exists/read の TOCTOU 差分を避けるようになりました (#1653)** — scanner は ignore file を直接読み、読み込み窓で削除されたファイルはルールなしとして扱い、その他の I/O 失敗では未知のローカル ignore 状態で黙って index しないようにしました。
+- **index 中に mtime が変わったファイル読み取りを 1 回 retry するようになりました (#1654)** — `FileIndexer` は content 読み取り後に `LastWriteTimeUtc` を再確認し、metadata 保存前に 1 回 retry することで stale mtime/content race を減らします。
+- **scan 中に削除されたファイルを非 fatal な purge 候補として扱います (#1655)** — probe 中に消えたファイルは warning 付きの non-indexable path として記録され、directory purge の authority を失わず orphan row を残しにくくなります。
+- **dangling symlink を個別に報告するようになりました (#1656)** — 解決できない directory symlink target は dangling symlink として warning され、full-scan JSON summary の `dangling_symlinks_skipped` に計上されます。
+- **権限不足の ignore file でも継承済みルールを維持するようになりました (#1657)** — 読み取れない `.gitignore` / `.cdidxignore` は warning として報告しつつ、既に読み込まれた ancestor rules は scan 中に有効なまま維持します。
+- **ignore pattern regex に複雑性上限を追加しました (#1658)** — malformed pattern による過剰な regex 処理を避けるため、ignore rule の長さを制限し、non-backtracking regex engine と match timeout でコンパイルします。
+- コマンド実行中の予期しない失敗で database error の終了コードを流用せず、安定した `UnhandledException` 終了コード `99` を返すようにしました。
+- **人間向け CLI index 出力が invariant な数値形式を使うようになりました (#1662)** — progress と index summary は JSON の期待と揃うよう、culture に依存しない小数点と桁区切りを一貫して使います。
+- catch-all まで到達した SQLite の `BUSY`、`LOCKED`、`READONLY` 失敗を一時的なデータベース終了コード `6` に分類し、永続的な SQLite 失敗はデータベース終了コード `3` のままにしました。
+- **Elixir pipe chain の呼び出し先を保持するようになりました (#1664)** — `|>` による `Module.function(...)` とローカル `function(...)` の両方を call reference として index します。
+- **R の S4 dispatch 呼び出しが graph 参照を出力するようになりました (#1665)** — `setGeneric`、`setClass`、`setMethod` 呼び出しが generic、class、class-qualified method binding の参照を追加し、S4 dispatch edge が graph query から見えるようになりました。
+- **PowerShell の splat された hashtable がパラメーター参照を出力するようになりました (#1666)** — `$params = @{ Path = "." }` のような単純な代入から、`Get-ChildItem @params` が hashtable key の `parameter` 参照を出力します。
+- **MCP の `index` が client roots を尊重するようになりました (#1687)** — cdidx は roots support を advertise し、利用可能な場合は `roots/list` を更新して、許可された client root 外の `index` path を current working directory 判定だけに頼らず拒否します。
+- **ディレクトリごとの `.cdidxignore` 優先順位を回帰テストで固定しました (#1712)** - 子ディレクトリの `.cdidxignore` が追加除外や再 include を行っても、その規則が sibling ディレクトリへ漏れないことを確認します。
+- **MCP の DbReader lifetime を決定的に破棄するようにしました (#1714)** - リクエスト単位の reader と index-project の signal reader が、呼び出し終了時に reader 内キャッシュを解放します。
+- **ignore path 正規化が POSIX の backslash を尊重するようになりました (#1715)** — `.cdidxignore` / `.gitignore` の比較で POSIX ファイル名内のリテラル backslash を書き換えず、Windows path では引き続き区切り文字を正規化します。
+- **MCP server 起動経路がループ失敗をプロセス終了前に処理するようにしました (#1716)** - stdio / HTTP MCP の entry point は予期しない失敗をログに残し、stdout/stderr を flush してからエラー終了します。
+- **project root 外への escape 判定が backslash traversal を拒否するようになりました (#1717)** — commit / file scoped indexing path は relative target を受け入れる前に `..\` traversal を `../` と同じように扱います。
+- **MCP index がファイル単位の失敗を黙殺せず報告するようにしました (#1720)** - 個別ファイルの処理に失敗した場合、応答に `failed_count` と上限付きの失敗一覧を含めます。
+- **CLI の project path 判定がプラットフォーム別の path 構文に沿うようになりました (#1725)** — Windows では drive / UNC 形式を認識し、POSIX ではリテラル backslash を含むファイル名を path 構文として扱わないようになりました。
+- **未変更ファイル再利用の atomic 契約を固定しました (#1735)** — `GetUnchangedFileId` に checksum drift 時に古い file metadata を touch しない regression coverage を追加しました。
+- **metadata stamp が transaction 境界に参加するようにしました (#1753)** — `SetMeta` は writer transaction に参加し、単独書き込みでは SQLite savepoint を使うため、metadata と依存 row をまとめて rollback できます。
+- **MCP tool が綴り間違いの引数を拒否するようになりました (#1778)** — `tools/list` schema は `additionalProperties: false` を公開し、`tools/call` は未知の field を含むリクエストに invalid-argument error を返します。
+- **部分更新で ignore file が変わった場合の挙動を回帰テストで固定しました (#1782)** - `.gitignore` や `.cdidxignore` を含む `--files` 更新は full scan に切り替わり、新たに ignore 対象になった古い行を index から削除します。
+- **遅い query 診断向けの query profiling output を明記しました (#1786)** — query command は `--profile` と `--slow-query-ms` による profiling を提供し、ソース修正なしで query timing と SQL diagnostics を確認できるようになりました。
+- **環境変数で制御できる SQLite slow-query log を追加しました (#1789)** — `CDIDX_SLOW_QUERY_MS` により、ソース修正なしで遅い tracked SQLite command を stderr に出力できるようになりました。
+- **提案テキストを保存前に redaction するようにしました (#1796)** — `SuggestionStore` はローカルの提案履歴保存や GitHub 送信の前に一般的な credential/token パターンをマスクし、stderr には redaction 種別だけを警告します。
+- **読み取り専用フォールバック前に WAL checkpoint を試みるようにしました (#1798)** — writable open のフォールバック前に `wal_checkpoint(TRUNCATE)` を試行し、fallback / checkpoint 診断を `status --json` に出します。
+- **CI テストの timeout / blame 診断 (#1821)** — セッションタイムアウトと xUnit long-running 診断を含む test runsettings を追加し、CI で VSTest の crash/hang blame 収集を有効化して、TRX と一緒に blame artifact をアップロードするようにしました。
+- **Elixir protocol implementation を index するようになりました (#1824)** — `defimpl Protocol, for: Type` block は `protocol_impl` symbol と、protocol/type 双方への type reference を生成します。
+- **GraphQL input field と union variant を anchor として index するようになりました (#1825)** — `input` member は `property` symbol、`union` variant は `reference` symbol として出力され、`extend` と複数行 union 宣言にも対応します。
+- **ファイルメタデータ取得で行ごとの count サブクエリを実行しないようにしました (#1827)** — `files` と完全一致のファイル取得は symbol / reference 件数を集約 JOIN で取得し、大規模 index での相関 scan の繰り返しを避けます。
+- **`suggest_improvement` の書き込み先を lock 前に検証するようにしました (#1921)** — MCP tool は suggestion-store lock に入る前に解決済み `.cdidx` ディレクトリへ書き込み probe を行い、成功/重複 payload に `cdidx_dir` を含めます。
+- **find_in_file が opt-in regex 検索に対応しました (#1930)** - CLI の `find --regex` と MCP `find_in_file` の `regex` はクエリをタイムアウト付き正規表現として扱い、不正なパターンは literal miss ではなくエラーとして返します。
+- **symbol hotspots の同点順位を決定的にしました (#1934)** — hotspot 結果は同じ score / count の行を path、line、name、kind、symbol id で並べ、MCP tool description でもその順序を明記しました。
+- **live の提案履歴に上限を設けました (#1940)** — `SuggestionStore` は古いまたは上限超過の record を `.cdidx/suggestions-*.archive.jsonl` に退避し、`suggestion_max_age_days` と `suggestion_max_count` で設定できます。
+- **Scala extractor が for comprehension と evidence-based dispatch edge を索引するようになりました (#1942)** — Scala の `for` generator、`implicit` 宣言、Scala 3 の `given` / `using` evidence type が、impact analysis 用の symbol または graph reference を生成するようになりました。
+- **複数 symbol query の正規化済み入力を再利用するようにしました (#1954)** — 再帰的な symbol search / count は、query list がすでに正規化済みの場合に二度目の正規化・materialize を行いません。
+- **reference dedupe が異なる container を保持するようになりました (#1974)** — reference extraction はメモリ上の dedupe key に container kind / name を含めるため、異なる enclosing symbol からの同一位置 reference が保持されます。
+- **type alias 経由の継承参照で underlying type も記録するようになりました (#1976)** — TypeScript の `type Alias = Target` と Swift の `typealias Alias = Target` 経由の継承利用で、alias だけでなく underlying type への追加 `type_reference` も出力します。
+- **Lisp の reader macro が phantom 定義を作らなくなりました (#2004)** — quote / quasiquote されたフォームをシンボル定義抽出から除外し、マクロテンプレートが実関数として現れないようにしました。
+- **Perl の hash constant キーを正規化して重複排除するようになりました (#2005)** — quoted key を trim・escape decode・Unicode 正規化し、等価な bareword constant と重複しないようにしました。
+- **DbDebug が row read 例外チェーンを保持するようにしました (#2010)** - 行フィールドの snapshot 中に捕捉した例外チェーンと root-cause 行を debug dump に含め、原因特定を容易にします。
+- **生成された補完 script に生成元の `cdidx` version を含めるようになりました (#2013)** — bash、zsh、fish、PowerShell の completion output に version marker と再生成案内を含め、upgrade 後に古い補完を確認できます。
+- **definition のシンボル順序に安定した column tie-breaker を追加しました (#2015)** — symbol search は同じ name / path / line の結果を `start_column` と symbol id で並べるため、definition 出力が決定的になりました。
+- **outline depth が同名 container を qualified path で区別するようになりました (#2016)** — nested symbol は一致する qualified parent に紐づくため、別 scope の同名 class が outline depth を誤らせなくなりました。
+- **時刻依存テストが明示的な test clock を使うようになりました (#2034)** — MCP timestamp と suggestion lifecycle のカバレッジは wall-clock や固定 fixture 日付に依存せず `ManualTimeProvider` を使うようになりました。
+- **C# シンボル抽出中に full self-indexing が停止しないようになりました (#2710, #2711, #2717)** — C# シンボル抽出はパターン照合中に行単位の複数行メンバー候補を再利用し、大きなソースファイルで高コストな先読みを繰り返さないようになりました。
+- **Git を使うテスト fixture が commit signing を引き継がなくなりました (#2729)** — テストヘルパーが作る一時リポジトリでは commit / tag signing を repo-local に無効化し、fixture commit が署名キーのパスフレーズ入力を要求しないようにしました。
+- **永続 stderr mirror が閉じた writer の失敗を連鎖させなくなりました (#2730)** — global tool log の tee は、閉じた console/log writer をベストエフォートの失敗として扱い、`ObjectDisposedException` をテストや CLI 呼び出し元へ投げ返さないようになりました。
+- **C# シンボル抽出がメソッド本体をフィールド候補として繰り返し再走査しなくなりました (#2740)** — `SymbolExtractor.JavaScriptTypeScriptSupport.cs` のような大きな C# ファイルで、full index 中の property header fallback が二乗的に重くなる経路を避けます。
+- **extraction stall 診断が病的な symbol 出力への bounded recovery を示すようになりました (#2744)** - `E013_INDEX_EXTRACTION_STALLED` は active file / phase を保持したまま、full refresh が symbol extraction で止まる場合に `--max-symbols-per-file` または該当ファイルの除外を案内します。
+- **process-global state を触るテストの並列実行を安定化しました (#2747)** — `FileIndexerTests`、`CdidxConfigFileTests`、`GlobalToolLogTests` は一時的に process current directory、environment、console state を変更するため、既存の非並列 test collection に移しました。
+- MCP `index` ツールで、公開済みの `maxFileBytes` 引数が unknown argument として拒否されないよう修正しました。
+- **NuGet release package のランダムな core-properties part 名を正規化するようになりました (#2756)** — release workflow は package 検証、hash、publish の前に `.nupkg` / `.snupkg` archive を書き換え、NuGet が生成する `package/services/metadata/core-properties/*.psmdcp` entry を安定した path に固定します。
+- **net9 テスト実行で共有 console capture writer を閉じないようになりました (#2775)** - console capture helper は global stream を復元しても捕捉 writer を dispose せず、changelog の console テストも非並列 test collection で実行します。
+- **Native AOT analyzer 警告が通常のテストビルドを止めないようになりました (#2786)** — `IL3050` 診断をリポジトリ全体の warnings-as-errors 設定下でも警告として扱い、既存の trim analyzer と同じ扱いにすることで、対象を絞った `dotnet test` がテスト実行前のビルドで失敗しないようにしました。
+
+#### 非推奨
+
+- **`find --count --json` の `file_count` エイリアスを非推奨にしました (#1423)** - `files` を一致ファイル数の正規フィールドとして文書化しテストで固定しました。`file_count` は同じ値を返す互換エイリアスとして残り、次のメジャーリリースより前に削除される予定はありません。
+
+#### セキュリティ
+
+- **installer の staging directory を private にしました (#1449)** — `install.sh` は一時 staging directory 作成直後に `0700` 権限を適用し、緩い umask の環境でも中間 release artifact が他ユーザーから読めないようにしました。
+- **リリース成果物に GitHub provenance attestation を付与するようになりました (#1674)** - リリースアーカイブ、SBOM、チェックサム manifest、チェックサム署名に GitHub build provenance attestation を付与し、リポジトリの release workflow 由来であることを検証できるようにしました。
+- **リリース重要パスを CODEOWNERS でカバーしました (#1677)** - workflow、installer、package project、NuGet 設定の変更が、branch protection で CODEOWNERS 承認を必須化したときに repository owner review へ回るようになりました。
+- **installer download が GitHub provenance attestation を検証できるようになりました (#1678)** - `install.sh` は `gh` が利用可能な場合に release archive と `sha256sums.txt` を GitHub provenance attestation で検証し、`CDIDX_REQUIRE_ATTESTATION=1` を設定すると second-channel verification を完了できない場合に install を fail closed します。
+- **POSIX で SQLite DB ファイル権限を制限しました (#1794)** — cdidx は `codeindex.db` と WAL/SHM sidecar に `0600` を適用し、`status --json` に `db_file_mode` を出します。
+- **Windows release binary を Authenticode 署名するようになりました (#1845)** — Windows release build は GitHub Actions secrets から release signing certificate を import し、`cdidx.exe` に署名してから、ZIP artifact の upload 前に署名検証を行います。
+- **リリース checksum manifest を GPG 署名するようになりました (#1847)** - release workflow が `sha256sums.txt` と一緒に `sha256sums.txt.asc` を公開し、ダウンロードした成果物を信頼する前の手動検証手順を文書化しました。
+
+#### ドキュメント
+
+- User Guide の日本語版に、英語版にあった reader error と interrupt code の説明漏れを補記しました。
+- **CodeIndex の設計上の境界を明確化** — README で CodeIndex を人間と AI エージェント向けの local-first code index and retrieval backend として説明し、editor、chat、自律的な変更判断、optional な semantic ranking layer を core scope の外に位置づけました。
+- **`hotspots --group-by-name` の count semantics を明文化しました (#1596)** — help text と user guide で、grouped JSON の `count` は返された name/kind group 数であり、definition site、reference、file は別 field で確認することを明記しました。
+- **project-local `.cdidxignore` の意味論を文書化しました (#1621)** — user guide と CLI help で、`.cdidxignore` の読み込み場所、Git 形式の構文、`.gitignore` ルールを拡張する扱いを説明しました。
+- **`cdidx validate` をユーザー向け help と guide に記載しました (#1694)** — `validate` が top-level command summary、README、developer guidance に表示されるようになり、source を読まなくても indexed content validation を見つけられます。
+- **DB 互換性ポリシーを文書化しました (#1718)** — schema readiness bit、`codeindex_meta` stamp、upgrade / downgrade 時の動作、rebuild が必要な条件を説明する bilingual compatibility contract を追加しました。
+
+#### 内部変更
+
+- **format と warning の drift を CI で検出するようになりました (#1609)** — repository root に format metadata を追加し、CI が `dotnet format` を検証し、build では既存の trim-analysis warning を明示 allowlist に入れたうえで compiler warning を error として扱います。
+- **共通の開発タスクに共有 wrapper を追加しました (#1611)** — contributor は build / test / lint / format / coverage / MCP smoke / clean を `make` または `./dev.sh` から実行でき、CI でも wrapper 経路を検証します。
+- **抽出 hot path 向けの CI allocation budget を追加しました (#1667)** — symbol extraction と reference extraction に固定 C# fixture の allocation 検査を加え、indexing が遅くなる前にメモリ負荷の回帰を検出します。
+- **DbWriter の週次 mutation testing を追加しました (#1669)** — Stryker.NET が DbWriter の transaction / rollback 周辺を定期 workflow で検査し、score gate も文書化されました。
+- **Native AOT analyzer diagnostics で通常 CI build が失敗しなくなりました (#2786)** — 現在の IL3050 diagnostics は warning として表示しつつ、format verification は whitespace に絞り、AOT compatibility 対応は別途追跡します。
+
 ### [1.26.3] - 2026-05-26
 
 #### 修正
@@ -5928,7 +6310,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.26.3...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.27.0...HEAD
+[1.27.0]: https://github.com/Widthdom/CodeIndex/compare/v1.26.3...v1.27.0
 [1.26.3]: https://github.com/Widthdom/CodeIndex/compare/v1.26.2...v1.26.3
 [1.26.2]: https://github.com/Widthdom/CodeIndex/compare/v1.26.1...v1.26.2
 [1.26.1]: https://github.com/Widthdom/CodeIndex/compare/v1.26.0...v1.26.1
