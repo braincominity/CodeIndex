@@ -13,6 +13,9 @@ internal static class SwiftReferenceExtractor
     private static readonly Regex PropertyWrapperAttributeRegex = new(
         @"@(?<name>[A-Z]\w*(?:\.[A-Z]\w*)?)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex TypeAliasRegex = new(
+        @"^\s*(?:(?:public|private|internal|open|fileprivate|package)\s+)?typealias\s+(?<alias>`[^`]+`|\w+)(?:\s*<[^=]+>)?\s*=\s*(?<target>.+)$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly HashSet<string> NonWrapperPropertyAttributes = new(StringComparer.Ordinal)
     {
         "IBOutlet",
@@ -76,6 +79,89 @@ internal static class SwiftReferenceExtractor
             lineNumber,
             resolveContainerForColumn);
     }
+
+    public static Dictionary<string, string> BuildTypeAliasTargets(IReadOnlyList<string> preparedLines)
+    {
+        var aliases = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var line in preparedLines)
+        {
+            var match = TypeAliasRegex.Match(line);
+            if (!match.Success)
+                continue;
+
+            var target = match.Groups["target"].Value.Trim();
+            if (target.Length > 0)
+                aliases[TrimSwiftBackticks(match.Groups["alias"].Value)] = target;
+        }
+
+        return aliases;
+    }
+
+    public static void EmitAliasTargetReferences(
+        string preparedLine,
+        IReadOnlyDictionary<string, string> aliases,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        if (aliases.Count == 0 || TypeAliasRegex.IsMatch(preparedLine))
+            return;
+
+        foreach (var (alias, target) in aliases)
+        {
+            var searchStart = 0;
+            while (searchStart < preparedLine.Length)
+            {
+                var index = preparedLine.IndexOf(alias, searchStart, StringComparison.Ordinal);
+                if (index < 0)
+                    break;
+
+                searchStart = index + alias.Length;
+                if (!HasIdentifierBoundaries(preparedLine, index, alias.Length))
+                    continue;
+                var column = index + 1;
+                if (!references.Any(reference =>
+                        reference.FileId == fileId
+                        && reference.Line == lineNumber
+                        && reference.Column == column
+                        && reference.ReferenceKind == "type_reference"
+                        && string.Equals(reference.SymbolName, alias, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                    target,
+                    index,
+                    "swift",
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(index));
+            }
+        }
+    }
+
+    private static string TrimSwiftBackticks(string value) =>
+        value.Length >= 2 && value[0] == '`' && value[^1] == '`'
+            ? value[1..^1]
+            : value;
+
+    private static bool HasIdentifierBoundaries(string line, int start, int length)
+    {
+        var before = start == 0 ? '\0' : line[start - 1];
+        var afterIndex = start + length;
+        var after = afterIndex >= line.Length ? '\0' : line[afterIndex];
+        return !IsIdentifierPart(before) && !IsIdentifierPart(after);
+    }
+
+    private static bool IsIdentifierPart(char c) =>
+        c == '_' || char.IsLetterOrDigit(c);
 
     private static void EmitPropertyWrapperTypeReferences(
         string preparedLine,

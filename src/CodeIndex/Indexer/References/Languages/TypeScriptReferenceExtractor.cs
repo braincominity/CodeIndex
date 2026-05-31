@@ -37,6 +37,9 @@ internal static class TypeScriptReferenceExtractor
         "keyof",
         "readonly",
     };
+    private static readonly Regex TypeAliasRegex = new(
+        @"^\s*(?:export\s+)?type\s+(?<alias>[A-Za-z_$][\w$]*)(?:\s*<[^=;]+>)?\s*=\s*(?<target>[^;]+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static IReadOnlyList<NamespaceAliasBinding> BuildNamespaceAliasBindings(
         IReadOnlyList<string> originalLines,
@@ -224,6 +227,103 @@ internal static class TypeScriptReferenceExtractor
             context,
             lineNumber,
             resolveContainerForColumn);
+    }
+
+    public static Dictionary<string, string> BuildTypeAliasTargets(IReadOnlyList<string> preparedLines)
+    {
+        var aliases = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var line in preparedLines)
+        {
+            var match = TypeAliasRegex.Match(line);
+            if (!match.Success)
+                continue;
+
+            var target = TrimAliasTarget(match.Groups["target"].Value);
+            if (target.Length > 0)
+                aliases[match.Groups["alias"].Value] = target;
+        }
+
+        return aliases;
+    }
+
+    public static void EmitAliasTargetReferences(
+        string preparedLine,
+        IReadOnlyDictionary<string, string> aliases,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        if (aliases.Count == 0 || TypeAliasRegex.IsMatch(preparedLine))
+            return;
+
+        foreach (var (alias, target) in aliases)
+        {
+            var searchStart = 0;
+            while (searchStart < preparedLine.Length)
+            {
+                var index = preparedLine.IndexOf(alias, searchStart, StringComparison.Ordinal);
+                if (index < 0)
+                    break;
+
+                searchStart = index + alias.Length;
+                if (!HasIdentifierBoundaries(preparedLine, index, alias.Length))
+                    continue;
+                var column = index + 1;
+                if (!references.Any(reference =>
+                        reference.FileId == fileId
+                        && reference.Line == lineNumber
+                        && reference.Column == column
+                        && reference.ReferenceKind == "type_reference"
+                        && string.Equals(reference.SymbolName, alias, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                    target,
+                    index,
+                    "typescript",
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(index));
+            }
+        }
+    }
+
+    private static string TrimAliasTarget(string target)
+    {
+        var equalsTarget = target.Trim();
+        var stop = equalsTarget.Length;
+        foreach (var keyword in new[] { "extends", "implements" })
+        {
+            var keywordIndex = FindTopLevelKeyword(equalsTarget, keyword);
+            if (keywordIndex >= 0)
+                stop = Math.Min(stop, keywordIndex);
+        }
+
+        return equalsTarget[..stop].Trim();
+    }
+
+    private static int FindTopLevelKeyword(string line, string keyword)
+    {
+        foreach (var index in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(line, keyword))
+            return index;
+
+        return -1;
+    }
+
+    private static bool HasIdentifierBoundaries(string line, int start, int length)
+    {
+        var before = start == 0 ? '\0' : line[start - 1];
+        var afterIndex = start + length;
+        var after = afterIndex >= line.Length ? '\0' : line[afterIndex];
+        return !IsTypeScriptIdentifierPart(before) && !IsTypeScriptIdentifierPart(after);
     }
 
     private static void EmitAsTypeReferences(

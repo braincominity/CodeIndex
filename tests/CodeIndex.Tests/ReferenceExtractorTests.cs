@@ -5755,6 +5755,53 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptTypeAliasHeritage_EmitsUnderlyingTypeReference()
+    {
+        const string content = """
+            class SomeType {}
+            type MyAlias = SomeType;
+            class Derived extends MyAlias {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "MyAlias"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "SomeType"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived"
+            && reference.Context == "class Derived extends MyAlias {}");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptTypeAliasMixedValueUse_OnlyExpandsTypePositionOccurrence()
+    {
+        const string content = """
+            class SomeType {}
+            type MyAlias = SomeType;
+            function get(value: unknown) { return value; }
+            const x: MyAlias = get(MyAlias);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        var expanded = references
+            .Where(reference =>
+                reference.SymbolName == "SomeType"
+                && reference.ReferenceKind == "type_reference"
+                && reference.Context == "const x: MyAlias = get(MyAlias);")
+            .ToList();
+
+        Assert.Single(expanded);
+        Assert.Equal(10, expanded[0].Column);
+    }
+
+    [Fact]
     public void Extract_CsharpIndentedRawStringBeforeBlockComment_DoesNotLeakXmlDocReferences()
     {
         // Regression: BuildCSharpBlockCommentLines must recognize the closing delimiter of an
@@ -26209,6 +26256,53 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference =>
             reference.SymbolName == "NetworkLoader"
             && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftTypealiasHeritage_EmitsUnderlyingTypeReference()
+    {
+        const string content = """
+            class SomeType {}
+            typealias MyAlias = SomeType
+            class Derived: MyAlias {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "MyAlias"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "SomeType"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived"
+            && reference.Context == "class Derived: MyAlias {}");
+    }
+
+    [Fact]
+    public void Extract_SwiftTypealiasMixedValueUse_OnlyExpandsTypePositionOccurrence()
+    {
+        const string content = """
+            class SomeType {}
+            typealias MyAlias = SomeType
+            func get(_ value: Any) -> Any { value }
+            let x: MyAlias = get("MyAlias")
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        var expanded = references
+            .Where(reference =>
+                reference.SymbolName == "SomeType"
+                && reference.ReferenceKind == "type_reference"
+                && reference.Context == "let x: MyAlias = get(\"MyAlias\")")
+            .ToList();
+
+        Assert.Single(expanded);
+        Assert.Equal(8, expanded[0].Column);
     }
 
     [Fact]
