@@ -18,6 +18,17 @@ namespace CodeIndex.Tests;
 public class FileIndexerTests
 {
     [Fact]
+    public void NormalizeIgnorePath_PosixPreservesLiteralBackslash()
+    {
+        var normalized = FileIndexer.NormalizeIgnorePath(@"weird\name.py/");
+
+        if (OperatingSystem.IsWindows())
+            Assert.Equal("weird/name.py", normalized);
+        else
+            Assert.Equal(@"weird\name.py", normalized);
+    }
+
+    [Fact]
     public void ScanFilesDetailed_CancelledToken_ThrowsBeforeEnumeration()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-cancel-scan-{Guid.NewGuid():N}");
@@ -3054,6 +3065,154 @@ public class FileIndexerTests
         {
             File.Delete(path);
             yield return path;
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_DanglingDirectorySymlink_RecordsWarningAndCount()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-dangling-symlink-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var linkPath = Path.Combine(tempDir, "missing-link");
+            Directory.CreateSymbolicLink(linkPath, Path.Combine(tempDir, "missing-target"));
+
+            var result = new FileIndexer(tempDir).ScanFilesDetailed();
+
+            Assert.Contains("missing-link", result.DanglingSymlinks);
+            Assert.Contains(
+                result.Errors,
+                error => error.Path == "missing-link"
+                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Message.Contains("dangling symlink", StringComparison.OrdinalIgnoreCase));
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_FollowSymlinksInternal_SkipsOutOfTreeDirectorySymlink()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-policy-{Guid.NewGuid():N}");
+        var externalDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-external-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        Directory.CreateDirectory(externalDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(externalDir, "external.py"), "print('external')\n");
+            var linkPath = Path.Combine(tempDir, "external");
+            Directory.CreateSymbolicLink(linkPath, externalDir);
+
+            var indexer = new FileIndexer(
+                tempDir,
+                ignoreCase: false,
+                ignoreRuleRoot: null,
+                maxFileSizeBytes: null,
+                directoryIgnoreCaseProbe: null,
+                symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
+
+            var result = indexer.ScanFilesDetailed();
+
+            Assert.Empty(result.Files);
+            Assert.Contains(
+                result.Errors,
+                error => error.Path == "external"
+                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Message.Contains("symlinked directory", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+            if (Directory.Exists(externalDir))
+                Directory.Delete(externalDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_FollowSymlinksInternal_FollowsInTreeDirectorySymlinkOnce()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-internal-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var targetDir = Path.Combine(tempDir, "src");
+            Directory.CreateDirectory(targetDir);
+            File.WriteAllText(Path.Combine(targetDir, "app.py"), "print('app')\n");
+            Directory.CreateSymbolicLink(Path.Combine(tempDir, "src-link"), targetDir);
+
+            var indexer = new FileIndexer(
+                tempDir,
+                ignoreCase: false,
+                ignoreRuleRoot: null,
+                maxFileSizeBytes: null,
+                directoryIgnoreCaseProbe: null,
+                symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
+
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Single(files);
+            Assert.Contains(files[0], new[] { "src/app.py", "src-link/app.py" });
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_FollowSymlinksInternal_SkipsCycleToProjectRoot()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-symlink-cycle-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('app')\n");
+            Directory.CreateSymbolicLink(Path.Combine(tempDir, "self"), tempDir);
+
+            var indexer = new FileIndexer(
+                tempDir,
+                ignoreCase: false,
+                ignoreRuleRoot: null,
+                maxFileSizeBytes: null,
+                directoryIgnoreCaseProbe: null,
+                symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
+
+            var result = indexer.ScanFilesDetailed();
+
+            Assert.Single(result.Files);
+            Assert.Contains(
+                result.Errors,
+                error => error.Path == "self"
+                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Message.Contains("already scanned", StringComparison.OrdinalIgnoreCase));
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
         }
     }
 
