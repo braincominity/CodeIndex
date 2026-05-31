@@ -6502,7 +6502,7 @@ public class McpServerTests : IDisposable
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal(2, structured["symbols"]!.GetValue<int>());
         Assert.Equal(0, structured["symbol_references"]!.GetValue<int>());
@@ -6531,7 +6531,7 @@ public class McpServerTests : IDisposable
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{"dry_run":true}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
         var structured = response["result"]!["structuredContent"]!;
         Assert.True(structured["dry_run"]!.GetValue<bool>());
         Assert.Equal(2, structured["symbols"]!.GetValue<int>());
