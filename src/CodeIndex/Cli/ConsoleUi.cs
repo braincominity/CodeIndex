@@ -85,7 +85,7 @@ public static class ConsoleUi
         ("workspace", "cdidx workspace <list|status|use|current> [name] [--json]"),
         ("config", "cdidx config show [--json]"),
         ("validate-config", "cdidx validate-config"),
-        ("db", "cdidx db --integrity-check [--db <path>] [--json]"),
+        ("db", "cdidx db --integrity-check|schema|prune [--dry-run|--apply] [--db <path>] [--json]"),
         ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n>]"),
         ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n>] [--no-log] [--include-args]"),
         ("validate", "cdidx validate [--db <path>] [--json] [--verbose] [--kind <kind>] [--path <glob>]"),
@@ -768,6 +768,8 @@ public static class ConsoleUi
         Console.WriteLine("  upgrade                    Check for and install the latest release via install.sh");
         Console.WriteLine("  validate-config            Validate .cdidx/config.json or .cdidxrc.json");
         Console.WriteLine("  db --integrity-check       Run SQLite `PRAGMA integrity_check` and report findings");
+        Console.WriteLine("  db schema                  Dump SQLite schema entries and PRAGMA user_version");
+        Console.WriteLine("  db prune --dry-run|--apply Count or delete orphaned DB rows");
         Console.WriteLine("  diff <db1> <db2>           Compare two index databases; exit 0 identical, 1 drift, 2 schema mismatch, 3 unreadable");
         Console.WriteLine("  report --output <path>     Build a redacted crash-repro tarball (.tgz) for bug reports");
         Console.WriteLine("  validate                   Report encoding issues (U+FFFD, BOM, null bytes, mixed line endings, UTF-16 BOM, likely non-UTF8)");

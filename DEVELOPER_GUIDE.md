@@ -148,6 +148,8 @@ Scoped `--files` / `--commits` refreshes reuse the same path filter as full scan
 
 Incremental refreshes that mutate `fts_chunks` increment `codeindex_meta.fts_incremental_writes_since_optimize`. When the counter reaches `DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold`, the update path runs `INSERT INTO fts_chunks(fts_chunks) VALUES('optimize')`, resets the counter, and stamps `fts_last_optimized_at`. Users can run the same maintenance directly with `cdidx optimize --db <path>` or `cdidx index <projectPath> --optimize`; this may briefly hold the writer lock on large indexes.
 
+Successful writer sessions attempt `PRAGMA wal_checkpoint(TRUNCATE)` before closing a writable `DbContext`, so large WAL files are reclaimed after index, backfill, optimize, prune, and other DB-writing commands. `cdidx db schema [--json]` dumps `sqlite_master` entries plus `PRAGMA user_version` for schema inspection, and `cdidx db prune --dry-run|--apply [--json]` counts or deletes orphaned `symbol_references`, `reference_lines`, and `symbols` rows before running `PRAGMA optimize` on apply.
+
 ### Extending the indexer
 
 Out-of-tree post-extraction hooks can implement `CodeIndex.Indexer.Hooks.IPostExtractionHook` in a `.dll` placed under `~/.config/cdidx/hooks/` (or the directory named by `CDIDX_HOOKS_DIR`). Hook assemblies are discovered in path order. Each concrete hook type is instantiated with a public parameterless constructor, then called after built-in symbol extraction and again after built-in reference extraction, before rows are persisted. Hooks receive a `FileContext` plus mutable `IList<SymbolRecord>` / `IList<ReferenceRecord>` values, so they can annotate extracted records, add synthetic symbols, or add domain-specific references.
