@@ -541,6 +541,14 @@ public class DbWriter
         return cmd.ExecuteScalar() != null;
     }
 
+    public int CountSymbolsForFile(long fileId)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE file_id = @file_id";
+        cmd.Parameters.AddWithValue("@file_id", fileId);
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
     public IReadOnlyList<string> GetIndexedLanguages()
     {
         var languages = new List<string>();
