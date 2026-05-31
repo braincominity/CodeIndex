@@ -10,6 +10,23 @@ dotnet test
 dotnet run --project src/CodeIndex -- <command> [options]
 ```
 
+CLI help is intentionally layered: `cdidx --help` stays brief, `cdidx --help-all`
+prints the full command/flag/example reference, `cdidx --help-flags` prints only
+shared flag tables, and `cdidx <command> --help` prints one command's usage
+line. Keep new commands visible in the brief summary only when they are a
+primary user workflow; every command must remain present in the full help and
+command-specific usage table.
+
+`cdidx validate` is the user-facing integrity scan for indexed content issues
+such as replacement characters, BOMs, NUL bytes, mixed line endings, UTF-16 BOMs,
+and likely non-UTF8 content. Keep its CLI usage, README entry, and help summary
+in sync when adding validation issue kinds or filters.
+
+Generated shell completion scripts include a comment with the `cdidx` version
+that produced them. When command or flag schema changes, update completion
+tests and keep the README guidance that installed completions should be
+regenerated after upgrades.
+
 The production CLI and NuGet tool packaging target `net8.0`. The test project
 multi-targets `net8.0;net9.0`, and CI runs the test suite on both frameworks
 across Linux, Windows, and macOS. Use a .NET SDK that can restore and run both

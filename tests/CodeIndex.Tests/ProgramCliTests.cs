@@ -306,6 +306,38 @@ public class ProgramCliTests
         Assert.DoesNotContain("██████╗", stdout);
     }
 
+    [Fact]
+    public void TopLevelHelp_DefaultIsBriefAndExtendedHelpKeepsFullReference()
+    {
+        var (briefExit, briefStdout, briefStderr) = RunCliInSubprocess(["--help"]);
+        var (fullExit, fullStdout, fullStderr) = RunCliInSubprocess(["--help-all"]);
+
+        Assert.Equal(0, briefExit);
+        Assert.Equal(string.Empty, briefStderr);
+        Assert.Contains("cdidx --help-all", briefStdout);
+        Assert.Contains("cdidx --help-flags", briefStdout);
+        Assert.DoesNotContain("Index and update options:", briefStdout);
+
+        Assert.Equal(0, fullExit);
+        Assert.Equal(string.Empty, fullStderr);
+        Assert.Contains("Index and update options:", fullStdout);
+        Assert.Contains("cdidx index <projectPath> --commits <id>", fullStdout);
+        Assert.Contains("--limit <n>, --top <n>", fullStdout);
+    }
+
+    [Fact]
+    public void HelpFlags_PrintsFlagReferenceOnly()
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["--help-flags"]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Index and update options:", stdout);
+        Assert.Contains("Query options:", stdout);
+        Assert.Contains("--limit <n>, --top <n>", stdout);
+        Assert.DoesNotContain("Commands:", stdout);
+    }
+
     [Theory]
     [InlineData("completions")]
     [InlineData("completions", "--json")]
