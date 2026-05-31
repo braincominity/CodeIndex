@@ -290,6 +290,7 @@ public class ProgramCliTests
     [InlineData("deps", "cdidx deps")]
     [InlineData("map", "cdidx map")]
     [InlineData("status", "cdidx status")]
+    [InlineData("doctor", "cdidx doctor")]
     [InlineData("completions", "cdidx completions <shell>")]
     [InlineData("license", "cdidx license")]
     public void SubcommandHelp_PrintsCommandSpecificUsage(string command, string expectedUsage)
@@ -315,6 +316,7 @@ public class ProgramCliTests
             {
                 ["CDIDX_DATA_DIR"] = Path.Combine(Path.GetTempPath(), "cdidx-doctor-data"),
                 ["CDIDX_GITHUB_TOKEN"] = "secret-token-value",
+                ["CDIDX_PRIVATE_KEY"] = "private-key-value",
             });
 
         Assert.Equal(0, exitCode);
@@ -327,8 +329,10 @@ public class ProgramCliTests
         Assert.Contains("cdidx_env:", stdout);
         Assert.Contains("CDIDX_DATA_DIR", stdout);
         Assert.Contains("CDIDX_GITHUB_TOKEN", stdout);
+        Assert.Contains("CDIDX_PRIVATE_KEY", stdout);
         Assert.Contains("<redacted>", stdout);
         Assert.DoesNotContain("secret-token-value", stdout);
+        Assert.DoesNotContain("private-key-value", stdout);
     }
 
     [Fact]

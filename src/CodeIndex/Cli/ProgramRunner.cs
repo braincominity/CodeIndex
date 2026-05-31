@@ -151,14 +151,6 @@ internal static class ProgramRunner
             return CommandExitCodes.Success;
         }
 
-        if (args[0] == "doctor")
-        {
-            var doctorExitCode = RunDoctor(args[1..], appVersion);
-            GlobalToolLog.Info($"command_complete exit_code={doctorExitCode} command=doctor");
-            EmitCommandMetric("doctor", args, commandStartTimestamp, commandStopwatch, doctorExitCode);
-            return doctorExitCode;
-        }
-
         if (args[0] is "--completions" or "completions")
         {
             if (args[0] == "completions" && args.Length > 1 && ArgHelper.WantsHelp(args.AsSpan(1)))
@@ -182,6 +174,14 @@ internal static class ProgramRunner
             GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} subcommand_help=true");
             EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
             return CommandExitCodes.Success;
+        }
+
+        if (args[0] == "doctor")
+        {
+            var doctorExitCode = RunDoctor(args[1..], appVersion);
+            GlobalToolLog.Info($"command_complete exit_code={doctorExitCode} command=doctor");
+            EmitCommandMetric("doctor", args, commandStartTimestamp, commandStopwatch, doctorExitCode);
+            return doctorExitCode;
         }
 
         var easterEgg = args.FirstOrDefault(a => a is "--sushi" or "--coffee" or "--ramen" or "--wine" or "--beer" or "--matcha" or "--whisky");
@@ -482,6 +482,8 @@ internal static class ProgramRunner
         || name.Contains("AUTH", StringComparison.OrdinalIgnoreCase)
         || name.Contains("APIKEY", StringComparison.OrdinalIgnoreCase)
         || name.Contains("API_KEY", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("PRIVATE_KEY", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith("_KEY", StringComparison.OrdinalIgnoreCase)
         || name.Contains("CREDENTIAL", StringComparison.OrdinalIgnoreCase);
 
     internal static void EnsureRedirectedStdoutUsesUtf8()
