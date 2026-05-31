@@ -1,0 +1,392 @@
+using System.Buffers;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using CodeIndex.Database;
+using CodeIndex.Models;
+
+namespace CodeIndex.Lsp;
+
+internal sealed class LspServer : IDisposable
+{
+    private const int DefaultLimit = 50;
+    private readonly DbReader _reader;
+    private readonly string _version;
+    private readonly JsonSerializerOptions _jsonOptions;
+    private readonly string? _projectRoot;
+    private bool _shutdownRequested;
+
+    public LspServer(DbReader reader, string version, JsonSerializerOptions jsonOptions, string? projectRoot = null)
+    {
+        _reader = reader;
+        _version = version;
+        _jsonOptions = jsonOptions;
+        _projectRoot = string.IsNullOrWhiteSpace(projectRoot) ? null : projectRoot;
+    }
+
+    public void Run(Stream input, Stream output)
+    {
+        while (TryReadMessage(input, out var payload))
+        {
+            var response = HandleMessage(payload);
+            if (response != null)
+                WriteMessage(output, response.ToJsonString(_jsonOptions));
+        }
+    }
+
+    internal JsonObject? HandleMessage(string payload)
+    {
+        using var document = JsonDocument.Parse(payload);
+        var root = document.RootElement;
+        var method = root.TryGetProperty("method", out var methodElement) ? methodElement.GetString() : null;
+        var hasId = root.TryGetProperty("id", out var idElement);
+        JsonNode? id = hasId ? JsonNode.Parse(idElement.GetRawText()) : null;
+
+        if (method == null)
+            return hasId ? Error(id, -32600, "Invalid Request") : null;
+
+        try
+        {
+            return method switch
+            {
+                "initialize" => Result(id, BuildInitializeResult()),
+                "initialized" => null,
+                "shutdown" => HandleShutdown(id),
+                "exit" => null,
+                "workspace/symbol" => Result(id, WorkspaceSymbol(root)),
+                "textDocument/documentSymbol" => Result(id, DocumentSymbol(root)),
+                "textDocument/definition" => Result(id, Definition(root)),
+                "textDocument/references" => Result(id, References(root)),
+                _ => hasId ? Error(id, -32601, $"Method not found: {method}") : null,
+            };
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or JsonException or IOException)
+        {
+            return hasId ? Error(id, -32602, ex.Message) : null;
+        }
+    }
+
+    private JsonObject HandleShutdown(JsonNode? id)
+    {
+        _shutdownRequested = true;
+        return Result(id, null);
+    }
+
+    private JsonObject BuildInitializeResult() => new()
+    {
+        ["capabilities"] = new JsonObject
+        {
+            ["definitionProvider"] = true,
+            ["referencesProvider"] = true,
+            ["documentSymbolProvider"] = true,
+            ["workspaceSymbolProvider"] = true,
+            ["textDocumentSync"] = 0,
+        },
+        ["serverInfo"] = new JsonObject
+        {
+            ["name"] = "cdidx",
+            ["version"] = _version,
+        },
+    };
+
+    private JsonArray WorkspaceSymbol(JsonElement root)
+    {
+        var query = GetString(root, "params", "query");
+        var symbols = _reader.SearchSymbols(query, DefaultLimit);
+        var array = new JsonArray();
+        foreach (var symbol in symbols)
+            array.Add(ToWorkspaceSymbol(symbol));
+        return array;
+    }
+
+    private JsonArray DocumentSymbol(JsonElement root)
+    {
+        var path = GetDocumentPath(root);
+        var indexedPath = ResolveIndexedPath(path);
+        if (indexedPath == null)
+            return [];
+
+        var symbols = _reader.SearchSymbols((string?)null, 1000, pathPatterns: [indexedPath]);
+        var array = new JsonArray();
+        foreach (var symbol in symbols.OrderBy(s => s.StartLine).ThenBy(s => s.Name, StringComparer.Ordinal))
+            array.Add(ToDocumentSymbol(symbol));
+        return array;
+    }
+
+    private JsonArray Definition(JsonElement root)
+    {
+        var query = ExtractPositionToken(root);
+        if (string.IsNullOrWhiteSpace(query))
+            return [];
+
+        var definitions = _reader.GetDefinitions(query, DefaultLimit, exact: true);
+        var array = new JsonArray();
+        foreach (var definition in definitions)
+            array.Add(ToLocation(definition.Path, definition.StartLine, 1, definition.EndLine, 1));
+        return array;
+    }
+
+    private JsonArray References(JsonElement root)
+    {
+        var query = ExtractPositionToken(root);
+        if (string.IsNullOrWhiteSpace(query))
+            return [];
+
+        var analysis = _reader.AnalyzeSymbol(query, DefaultLimit, exact: true);
+        var array = new JsonArray();
+        foreach (var reference in analysis.References)
+            array.Add(ToLocation(reference.Path, reference.Line, Math.Max(reference.Column, 1), reference.Line, Math.Max(reference.Column, 1) + Math.Max(query.Length, 1)));
+        return array;
+    }
+
+    private string? ExtractPositionToken(JsonElement root)
+    {
+        var path = GetDocumentPath(root);
+        var line = GetInt32(root, "params", "position", "line");
+        var character = GetInt32(root, "params", "position", "character");
+        if (line < 0 || character < 0)
+            return null;
+
+        var resolved = Path.IsPathRooted(path) ? path : Path.GetFullPath(path);
+        if (!File.Exists(resolved))
+            return null;
+
+        var lines = File.ReadAllLines(resolved);
+        if (line >= lines.Length)
+            return null;
+
+        return ExtractTokenAtUtf16Position(lines[line], character);
+    }
+
+    internal static string? ExtractTokenAtUtf16Position(string line, int character)
+    {
+        if (character < 0)
+            return null;
+        var index = Math.Min(character, line.Length);
+        while (index > 0 && index == line.Length)
+            index--;
+        if (index < line.Length && !IsTokenChar(line[index]) && index > 0 && IsTokenChar(line[index - 1]))
+            index--;
+        if (index >= line.Length || !IsTokenChar(line[index]))
+            return null;
+
+        var start = index;
+        while (start > 0 && IsTokenChar(line[start - 1]))
+            start--;
+        var end = index + 1;
+        while (end < line.Length && IsTokenChar(line[end]))
+            end++;
+        return line[start..end].TrimStart('@');
+    }
+
+    private static bool IsTokenChar(char c) => char.IsLetterOrDigit(c) || c == '_' || c == '@';
+
+    private static bool MatchesDocumentPath(string indexedPath, string documentPath)
+    {
+        if (string.Equals(indexedPath, documentPath, StringComparison.Ordinal))
+            return true;
+
+        var normalizedIndexed = indexedPath.Replace('\\', '/');
+        var normalizedDocument = documentPath.Replace('\\', '/');
+        return normalizedDocument.EndsWith("/" + normalizedIndexed, StringComparison.Ordinal)
+            || string.Equals(Path.GetFileName(normalizedIndexed), Path.GetFileName(normalizedDocument), StringComparison.Ordinal);
+    }
+
+    private string? ResolveIndexedPath(string documentPath)
+    {
+        var fileName = Path.GetFileName(documentPath);
+        var files = _reader.ListFiles(fileName, 1000);
+        return files.FirstOrDefault(file => MatchesDocumentPath(file.Path, documentPath))?.Path;
+    }
+
+    private JsonObject ToWorkspaceSymbol(SymbolResult symbol) => new()
+    {
+        ["name"] = symbol.Name,
+        ["kind"] = SymbolKind(symbol.Kind),
+        ["location"] = ToLocation(symbol.Path, symbol.StartLine, 1, symbol.EndLine, 1),
+        ["containerName"] = symbol.ContainerName,
+    };
+
+    private static JsonObject ToDocumentSymbol(SymbolResult symbol) => new()
+    {
+        ["name"] = symbol.Name,
+        ["kind"] = SymbolKind(symbol.Kind),
+        ["range"] = ToRange(symbol.StartLine, 1, symbol.EndLine, 1),
+        ["selectionRange"] = ToRange(symbol.Line, 1, symbol.Line, 1),
+        ["detail"] = symbol.Signature,
+    };
+
+    private JsonObject ToLocation(string path, int startLine, int startColumn, int endLine, int endColumn) => new()
+    {
+        ["uri"] = PathToUri(path, _projectRoot),
+        ["range"] = ToRange(startLine, startColumn, endLine, endColumn),
+    };
+
+    private static JsonObject ToRange(int startLine, int startColumn, int endLine, int endColumn) => new()
+    {
+        ["start"] = new JsonObject
+        {
+            ["line"] = Math.Max(startLine - 1, 0),
+            ["character"] = Math.Max(startColumn - 1, 0),
+        },
+        ["end"] = new JsonObject
+        {
+            ["line"] = Math.Max(endLine - 1, 0),
+            ["character"] = Math.Max(endColumn - 1, 0),
+        },
+    };
+
+    private static int SymbolKind(string kind) => kind switch
+    {
+        "class" => 5,
+        "function" or "test.method" => 12,
+        "property" => 7,
+        "enum" => 10,
+        "interface" => 11,
+        "namespace" => 3,
+        "struct" => 23,
+        _ => 13,
+    };
+
+    private static string GetDocumentPath(JsonElement root)
+    {
+        var uri = GetString(root, "params", "textDocument", "uri");
+        if (string.IsNullOrWhiteSpace(uri))
+            throw new ArgumentException("textDocument.uri is required.");
+        return UriToPath(uri);
+    }
+
+    private static string? GetString(JsonElement root, params string[] path)
+    {
+        if (!TryGet(root, out var value, path) || value.ValueKind != JsonValueKind.String)
+            return null;
+        return value.GetString();
+    }
+
+    private static int GetInt32(JsonElement root, params string[] path)
+    {
+        if (!TryGet(root, out var value, path) || value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var result))
+            return -1;
+        return result;
+    }
+
+    private static bool TryGet(JsonElement root, out JsonElement value, params string[] path)
+    {
+        value = root;
+        foreach (var segment in path)
+        {
+            if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(segment, out value))
+                return false;
+        }
+        return true;
+    }
+
+    internal static string PathToUri(string path, string? projectRoot = null)
+    {
+        var fullPath = Path.IsPathRooted(path)
+            ? Path.GetFullPath(path)
+            : Path.GetFullPath(path, projectRoot ?? Environment.CurrentDirectory);
+        return new Uri(fullPath).AbsoluteUri;
+    }
+
+    internal static string UriToPath(string uri)
+    {
+        if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsed) || !parsed.IsFile)
+            return uri;
+        return parsed.LocalPath;
+    }
+
+    private static JsonObject Result(JsonNode? id, JsonNode? result) => new()
+    {
+        ["jsonrpc"] = "2.0",
+        ["id"] = id,
+        ["result"] = result,
+    };
+
+    private static JsonObject Error(JsonNode? id, int code, string message) => new()
+    {
+        ["jsonrpc"] = "2.0",
+        ["id"] = id,
+        ["error"] = new JsonObject
+        {
+            ["code"] = code,
+            ["message"] = message,
+        },
+    };
+
+    internal static bool TryReadMessage(Stream input, out string payload)
+    {
+        payload = string.Empty;
+        var contentLength = -1;
+        while (true)
+        {
+            var line = ReadAsciiLine(input);
+            if (line == null)
+                return false;
+            if (line.Length == 0)
+                break;
+            var colon = line.IndexOf(':');
+            if (colon <= 0)
+                continue;
+            var name = line[..colon].Trim();
+            var value = line[(colon + 1)..].Trim();
+            if (string.Equals(name, "Content-Length", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(value, out var parsed))
+            {
+                contentLength = parsed;
+            }
+        }
+
+        if (contentLength < 0)
+            return false;
+
+        var buffer = ArrayPool<byte>.Shared.Rent(contentLength);
+        try
+        {
+            var offset = 0;
+            while (offset < contentLength)
+            {
+                var read = input.Read(buffer, offset, contentLength - offset);
+                if (read == 0)
+                    return false;
+                offset += read;
+            }
+            payload = Encoding.UTF8.GetString(buffer, 0, contentLength);
+            return true;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    internal static void WriteMessage(Stream output, string payload)
+    {
+        var body = Encoding.UTF8.GetBytes(payload);
+        var header = Encoding.ASCII.GetBytes($"Content-Length: {body.Length}\r\n\r\n");
+        output.Write(header);
+        output.Write(body);
+        output.Flush();
+    }
+
+    private static string? ReadAsciiLine(Stream input)
+    {
+        var bytes = new List<byte>();
+        while (true)
+        {
+            var value = input.ReadByte();
+            if (value < 0)
+                return bytes.Count == 0 ? null : Encoding.ASCII.GetString(bytes.ToArray());
+            if (value == '\n')
+                break;
+            if (value != '\r')
+                bytes.Add((byte)value);
+        }
+        return Encoding.ASCII.GetString(bytes.ToArray());
+    }
+
+    public void Dispose()
+    {
+        _ = _shutdownRequested;
+    }
+}

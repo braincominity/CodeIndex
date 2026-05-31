@@ -903,7 +903,7 @@ jobs:
 
           cat > "$tap_dir/Formula/codeindex.rb" <<EOF
           class Codeindex < Formula
-            desc "CLI code indexing and MCP search for local repositories"
+            desc "CLI code indexing, MCP search, and LSP lookup for local repositories"
             homepage "${REPO_URL}"
             version "${VERSION}"
             license "FSL-1.1-ALv2"
