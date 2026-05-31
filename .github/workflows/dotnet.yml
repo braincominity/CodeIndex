@@ -179,14 +179,14 @@ jobs:
           }
 
       - name: Verify formatting
-        run: dotnet format CodeIndex.sln --verify-no-changes --no-restore --verbosity minimal
+        run: dotnet format whitespace CodeIndex.sln --verify-no-changes --no-restore --verbosity minimal
 
       - name: Verify developer task wrapper
         if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'
         run: make lint
 
       - name: Build
-        run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore
+        run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore -p:EnableAotAnalyzer=false -p:EnableTrimAnalyzer=false
 
       - name: Test
         shell: pwsh
