@@ -40,6 +40,8 @@ public static class DbDebug
     [ThreadStatic]
     private static List<(string Name, string Value)>? _lastRow;
     [ThreadStatic]
+    private static List<string>? _lastRowReadExceptionChains;
+    [ThreadStatic]
     private static bool _hasContext;
     [ThreadStatic]
     private static List<QueryProfileEntry>? _profileEntries;
@@ -169,6 +171,7 @@ public static class DbDebug
         _lastSql = null;
         _lastParams = null;
         _lastRow = null;
+        _lastRowReadExceptionChains = null;
         _hasContext = false;
     }
 
@@ -314,6 +317,8 @@ public static class DbDebug
             catch (Exception ex)
             {
                 row.Add((name, $"<error: {ex.GetType().Name}: {ex.Message}>"));
+                (_lastRowReadExceptionChains ??= new List<string>())
+                    .Add($"[{name}]\n{GlobalToolLog.FormatExceptionChain(ex, includeStacks: mode == DebugMode.Unsafe)}");
             }
         }
         _lastRow = row;
@@ -356,6 +361,15 @@ public static class DbDebug
             foreach (var (name, value) in _lastRow)
                 sb.AppendLine($"  [{name}] = {value}");
         }
+        if (_lastRowReadExceptionChains is { Count: > 0 })
+        {
+            sb.AppendLine("Row read exception chains:");
+            foreach (var chain in _lastRowReadExceptionChains)
+                sb.AppendLine(chain);
+        }
+        var rootCause = GetDeepestException(ex);
+        if (_lastRowReadExceptionChains is { Count: > 0 })
+            sb.AppendLine($"Root cause: {rootCause.GetType().Name}: {rootCause.Message}");
         if (mode != DebugMode.Unsafe && ex.StackTrace != null)
         {
             sb.AppendLine("Stack:");
@@ -363,6 +377,14 @@ public static class DbDebug
         }
         sb.AppendLine("--- END CDIDX_DEBUG ---");
         Console.Error.Write(sb.ToString());
+    }
+
+    private static Exception GetDeepestException(Exception ex)
+    {
+        var current = ex;
+        while (current.InnerException != null)
+            current = current.InnerException;
+        return current;
     }
 
     private static string FormatValue(object? value, DebugMode mode, string? valueName = null)
