@@ -6,8 +6,8 @@ using Microsoft.Data.Sqlite;
 namespace CodeIndex.Tests;
 
 /// <summary>
-/// Tests for `cdidx db --integrity-check` (issue #1517).
-/// `cdidx db --integrity-check` のテスト (issue #1517)。
+/// Tests for `cdidx db` maintenance commands.
+/// `cdidx db` 保守コマンドのテスト。
 /// </summary>
 [Collection("SQLite pool sensitive")]
 public class DbCommandRunnerTests
@@ -49,7 +49,26 @@ public class DbCommandRunnerTests
         var options = DbCommandRunner.ParseArgs(["something"]);
 
         Assert.NotNull(options.ParseError);
-        Assert.Contains("positional", options.ParseError);
+        Assert.Contains("unknown db command", options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_CheckpointCommandSetsModeAndName()
+    {
+        var options = DbCommandRunner.ParseArgs(["checkpoint", "before-upgrade"]);
+
+        Assert.Equal(DbCommandMode.Checkpoint, options.Mode);
+        Assert.Equal("before-upgrade", options.Name);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_RestoreRequiresName()
+    {
+        var options = DbCommandRunner.ParseArgs(["restore"]);
+
+        Assert.Equal(DbCommandMode.Restore, options.Mode);
+        Assert.Contains("requires", options.ParseError);
     }
 
     [Fact]
@@ -58,7 +77,7 @@ public class DbCommandRunnerTests
         var (exitCode, _, stderr) = RunAndCaptureStreams([]);
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains("db requires a mode flag", stderr);
+        Assert.Contains("db requires a mode", stderr);
         Assert.Contains("--integrity-check", stderr);
     }
 
@@ -146,6 +165,70 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_CheckpointAndRestore_RestoresDatabaseBytes()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        Directory.CreateDirectory(root);
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var originalBytes = File.ReadAllBytes(dbPath);
+            var (checkpointExit, checkpointOut, _) = RunAndCaptureStreams(["checkpoint", "saved", "--db", dbPath]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+            Assert.Contains("saved", checkpointOut);
+
+            File.WriteAllText(dbPath, "changed");
+
+            var (restoreExit, restoreOut, _) = RunAndCaptureStreams(["restore", "saved", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.Success, restoreExit);
+            Assert.Contains("Restored", restoreOut);
+            Assert.Equal(originalBytes, File.ReadAllBytes(dbPath));
+            Assert.Single(Directory.GetDirectories(root, "codeindex.db.restore-backup-*"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Run_CheckpointsList_JsonIncludesCreatedCheckpoint()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx_db_checkpoint_list_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        Directory.CreateDirectory(root);
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var (checkpointExit, _) = RunAndCaptureJson(["checkpoint", "listed", "--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, checkpointExit);
+
+            var (listExit, json) = RunAndCaptureJson(["checkpoints", "--list", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, listExit);
+            var checkpoints = json.GetProperty("checkpoints");
+            Assert.Single(checkpoints.EnumerateArray());
+            Assert.Equal("listed", checkpoints[0].GetProperty("name").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Run_CorruptedDb_ReturnsDatabaseError()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_corrupt_{Guid.NewGuid():N}.db");
@@ -180,14 +263,14 @@ public class DbCommandRunnerTests
     private (int ExitCode, string StdOut, string StdErr) RunAndCaptureStreams(string[] args)
     {
         using var capture = ConsoleCapture.Start(captureOut: true, captureError: true);
-        var exitCode = DbCommandRunner.RunIntegrityCheck(args, _jsonOptions);
+        var exitCode = DbCommandRunner.Run(args, _jsonOptions);
         return (exitCode, capture.Out!.ToString()!, capture.Error!.ToString()!);
     }
 
     private (int ExitCode, JsonElement Json) RunAndCaptureJson(string[] args)
     {
         using var capture = ConsoleCapture.Start(captureOut: true);
-        var exitCode = DbCommandRunner.RunIntegrityCheck(args, _jsonOptions);
+        var exitCode = DbCommandRunner.Run(args, _jsonOptions);
         using var document = JsonDocument.Parse(capture.Out!.ToString()!);
         return (exitCode, document.RootElement.Clone());
     }

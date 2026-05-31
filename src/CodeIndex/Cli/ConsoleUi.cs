@@ -62,7 +62,7 @@ public static class ConsoleUi
     [
         ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--optimize] [--verbose] [--dry-run] [--force] [--quiet] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--follow-symlinks <none|internal|all>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]] [--watch [--debounce <ms>]]"),
         ("hooks", "cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]"),
-        ("backfill-fold", "cdidx backfill-fold [--db <path>] [--dry-run] [--json]"),
+        ("backfill-fold", "cdidx backfill-fold [--db <path>] [--dry-run] [--no-checkpoint] [--json]"),
         ("optimize", "cdidx optimize [--db <path>] [--json]"),
         ("vacuum", "cdidx vacuum [--db <path>] [--json]"),
         ("index-commits", "cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
@@ -85,7 +85,7 @@ public static class ConsoleUi
         ("workspace", "cdidx workspace <list|status|use|current> [name] [--json]"),
         ("config", "cdidx config show [--json]"),
         ("validate-config", "cdidx validate-config"),
-        ("db", "cdidx db --integrity-check [--db <path>] [--json]"),
+        ("db", "cdidx db --integrity-check [--db <path>] [--json] | cdidx db checkpoint [name] [--db <path>] [--json] | cdidx db checkpoints --list [--db <path>] [--json] | cdidx db restore <name> [--db <path>] [--json]"),
         ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n>]"),
         ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n>] [--no-log] [--include-args]"),
         ("validate", "cdidx validate [--db <path>] [--json] [--verbose] [--kind <kind>] [--path <glob>]"),

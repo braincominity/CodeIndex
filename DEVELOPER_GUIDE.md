@@ -54,6 +54,13 @@ cdidx search AuthService --db /artifacts/codeindex.db --immutable
 Mutating commands such as `index`, `backfill-fold`, `optimize`, and `vacuum`
 require writable storage and reject read-only database opens.
 
+Use `cdidx db checkpoint <name>` to take a filesystem snapshot of
+`codeindex.db` plus existing WAL/SHM sidecars before risky maintenance, and use
+`cdidx db restore <name>` to roll back. Checkpoints live next to the DB under
+`<db>.checkpoints/<name>/`; restore keeps the pre-restore files under
+`<db>.restore-backup-<timestamp>/`. `backfill-fold` creates an automatic
+checkpoint before it mutates rows unless `--no-checkpoint` is passed.
+
 Database compatibility across `cdidx` binary upgrades and downgrades is
 documented in [COMPATIBILITY.md](COMPATIBILITY.md). Keep that policy updated
 whenever readiness bits, `codeindex_meta` contract stamps, or rebuild

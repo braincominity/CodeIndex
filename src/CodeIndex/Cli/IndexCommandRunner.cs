@@ -1351,6 +1351,7 @@ public sealed class BackfillFoldCommandOptions
     public string DbPath { get; init; } = Path.Combine(".cdidx", "codeindex.db");
     public bool Json { get; init; }
     public bool DryRun { get; init; }
+    public bool NoCheckpoint { get; init; }
     public string? ParseError { get; init; }
 }
 
