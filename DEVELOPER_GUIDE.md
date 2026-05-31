@@ -19,6 +19,19 @@ explicitly listed in `WarningsNotAsErrors` until they are fixed without blocking
 ordinary compiler-warning enforcement, and ILLink keeps reporting trim warnings
 without failing trimmed publish smoke tests.
 
+Common local workflows are also available through the top-level task wrappers:
+
+```bash
+make build
+make test
+make lint
+make coverage
+make mcp-smoke
+```
+
+Use `FRAMEWORK=net9.0 make test` to match the net9 CI lane. On systems without
+`make`, run the same tasks as `./dev.sh build`, `./dev.sh test`, and so on.
+
 CLI help is intentionally layered: `cdidx --help` stays brief, `cdidx --help-all`
 prints the full command/flag/example reference, `cdidx --help-flags` prints only
 shared flag tables, and `cdidx <command> --help` prints one command's usage
