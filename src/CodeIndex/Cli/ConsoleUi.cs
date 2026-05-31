@@ -350,6 +350,9 @@ public static class ConsoleUi
     // Track last progress line length for clearing / クリア用に最後のプログレス行の長さを記録
     private static int _lastProgressLineLength;
     private static bool _asciiOutputForced;
+    private static bool _widthDetectionFailed;
+    private static bool _widthDetectionTraceWritten;
+    private static bool _traceWidthDetectionFailures;
 
     /// <summary>
     /// Set progress bar spinner theme (reuses GetSpinnerFrames).
@@ -2008,6 +2011,10 @@ public static class ConsoleUi
 
     internal static bool IsAsciiOutputForced() => _asciiOutputForced;
 
+    internal static bool WidthDetectionFailed => _widthDetectionFailed;
+
+    internal static void SetWidthDetectionTracing(bool enabled) => _traceWidthDetectionFailures = enabled;
+
     /// <summary>
     /// Get console window width safely (some environments throw IOException).
     /// コンソール幅を安全に取得する（一部環境ではIOExceptionが発生する）。
@@ -2020,12 +2027,32 @@ public static class ConsoleUi
         try
         {
             var w = Console.WindowWidth;
-            return w > 0 ? w : 80;
+            if (w > 0)
+                return w;
         }
-        catch
+        catch (IOException ex)
         {
-            return 80;
+            return GetFallbackWindowWidth(ex);
         }
+        catch (NotSupportedException ex)
+        {
+            return GetFallbackWindowWidth(ex);
+        }
+
+        return GetFallbackWindowWidth(null);
+    }
+
+    private static int GetFallbackWindowWidth(Exception? exception)
+    {
+        _widthDetectionFailed = true;
+        if (_traceWidthDetectionFailures && !_widthDetectionTraceWritten)
+        {
+            var suffix = exception == null ? string.Empty : $" ({exception.GetType().Name}: {exception.Message})";
+            Console.Error.WriteLine($"cdidx: console width detection failed; using COLUMNS or 80 columns{suffix}");
+            _widthDetectionTraceWritten = true;
+        }
+
+        return TryGetColumnsEnvironmentWidth(out var columnsWidth) ? columnsWidth : 80;
     }
 
     private static bool TryGetColumnsEnvironmentWidth(out int width)

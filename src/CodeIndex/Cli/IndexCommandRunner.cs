@@ -43,6 +43,7 @@ public static partial class IndexCommandRunner
     {
         RuntimeSafety.Configure();
         var options = ParseArgs(indexArgs);
+        ConsoleUi.SetWidthDetectionTracing(options.Verbose && !options.Json && !options.Quiet);
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
         using var ownedCancellation = cancellationForTesting == null ? new CancellationTokenSource() : null;
         var indexCancellation = cancellationForTesting ?? ownedCancellation!;
