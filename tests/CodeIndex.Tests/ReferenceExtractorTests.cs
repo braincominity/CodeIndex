@@ -18345,6 +18345,16 @@ public class ReferenceExtractorTests
                 Invoke-RestMethod -Uri "https://api.example.com$Endpoint"
             }
 
+            function MyFunction {
+                param($Value)
+                Write-Host $Value
+            }
+
+            filter Select-Valid {
+                process { if ($_.IsValid) { return $_ } }
+            }
+            IF ($true) { RETURN "ok" }
+
             function Process-Items {
                 param([array]$Items)
                 $Items | ForEach-Object { Process-One $_ }
@@ -18358,6 +18368,7 @@ public class ReferenceExtractorTests
             function Compute-Stats  { param($d) return @{count = $d.Count} }
 
             Get-UserData -Name "Alice" -Id 42
+            MyFunction "hello"
             Process-Items -Items @(1,2,3)
             if ($Items -lt 10) { Write-Host "too few" }
             """;
@@ -18367,6 +18378,7 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "Get-UserData" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "Fetch-Remote" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "MyFunction" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "Process-Items" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "Process-One" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "Transform-Item" && r.ReferenceKind == "call");
@@ -18375,7 +18387,30 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Invoke-RestMethod" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "ForEach-Object" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "Where-Object" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName is "function" or "filter" or "if" or "IF" or "return" or "RETURN");
         Assert.DoesNotContain(references, r => r.SymbolName == "lt");
+    }
+
+    [Fact]
+    public void Extract_PowerShell_SplattingEmitsParameterReferences()
+    {
+        const string content = """
+            $params = @{
+                Path = "."
+                Recurse = $true
+            }
+
+            Get-ChildItem @params
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "powershell", content);
+        var references = ReferenceExtractor.Extract(1, "powershell", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Get-ChildItem" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Path" && r.ReferenceKind == "parameter");
+        Assert.Contains(references, r => r.SymbolName == "Recurse" && r.ReferenceKind == "parameter");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Path" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Recurse" && r.ReferenceKind == "call");
     }
 
     [Fact]
