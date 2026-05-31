@@ -21,11 +21,13 @@ public static class DegradationReasonCodes
     public const string HotspotFamilyDisabledAtIndexTime = "hotspot_family_disabled_at_index_time";
     public const string GraphTableMissing = "graph_table_available=false";
     public const string IssuesTableMissing = "issues_table_available=false";
+    public const string FileIssuesDataStale = "file_issues_data_current=false";
     public const string CSharpSymbolNameNotReady = "csharp_symbol_name_ready=false";
     public const string CSharpMetadataTargetNotReady = "csharp_metadata_target_ready=false";
     public const string CSharpMetadataTargetMissingColumn = "csharp_metadata_target_missing_column";
     public const string CSharpMetadataTargetStampOutdated = "csharp_metadata_target_stamp_outdated";
     public const string IndexNewerThanReader = "index_newer_than_reader=true";
+    public const string MigrationInProgress = "migration_in_progress";
 
     public static readonly IReadOnlyList<string> All =
     [
@@ -42,11 +44,13 @@ public static class DegradationReasonCodes
         HotspotFamilyDisabledAtIndexTime,
         GraphTableMissing,
         IssuesTableMissing,
+        FileIssuesDataStale,
         CSharpSymbolNameNotReady,
         CSharpMetadataTargetNotReady,
         CSharpMetadataTargetMissingColumn,
         CSharpMetadataTargetStampOutdated,
         IndexNewerThanReader,
+        MigrationInProgress,
     ];
 
     private static readonly IReadOnlyDictionary<string, DegradationReasonMetadata> MetadataByCode =
@@ -152,6 +156,11 @@ public static class DegradationReasonCodes
                 "Validate output is degraded to empty because the file_issues table is missing.",
                 "Run `cdidx index <projectPath>` to rebuild the issue table.",
                 "Run `cdidx index <projectPath> --rebuild` for a full rebuild."),
+            FileIssuesDataStale => new(
+                code,
+                "The file_issues table exists, but its data is not stamped current for this index generation.",
+                "Run `cdidx index <projectPath>` to refresh file issue rows.",
+                "Run `cdidx index <projectPath> --rebuild` for a full rebuild."),
             CSharpSymbolNameNotReady => new(
                 code,
                 "C# exact-name for operators / conversion operators / indexers is degraded.",
@@ -177,6 +186,11 @@ public static class DegradationReasonCodes
                 "This DB was written by a newer cdidx, so older readers may degrade instead of trusting newer contract stamps.",
                 "Run status with a current cdidx binary.",
                 "Rebuild the DB with the cdidx version you intend to use."),
+            MigrationInProgress => new(
+                code,
+                "An index write or migration is currently in progress; readiness may be temporarily degraded until the writer finishes.",
+                "Wait for the active `cdidx index` run to finish, then rerun `cdidx status --json`.",
+                "If no index process is running, run `cdidx index <projectPath> --rebuild` to recover from the interrupted batch."),
             _ => throw new ArgumentOutOfRangeException(nameof(code), code, "Unknown degradation reason code.")
         };
 }

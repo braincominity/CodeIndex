@@ -70,6 +70,7 @@ public partial class DbReader
     private Dictionary<string, CSharpUsingAliasScope>? _csharpGlobalUsingAliasesByName;
     internal readonly bool _hasReferencesTable;
     internal readonly bool _hasIssuesTable;
+    internal readonly bool _hasIssuesPhysicalTable;
     internal readonly bool _hasChunksTable;
     internal readonly bool _hasReferenceLinesTable;
     internal readonly bool _canUseReferenceLines;
@@ -505,7 +506,8 @@ public partial class DbReader
         }
         _hasChunksTable = HasTable("chunks");
         _hasReferencesTable = HasTable("symbol_references") && (userVersion & DbContext.GraphReadyFlag) != 0;
-        _hasIssuesTable = HasTable("file_issues") && (userVersion & DbContext.IssuesReadyFlag) != 0;
+        _hasIssuesPhysicalTable = HasTable("file_issues");
+        _hasIssuesTable = _hasIssuesPhysicalTable && (userVersion & DbContext.IssuesReadyFlag) != 0;
         _hasReferenceLinesTable = HasTable("reference_lines");
         _canUseReferenceLines = _hasReferencesTable && _hasReferenceLinesTable && _referenceColumns.Contains("reference_line_id");
         _referenceIndexes = LoadIndexes("symbol_references");

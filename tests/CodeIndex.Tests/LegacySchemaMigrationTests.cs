@@ -268,7 +268,8 @@ public class LegacySchemaMigrationTests : IDisposable
         Assert.Empty(bundle.Callees);
         var status = reader.GetStatus();
         Assert.False(status.GraphTableAvailable);
-        Assert.False(status.IssuesTableAvailable);
+        Assert.True(status.IssuesTableAvailable);
+        Assert.False(status.FileIssuesDataCurrent);
     }
 
     [Fact]
@@ -687,7 +688,8 @@ public class LegacySchemaMigrationTests : IDisposable
                 // 版印なしの DB で空テーブルは縮退として扱うこと。
                 var status = reader.GetStatus();
                 Assert.False(status.GraphTableAvailable);
-                Assert.False(status.IssuesTableAvailable);
+                Assert.True(status.IssuesTableAvailable);
+                Assert.False(status.FileIssuesDataCurrent);
             }
         }
         finally
@@ -718,7 +720,8 @@ public class LegacySchemaMigrationTests : IDisposable
                 var reader = new DbReader(db.Connection);
                 var status = reader.GetStatus();
                 Assert.True(status.GraphTableAvailable);
-                Assert.False(status.IssuesTableAvailable);
+                Assert.True(status.IssuesTableAvailable);
+                Assert.False(status.FileIssuesDataCurrent);
             }
         }
         finally
@@ -758,7 +761,8 @@ public class LegacySchemaMigrationTests : IDisposable
                 var reader = new DbReader(db.Connection);
                 var status = reader.GetStatus();
                 Assert.False(status.GraphTableAvailable);
-                Assert.False(status.IssuesTableAvailable);
+                Assert.True(status.IssuesTableAvailable);
+                Assert.False(status.FileIssuesDataCurrent);
             }
         }
         finally
@@ -1042,7 +1046,8 @@ public class LegacySchemaMigrationTests : IDisposable
                 var reader = new DbReader(db.Connection);
                 var status = reader.GetStatus();
                 Assert.False(status.GraphTableAvailable);
-                Assert.False(status.IssuesTableAvailable);
+                Assert.True(status.IssuesTableAvailable);
+                Assert.False(status.FileIssuesDataCurrent);
             }
         }
         finally
@@ -1135,7 +1140,8 @@ public class LegacySchemaMigrationTests : IDisposable
                 var reader = new DbReader(db.Connection);
                 var status = reader.GetStatus();
                 Assert.False(status.GraphTableAvailable);
-                Assert.False(status.IssuesTableAvailable);
+                Assert.True(status.IssuesTableAvailable);
+                Assert.False(status.FileIssuesDataCurrent);
             }
         }
         finally
