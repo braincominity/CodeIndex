@@ -2786,6 +2786,8 @@ public partial class McpServer
         if (maxFileBytes is <= 0 or > int.MaxValue)
             return CreateToolErrorResponse(id, "maxFileBytes must be a positive integer less than or equal to 2147483647");
         var projectPath = Path.GetFullPath(path);
+        var runStartedAtUtc = DateTime.UtcNow;
+        var runStopwatch = Stopwatch.StartNew();
 
         // Prevent path traversal — only allow indexing within current working directory
         // パストラバーサル防止 — カレントディレクトリ配下のみインデックスを許可
@@ -2870,6 +2872,25 @@ public partial class McpServer
                 writer.SetMeta(DbContext.IndexedProjectRootMetaKey, normalizedProjectPath);
                 projectRootWritten = true;
             }
+        }
+
+        static long SumReadableFileBytes(IEnumerable<string> paths)
+        {
+            long total = 0;
+            foreach (var filePath in paths)
+            {
+                try
+                {
+                    var info = new FileInfo(filePath);
+                    if (info.Exists)
+                        total += info.Length;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+                {
+                }
+            }
+
+            return total;
         }
 
         // First mutation point — demote readiness just before any write.
@@ -3098,6 +3119,15 @@ public partial class McpServer
             writer.SetMeta(
                 DbContext.UnknownExtensionFileCountMetaKey,
                 scanResult.UnknownExtensionFiles.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp");
+            writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunDurationMsMetaKey, runStopwatch.ElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunFilesScannedMetaKey, files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunFilesSkippedMetaKey, skipped.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunParseErrorsMetaKey, errors.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunBytesReadMetaKey, SumReadableFileBytes(files).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunRowsUpsertedMetaKey, processed.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.SetMeta(DbContext.LastIndexRunRowsDeletedMetaKey, purged.ToString(System.Globalization.CultureInfo.InvariantCulture));
             // Persist the current HEAD only after the run is fully successful (errors == 0).
             // Mirrors the CLI full-scan contract (Issue #1508) so MCP-driven re-indexes also
             // refresh `worktree_head_changed`; partial / failed runs leave the prior HEAD

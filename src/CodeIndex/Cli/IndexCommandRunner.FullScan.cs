@@ -356,6 +356,7 @@ public static partial class IndexCommandRunner
         string resolvedDbPath,
         IndexCommandOptions options,
         Stopwatch stopwatch,
+        DateTime runStartedAtUtc,
         string[] spinnerFrames,
         JsonSerializerOptions jsonOptions,
         string? priorFoldVersion,
@@ -375,6 +376,7 @@ public static partial class IndexCommandRunner
         CancellationToken cancellationToken)
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
+        var memorySamples = options.MemoryTrace ? new List<IndexMemorySampleJsonResult> { CaptureMemorySample("start", stopwatch) } : [];
         _ = priorMetadataTargetCsharp; // full-scan resolver runs unconditionally on success / 成功時に常に再解決するため不要
         var unresolvedMergeExitCode = RejectUnresolvedMergeState(projectRoot, options.Json, jsonOptions);
         if (unresolvedMergeExitCode != null)
@@ -517,6 +519,8 @@ public static partial class IndexCommandRunner
             StopJsonPhaseHeartbeat(scanHeartbeat);
         }
         var files = scanResult.Files;
+        if (options.MemoryTrace)
+            memorySamples.Add(CaptureMemorySample("scan", stopwatch));
         ConsoleUi.StopSpinner(spinnerCts);
         WriteJsonLiveness($"found {ConsoleUi.Counted(files.Count, "file", format: "N0")}; preparing database...");
         var fatalScanErrors = scanResult.Errors
@@ -606,6 +610,8 @@ public static partial class IndexCommandRunner
         }
         if (purged > 0)
             WriteProjectRootOnce();
+        if (options.MemoryTrace)
+            memorySamples.Add(CaptureMemorySample("purge", stopwatch));
         ConsoleUi.StopSpinner(purgeCts);
         WriteJsonLiveness(purged > 0
             ? $"purged {purged:N0} stale file(s); preparing index writes..."
@@ -1273,10 +1279,27 @@ public static partial class IndexCommandRunner
             // #1509: あらゆる成功 index の終端で更新する HEAD トリプル (SHA + branch + 時刻) も
             // ここで stamp する。full scan / partial update を問わず最新の HEAD を保存する。
             StampIndexedHeadMetadata(writer, projectRoot);
+            if (options.MemoryTrace)
+                memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
+            var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
+            StampLastIndexRunMetadata(
+                writer,
+                options.Rebuild ? "rebuild" : "incremental",
+                runStartedAtUtc,
+                stopwatch.ElapsedMilliseconds,
+                files.Count,
+                skipped,
+                errors,
+                SumReadableFileBytes(files),
+                processed,
+                purged,
+                memoryTimelineForStamp);
         }
         writer.ClearBatchInProgress();
         fullScanTxn.Commit();
         stopwatch.Stop();
+        var memoryTimeline = BuildMemoryTimeline(memorySamples);
+        WarnIfMemoryThresholdExceeded(memoryTimeline);
         // Detect cwd drift between option-parsing and finalize. See RunUpdateMode for the
         // rationale; the warning is informational because we already absolutized paths.
         // Issue #1577.
@@ -1357,6 +1380,7 @@ public static partial class IndexCommandRunner
                 CwdDriftNotice = cwdDriftNotice,
                 Errors = errorList.Count > 0 ? errorList : null,
                 Warnings = warningList.Count > 0 ? warningList : null,
+                MemoryTimeline = memoryTimeline,
                 ElapsedMs = stopwatch.ElapsedMilliseconds,
             }, jsonContext.IndexFullScanJsonResult));
         }

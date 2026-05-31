@@ -20,6 +20,13 @@
     "function": 1,
     "namespace": 1
   },
+  "symbols_by_language": {
+    "csharp": {
+      "class": 1,
+      "function": 1,
+      "namespace": 1
+    }
+  },
   "graph_supported_languages": [
     "assembly",
     "batch",
@@ -138,5 +145,15 @@
     "page_count": "\u003CCOUNT\u003E",
     "freelist_count": 0,
     "page_size": 4096
+  },
+  "db_size_bytes": "\u003CCOUNT\u003E",
+  "wal_size_bytes": "\u003CCOUNT\u003E",
+  "process": {
+    "heap_bytes": "\u003CCOUNT\u003E",
+    "gc_heap_size_bytes": "\u003CCOUNT\u003E",
+    "gc_gen0_count": "\u003CCOUNT\u003E",
+    "gc_gen1_count": "\u003CCOUNT\u003E",
+    "gc_gen2_count": "\u003CCOUNT\u003E",
+    "working_set_bytes": "\u003CCOUNT\u003E"
   }
 }

@@ -556,6 +556,9 @@ public class StatusResult
     public int? CommitsAheadOfIndexedHead { get; set; }
     public Dictionary<string, long> Languages { get; set; } = new();
     public Dictionary<string, long>? SymbolKinds { get; set; }
+    [JsonPropertyName("symbols_by_language")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, Dictionary<string, long>>? SymbolsByLanguage { get; set; }
     public List<string>? GraphSupportedLanguages { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<PostExtractionHookStatus>? Hooks { get; set; }
@@ -727,6 +730,70 @@ public class StatusResult
     /// </summary>
     [JsonPropertyName("db_pragma_settings")]
     public StatusDbPragmaSettings DbPragmaSettings { get; set; } = new();
+    [JsonPropertyName("db_size_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? DbSizeBytes { get; set; }
+    [JsonPropertyName("wal_size_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? WalSizeBytes { get; set; }
+    [JsonPropertyName("process")]
+    public StatusProcessMetrics Process { get; set; } = StatusProcessMetrics.Capture();
+    [JsonPropertyName("last_index_run")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public StatusLastIndexRun? LastIndexRun { get; set; }
+}
+
+public sealed class StatusProcessMetrics
+{
+    [JsonPropertyName("heap_bytes")]
+    public long HeapBytes { get; set; }
+    [JsonPropertyName("gc_heap_size_bytes")]
+    public long GcHeapSizeBytes { get; set; }
+    [JsonPropertyName("gc_gen0_count")]
+    public int GcGen0Count { get; set; }
+    [JsonPropertyName("gc_gen1_count")]
+    public int GcGen1Count { get; set; }
+    [JsonPropertyName("gc_gen2_count")]
+    public int GcGen2Count { get; set; }
+    [JsonPropertyName("working_set_bytes")]
+    public long WorkingSetBytes { get; set; }
+
+    public static StatusProcessMetrics Capture()
+    {
+        var gcInfo = GC.GetGCMemoryInfo();
+        return new StatusProcessMetrics
+        {
+            HeapBytes = GC.GetTotalMemory(forceFullCollection: false),
+            GcHeapSizeBytes = gcInfo.HeapSizeBytes,
+            GcGen0Count = GC.CollectionCount(0),
+            GcGen1Count = GC.CollectionCount(1),
+            GcGen2Count = GC.CollectionCount(2),
+            WorkingSetBytes = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64,
+        };
+    }
+}
+
+public sealed class StatusLastIndexRun
+{
+    public string? Mode { get; set; }
+    [JsonPropertyName("started_at")]
+    public DateTime? StartedAt { get; set; }
+    [JsonPropertyName("duration_ms")]
+    public long? DurationMs { get; set; }
+    [JsonPropertyName("files_scanned")]
+    public long? FilesScanned { get; set; }
+    [JsonPropertyName("files_skipped")]
+    public long? FilesSkipped { get; set; }
+    [JsonPropertyName("parse_errors")]
+    public long? ParseErrors { get; set; }
+    [JsonPropertyName("bytes_read")]
+    public long? BytesRead { get; set; }
+    [JsonPropertyName("rows_upserted")]
+    public long? RowsUpserted { get; set; }
+    [JsonPropertyName("rows_deleted")]
+    public long? RowsDeleted { get; set; }
+    [JsonPropertyName("peak_memory_mb")]
+    public long? PeakMemoryMb { get; set; }
 }
 
 public class StatusReadinessDegradation

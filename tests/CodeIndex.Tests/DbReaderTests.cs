@@ -71,6 +71,35 @@ public class DbReaderTests : IDisposable
         }
     }
 
+    [Fact]
+    public void GetStatus_ExposesOperationalMetrics()
+    {
+        _writer.SetMeta(DbContext.LastIndexRunModeMetaKey, "incremental");
+        _writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, "2026-05-31T00:00:00.0000000Z");
+        _writer.SetMeta(DbContext.LastIndexRunDurationMsMetaKey, "1234");
+        _writer.SetMeta(DbContext.LastIndexRunFilesScannedMetaKey, "3");
+        _writer.SetMeta(DbContext.LastIndexRunFilesSkippedMetaKey, "1");
+        _writer.SetMeta(DbContext.LastIndexRunParseErrorsMetaKey, "0");
+        _writer.SetMeta(DbContext.LastIndexRunBytesReadMetaKey, "4096");
+        _writer.SetMeta(DbContext.LastIndexRunRowsUpsertedMetaKey, "2");
+        _writer.SetMeta(DbContext.LastIndexRunRowsDeletedMetaKey, "1");
+        _writer.SetMeta(DbContext.LastIndexRunPeakMemoryMbMetaKey, "64");
+
+        var status = _reader.GetStatus();
+
+        Assert.True(status.DbSizeBytes > 0);
+        Assert.True(status.WalSizeBytes >= 0);
+        Assert.NotNull(status.SymbolsByLanguage);
+        Assert.True(status.SymbolsByLanguage.Values.Sum(kinds => kinds.Values.Sum()) > 0);
+        Assert.True(status.Process.HeapBytes > 0);
+        Assert.True(status.Process.WorkingSetBytes > 0);
+        Assert.NotNull(status.LastIndexRun);
+        Assert.Equal("incremental", status.LastIndexRun.Mode);
+        Assert.Equal(1234, status.LastIndexRun.DurationMs);
+        Assert.Equal(3, status.LastIndexRun.FilesScanned);
+        Assert.Equal(64, status.LastIndexRun.PeakMemoryMb);
+    }
+
     [Theory]
     [InlineData(DegradationReasonCodes.MissingFoldBackfill, "--exact falls back")]
     [InlineData(DegradationReasonCodes.StaleFoldKeyVersion, "older fold-key version")]
