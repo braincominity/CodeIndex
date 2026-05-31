@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CodeIndex.Database;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
@@ -332,6 +333,7 @@ public static class DbCommandRunner
             Execute(connection, transaction, "DELETE FROM symbols WHERE file_id NOT IN (SELECT id FROM files)");
             transaction!.Commit();
             Execute(connection, null, "PRAGMA optimize");
+            RunWalCheckpointTruncate(connection);
         }
 
         var total = orphanSymbolReferences + orphanReferenceLines + orphanSymbols;
@@ -365,6 +367,14 @@ public static class DbCommandRunner
         using var cmd = connection.CreateCommand();
         cmd.Transaction = transaction;
         cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void RunWalCheckpointTruncate(SqliteConnection connection)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+        DbContext.WalCheckpointTruncateExecutedForTesting?.Invoke(connection.DataSource);
         cmd.ExecuteNonQuery();
     }
 

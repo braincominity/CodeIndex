@@ -207,10 +207,13 @@ public class DbCommandRunnerTests
             Assert.True(dryRunJson.GetProperty("dry_run").GetBoolean());
             Assert.Equal(4, dryRunJson.GetProperty("total").GetInt32());
 
+            var checkpointAttempted = false;
+            DbContext.WalCheckpointTruncateExecutedForTesting = _ => checkpointAttempted = true;
             var (applyExit, applyJson) = RunAndCaptureJson(["prune", "--apply", "--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, applyExit);
             Assert.False(applyJson.GetProperty("dry_run").GetBoolean());
             Assert.Equal(4, applyJson.GetProperty("total").GetInt32());
+            Assert.True(checkpointAttempted);
 
             var (secondExit, secondJson) = RunAndCaptureJson(["prune", "--dry-run", "--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, secondExit);
@@ -218,6 +221,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
+            DbContext.WalCheckpointTruncateExecutedForTesting = null;
             SqliteConnection.ClearAllPools();
             if (File.Exists(dbPath))
                 File.Delete(dbPath);
