@@ -3274,8 +3274,9 @@ public class DbWriter
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var foldBackfillPhase = rewriteAll ? GetMetaString(FoldBackfillPhaseMetaKey) : null;
         var symbols = BackfillSymbolFoldedRows(rewriteAll, cancellationToken);
-        if (rewriteAll)
+        if (rewriteAll && foldBackfillPhase != "references")
         {
             SetMeta(FoldBackfillPhaseMetaKey, "references");
             SetMeta(FoldBackfillLastReferenceIdMetaKey, "0");

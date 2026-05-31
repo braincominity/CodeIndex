@@ -3405,6 +3405,53 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void BackfillFoldedColumns_RewriteAllResumesReferencePhaseCheckpoint()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_rewrite_refs_resume_{Guid.NewGuid():N}.db");
+        var cts = new CancellationTokenSource();
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertReferences([
+                    new ReferenceRecord { FileId = fileId, SymbolName = "first", ReferenceKind = "call", Line = 1, Column = 1, Context = "first()" },
+                    new ReferenceRecord { FileId = fileId, SymbolName = "second", ReferenceKind = "call", Line = 2, Column = 1, Context = "second()" },
+                ]);
+
+                DbWriter.FoldBackfillRowUpdatedForTesting = cts.Cancel;
+                Assert.Throws<OperationCanceledException>(() => writer.BackfillFoldedColumns(rewriteAll: true, cts.Token));
+
+                DbWriter.FoldBackfillRowUpdatedForTesting = null;
+                var resumed = writer.BackfillFoldedColumns(rewriteAll: true);
+
+                Assert.Equal(0, resumed.Symbols);
+                Assert.Equal(1, resumed.SymbolReferences);
+                using var count = db.Connection.CreateCommand();
+                count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE symbol_name_folded IS NOT NULL";
+                Assert.Equal(2L, (long)count.ExecuteScalar()!);
+            }
+        }
+        finally
+        {
+            DbWriter.FoldBackfillRowUpdatedForTesting = null;
+            cts.Dispose();
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_Cancelled_ReturnsInterruptedErrorCode()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_cancel_cli_{Guid.NewGuid():N}.db");
