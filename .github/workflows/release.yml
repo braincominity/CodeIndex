@@ -815,6 +815,31 @@ jobs:
           -p:Version=${{ steps.version.outputs.version }}
           --output nupkg
 
+      # NuGet's OPC writer gives the core-properties *.psmdcp part a random
+      # name on each pack run. Normalize that internal path before hashing or
+      # publishing so otherwise identical .nupkg/.snupkg archives compare
+      # byte-for-byte. See issue #2756 / DEVELOPER_GUIDE.md.
+      # NuGet の OPC writer は core-properties の *.psmdcp part に pack ごと
+      # ランダムな名前を付ける。hash / publish 前に内部 path を正規化し、
+      # それ以外が同一の .nupkg/.snupkg archive を byte-for-byte で比較可能にする。
+      # 詳細は issue #2756 / DEVELOPER_GUIDE.md。
+      - name: Normalize NuGet package metadata part names
+        run: dotnet run --project tools/CodeIndex.PackageNormalize -- nupkg/*.nupkg nupkg/*.snupkg
+
+      - name: Verify normalized NuGet package metadata part names
+        run: |
+          set -euo pipefail
+          for package in nupkg/*.nupkg nupkg/*.snupkg; do
+            unzip -Z1 "$package" | grep -qx 'package/services/metadata/core-properties/core-properties.psmdcp'
+            if unzip -Z1 "$package" \
+              | grep '^package/services/metadata/core-properties/' \
+              | grep -vx 'package/services/metadata/core-properties/core-properties.psmdcp'; then
+              echo "Unexpected non-canonical NuGet core-properties part in ${package}." >&2
+              unzip -Z1 "$package" >&2
+              exit 1
+            fi
+          done
+
       - name: Verify packed NuGet package version
         env:
           VERSION: ${{ steps.version.outputs.version }}

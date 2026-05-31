@@ -1207,6 +1207,9 @@
       "codeindex.changelog": {
         "type": "Project"
       },
+      "codeindex.packagenormalize": {
+        "type": "Project"
+      },
       "codeindex.testtelemetry": {
         "type": "Project"
       }
@@ -2415,6 +2418,9 @@
         }
       },
       "codeindex.changelog": {
+        "type": "Project"
+      },
+      "codeindex.packagenormalize": {
         "type": "Project"
       },
       "codeindex.testtelemetry": {

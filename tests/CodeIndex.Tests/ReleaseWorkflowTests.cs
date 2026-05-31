@@ -1,3 +1,8 @@
+using CodeIndex.PackageNormalize;
+using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text;
+
 namespace CodeIndex.Tests;
 
 public class ReleaseWorkflowTests
@@ -89,6 +94,58 @@ public class ReleaseWorkflowTests
         Assert.DoesNotContain("--skip-duplicate", workflow);
     }
 
+    // Issue #2756: NuGet emits the core-properties OPC part with a random
+    // *.psmdcp entry name, so two otherwise identical pack runs can produce
+    // different .nupkg/.snupkg bytes. The release workflow normalizes that
+    // implementation detail before hashing and publishing.
+    // Issue #2756 対応: NuGet は core-properties の OPC part をランダムな
+    // *.psmdcp entry 名で生成するため、他が同一でも .nupkg/.snupkg の bytes が
+    // 揺れる。release workflow は hash / publish 前にその実装詳細を正規化する。
+    [Fact]
+    public void ReleaseWorkflow_NormalizesNuGetCorePropertiesBeforePublishing()
+    {
+        var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
+
+        Assert.Contains("Normalize NuGet package metadata part names", workflow);
+        Assert.Contains("dotnet run --project tools/CodeIndex.PackageNormalize --", workflow);
+        Assert.Contains("nupkg/*.nupkg nupkg/*.snupkg", workflow);
+        Assert.Contains("core-properties/core-properties.psmdcp", workflow);
+    }
+
+    [Fact]
+    public void PackageNormalizer_RewritesRandomCorePropertiesPartDeterministically()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(nameof(PackageNormalizer_RewritesRandomCorePropertiesPartDeterministically));
+        try
+        {
+            var packageA = Path.Combine(projectRoot, "a.nupkg");
+            var packageB = Path.Combine(projectRoot, "b.nupkg");
+
+            CreateMinimalNuGetPackage(packageA, "a1b2c3.psmdcp");
+            CreateMinimalNuGetPackage(packageB, "f9e8d7.psmdcp");
+
+            PackageCorePropertiesNormalizer.NormalizePackage(packageA);
+            PackageCorePropertiesNormalizer.NormalizePackage(packageB);
+
+            Assert.Equal(
+                Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(packageA))),
+                Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(packageB))));
+
+            using var archive = ZipFile.OpenRead(packageA);
+            Assert.Contains(archive.Entries, entry => entry.FullName == PackageCorePropertiesNormalizer.CanonicalCorePropertiesPath);
+            Assert.DoesNotContain(archive.Entries, entry => entry.FullName.EndsWith("a1b2c3.psmdcp", StringComparison.Ordinal));
+
+            var contentTypes = ReadZipEntryText(archive, "[Content_Types].xml");
+            var relationships = ReadZipEntryText(archive, "_rels/.rels");
+            Assert.Contains("/package/services/metadata/core-properties/core-properties.psmdcp", contentTypes);
+            Assert.Contains("/package/services/metadata/core-properties/core-properties.psmdcp", relationships);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void ReleaseWorkflow_PublishesOfficialContainerImage()
     {
@@ -123,5 +180,51 @@ public class ReleaseWorkflowTests
         }
 
         throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
+    }
+
+    private static void CreateMinimalNuGetPackage(string packagePath, string corePropertiesFileName)
+    {
+        var corePropertiesPath = $"package/services/metadata/core-properties/{corePropertiesFileName}";
+        using var archive = ZipFile.Open(packagePath, ZipArchiveMode.Create);
+
+        WriteZipEntry(archive, "[Content_Types].xml", $"""
+            <?xml version="1.0" encoding="utf-8"?>
+            <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+              <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml" />
+              <Override PartName="/{corePropertiesPath}" ContentType="application/vnd.openxmlformats-package.core-properties+xml" />
+            </Types>
+            """);
+        WriteZipEntry(archive, "_rels/.rels", $"""
+            <?xml version="1.0" encoding="utf-8"?>
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="R1" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="/{corePropertiesPath}" />
+            </Relationships>
+            """);
+        WriteZipEntry(archive, "cdidx.nuspec", """
+            <?xml version="1.0" encoding="utf-8"?>
+            <package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
+              <metadata><id>cdidx</id><version>1.0.0</version></metadata>
+            </package>
+            """);
+        WriteZipEntry(archive, corePropertiesPath, """
+            <?xml version="1.0" encoding="utf-8"?>
+            <coreProperties xmlns="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" />
+            """);
+    }
+
+    private static void WriteZipEntry(ZipArchive archive, string entryName, string content)
+    {
+        var entry = archive.CreateEntry(entryName);
+        using var stream = entry.Open();
+        using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        writer.Write(content.Replace("\r\n", "\n", StringComparison.Ordinal));
+    }
+
+    private static string ReadZipEntryText(ZipArchive archive, string entryName)
+    {
+        var entry = archive.GetEntry(entryName) ?? throw new InvalidOperationException($"Missing ZIP entry: {entryName}");
+        using var stream = entry.Open();
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        return reader.ReadToEnd();
     }
 }
