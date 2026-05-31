@@ -444,6 +444,12 @@ Each JSON-RPC MCP request gets a server-generated `correlation_id` in addition t
 
 MCP stderr diagnostics are prefixed with `[rid=<json-rpc-id> cid=<correlation-id>]` when a request context exists. Every `tools/call` also emits one structured JSON line with `event: "mcp.tool.invocation"`, the tool name, elapsed milliseconds, status, result count when available, error metadata, argument keys, and argument lengths. Argument values are intentionally not logged in this telemetry line.
 
+### MCP search pagination
+
+MCP `search` responses include `result_stable_at`, copied from the index freshness timestamp for the database snapshot used by that call. Clients that page through search results should compare `result_stable_at` across calls; if it changes, an intervening index mutation may have shifted the result set and the client should restart pagination.
+
+Non-empty `search` responses also include `next_cursor`. Passing that value back as the `cursor` argument with the same query and filters continues after the last returned `(score, chunk rowid)` anchor. The cursor is an opaque response value; clients should not construct or edit it.
+
 ### MCP health probes
 
 The MCP JSON-RPC `ping` method returns a structured health object with `status`, `uptime_s`, `last_request_at`, `db_open`, `last_db_check_at`, and `transport_ready`. HTTP MCP transports expose the same object at `GET /healthz` on the existing listener. If the HTTP transport is protected by a bearer token, `/healthz` uses the same `Authorization: Bearer <token>` requirement as POST and `/events`.

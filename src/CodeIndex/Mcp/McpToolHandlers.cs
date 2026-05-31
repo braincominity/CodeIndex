@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -145,6 +146,45 @@ public partial class McpServer
         payload["freshness_available"] = freshness.FreshnessAvailable;
         if (!freshness.FreshnessAvailable && freshness.FreshnessDegradedReason != null)
             payload["freshness_degraded_reason"] = freshness.FreshnessDegradedReason;
+    }
+
+    private static void AddSearchStabilityMetadata(JsonObject payload, DbReader reader, SearchCursor? cursor, IReadOnlyList<SearchResult> results)
+    {
+        var freshness = reader.GetFreshnessHint();
+        payload["result_stable_at"] = freshness.IndexedAt.HasValue
+            ? JsonSerializer.SerializeToNode(freshness.IndexedAt.Value)
+            : null;
+        payload["freshness_available"] = freshness.FreshnessAvailable;
+        if (!freshness.FreshnessAvailable && freshness.FreshnessDegradedReason != null)
+            payload["freshness_degraded_reason"] = freshness.FreshnessDegradedReason;
+
+        if (results.Count > 0)
+            payload["next_cursor"] = FormatSearchCursor(results[^1]);
+    }
+
+    private static string FormatSearchCursor(SearchResult result)
+        => string.Create(CultureInfo.InvariantCulture, $"{result.Score:R}:{result.ChunkId}:{result.NextOffset}");
+
+    private static bool TryParseSearchCursor(string value, out SearchCursor cursor)
+    {
+        cursor = default;
+        var lastSeparator = value.LastIndexOf(':');
+        if (lastSeparator <= 0 || lastSeparator == value.Length - 1)
+            return false;
+
+        var firstSeparator = value.LastIndexOf(':', lastSeparator - 1);
+        if (firstSeparator <= 0 || firstSeparator == lastSeparator - 1)
+            return false;
+
+        if (!double.TryParse(value.AsSpan(0, firstSeparator), NumberStyles.Float, CultureInfo.InvariantCulture, out var score))
+            return false;
+        if (!long.TryParse(value.AsSpan(firstSeparator + 1, lastSeparator - firstSeparator - 1), NumberStyles.None, CultureInfo.InvariantCulture, out var chunkId))
+            return false;
+        if (!int.TryParse(value.AsSpan(lastSeparator + 1), NumberStyles.None, CultureInfo.InvariantCulture, out var offset) || offset < 0)
+            return false;
+
+        cursor = new SearchCursor(score, chunkId, offset);
+        return true;
     }
 
     private static void AddFtsQueryDiagnostics(JsonObject payload, FtsQueryDiagnostics diagnostics)
@@ -494,7 +534,7 @@ public partial class McpServer
 
     private static IReadOnlySet<string> GetAllowedToolArguments(string toolName) => toolName switch
     {
-        "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "limit", "lang", "snippetLines", "maxLineWidth", "rawQuery", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "exact", "prefix", "countOnly", "format", "project", "solution" },
+        "search" => new HashSet<string>(StringComparer.Ordinal) { "query", "limit", "lang", "snippetLines", "maxLineWidth", "rawQuery", "cursor", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "noDedup", "exactSubstring", "exact", "prefix", "countOnly", "format", "project", "solution" },
         "definition" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "includeBody", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "format", "project", "solution" },
         "references" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "lang", "limit", "offset", "maxLineWidth", "lsp_compatible", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
         "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "format", "project", "solution" },
@@ -914,6 +954,14 @@ public partial class McpServer
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var rawQuery = args?["rawQuery"]?.GetValue<bool>() ?? false;
+        SearchCursor? cursor = null;
+        var cursorValue = args?["cursor"]?.GetValue<string>();
+        if (!string.IsNullOrWhiteSpace(cursorValue))
+        {
+            if (!TryParseSearchCursor(cursorValue, out var parsedCursor))
+                return CreateToolErrorResponse(id, "'cursor' must be a search pagination cursor returned as `next_cursor` by a previous search response.");
+            cursor = parsedCursor;
+        }
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -948,12 +996,13 @@ public partial class McpServer
                 payload["rawQuery"] = rawQuery;
                 payload["path"] = PathEcho(pathPatterns);
                 payload["excludeTests"] = excludeTests;
+                AddSearchStabilityMetadata(payload, reader, cursor, []);
                 if (countResults.Count == 0)
                     AddFtsQueryDiagnostics(payload, DbReader.AnalyzeFtsQuery(query, rawQuery, prefix, lang));
                 return CreateToolResult(id, $"Counted {countResults.Count} search result(s).", payload);
             }
 
-            var results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix);
+            var results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix, cursor: cursor);
             var ftsDiagnostics = DbReader.AnalyzeFtsQuery(query, rawQuery, prefix, lang);
             var truncated = TrimToRequestedLimit(results, limit);
             if (results.Count == 0)
@@ -968,6 +1017,7 @@ public partial class McpServer
                     ["excludeTests"] = excludeTests,
                     ["results"] = new JsonArray()
                 };
+                AddSearchStabilityMetadata(payload, reader, cursor, results);
                 AddFtsQueryDiagnostics(payload, ftsDiagnostics);
                 AddResultEnvelope(payload, 0, 0, truncated: false);
                 AddRecoveryHint(
@@ -984,12 +1034,14 @@ public partial class McpServer
             {
                 ["query"] = query,
                 ["rawQuery"] = rawQuery,
+                ["cursor"] = cursorValue,
                 ["snippetLines"] = snippetLines,
                 ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["results"] = ToJsonArray(SearchSnippetFormatter.ToCompactResults(results, query, snippetLines, exact, maxLineWidth))
             };
+            AddSearchStabilityMetadata(structured, reader, cursor, results);
             AddResultEnvelope(structured, results.Count, truncated ? null : results.Count, truncated);
             if (format == "compact")
                 ApplyCompactResults(structured, results, result => result.Path, result => result.StartLine);

@@ -20,7 +20,7 @@ public partial class McpServer
         {
             CreateToolDefinition(
                 "search",
-                "Full-text search across indexed code chunks. Returns match-centered snippets with line metadata plus `next_step_suggestion` or `recovery_hint`. Use `prefix` or trailing `*` to widen token matching, `rawQuery` for FTS5 syntax, and `exactSubstring` for case-sensitive text identity. Details and examples: USER_GUIDE.md#search. / インデックス済みコードチャンクの全文検索。`prefix` / 末尾 `*` / `rawQuery` / `exactSubstring` の詳細と例は USER_GUIDE.md#search を参照。",
+                "Full-text search across indexed code chunks. Returns match-centered snippets with line metadata plus `result_stable_at` for index-drift checks, `next_cursor` for non-empty paginated responses, and `next_step_suggestion` or `recovery_hint`. Use `prefix` or trailing `*` to widen token matching, `rawQuery` for FTS5 syntax, and `exactSubstring` for case-sensitive text identity. Details and examples: USER_GUIDE.md#search. / インデックス済みコードチャンクの全文検索。レスポンスには index drift 検出用の `result_stable_at`、非空ページ継続用の `next_cursor`、`next_step_suggestion` または `recovery_hint` を含める。`prefix` / 末尾 `*` / `rawQuery` / `exactSubstring` の詳細と例は USER_GUIDE.md#search を参照。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -32,6 +32,7 @@ public partial class McpServer
                         ["snippetLines"] = new JsonObject { ["type"] = "integer", ["description"] = "Max snippet lines per result (default: 8, max: 20)", ["default"] = 8, ["minimum"] = 1, ["maximum"] = SearchSnippetFormatter.MaxSnippetLines },
                         ["maxLineWidth"] = new JsonObject { ["type"] = "integer", ["description"] = "Clamp very long single-line snippets per line (default: 512; 0 disables clamping). Match lines are clamped around the first match; non-match lines are clamped from the head. Each clamp inserts a `...(+N)...` marker showing how many chars were elided.", ["default"] = LineWidthFormatter.DefaultMaxLineWidth, ["minimum"] = 0, ["maximum"] = LineWidthFormatter.MaxAllowedLineWidth },
                         ["rawQuery"] = new JsonObject { ["type"] = "boolean", ["description"] = "Use raw FTS5 syntax instead of literal-safe quoting: content:term, NEAR(a b, 5), OR, NOT, parenthesized groups, prefix*, and quoted phrases.", ["default"] = false },
+                        ["cursor"] = new JsonObject { ["type"] = "string", ["description"] = "Optional pagination cursor returned as `next_cursor` by a previous search response with the same query and filters. Compare `result_stable_at` across pages to detect index drift." },
                         ["path"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string" }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" } } }, ["description"] = "Prefer or restrict glob-style path patterns. `*` and `?` are wildcards. Accepts a single string or an array; multiple values are OR'd together." },
                         ["excludePaths"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Exclude glob-style path patterns. `*` and `?` are wildcards." },
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
