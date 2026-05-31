@@ -388,6 +388,20 @@ jobs:
           # 完全性を検証できる。
           find all-artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.cdx.json' \) -exec cp {} release-files/ \;
           cd release-files
+          expected_rids="linux-x64 linux-arm64 osx-arm64 win-x64 win-arm64"
+          for rid in $expected_rids; do
+            case "$rid" in
+              win-*) asset="CodeIndex-${rid}.zip" ;;
+              *) asset="CodeIndex-${rid}.tar.gz" ;;
+            esac
+            test -f "$asset" \
+              || { echo "Missing release archive for ${rid}: ${asset}" >&2; ls -la >&2; exit 1; }
+          done
+          if compgen -G 'CodeIndex-osx-x64.*' >/dev/null; then
+            echo "Unexpected osx-x64 release archive found; update platform-support docs and installer guidance before publishing it." >&2
+            ls -la CodeIndex-osx-x64.* >&2
+            exit 1
+          fi
           sha256sum * > sha256sums.txt
 
       - name: Import release GPG key
@@ -617,19 +631,11 @@ jobs:
           mkdir -p "$CDIDX_INSTALL_DIR"
           bash install.sh "${TAG_NAME}"
 
-          # Runtime and license/policy assets must land next to the binary.
-          case "${{ matrix.rid }}" in
-            linux-*) native_asset="libe_sqlite3.so" ;;
-            osx-*) native_asset="libe_sqlite3.dylib" ;;
-            win-*) native_asset="e_sqlite3.dll" ;;
-            *) echo "Unsupported release verification RID: ${{ matrix.rid }}" >&2; exit 1 ;;
-          esac
-
+          # This Ubuntu smoke test exercises the linux-x64 installer path. The
+          # release-files collection step above verifies that every published
+          # RID archive exists, including macOS/Windows assets.
           binary_name="cdidx"
-          if [[ "${{ matrix.rid }}" == win-* ]]; then
-            binary_name="cdidx.exe"
-          fi
-
+          native_asset="libe_sqlite3.so"
           for asset in "$binary_name" "$native_asset" version.json LICENSE COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md LICENSES; do
             test -e "$CDIDX_INSTALL_DIR/$asset" \
               || { echo "Missing $asset in $CDIDX_INSTALL_DIR" >&2; ls -la "$CDIDX_INSTALL_DIR" >&2; exit 1; }
