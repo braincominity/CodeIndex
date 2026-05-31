@@ -26,6 +26,26 @@ public class ConsoleUiTests
         .ToDictionary(opCode => (short)(opCode.Value & 0xff));
 
     [Fact]
+    public void TryWriteErrorLine_IgnoresClosedErrorWriter()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            var closedError = new StringWriter();
+            closedError.Dispose();
+            Console.SetError(closedError);
+            try
+            {
+                ConsoleUi.TryWriteErrorLine("diagnostic");
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
     public void StartSpinner_BackgroundLoop_DoesNotBlockOnTaskWait()
     {
         var methods = typeof(ConsoleUi).GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)

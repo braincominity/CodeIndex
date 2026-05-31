@@ -156,6 +156,20 @@ public static class ConsoleUi
         }
     }
 
+    internal static void TryWriteErrorLine(string? value = null)
+    {
+        try
+        {
+            if (value == null)
+                Console.Error.WriteLine();
+            else
+                Console.Error.WriteLine(value);
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
     internal static IDisposable SuppressAnsiForJsonOutput(bool enabled)
     {
         if (!enabled)

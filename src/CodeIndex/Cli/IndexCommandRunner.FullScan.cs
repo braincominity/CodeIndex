@@ -433,7 +433,7 @@ public static partial class IndexCommandRunner
             if (!options.Json || options.Quiet)
                 return;
 
-            Console.Error.WriteLine($"cdidx: {message}");
+            ConsoleUi.TryWriteErrorLine($"cdidx: {message}");
         }
 
         (CancellationTokenSource Cts, Task Task)? StartJsonPhaseHeartbeat(string phase, Func<string?>? detailProvider = null)
@@ -461,7 +461,7 @@ public static partial class IndexCommandRunner
 
                     var detail = detailProvider?.Invoke();
                     var suffix = string.IsNullOrWhiteSpace(detail) ? string.Empty : $": {detail}";
-                    Console.Error.WriteLine($"cdidx: still {phase}{suffix}...");
+                    ConsoleUi.TryWriteErrorLine($"cdidx: still {phase}{suffix}...");
                 }
             }, token);
             return (cts, task);
@@ -685,7 +685,7 @@ public static partial class IndexCommandRunner
 
             if (options.Json)
             {
-                Console.Error.WriteLine(message);
+                ConsoleUi.TryWriteErrorLine(message);
                 return;
             }
 
@@ -727,7 +727,7 @@ public static partial class IndexCommandRunner
                 || processed % 100 == 0
                 || Stopwatch.GetElapsedTime(lastJsonProgressAt, now) >= TimeSpan.FromSeconds(5))
             {
-                Console.Error.WriteLine($"cdidx: indexed {processed:N0}/{files.Count:N0} file(s)...");
+                ConsoleUi.TryWriteErrorLine($"cdidx: indexed {processed:N0}/{files.Count:N0} file(s)...");
                 lastJsonProgressAt = now;
             }
         }
@@ -759,7 +759,7 @@ public static partial class IndexCommandRunner
                         currentJsonIndexFile,
                         activeJsonExtractionPhases.OrderBy(static kvp => kvp.Key).Select(static kvp => kvp.Value));
                     var fileSuffix = string.IsNullOrEmpty(file) ? string.Empty : $": {file}";
-                    Console.Error.WriteLine($"cdidx: still indexing {processed:N0}/{files.Count:N0} file(s){fileSuffix}...");
+                    ConsoleUi.TryWriteErrorLine($"cdidx: still indexing {processed:N0}/{files.Count:N0} file(s){fileSuffix}...");
                 }
             }, token);
         }
@@ -1108,7 +1108,7 @@ public static partial class IndexCommandRunner
                     {
                         PauseIndexSpinnerForConsoleWrite();
                         ConsoleUi.ClearProgressLine();
-                        Console.Error.WriteLine(FormatPerFileErrorLine("ERR ", item.FilePath, ex, errorMessage));
+                        ConsoleUi.TryWriteErrorLine(FormatPerFileErrorLine("ERR ", item.FilePath, ex, errorMessage));
                         ResumeIndexSpinnerAfterConsoleWrite();
                     }
                 }

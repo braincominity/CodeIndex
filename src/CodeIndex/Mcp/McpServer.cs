@@ -428,7 +428,7 @@ public partial class McpServer : IDisposable
 
         // Use stderr for logging so stdout stays clean for JSON-RPC
         // stdoutをJSON-RPC用にクリーンに保つため、ログはstderrに出力
-        Console.Error.WriteLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {_dbPath}, transport: {transport.Name} @ {transport.Endpoint}, max in-flight: {MaxConcurrency})");
+        ConsoleUi.TryWriteErrorLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {_dbPath}, transport: {transport.Name} @ {transport.Endpoint}, max in-flight: {MaxConcurrency})");
 
         if (transport is HttpMcpTransport httpTransport)
             httpTransport.OutOfBandFrameHandler = ProcessFrame;
