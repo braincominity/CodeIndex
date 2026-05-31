@@ -14,7 +14,7 @@ public static partial class IndexCommandRunner
     [
         "--db", "--data-dir", "--rebuild", "--verbose", "--json", "--dry-run", "--force",
         "--yes", "--watch", "--debounce", "--duration-format", "--max-file-bytes",
-        "--parallelism",
+        "--parallelism", "--memory-trace",
         "--commits", "--changed-between", "--files", "--solution", "--project",
         "--include-symbol-kind", "--exclude-symbol-kind", "--optimize", "--help",
     ];
@@ -35,6 +35,7 @@ public static partial class IndexCommandRunner
         bool yes = false;
         bool watch = false;
         bool optimizeOnly = false;
+        bool memoryTrace = false;
         int? watchDebounceMs = null;
         var durationFormat = DurationOutputFormat.Auto;
         long? maxFileSizeBytes = ReadMaxFileSizeBytesFromEnvironment();
@@ -106,6 +107,9 @@ public static partial class IndexCommandRunner
                     break;
                 case "--optimize":
                     optimizeOnly = true;
+                    break;
+                case "--memory-trace":
+                    memoryTrace = true;
                     break;
                 case "--debounce" when i + 1 < args.Length:
                     if (int.TryParse(args[i + 1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedDebounce) && parsedDebounce >= 0)
@@ -277,6 +281,7 @@ public static partial class IndexCommandRunner
             Yes = yes,
             Watch = watch,
             OptimizeOnly = optimizeOnly,
+            MemoryTrace = memoryTrace,
             WatchDebounceMs = watchDebounceMs,
             DurationFormat = durationFormat,
             MaxFileSizeBytes = maxFileSizeBytes,

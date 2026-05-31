@@ -62,6 +62,14 @@ internal static class JsonOutputSnapshotHelper
     private static readonly HashSet<string> VolatileCountKeys = new(StringComparer.Ordinal)
     {
         "page_count",
+        "db_size_bytes",
+        "wal_size_bytes",
+        "heap_bytes",
+        "gc_heap_size_bytes",
+        "gc_gen0_count",
+        "gc_gen1_count",
+        "gc_gen2_count",
+        "working_set_bytes",
     };
 
     public static void AssertMatches(

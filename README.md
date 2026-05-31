@@ -143,13 +143,16 @@ The documented `status --json` trust contract covers these fields:
 <tr><td><code>worktree_head_changed</code></td><td><code>indexed_head_sha</code></td><td><code>indexed_head_branch</code></td><td><code>indexed_head_timestamp</code></td></tr>
 <tr><td><code>commits_ahead_of_indexed_head</code></td><td><code>index_writer_version</code></td><td><code>index_newer_than_reader</code></td><td><code>index_newer_than_reader_reason</code></td></tr>
 <tr><td><code>unknown_extension_file_count</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td><td><code>data_dir_source</code></td></tr>
-<tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_pragma_settings</code></td><td><code>hooks</code></td></tr>
-<tr><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td><td><code>degraded_reason</code></td><td><code>recommended_action</code></td></tr>
-<tr><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td></td><td></td></tr>
+<tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_size_bytes</code></td><td><code>wal_size_bytes</code></td></tr>
+<tr><td><code>db_pragma_settings</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td><td><code>last_index_run</code></td></tr>
+<tr><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td><td><code>degraded_reason</code></td></tr>
+<tr><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td></td></tr>
 </tbody>
 </table>
 
 For MCP `status`, `mcp_session` is session-scoped diagnostic data rather than persisted index state. It includes `log_level`, `roots`, optional `client_info`, and optional `client_capabilities`.
+
+`process` is captured at status-call time and includes heap, GC collection, and working-set counters. `last_index_run` is persisted by successful CLI and MCP index runs with the run mode, duration, file counts, byte count, row-change counts, and optional peak-memory summary from CLI `--memory-trace`.
 
 `hotspot_family_degraded_reason` uses these values:
 
@@ -333,13 +336,16 @@ cdidx mcp
 <tr><td><code>worktree_head_changed</code></td><td><code>indexed_head_sha</code></td><td><code>indexed_head_branch</code></td><td><code>indexed_head_timestamp</code></td></tr>
 <tr><td><code>commits_ahead_of_indexed_head</code></td><td><code>index_writer_version</code></td><td><code>index_newer_than_reader</code></td><td><code>index_newer_than_reader_reason</code></td></tr>
 <tr><td><code>unknown_extension_file_count</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td><td><code>data_dir_source</code></td></tr>
-<tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_pragma_settings</code></td><td><code>hooks</code></td></tr>
-<tr><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td><td><code>degraded_reason</code></td><td><code>recommended_action</code></td></tr>
-<tr><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td></td><td></td></tr>
+<tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_size_bytes</code></td><td><code>wal_size_bytes</code></td></tr>
+<tr><td><code>db_pragma_settings</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td><td><code>last_index_run</code></td></tr>
+<tr><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td><td><code>degraded_reason</code></td></tr>
+<tr><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td></td></tr>
 </tbody>
 </table>
 
 MCP `status` の `mcp_session` は永続化された index 状態ではなく、セッション単位の診断情報です。`log_level`、`roots`、任意の `client_info`、任意の `client_capabilities` を含みます。
+
+`process` は status 呼び出し時点の heap、GC collection、working-set counters です。`last_index_run` は成功した CLI / MCP index 実行が永続化し、run mode、duration、file counts、byte count、row-change counts、CLI `--memory-trace` 由来の任意の peak-memory summary を含みます。
 
 `hotspot_family_degraded_reason` は次の値を使います。
 
