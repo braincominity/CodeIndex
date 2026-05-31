@@ -12,7 +12,8 @@ internal static class TypeScriptReferenceExtractor
         int BindingLine,
         int? EndLine,
         int BraceDepth,
-        IReadOnlyList<LineRange> ShadowRanges);
+        IReadOnlyList<LineRange> ShadowRanges,
+        IReadOnlySet<string> TypeParameters);
     internal sealed record NamespaceAliasBinding(
         string Alias,
         string ModuleSpecifier,
@@ -48,7 +49,7 @@ internal static class TypeScriptReferenceExtractor
         "readonly",
     };
     private static readonly Regex TypeAliasRegex = new(
-        @"^\s*(?:export\s+)?type\s+(?<alias>[A-Za-z_$][\w$]*)(?:\s*<[^;]*>)?\s*=\s*(?<target>[^;]+)",
+        @"^\s*(?:export\s+)?type\s+(?<alias>[A-Za-z_$][\w$]*)(?<params>\s*<[^;]*>)?\s*=\s*(?<target>[^;]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static IReadOnlyList<NamespaceAliasBinding> BuildNamespaceAliasBindings(
@@ -258,7 +259,8 @@ internal static class TypeScriptReferenceExtractor
                     index + 1,
                     FindScopedAliasEndLine(preparedLines, braceDepths, index),
                     braceDepths[index],
-                    BuildTypeAliasShadowRanges(preparedLines, braceDepths, match.Groups["alias"].Value)));
+                    BuildTypeAliasShadowRanges(preparedLines, braceDepths, match.Groups["alias"].Value),
+                    ExtractGenericTypeParameters(match.Groups["params"].Value)));
         }
 
         return aliases;
@@ -313,7 +315,8 @@ internal static class TypeScriptReferenceExtractor
                     fileId,
                     context,
                     lineNumber,
-                    resolveContainerForColumn(index));
+                    resolveContainerForColumn(index),
+                    binding.Value.TypeParameters);
             }
         }
     }
@@ -395,6 +398,24 @@ internal static class TypeScriptReferenceExtractor
         }
 
         return false;
+    }
+
+    private static IReadOnlySet<string> ExtractGenericTypeParameters(string parameters)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var openAngle = parameters.IndexOf('<');
+        var closeAngle = parameters.LastIndexOf('>');
+        if (openAngle < 0 || closeAngle <= openAngle)
+            return names;
+
+        foreach (var parameter in parameters.Substring(openAngle + 1, closeAngle - openAngle - 1).Split(','))
+        {
+            var name = parameter.Trim().Split([' ', '=', ':'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(name))
+                names.Add(name);
+        }
+
+        return names;
     }
 
     private static bool ContainsKeyword(string text, string keyword)

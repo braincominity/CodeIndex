@@ -5807,8 +5807,9 @@ public class ReferenceExtractorTests
         const string content = """
             class DefaultKey {}
             class SomeType {}
-            type MyAlias<T = DefaultKey> = SomeType;
-            class Derived extends MyAlias {}
+            class Arg {}
+            type MyAlias<T = DefaultKey> = SomeType & Box<T>;
+            class Derived extends MyAlias<Arg> {}
             """;
 
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
@@ -5817,12 +5818,17 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference =>
             reference.SymbolName == "DefaultKey"
             && reference.ReferenceKind == "type_reference"
-            && reference.Context == "type MyAlias<T = DefaultKey> = SomeType;");
+            && reference.Context == "type MyAlias<T = DefaultKey> = SomeType & Box<T>;");
         Assert.Contains(references, reference =>
             reference.SymbolName == "SomeType"
             && reference.ReferenceKind == "type_reference"
             && reference.ContainerName == "Derived"
-            && reference.Context == "class Derived extends MyAlias {}");
+            && reference.Context == "class Derived extends MyAlias<Arg> {}");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "T"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived"
+            && reference.Context == "class Derived extends MyAlias<Arg> {}");
     }
 
     [Fact]
@@ -26394,6 +26400,32 @@ public class ReferenceExtractorTests
 
         Assert.Single(expanded);
         Assert.Equal(8, expanded[0].Column);
+    }
+
+    [Fact]
+    public void Extract_SwiftGenericTypealiasHeritage_DoesNotEmitTypeParameterAsTarget()
+    {
+        const string content = """
+            class SomeType {}
+            class Box<T> {}
+            class Arg {}
+            typealias MyAlias<T> = SomeType & Box<T>
+            class Derived: MyAlias<Arg> {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "SomeType"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived"
+            && reference.Context == "class Derived: MyAlias<Arg> {}");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "T"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived"
+            && reference.Context == "class Derived: MyAlias<Arg> {}");
     }
 
     [Fact]

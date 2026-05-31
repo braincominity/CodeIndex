@@ -12,7 +12,8 @@ internal static class SwiftReferenceExtractor
         int BindingLine,
         int? EndLine,
         int BraceDepth,
-        IReadOnlyList<LineRange> ShadowRanges);
+        IReadOnlyList<LineRange> ShadowRanges,
+        IReadOnlySet<string> TypeParameters);
 
     private static readonly string[] DeclarationKeywords = ["let", "var"];
     private static readonly string[] TypeOperatorKeywords = ["is", "as"];
@@ -23,7 +24,7 @@ internal static class SwiftReferenceExtractor
         @"@(?<name>[A-Z]\w*(?:\.[A-Z]\w*)?)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex TypeAliasRegex = new(
-        @"^\s*(?:(?:public|private|internal|open|fileprivate|package)\s+)?typealias\s+(?<alias>`[^`]+`|\w+)(?:\s*<[^=]+>)?\s*=\s*(?<target>.+)$",
+        @"^\s*(?:(?:public|private|internal|open|fileprivate|package)\s+)?typealias\s+(?<alias>`[^`]+`|\w+)(?<params>\s*<[^=]+>)?\s*=\s*(?<target>.+)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex TypeDeclarationShadowRegex = new(
         @"^\s*(?:(?:public|private|internal|open|fileprivate|package)\s+)?(?:final\s+)?(?:class|struct|enum|protocol)\s+(?<name>`[^`]+`|\w+)\b",
@@ -111,7 +112,8 @@ internal static class SwiftReferenceExtractor
                     index + 1,
                     FindScopedAliasEndLine(preparedLines, braceDepths, index),
                     braceDepths[index],
-                    BuildTypeAliasShadowRanges(preparedLines, braceDepths, TrimSwiftBackticks(match.Groups["alias"].Value))));
+                    BuildTypeAliasShadowRanges(preparedLines, braceDepths, TrimSwiftBackticks(match.Groups["alias"].Value)),
+                    ExtractGenericTypeParameters(match.Groups["params"].Value)));
         }
 
         return aliases;
@@ -166,7 +168,8 @@ internal static class SwiftReferenceExtractor
                     fileId,
                     context,
                     lineNumber,
-                    resolveContainerForColumn(index));
+                    resolveContainerForColumn(index),
+                    binding.Value.TypeParameters);
             }
         }
     }
@@ -250,6 +253,24 @@ internal static class SwiftReferenceExtractor
         }
 
         return false;
+    }
+
+    private static IReadOnlySet<string> ExtractGenericTypeParameters(string parameters)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var openAngle = parameters.IndexOf('<');
+        var closeAngle = parameters.LastIndexOf('>');
+        if (openAngle < 0 || closeAngle <= openAngle)
+            return names;
+
+        foreach (var parameter in parameters.Substring(openAngle + 1, closeAngle - openAngle - 1).Split(','))
+        {
+            var name = parameter.Trim().Split([' ', ':', '='], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(name))
+                names.Add(TrimSwiftBackticks(name));
+        }
+
+        return names;
     }
 
     private static bool ContainsKeyword(string text, string keyword)
