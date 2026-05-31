@@ -21151,6 +21151,10 @@ public class SymbolExtractorTests
               | Organization
               | Team @deprecated(reason: "legacy")
 
+            union ExternalSearchResult @deprecated(reason: "legacy")
+              = User
+              | Organization
+
             extend scalar DateTime
 
             query GetUser($id: ID!) {
@@ -21180,6 +21184,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "Organization" && s.ContainerName == "SearchResult");
         Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "Team" && s.ContainerName == "SearchResult");
         Assert.DoesNotContain(symbols, s => s.Kind == "reference" && s.Name is "organization" or "result" or "deprecated" or "reason" or "legacy");
+        Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "User" && s.ContainerName == "ExternalSearchResult");
+        Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "Organization" && s.ContainerName == "ExternalSearchResult");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DateTime");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetUser");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreateUser");

@@ -24,6 +24,9 @@ public static partial class SymbolExtractor
     private static readonly Regex GraphQLUnionDeclarationRegex = new(
         @"^\s*(?:extend\s+)?union\s+(?<name>\w+)(?:\s+@\w+(?:\([^)]*\))?)*\s*=\s*(?<variants>.*)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex GraphQLUnionHeaderRegex = new(
+        @"^\s*(?:extend\s+)?union\s+(?<name>\w+)(?:\s+@\w+(?:\([^)]*\))?)*\s*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex GraphQLUnionVariantRegex = new(
         @"\|?\s*(?<name>[_A-Za-z]\w*)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -4212,18 +4215,49 @@ public static partial class SymbolExtractor
         for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
             var match = GraphQLUnionDeclarationRegex.Match(lines[lineIndex]);
-            if (!match.Success)
+            if (match.Success)
+            {
+                var unionName = match.Groups["name"].Value;
+                AddGraphQLUnionVariantSymbols(fileId, lines, lineIndex, match.Groups["variants"].Value, match.Groups["variants"].Index, unionName, symbols);
+                for (var continuationIndex = lineIndex + 1; continuationIndex < lines.Length; continuationIndex++)
+                {
+                    var continuation = lines[continuationIndex];
+                    if (string.IsNullOrWhiteSpace(continuation) || GraphQLDeclarationStartRegex.IsMatch(continuation))
+                        break;
+
+                    AddGraphQLUnionVariantSymbols(fileId, lines, continuationIndex, continuation, 0, unionName, symbols);
+                }
+
+                continue;
+            }
+
+            var headerMatch = GraphQLUnionHeaderRegex.Match(lines[lineIndex]);
+            if (!headerMatch.Success)
                 continue;
 
-            var unionName = match.Groups["name"].Value;
-            AddGraphQLUnionVariantSymbols(fileId, lines, lineIndex, match.Groups["variants"].Value, match.Groups["variants"].Index, unionName, symbols);
+            var headerUnionName = headerMatch.Groups["name"].Value;
             for (var continuationIndex = lineIndex + 1; continuationIndex < lines.Length; continuationIndex++)
             {
                 var continuation = lines[continuationIndex];
                 if (string.IsNullOrWhiteSpace(continuation) || GraphQLDeclarationStartRegex.IsMatch(continuation))
                     break;
 
-                AddGraphQLUnionVariantSymbols(fileId, lines, continuationIndex, continuation, 0, unionName, symbols);
+                var equalsIndex = continuation.IndexOf('=', StringComparison.Ordinal);
+                if (equalsIndex >= 0)
+                {
+                    AddGraphQLUnionVariantSymbols(fileId, lines, continuationIndex, continuation[(equalsIndex + 1)..], equalsIndex + 1, headerUnionName, symbols);
+                    for (var variantIndex = continuationIndex + 1; variantIndex < lines.Length; variantIndex++)
+                    {
+                        var variantContinuation = lines[variantIndex];
+                        if (string.IsNullOrWhiteSpace(variantContinuation) || GraphQLDeclarationStartRegex.IsMatch(variantContinuation))
+                            break;
+
+                        AddGraphQLUnionVariantSymbols(fileId, lines, variantIndex, variantContinuation, 0, headerUnionName, symbols);
+                    }
+
+                    lineIndex = continuationIndex;
+                    break;
+                }
             }
         }
     }
