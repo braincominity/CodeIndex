@@ -53,4 +53,30 @@ public class WorkspaceCommandRunnerTests
         Assert.Contains("precedence", stdout);
         Assert.Contains("active_workspace", stdout);
     }
+
+    [Fact]
+    public void ActiveWorkspace_AffectsQueryResolutionButNotIndexResolution()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_project");
+        var activeRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_state");
+        var activeDb = Path.Combine(activeRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable);
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, activeDb);
+
+            var query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+            var index = DbPathResolver.ResolveForIndex(projectRoot, explicitDbPath: null, explicitDataDir: null);
+
+            Assert.Equal(Path.GetFullPath(activeDb), query.DbPath);
+            Assert.Equal(DbPathResolver.DataDirSourceActiveWorkspace, query.DataDirSource);
+            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), index.DbPath);
+            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, index.DataDirSource);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(activeRoot);
+        }
+    }
 }

@@ -52,10 +52,6 @@ public static class DbPathResolver
         if (!string.IsNullOrWhiteSpace(environmentDataDir))
             return BuildDataDirResolution(environmentDataDir, DataDirSourceEnv);
 
-        var active = ActiveWorkspace.Load();
-        if (active != null)
-            return new DbPathResolution(active.DbPath, Path.GetDirectoryName(active.DbPath), DataDirSourceActiveWorkspace);
-
         if (!string.IsNullOrWhiteSpace(xdgDataHome))
         {
             return BuildDataDirResolution(BuildXdgDataDir(xdgDataHome, fullWorkspacePath), DataDirSourceXdg);
@@ -72,6 +68,10 @@ public static class DbPathResolver
 
         if (!string.IsNullOrWhiteSpace(environmentDataDir))
             return BuildDataDirResolution(environmentDataDir, DataDirSourceEnv);
+
+        var active = ActiveWorkspace.Load();
+        if (active != null)
+            return new DbPathResolution(active.DbPath, Path.GetDirectoryName(active.DbPath), DataDirSourceActiveWorkspace);
 
         if (!string.IsNullOrWhiteSpace(xdgDataHome))
         {
