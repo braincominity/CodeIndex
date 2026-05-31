@@ -110,7 +110,7 @@ internal static class RubyReferenceExtractor
         }
 
         EmitSymbolLiteralFirstArgumentReferences(
-            originalLine,
+            preparedLine,
             references,
             seen,
             fileId,
@@ -241,7 +241,7 @@ internal static class RubyReferenceExtractor
     }
 
     private static void EmitSymbolLiteralFirstArgumentReferences(
-        string originalLine,
+        string preparedLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -249,7 +249,7 @@ internal static class RubyReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {
-        foreach (Match match in SymbolLiteralFirstArgumentRegex.Matches(originalLine))
+        foreach (Match match in SymbolLiteralFirstArgumentRegex.Matches(preparedLine))
         {
             var rawToken = match.Groups["token"].Value;
             var token = NormalizeCommandTargetToken(rawToken);
