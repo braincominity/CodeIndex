@@ -22,7 +22,7 @@ public static partial class SymbolExtractor
         @"^\s*(?<name>[_A-Za-z]\w*)\s*:",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.Multiline);
     private static readonly Regex GraphQLUnionDeclarationRegex = new(
-        @"^\s*(?:extend\s+)?union\s+(?<name>\w+)\s*=\s*(?<variants>.*)$",
+        @"^\s*(?:extend\s+)?union\s+(?<name>\w+)(?:\s+@\w+(?:\([^)]*\))?)*\s*=\s*(?<variants>.*)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex GraphQLUnionVariantRegex = new(
         @"\|?\s*(?<name>[_A-Za-z]\w*)\b",
