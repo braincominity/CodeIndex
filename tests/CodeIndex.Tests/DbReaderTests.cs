@@ -261,6 +261,21 @@ public class DbReaderTests : IDisposable
         Assert.Equal("COALESCE(reference_counts.reference_count, 0)", countSql);
     }
 
+    [Fact]
+    public void NormalizeSymbolSearchQueries_SkipsAlreadyNormalizedInput()
+    {
+        var method = typeof(DbReader).GetMethod(
+            "NormalizeSymbolSearchQueries",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var normalized = Assert.IsAssignableFrom<IReadOnlyList<string>>(method!.Invoke(null, [new[] { "module.exports.fetchData", "module.exports.fetchData" }, "javascript", false]));
+        var secondPass = Assert.IsAssignableFrom<IReadOnlyList<string>>(method.Invoke(null, [normalized, "javascript", false]));
+
+        Assert.Same(normalized, secondPass);
+        Assert.Equal(["fetchData"], normalized);
+    }
+
     [Theory]
     [InlineData("js")]
     [InlineData("JS")]
