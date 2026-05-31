@@ -20790,6 +20790,31 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Elixir_DetectsProtocolImplementations()
+    {
+        const string content = """
+            defmodule MyApp.Stream do
+              defstruct [:items]
+            end
+
+            defimpl Enumerable, for: MyApp.Stream do
+              def count(stream), do: {:ok, length(stream.items)}
+            end
+
+            defimpl Inspect, for: [MyApp.Stream, Other.Stream] do
+              def inspect(stream, _opts), do: "#Stream<#{length(stream.items)}>"
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "elixir", content);
+
+        Assert.Contains(symbols, s => s.Kind == "protocol_impl" && s.Name.StartsWith("Enumerable", StringComparison.Ordinal));
+        Assert.Contains(symbols, s => s.Kind == "protocol_impl" && s.Name.StartsWith("Inspect", StringComparison.Ordinal));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "count" && s.ContainerKind == "protocol_impl");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "inspect" && s.ContainerKind == "protocol_impl");
+    }
+
+    [Fact]
     public void Extract_Elixir_NestedBlocks_AndDoShorthand_HaveMatchingBodyRanges()
     {
         // Elixir: nested fn/case/if/with bodies and `, do:` shorthand / ネストした fn/case/if/with と `, do:` 短縮形
@@ -24432,6 +24457,28 @@ public class SymbolExtractorTests
         Assert.True(
             stopwatch.Elapsed < runawayBudget,
             $"InstallScriptTests.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
+    }
+
+    [Fact]
+    public void Extract_CSharp_ReferenceExtractorFixture_CompletesWithinPracticalBudget()
+    {
+        // issue #2710/#2711/#2717 regression: full self-indexing could spend minutes
+        // repeatedly rebuilding the same multi-line C# member candidate while scanning large
+        // extractor sources. Keep this as a broad runaway guard for the realistic file that
+        // reproduced the stall on origin/main.
+        var path = Path.Combine(GetRepositoryRoot(), "src", "CodeIndex", "Indexer", "References", "ReferenceExtractor.cs");
+        var content = File.ReadAllText(path);
+
+        var stopwatch = Stopwatch.StartNew();
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        stopwatch.Stop();
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ReferenceExtractor");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Extract");
+        var runawayBudget = TimeSpan.FromSeconds(30);
+        Assert.True(
+            stopwatch.Elapsed < runawayBudget,
+            $"ReferenceExtractor.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < {runawayBudget.TotalSeconds:F0}s runaway guard budget.");
     }
 
     [Fact]

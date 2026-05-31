@@ -16,6 +16,7 @@ public static partial class IndexCommandRunner
         string resolvedDbPath,
         IndexCommandOptions options,
         Stopwatch stopwatch,
+        DateTime runStartedAtUtc,
         string[] spinnerFrames,
         JsonSerializerOptions jsonOptions,
         int priorReadiness,
@@ -36,6 +37,7 @@ public static partial class IndexCommandRunner
         CancellationToken cancellationToken)
     {
         var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
+        var memorySamples = options.MemoryTrace ? new List<IndexMemorySampleJsonResult> { CaptureMemorySample("start", stopwatch) } : [];
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var sqlGraphContractMatchesCurrent = priorSqlGraphContractVersion == currentSqlGraphContractVersion;
         var unresolvedMergeExitCode = RejectUnresolvedMergeState(projectRoot, options.Json, jsonOptions);
@@ -162,6 +164,7 @@ public static partial class IndexCommandRunner
                 resolvedDbPath,
                 options,
                 stopwatch,
+                runStartedAtUtc,
                 spinnerFrames,
                 jsonOptions,
                 priorFoldVersion,
@@ -1069,8 +1072,25 @@ public static partial class IndexCommandRunner
         {
             StampIndexedHeadMetadata(writer, projectRoot);
             StampCommitScopedFreshHeadMetadata(writer, options, currentHeadCommit);
+            if (options.MemoryTrace)
+                memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
+            var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
+            StampLastIndexRunMetadata(
+                writer,
+                "update",
+                runStartedAtUtc,
+                stopwatch.ElapsedMilliseconds,
+                updated + removed + skipped,
+                skipped,
+                errors,
+                SumReadableFileBytes(targetPaths.Select(path => Path.Combine(projectRoot, path.Replace('/', Path.DirectorySeparatorChar)))),
+                updated,
+                removed,
+                memoryTimelineForStamp);
         }
         stopwatch.Stop();
+        var memoryTimeline = BuildMemoryTimeline(memorySamples);
+        WarnIfMemoryThresholdExceeded(memoryTimeline);
         // Detect cwd drift between option-parsing and finalize. Paths used in this run are
         // already absolute, but a drifted cwd is a strong signal that an embedded host or
         // signal handler mutated process state -- surface it so the operator can correct
@@ -1148,6 +1168,7 @@ public static partial class IndexCommandRunner
                 CwdDriftNotice = cwdDriftNotice,
                 Errors = errorList.Count > 0 ? errorList : null,
                 Warnings = warningList.Count > 0 ? warningList : null,
+                MemoryTimeline = memoryTimeline,
                 ElapsedMs = stopwatch.ElapsedMilliseconds,
             }, jsonContext.IndexUpdateJsonResult));
         }

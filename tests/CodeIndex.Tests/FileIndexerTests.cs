@@ -1517,6 +1517,62 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_TrimsLeadingWhitespaceBeforeParsingIgnoreLines()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "  # comment\n  *.tmp\n\\ leading.py\n\\#literal.py\n", Encoding.UTF8);
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
+            File.WriteAllText(Path.Combine(tempDir, "ignored.tmp"), "ignored");
+            File.WriteAllText(Path.Combine(tempDir, " leading.py"), "print('literal leading space')");
+            File.WriteAllText(Path.Combine(tempDir, "#literal.py"), "print('literal hash')");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "keep.py"], files);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_ReportsOverlongIgnorePatternAndContinues()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), $"{new string('a', 513)}\n*.tmp\n", Encoding.UTF8);
+            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('keep')");
+            File.WriteAllText(Path.Combine(tempDir, "ignored.tmp"), "ignored");
+
+            var result = new FileIndexer(tempDir).ScanFilesDetailed();
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "keep.py"], files);
+            var warning = Assert.Single(result.Errors);
+            Assert.Equal(FileIndexer.ScanIssueSeverity.Warning, warning.Severity);
+            Assert.Contains("pattern exceeds 512 characters", warning.Message);
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFiles_RespectsCdidxignoreAndNestedGitignore()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
@@ -1679,7 +1735,7 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void ScanFiles_FailsClosedWhenRootIgnoreFileIsUnreadable()
+    public void ScanFiles_PreservesInheritedRulesWhenRootIgnoreFileIsUnreadable()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1699,8 +1755,17 @@ public class FileIndexerTests
             var indexer = new FileIndexer(tempDir);
             var result = indexer.ScanFilesDetailed();
 
-            Assert.Empty(result.Files);
-            Assert.Contains(result.Errors, error => error.Path == ".gitignore" && error.Message == "Could not read .gitignore.");
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal([".gitignore", "keep.py", "secret.py"], files);
+            Assert.Contains(result.Errors, error =>
+                error.Path == ".gitignore" &&
+                error.Message == "Could not read .gitignore due to permissions." &&
+                error.Severity == FileIndexer.ScanIssueSeverity.Warning);
+            Assert.False(result.HadErrors);
         }
         finally
         {
@@ -1712,7 +1777,7 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void ScanFiles_FailsClosedWhenNestedIgnoreFileIsUnreadable()
+    public void ScanFiles_PreservesInheritedRulesWhenNestedIgnoreFileIsUnreadable()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1738,8 +1803,12 @@ public class FileIndexerTests
                 .OrderBy(path => path, StringComparer.Ordinal)
                 .ToList();
 
-            Assert.Equal(["keep.py"], files);
-            Assert.Contains(result.Errors, error => error.Path == "src/.gitignore" && error.Message == "Could not read .gitignore.");
+            Assert.Equal(["keep.py", "src/.gitignore", "src/keep_nested.py", "src/secret.py"], files);
+            Assert.Contains(result.Errors, error =>
+                error.Path == "src/.gitignore" &&
+                error.Message == "Could not read .gitignore due to permissions." &&
+                error.Severity == FileIndexer.ScanIssueSeverity.Warning);
+            Assert.False(result.HadErrors);
         }
         finally
         {
@@ -1961,11 +2030,11 @@ public class FileIndexerTests
             File.WriteAllText(
                 Path.Combine(tempDir, ".gitignore"),
                 "  #*.py\n  *.py\n*.cs\t\n");
-            File.WriteAllText(Path.Combine(tempDir, "  #x.py"), "print('ignored because leading-space # is literal')");
-            File.WriteAllText(Path.Combine(tempDir, "a.py"), "print('kept because leading spaces are literal')");
-            File.WriteAllText(Path.Combine(tempDir, "  a.py"), "print('ignored by leading-space pattern')");
+            File.WriteAllText(Path.Combine(tempDir, "  #x.py"), "print('kept because leading-space # is a comment')");
+            File.WriteAllText(Path.Combine(tempDir, "a.py"), "print('ignored after leading-space trim')");
+            File.WriteAllText(Path.Combine(tempDir, "  a.py"), "print('ignored by trimmed basename pattern')");
             File.WriteAllText(Path.Combine(tempDir, "a.cs"), "public class IgnoredAfterTrailingTabTrim { }");
-            File.WriteAllText(Path.Combine(tempDir, "keep.py"), "print('kept')");
+            File.WriteAllText(Path.Combine(tempDir, "keep.js"), "export const kept = true;");
 
             var indexer = new FileIndexer(tempDir);
             var files = indexer.ScanFiles()
@@ -1973,7 +2042,7 @@ public class FileIndexerTests
                 .OrderBy(path => path, StringComparer.Ordinal)
                 .ToList();
 
-            Assert.Equal([".gitignore", "a.py", "keep.py"], files);
+            Assert.Equal([".gitignore", "keep.js"], files);
         }
         finally
         {

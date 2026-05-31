@@ -1743,6 +1743,7 @@ public static partial class SymbolExtractor
             new("function", new Regex(@"^\s*(?:def|defp|defmacro|defguardp?)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.ElixirEnd),
             new("class",    new Regex(@"^\s*defmodule\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.ElixirEnd),
             new("interface", new Regex(@"^\s*defprotocol\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.ElixirEnd),
+            new("protocol_impl", new Regex(@"^\s*defimpl\s+(?<name>[\w.]+(?:\s*,\s*for:\s*(?:\[[^\]]+\]|[\w.{}]+))?)", RegexOptions.Compiled), BodyStyle.ElixirEnd),
             new("import",   new Regex(@"^\s*(?:import|alias|use|require)\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["dart"] =
@@ -2115,7 +2116,7 @@ public static partial class SymbolExtractor
 
     private static readonly HashSet<string> ContainerKinds =
     [
-        "class", "struct", "interface", "protocol", "namespace", "enum", "object", "heading", "specialization", "class_hook"
+        "class", "struct", "interface", "protocol", "protocol_impl", "namespace", "enum", "object", "heading", "specialization", "class_hook"
     ];
 
     private static bool IsRustDirectTraitBodyMember(List<SymbolRecord> symbols, int candidateLine)
@@ -2450,6 +2451,7 @@ public static partial class SymbolExtractor
             {
                 var stopAfterFirstPatternMatch = false;
                 var restartPatternScanOffset = -1;
+                CSharpPropertyMatchCandidate? csharpPropertyCandidateForLine = null;
                 foreach (var pattern in patterns)
                 {
                     if (lang == "csharp" && ReferenceEquals(pattern.Regex, CSharpEnumMemberRegex))
@@ -2466,7 +2468,7 @@ public static partial class SymbolExtractor
                     // function パターンは `CSharpPropertyHeaderPrefixRegex` が `(` や `{` を含む行を
                     // 受け付けないため影響を受けず、merger は元の行をそのまま返す。Closes #355.
                     var csharpPropertyCandidate = lang == "csharp" && pattern.Kind is "property" or "function"
-                        ? BuildCSharpPropertyMatchLine(lines, csharpMatchLines!, i)
+                        ? csharpPropertyCandidateForLine ??= BuildCSharpPropertyMatchLine(lines, csharpMatchLines!, i)
                         : new CSharpPropertyMatchCandidate(matchLine, i, i);
                     var patternMatchLine = csharpPropertyCandidate.MatchLine;
                     if (fortranContinuationCandidate != null)

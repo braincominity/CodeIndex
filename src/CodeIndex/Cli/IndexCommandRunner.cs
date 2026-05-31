@@ -87,6 +87,7 @@ public static partial class IndexCommandRunner
         var dbResolution = DbPathResolver.ResolveForIndex(options.ProjectPath, options.DbPath, options.DataDir);
         var dbPath = dbResolution.DbPath;
         var stopwatch = Stopwatch.StartNew();
+        var runStartedAtUtc = DateTime.UtcNow;
         var isUpdateMode = options.Commits.Count > 0 || options.ChangedBetweenSpecified || options.UpdateFiles.Count > 0;
         var mode = options.Rebuild ? "rebuild" : isUpdateMode ? "update" : "incremental";
 
@@ -244,8 +245,8 @@ public static partial class IndexCommandRunner
         var projectRoot = Path.GetFullPath(options.ProjectPath!);
 
         initialExitCode = isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexCancellation.Token)
-            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexCancellation.Token);
+            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexCancellation.Token)
+            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexCancellation.Token);
         if (initialExitCode == CommandExitCodes.Success)
             db.RunPlannerStatisticsMaintenance(forceAnalyze: !databaseExistedBeforeIndex);
             }
@@ -287,6 +288,94 @@ public static partial class IndexCommandRunner
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
             values[lang] = db.GetMetaString(keyFactory(lang));
         return values;
+    }
+
+    private static IndexMemorySampleJsonResult CaptureMemorySample(string phase, Stopwatch stopwatch)
+    {
+        var gcInfo = GC.GetGCMemoryInfo();
+        return new IndexMemorySampleJsonResult
+        {
+            Phase = phase,
+            ElapsedMs = stopwatch.ElapsedMilliseconds,
+            HeapBytes = GC.GetTotalMemory(forceFullCollection: false),
+            TotalAllocatedBytes = GC.GetTotalAllocatedBytes(),
+            GcHeapSizeBytes = gcInfo.HeapSizeBytes,
+            FragmentedBytes = gcInfo.FragmentedBytes,
+            WorkingSetBytes = Process.GetCurrentProcess().WorkingSet64,
+            Gen0Collections = GC.CollectionCount(0),
+            Gen1Collections = GC.CollectionCount(1),
+            Gen2Collections = GC.CollectionCount(2),
+        };
+    }
+
+    private static IndexMemoryTimelineJsonResult? BuildMemoryTimeline(List<IndexMemorySampleJsonResult> samples)
+    {
+        if (samples.Count == 0)
+            return null;
+
+        return new IndexMemoryTimelineJsonResult
+        {
+            Samples = samples,
+            PeakWorkingSetBytes = samples.Max(static sample => sample.WorkingSetBytes),
+            PeakHeapBytes = samples.Max(static sample => sample.HeapBytes),
+        };
+    }
+
+    private static void WarnIfMemoryThresholdExceeded(IndexMemoryTimelineJsonResult? timeline)
+    {
+        var rawThreshold = Environment.GetEnvironmentVariable("CDIDX_MEM_WARN_MB");
+        if (timeline == null || !long.TryParse(rawThreshold, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var thresholdMb) || thresholdMb <= 0)
+            return;
+
+        var peakMb = timeline.PeakWorkingSetBytes / (1024 * 1024);
+        if (peakMb >= thresholdMb)
+            Console.Error.WriteLine($"Warning: cdidx working set reached {peakMb:N0} MB (CDIDX_MEM_WARN_MB={thresholdMb:N0}).");
+    }
+
+    private static void StampLastIndexRunMetadata(
+        DbWriter writer,
+        string mode,
+        DateTime startedAtUtc,
+        long durationMs,
+        long filesScanned,
+        long filesSkipped,
+        long parseErrors,
+        long bytesRead,
+        long rowsUpserted,
+        long rowsDeleted,
+        IndexMemoryTimelineJsonResult? memoryTimeline)
+    {
+        writer.SetMeta(DbContext.LastIndexRunModeMetaKey, mode);
+        writer.SetMeta(DbContext.LastIndexRunStartedAtMetaKey, startedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
+        writer.SetMeta(DbContext.LastIndexRunDurationMsMetaKey, durationMs.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.SetMeta(DbContext.LastIndexRunFilesScannedMetaKey, filesScanned.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.SetMeta(DbContext.LastIndexRunFilesSkippedMetaKey, filesSkipped.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.SetMeta(DbContext.LastIndexRunParseErrorsMetaKey, parseErrors.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.SetMeta(DbContext.LastIndexRunBytesReadMetaKey, bytesRead.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.SetMeta(DbContext.LastIndexRunRowsUpsertedMetaKey, rowsUpserted.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.SetMeta(DbContext.LastIndexRunRowsDeletedMetaKey, rowsDeleted.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.SetMeta(DbContext.LastIndexRunPeakMemoryMbMetaKey, memoryTimeline == null
+            ? null
+            : (memoryTimeline.PeakWorkingSetBytes / (1024 * 1024)).ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    private static long SumReadableFileBytes(IEnumerable<string> paths)
+    {
+        long total = 0;
+        foreach (var path in paths)
+        {
+            try
+            {
+                var info = new FileInfo(path);
+                if (info.Exists)
+                    total += info.Length;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+            {
+            }
+        }
+
+        return total;
     }
 
     private static Dictionary<string, string?> GetHotspotFamilyMarkerFingerprints(FileIndexer indexer)
@@ -1180,6 +1269,7 @@ public sealed class IndexCommandOptions
     public DurationOutputFormat DurationFormat { get; init; } = DurationOutputFormat.Auto;
     public long? MaxFileSizeBytes { get; init; }
     public int Parallelism { get; init; } = IndexCommandRunner.DefaultIndexParallelism();
+    public bool MemoryTrace { get; init; }
     public FileIndexer.SymlinkPolicy SymlinkPolicy { get; init; } = FileIndexer.SymlinkPolicy.None;
     public SymbolKindFilter SymbolKindFilter { get; init; } = SymbolKindFilter.Empty;
 }
