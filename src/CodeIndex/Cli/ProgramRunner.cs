@@ -7,6 +7,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
 using CodeIndex.Mcp;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
 
@@ -292,10 +293,11 @@ internal static class ProgramRunner
                 return exitCode;
             }
 
-            GlobalToolLog.Error("unhandled_exception", ex);
+            var unhandledExitCode = MapUnhandledExceptionExitCode(ex);
+            GlobalToolLog.Error($"command_complete exit_code={unhandledExitCode} unhandled_exception", ex);
             Console.Error.WriteLine("Error: command failed before it could complete. Run `cdidx report` for details.");
-            EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, CommandExitCodes.DatabaseError, ex.GetType().Name);
-            return CommandExitCodes.DatabaseError;
+            EmitCommandMetric(args[0], args, commandStartTimestamp, commandStopwatch, unhandledExitCode, ex.GetType().Name);
+            return unhandledExitCode;
         }
     }
 
@@ -569,6 +571,36 @@ internal static class ProgramRunner
         CommandErrorCodes.Interrupted => CommandExitCodes.CancelledBySignal,
         _ => CommandExitCodes.DatabaseError,
     };
+
+    internal static int MapUnhandledExceptionExitCode(Exception ex)
+    {
+        var sqliteException = FindSqliteException(ex);
+        if (sqliteException is null)
+            return CommandExitCodes.UnhandledException;
+
+        return sqliteException.SqliteErrorCode switch
+        {
+            5 or 6 or 8 => CommandExitCodes.TransientDatabaseError,
+            _ => CommandExitCodes.DatabaseError,
+        };
+    }
+
+    private static SqliteException? FindSqliteException(Exception ex)
+    {
+        if (ex is SqliteException sqliteException)
+            return sqliteException;
+        if (ex is AggregateException aggregate)
+        {
+            foreach (var inner in aggregate.InnerExceptions)
+            {
+                var found = FindSqliteException(inner);
+                if (found is not null)
+                    return found;
+            }
+        }
+
+        return ex.InnerException is null ? null : FindSqliteException(ex.InnerException);
+    }
 
     private sealed class QuietStderrScope : IDisposable
     {
