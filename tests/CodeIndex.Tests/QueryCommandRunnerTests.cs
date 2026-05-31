@@ -29061,6 +29061,34 @@ jobs:
     }
 
     [Fact]
+    public void RunFind_SnippetLinesControlsMatchContext()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_snippet_lines");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Auth.cs",
+                "csharp",
+                "line one\nline two\nvoid Guard() {}\nline four\nline five\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["Guard", "--db", dbPath, "--path", "src/Auth.cs", "--snippet-lines", "5"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("line one", stdout);
+            Assert.Contains("line five", stdout);
+            Assert.Contains("1 matches in 1 file", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFind_CountOnlyJsonIncludesVisibleMatchAndFileCounts()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_count");

@@ -5605,6 +5605,24 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_FindInFile_SnippetLinesControlsMatchContext()
+    {
+        InsertIndexedFile("dist/search-snippet-lines.txt", "text", "line one\nline two\ntarget\nline four\nline five");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"target","path":"dist/search-snippet-lines.txt","snippetLines":5}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+        var structured = response["result"]!["structuredContent"]!;
+        var result = structured["results"]![0]!;
+
+        Assert.Equal(2, structured["before"]!.GetValue<int>());
+        Assert.Equal(2, structured["after"]!.GetValue<int>());
+        Assert.Equal(5, structured["snippetLines"]!.GetValue<int>());
+        Assert.Equal(1, result["startLine"]!.GetValue<int>());
+        Assert.Equal(5, result["endLine"]!.GetValue<int>());
+    }
+
+    [Fact]
     public void ToolsCall_AnalyzeSymbol_ClampsBundledReferenceContext()
     {
         InsertIndexedFile("src/target.js", "javascript",

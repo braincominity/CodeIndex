@@ -321,7 +321,7 @@ public partial class McpServer
         "callers" or "callees" => new HashSet<string>(StringComparer.Ordinal) { "query", "kind", "rankBy", "lang", "limit", "offset", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "countOnly", "project", "solution" },
         "symbols" => new HashSet<string>(StringComparer.Ordinal) { "query", "names", "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "exactName", "exact", "project", "solution" },
         "files" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "since" },
-        "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "maxLineWidth", "exact" },
+        "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "snippetLines", "maxLineWidth", "exact" },
         "excerpt" => new HashSet<string>(StringComparer.Ordinal) { "path", "startLine", "endLine", "before", "after", "focusLine", "focusColumn", "focusLength", "maxLineWidth" },
         "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "project", "solution" },
         "analyze_symbol" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "includeBody", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "maxLineWidth", "project", "solution" },
@@ -1823,6 +1823,17 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "after must be greater than or equal to 0");
         var after = ClampContextLines(afterValue ?? 0);
         var contextTruncated = beforeValue > MaxContextLines || afterValue > MaxContextLines;
+        var snippetLinesValue = args?["snippetLines"]?.GetValue<int>();
+        if (snippetLinesValue.HasValue && (snippetLinesValue.Value <= 0 || snippetLinesValue.Value > SearchSnippetFormatter.MaxSnippetLines))
+            return CreateToolErrorResponse(id, $"snippetLines must be in [1, {SearchSnippetFormatter.MaxSnippetLines}]");
+        if (snippetLinesValue.HasValue)
+        {
+            var surroundingLines = snippetLinesValue.Value - 1;
+            if (!beforeValue.HasValue)
+                before = surroundingLines / 2;
+            if (!afterValue.HasValue)
+                after = surroundingLines - before;
+        }
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var exact = args?["exact"]?.GetValue<bool>() ?? false;
@@ -1844,6 +1855,8 @@ public partial class McpServer
                 ["fileCount"] = results.Select(r => r.Path).Distinct().Count(),
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions),
             };
+            if (snippetLinesValue.HasValue)
+                structured["snippetLines"] = snippetLinesValue.Value;
             if (results.Count == 0)
             {
                 AddFreshnessHint(structured, reader);

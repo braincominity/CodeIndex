@@ -227,6 +227,7 @@ public partial class McpServer
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
                         ["before"] = new JsonObject { ["type"] = "integer", ["description"] = "Context lines before the match (default: 0, clamped to 1000)", ["default"] = 0, ["minimum"] = 0 },
                         ["after"] = new JsonObject { ["type"] = "integer", ["description"] = "Context lines after the match (default: 0, clamped to 1000)", ["default"] = 0, ["minimum"] = 0 },
+                        ["snippetLines"] = new JsonObject { ["type"] = "integer", ["description"] = "Total snippet lines around each match when before/after are not set (1-20)", ["default"] = 1, ["minimum"] = 1, ["maximum"] = SearchSnippetFormatter.MaxSnippetLines },
                         ["maxLineWidth"] = new JsonObject { ["type"] = "integer", ["description"] = "Clamp very long single-line snippets per line (default: 512; 0 disables clamping)", ["default"] = LineWidthFormatter.DefaultMaxLineWidth, ["minimum"] = 0, ["maximum"] = LineWidthFormatter.MaxAllowedLineWidth },
                         ["exact"] = new JsonObject { ["type"] = "boolean", ["description"] = "Case-sensitive literal substring match. Default is case-insensitive literal substring matching.", ["default"] = false }
                     },
