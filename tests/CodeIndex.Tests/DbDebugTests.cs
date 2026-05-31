@@ -1,5 +1,6 @@
 using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
+using System.Diagnostics;
 
 namespace CodeIndex.Tests;
 
@@ -8,6 +9,38 @@ public class DbDebugTests
 {
     private static string CaptureStderr(Action action)
         => ConsoleCapture.CaptureError(action);
+
+    [Fact]
+    public void ExecuteTrackedReader_EmitsActivityAndSlowQueryLog()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_SLOW_QUERY_MS");
+        env.Set("CDIDX_SLOW_QUERY_MS", "0");
+        var stopped = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == CodeIndex.CodeIndexTelemetry.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activity => stopped.Add(activity),
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        using var conn = new SqliteConnection("Data Source=:memory:");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT 1";
+
+        var stderr = CaptureStderr(() =>
+        {
+            using var reader = cmd.ExecuteTrackedReader();
+            Assert.True(reader.TrackedRead());
+            Assert.Equal(1, reader.GetInt32(0));
+        });
+
+        Assert.Contains("slow_query", stderr);
+        var activity = Assert.Single(stopped.Where(activity => activity.OperationName == "db.query"));
+        Assert.Equal("sqlite", activity.GetTagItem("db.system"));
+        Assert.Equal("SELECT", activity.GetTagItem("db.operation"));
+    }
 
     [Fact]
     public void DumpToStderr_NoOp_WhenDisabled()

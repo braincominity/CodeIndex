@@ -836,7 +836,9 @@ public partial class McpServer : IDisposable
             ExtractResponseId(request, out responseHasId, out responseId);
             if (responseHasId && CurrentCorrelationContext.Value is null)
                 frameCorrelationScope = BeginRequestCorrelation(responseId);
+            using var activity = StartMcpActivity(request, responseId);
             var response = await HandleMessageAsync(request, isolateRequestDb: true).ConfigureAwait(false);
+            activity?.SetTag("rpc.result", response is null ? "notification" : "response");
             return response != null ? SerializeResponseOrFallback(response, responseHasId, responseId) : null;
         }
         catch (JsonException ex)
@@ -871,6 +873,39 @@ public partial class McpServer : IDisposable
         {
             frameCorrelationScope?.Dispose();
         }
+    }
+
+    private static Activity? StartMcpActivity(JsonNode request, JsonNode? responseId)
+    {
+        var method = request is JsonObject obj ? TryGetStringMember(obj, "method") : null;
+        var traceParent = TryGetMcpTraceParent(request);
+        ActivityContext parentContext = default;
+        if (traceParent != null)
+            ActivityContext.TryParse(traceParent, traceState: null, out parentContext);
+
+        var activity = parentContext != default
+            ? CodeIndexTelemetry.ActivitySource.StartActivity("mcp.request", ActivityKind.Server, parentContext)
+            : CodeIndexTelemetry.ActivitySource.StartActivity("mcp.request", ActivityKind.Server);
+        activity?.SetTag("rpc.system", "jsonrpc");
+        activity?.SetTag("rpc.service", "mcp");
+        if (!string.IsNullOrWhiteSpace(method))
+            activity?.SetTag("rpc.method", method);
+        if (responseId != null)
+            activity?.SetTag("rpc.request_id", responseId.ToJsonString());
+        return activity;
+    }
+
+    private static string? TryGetMcpTraceParent(JsonNode request)
+    {
+        if (request is not JsonObject obj ||
+            obj["params"] is not JsonObject parameters ||
+            parameters["_meta"] is not JsonObject meta)
+            return null;
+
+        if (meta["traceparent"] is not JsonValue valueNode ||
+            !valueNode.TryGetValue<string>(out var value))
+            return null;
+        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
     private string SerializeResponseOrFallback(JsonNode response, bool hasId, JsonNode? id)
@@ -2096,7 +2131,16 @@ public partial class McpServer : IDisposable
         JsonNode response;
         try
         {
-            if (ValidateCommonListArguments(args) is JsonObject listArgumentError)
+            if (ValidateToolArguments(toolName, args) is JsonObject argumentError)
+            {
+                metricsError = "invalid_argument";
+                response = CreateToolErrorResponse(id, argumentError["message"]!.GetValue<string>(),
+                    category: McpErrorEnvelope.CategoryInvalidArgument,
+                    suggestion: "Use exactly the argument names advertised by tools/list for this tool.",
+                    retrySafe: false,
+                    extraData: argumentError);
+            }
+            else if (ValidateCommonListArguments(args) is JsonObject listArgumentError)
             {
                 metricsError = "invalid_list_argument";
                 response = CreateToolErrorResponse(id, listArgumentError["message"]!.GetValue<string>(),
