@@ -168,6 +168,9 @@ public static class ConsoleUi
         catch (ObjectDisposedException)
         {
         }
+        catch (IOException)
+        {
+        }
     }
 
     internal static IDisposable SuppressAnsiForJsonOutput(bool enabled)
