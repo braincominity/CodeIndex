@@ -15,6 +15,10 @@ namespace CodeIndex.Database;
 /// </summary>
 public class DbWriter
 {
+    private const string FoldBackfillPhaseMetaKey = "fold_backfill_phase";
+    private const string FoldBackfillLastSymbolIdMetaKey = "fold_backfill_last_symbol_id";
+    private const string FoldBackfillLastReferenceIdMetaKey = "fold_backfill_last_reference_id";
+
     public const string FtsIncrementalWritesSinceOptimizeMetaKey = "fts_incremental_writes_since_optimize";
     public const string FtsLastOptimizedAtMetaKey = "fts_last_optimized_at";
     public const int DefaultFtsOptimizeIncrementalWriteThreshold = 25;
@@ -3287,28 +3291,47 @@ public class DbWriter
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var txn = !IsInTransaction() ? BeginTransaction() : null;
+        var foldBackfillPhase = rewriteAll ? GetMetaString(FoldBackfillPhaseMetaKey) : null;
         var symbols = BackfillSymbolFoldedRows(rewriteAll, cancellationToken);
+        if (rewriteAll && foldBackfillPhase != "references")
+        {
+            SetMeta(FoldBackfillPhaseMetaKey, "references");
+            SetMeta(FoldBackfillLastReferenceIdMetaKey, "0");
+        }
+
         var symbolReferences = BackfillReferenceFoldedRows(rewriteAll, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        txn?.Commit();
+        if (rewriteAll)
+            ClearFoldBackfillCheckpoint();
+
         return (symbols, symbolReferences);
     }
 
     public (int Symbols, int SymbolReferences) CountBackfillFoldedColumns(bool rewriteAll = false)
     {
+        var phase = rewriteAll ? GetMetaString(FoldBackfillPhaseMetaKey) : null;
+        var lastSymbolId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastSymbolIdMetaKey) : 0;
+        var lastReferenceId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastReferenceIdMetaKey) : 0;
+
         using var symbols = _conn.CreateCommand();
-        symbols.CommandText = rewriteAll
-            ? "SELECT COUNT(*) FROM symbols WHERE name IS NOT NULL"
+        symbols.CommandText = rewriteAll && phase != "references"
+            ? "SELECT COUNT(*) FROM symbols WHERE name IS NOT NULL AND id > @lastSymbolId"
+            : rewriteAll
+            ? "SELECT 0"
             : "SELECT COUNT(*) FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL";
+        symbols.Parameters.AddWithValue("@lastSymbolId", lastSymbolId);
 
         using var references = _conn.CreateCommand();
         references.CommandText = rewriteAll
-            ? "SELECT COUNT(*) FROM symbol_references WHERE symbol_name IS NOT NULL OR container_name IS NOT NULL"
+            ? @"SELECT COUNT(*)
+                FROM symbol_references
+                WHERE id > @lastReferenceId
+                  AND (symbol_name IS NOT NULL OR container_name IS NOT NULL)"
             : @"SELECT COUNT(*)
                 FROM symbol_references
                 WHERE (symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
                    OR (container_name IS NOT NULL AND container_name_folded IS NULL)";
+        references.Parameters.AddWithValue("@lastReferenceId", phase == "references" ? lastReferenceId : 0);
 
         return (ToInt32Count(symbols.ExecuteScalar()), ToInt32Count(references.ExecuteScalar()));
     }
@@ -3321,12 +3344,18 @@ public class DbWriter
 
     private int BackfillSymbolFoldedRows(bool rewriteAll, CancellationToken cancellationToken)
     {
+        var phase = rewriteAll ? GetMetaString(FoldBackfillPhaseMetaKey) : null;
+        if (phase == "references")
+            return 0;
+
+        var lastSymbolId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastSymbolIdMetaKey) : 0;
         var rows = new List<(long Id, string Name)>();
         using (var cmd = _conn.CreateCommand())
         {
             cmd.CommandText = rewriteAll
-                ? "SELECT id, name FROM symbols WHERE name IS NOT NULL"
+                ? "SELECT id, name FROM symbols WHERE name IS NOT NULL AND id > @lastSymbolId ORDER BY id"
                 : "SELECT id, name FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL";
+            cmd.Parameters.AddWithValue("@lastSymbolId", lastSymbolId);
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
@@ -3350,6 +3379,8 @@ public class DbWriter
             pFolded.Value = (object?)NameFold.Fold(row.Name) ?? DBNull.Value;
             pId.Value = row.Id;
             update.ExecuteNonQuery();
+            if (rewriteAll)
+                SetMeta(FoldBackfillLastSymbolIdMetaKey, row.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
             FoldBackfillRowUpdatedForTesting?.Invoke();
         }
 
@@ -3358,15 +3389,21 @@ public class DbWriter
 
     private int BackfillReferenceFoldedRows(bool rewriteAll, CancellationToken cancellationToken)
     {
+        var lastReferenceId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastReferenceIdMetaKey) : 0;
         var rows = new List<(long Id, string? SymbolName, string? ContainerName)>();
         using (var cmd = _conn.CreateCommand())
         {
             cmd.CommandText = rewriteAll
-                ? "SELECT id, symbol_name, container_name FROM symbol_references WHERE symbol_name IS NOT NULL OR container_name IS NOT NULL"
+                ? @"SELECT id, symbol_name, container_name
+                    FROM symbol_references
+                    WHERE id > @lastReferenceId
+                      AND (symbol_name IS NOT NULL OR container_name IS NOT NULL)
+                    ORDER BY id"
                 : @"SELECT id, symbol_name, container_name
                     FROM symbol_references
                     WHERE (symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
                        OR (container_name IS NOT NULL AND container_name_folded IS NULL)";
+            cmd.Parameters.AddWithValue("@lastReferenceId", lastReferenceId);
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
             {
@@ -3398,10 +3435,27 @@ public class DbWriter
             pContainerNameFolded.Value = (object?)NameFold.Fold(row.ContainerName) ?? DBNull.Value;
             pId.Value = row.Id;
             update.ExecuteNonQuery();
+            if (rewriteAll)
+                SetMeta(FoldBackfillLastReferenceIdMetaKey, row.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
             FoldBackfillRowUpdatedForTesting?.Invoke();
         }
 
         return rows.Count;
+    }
+
+    private long GetFoldBackfillCheckpoint(string key)
+    {
+        var value = GetMetaString(key);
+        return long.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : 0;
+    }
+
+    private void ClearFoldBackfillCheckpoint()
+    {
+        SetMeta(FoldBackfillPhaseMetaKey, null);
+        SetMeta(FoldBackfillLastSymbolIdMetaKey, null);
+        SetMeta(FoldBackfillLastReferenceIdMetaKey, null);
     }
 
     private static object FoldedNameDbValue(string? name, Dictionary<string, string?> cache)
