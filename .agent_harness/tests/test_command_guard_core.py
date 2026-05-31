@@ -247,6 +247,18 @@ class CommandGuardCoreTests(TestCase):
 
                 self.assertTrue(decision.allowed, decision.reason)
 
+    def test_denies_forbidden_commands_inside_shell_constructs(self) -> None:
+        root = Path("/tmp")
+        for command in (
+            "if grep SymbolExtractor src; then echo yes; fi",
+            "while git grep SymbolExtractor; do break; done",
+            "until find . -name '*.cs'; do break; done",
+        ):
+            with self.subTest(command=command):
+                decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
+
+                self.assertFalse(decision.allowed)
+
     def test_denies_quote_concatenated_high_risk_commands(self) -> None:
         root = Path("/tmp")
         for command in (

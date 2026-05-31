@@ -65,6 +65,7 @@ _MACOS_SYSTEM_COMMANDS = {"launchctl", "security", "tccutil", "spctl", "csrutil"
 _CLOUD_COMMANDS = {"aws", "gcloud", "az"}
 _SECRET_FILE_READ_COMMANDS = {"cat", "less", "more", "head", "tail", "sed", "awk", "python", "python3", "node", "ruby", "perl", "sqlite3"}
 _CWD_CHANGING_COMMANDS = {"cd", "pushd", "popd"}
+_SHELL_COMMAND_PREFIX_KEYWORDS = {"if", "then", "elif", "else", "while", "until", "do"}
 _SECRET_PATH_RE = re.compile(r"(?i)(?:\.env\b|\.env\.|\.pem\b|\.key\b|id_rsa|id_ed25519|credentials?|secrets?)")
 ANSI_C_QUOTE_RE = re.compile(r"\$'")
 
@@ -543,6 +544,8 @@ def _tokenized_forbidden_tokens_reason(tokens: list[str]) -> str | None:
 
     for segment in _token_segments(tokens):
         segment = _strip_transparent_script_wrappers(_strip_leading_env_assignments(segment))
+        while segment and segment[0] in _SHELL_COMMAND_PREFIX_KEYWORDS:
+            segment = _strip_transparent_script_wrappers(_strip_leading_env_assignments(segment[1:]))
         if not segment:
             continue
         token = segment[0]
