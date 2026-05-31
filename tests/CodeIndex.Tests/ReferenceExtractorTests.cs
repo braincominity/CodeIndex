@@ -2933,6 +2933,18 @@ public class ReferenceExtractorTests
             output "instance_ids" {
               value = aws_instance.web[*].id
             }
+
+            resource "aws:s3_bucket" "data" {
+              bucket = "example-data"
+            }
+
+            output "endpoint" {
+              value = module.network.outputs.endpoint
+            }
+
+            output "bucket" {
+              value = aws:s3_bucket.data.id
+            }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "terraform", content);
@@ -2950,7 +2962,7 @@ public class ReferenceExtractorTests
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "ubuntu"
             && reference.ReferenceKind == "reference"));
-        Assert.Equal(2, references.Count(reference =>
+        Assert.Equal(3, references.Count(reference =>
             reference.SymbolName == "network"
             && reference.ReferenceKind == "reference"));
         Assert.Single(references.Where(reference =>
@@ -2959,9 +2971,15 @@ public class ReferenceExtractorTests
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "foo"
             && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "endpoint"
+            && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "data"
+            && reference.ReferenceKind == "reference"));
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
-            && reference.SymbolName is "region" or "instance_count" or "common_tags" or "ubuntu" or "network" or "web" or "foo");
+            && reference.SymbolName is "region" or "instance_count" or "common_tags" or "ubuntu" or "network" or "web" or "foo" or "endpoint" or "data");
     }
 
     [Fact]
