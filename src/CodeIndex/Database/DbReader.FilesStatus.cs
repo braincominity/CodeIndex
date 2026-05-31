@@ -418,6 +418,7 @@ public partial class DbReader
             : _csharpMetadataTargetDegradedReason;
         var sqlGraphContractSignal = GetSqlGraphContractSignal(lang: null);
         var hotspotFamilySignal = GetHotspotFamilySignal(lang: null);
+        var languageReadiness = GetLanguageReadiness();
         var foldReadyReason = ResolveFoldReadyReason();
         var foldReady = _foldReady && foldReadyReason == null;
 
@@ -502,6 +503,7 @@ public partial class DbReader
             MigrationInProgress = batchInProgress,
             HotspotFamilyReady = hotspotFamilySignal.Ready,
             HotspotFamilyDegradedReason = hotspotFamilySignal.DegradedReason,
+            LanguageReadiness = languageReadiness.Count > 0 ? languageReadiness : null,
             CSharpSymbolNameReady = csharpSymbolNameReady,
             CSharpMetadataTargetReady = csharpMetadataTargetReady,
             CSharpMetadataTargetDegradedReason = csharpMetadataTargetDegradedReason,

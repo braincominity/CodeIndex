@@ -626,6 +626,9 @@ public class StatusResult
     [JsonPropertyName("hotspot_family_degraded_reason")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? HotspotFamilyDegradedReason { get; set; }
+    [JsonPropertyName("language_readiness")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, Dictionary<string, LanguageReadinessSignal>>? LanguageReadiness { get; set; }
     /// <summary>
     /// True when C# canonical symbol-name upgrades (for operators, conversion operators,
     /// indexers) have been applied to all indexed C# rows in this DB. False means exact-name

@@ -311,6 +311,7 @@ Current stable codes and triggers:
 | `fold_ready=false` | aggregate fold readiness bit is degraded | `cdidx backfill-fold` or full rebuild |
 | `sql_graph_contract_ready=false` | SQL graph rows do not match the current call-column / qualified-name contract | `cdidx index <projectPath>` |
 | `hotspot_family_ready=false` | one or more hotspot-family languages lack current authoritative family stamps | `cdidx index <projectPath>` |
+| `partial_family_key_population` | hotspot-family metadata is stamped but some indexed symbols still have NULL `family_key` values | `cdidx index <projectPath>` |
 | `graph_table_available=false` | `symbol_references` is missing or not graph-ready | `cdidx index <projectPath>` |
 | `issues_table_available=false` | `file_issues` is missing or not issue-ready | `cdidx index <projectPath>` |
 | `csharp_symbol_name_ready=false` | C# canonical symbol-name stamps are stale | `cdidx index <projectPath>` |

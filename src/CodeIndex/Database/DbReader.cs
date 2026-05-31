@@ -17,6 +17,12 @@ public readonly record struct HotspotFamilySignal(
     bool Relevant,
     string? DegradedReason);
 
+public sealed record LanguageReadinessSignal(
+    [property: System.Text.Json.Serialization.JsonPropertyName("ready")] bool Ready,
+    [property: System.Text.Json.Serialization.JsonPropertyName("degraded_reason")]
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? DegradedReason);
+
 public readonly record struct SqlGraphContractSignal(
     bool Ready,
     bool Relevant,
@@ -728,7 +734,66 @@ public partial class DbReader : IDisposable
 
         return string.IsNullOrWhiteSpace(fingerprint)
             ? DegradationReasonCodes.HotspotFamilyDisabledAtIndexTime
-            : DegradationReasonCodes.HotspotFamilyMetadataStale;
+            : HasIncompleteHotspotFamilyRows(lang)
+                ? DegradationReasonCodes.HotspotFamilyRowsIncomplete
+                : DegradationReasonCodes.HotspotFamilyMetadataStale;
+    }
+
+    private bool HasIncompleteHotspotFamilyRows(string lang)
+    {
+        if (!_symbolColumns.Contains("family_key"))
+            return true;
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT EXISTS(
+                SELECT 1
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE f.lang = @lang
+                  AND s.name IS NOT NULL
+                  AND s.family_key IS NULL
+                LIMIT 1)";
+        cmd.Parameters.AddWithValue("@lang", lang);
+        var raw = cmd.ExecuteScalar();
+        return raw is long l ? l != 0 : raw is int i && i != 0;
+    }
+
+    public Dictionary<string, Dictionary<string, LanguageReadinessSignal>> GetLanguageReadiness()
+    {
+        var result = new Dictionary<string, Dictionary<string, LanguageReadinessSignal>>(StringComparer.Ordinal);
+
+        foreach (var lang in _indexedHotspotFamilyLanguages.OrderBy(value => value, StringComparer.Ordinal))
+        {
+            var signal = GetHotspotFamilySignal(lang);
+            AddLanguageReadiness(result, lang, "hotspot_family", signal.Ready, signal.DegradedReason);
+        }
+
+        if (ScopeMayIncludeCSharpFiles("csharp", pathPatterns: null, excludePathPatterns: null, excludeTests: false, since: null))
+        {
+            AddLanguageReadiness(result, "csharp", "symbol_name", _csharpSymbolNameContractCurrent,
+                _csharpSymbolNameContractCurrent ? null : DegradationReasonCodes.CSharpSymbolNameNotReady);
+            AddLanguageReadiness(result, "csharp", "metadata_target", _csharpMetadataTargetReady,
+                _csharpMetadataTargetReady ? null : _csharpMetadataTargetDegradedReason);
+        }
+
+        return result;
+    }
+
+    private static void AddLanguageReadiness(
+        Dictionary<string, Dictionary<string, LanguageReadinessSignal>> result,
+        string lang,
+        string feature,
+        bool ready,
+        string? degradedReason)
+    {
+        if (!result.TryGetValue(lang, out var features))
+        {
+            features = new Dictionary<string, LanguageReadinessSignal>(StringComparer.Ordinal);
+            result[lang] = features;
+        }
+
+        features[feature] = new LanguageReadinessSignal(ready, degradedReason);
     }
 
     private string GetHotspotFamilyRecoveryAction(IReadOnlyList<string> languages)
@@ -767,7 +832,7 @@ public partial class DbReader : IDisposable
     {
         if (_foldReady)
         {
-            if (ShouldVerifyFoldReadyRows() && HasIncompleteFoldRows())
+            if ((_readOnlyFallback || ShouldVerifyFoldReadyRows()) && HasIncompleteFoldRows())
                 return DegradationReasonCodes.FoldReadyBitSetButRowsIncomplete;
 
             return null;
@@ -843,7 +908,8 @@ public partial class DbReader : IDisposable
             if (raw is string s
                 && int.TryParse(s, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var version)
                 && version == DbContext.HotspotFamilyVersion
-                && !string.IsNullOrWhiteSpace(fingerprint))
+                && !string.IsNullOrWhiteSpace(fingerprint)
+                && !HasIncompleteHotspotFamilyRows(lang))
             {
                 readyLangs.Add(lang);
             }
