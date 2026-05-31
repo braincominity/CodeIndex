@@ -61,7 +61,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]", output);
         Assert.Contains("cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>]", output);
         Assert.Contains("cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--duration-format <auto|seconds|hms>]", output);
-        Assert.Contains("cdidx backfill-fold [--db <path>] [--json]", output);
+        Assert.Contains("cdidx backfill-fold [--db <path>] [--dry-run] [--json]", output);
         Assert.Contains("cdidx optimize [--db <path>] [--json]", output);
         Assert.Contains("cdidx license", output);
         Assert.Contains("cdidx completions <shell>", output);
