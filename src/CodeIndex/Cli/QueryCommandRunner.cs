@@ -409,10 +409,11 @@ public static class QueryCommandRunner
             if (options.CountOnly)
             {
                 var counts = reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank);
+                var queryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
                 if (counts.Count == 0)
                 {
                     Console.WriteLine(options.Json
-                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, query: options.Query, queryOptions: options).ToJsonString(jsonOptions)
+                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, query: options.Query, ftsQueryDiagnostics: queryDiagnostics, queryOptions: options).ToJsonString(jsonOptions)
                         : "0");
                     return CommandExitCodes.Success;
                 }
@@ -424,6 +425,7 @@ public static class QueryCommandRunner
             }
 
             var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank);
+            var ftsQueryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
             if (results.Count == 0)
             {
                 if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
@@ -440,7 +442,7 @@ public static class QueryCommandRunner
                     }
                     else
                     {
-                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, queryOptions: options).ToJsonString(jsonOptions));
+                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options).ToJsonString(jsonOptions));
                         jsonDoneCount = 0;
                     }
                 }
@@ -4365,7 +4367,7 @@ public static class QueryCommandRunner
     // `--kind replacement_chra` のようなタイプミスを did-you-mean で救うため、
     // FileIndexer.cs 内の `Kind = "..."` 代入と同期させる (#1582)。
     private static readonly string[] AllValidValidateKinds =
-        ["bom", "cr_only_line_endings", "file_too_large", "line_too_long", "mixed_line_endings", "mixed_line_endings_three_way", "non_utf8_likely", "null_byte", "replacement_char", "utf16_bom"];
+        ["bom", "cr_only_line_endings", "file_too_large", "fts_token_too_long", "line_too_long", "mixed_line_endings", "mixed_line_endings_three_way", "non_utf8_likely", "null_byte", "replacement_char", "utf16_bom"];
 
     public static int RunValidate(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -6492,6 +6494,7 @@ public static class QueryCommandRunner
         string? resultsKey = null,
         string? query = null,
         ExactZeroHintResult? exactZeroHint = null,
+        FtsQueryDiagnostics? ftsQueryDiagnostics = null,
         bool includeFiles = false,
         bool? graphTableAvailable = null,
         bool? degraded = null,
@@ -6522,6 +6525,11 @@ public static class QueryCommandRunner
         }
         if (exactZeroHint != null)
             payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, CliJsonSerializerContextFactory.Create(jsonOptions).ExactZeroHintResult);
+        if (ftsQueryDiagnostics is { HasDegradation: true })
+        {
+            payload["query_degraded_reason"] = ftsQueryDiagnostics.QueryDegradedReason;
+            payload["tokens_dropped"] = JsonSerializer.SerializeToNode(ftsQueryDiagnostics.TokensDropped.ToList(), CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        }
         if (queryOptions != null)
             payload["query_context"] = BuildQueryContextJson(queryOptions, jsonOptions);
         extraFields?.Invoke(payload);

@@ -128,6 +128,36 @@ public class DbReaderTests : IDisposable
         Assert.Equal(1, counts.FileCount);
     }
 
+    [Fact]
+    public void AnalyzeFtsQuery_AllStopwords_ReturnsDegradedReason()
+    {
+        var diagnostics = DbReader.AnalyzeFtsQuery("and or the");
+
+        Assert.Equal(DbReader.AllTokensFilteredAsStopwordsReason, diagnostics.QueryDegradedReason);
+        Assert.Equal(["and", "or", "the"], diagnostics.TokensDropped);
+    }
+
+    [Fact]
+    public void AnalyzeFtsQuery_AllTokensTooLong_ReturnsDegradedReason()
+    {
+        var query = new string('x', DbReader.FtsUnicode61MaxTokenLength + 1);
+
+        var diagnostics = DbReader.AnalyzeFtsQuery(query);
+
+        Assert.Equal(DbReader.AllTokensFilteredByLengthReason, diagnostics.QueryDegradedReason);
+        Assert.Equal([query], diagnostics.TokensDropped);
+    }
+
+    [Fact]
+    public void Search_ExplicitPrefixMatchesLatinDiacriticToken()
+    {
+        InsertIndexedFile("src/cafe.md", "markdown", "menu café_au_lait\n");
+
+        var results = _reader.Search("café*", lang: "markdown");
+
+        Assert.Contains(results, r => r.Path == "src/cafe.md");
+    }
+
     [Theory]
     [InlineData("rowid:authenticate", "rowid:")]
     [InlineData("title:authenticate", "title:")]

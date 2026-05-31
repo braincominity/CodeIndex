@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
@@ -8,6 +9,9 @@ namespace CodeIndex.Database;
 /// </summary>
 public partial class DbReader
 {
+    internal const int FtsUnicode61MaxTokenLength = 1000;
+    internal const string AllTokensFilteredAsStopwordsReason = "all_tokens_filtered_as_stopwords";
+    internal const string AllTokensFilteredByLengthReason = "all_tokens_filtered_by_length";
     internal const int MaxRawFtsQueryLength = 2000;
     internal const int MaxRawFtsBooleanOperators = 64;
     internal const int MaxRawFtsNearOperators = 16;
@@ -38,6 +42,30 @@ public partial class DbReader
         if (tokens.Length == 0)
             return "\"\"";
         return string.Join(" ", tokens.Select(token => FormatFtsToken(token, prefix)));
+    }
+
+    public static FtsQueryDiagnostics AnalyzeFtsQuery(string query, bool rawQuery = false, bool prefix = false, string? lang = null)
+    {
+        if (rawQuery || string.IsNullOrWhiteSpace(query))
+            return FtsQueryDiagnostics.None;
+
+        var normalizedQuery = NormalizeLiteralSearchQuery(query, NormalizeQueryLanguage(lang));
+        var tokens = normalizedQuery.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            .Select(token => token.Length > 1 && token.EndsWith('*') ? token[..^1] : token)
+            .Where(token => token.Length > 0)
+            .ToArray();
+        if (tokens.Length == 0)
+            return FtsQueryDiagnostics.None;
+
+        var tooLong = tokens.Where(token => token.EnumerateRunes().Count() > FtsUnicode61MaxTokenLength).Distinct(StringComparer.Ordinal).ToArray();
+        if (tooLong.Length == tokens.Length)
+            return new FtsQueryDiagnostics(AllTokensFilteredByLengthReason, tooLong);
+
+        var stopwords = tokens.Where(token => CommonFtsStopwords.Contains(token.Normalize(NormalizationForm.FormC), StringComparer.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (stopwords.Length == tokens.Length)
+            return new FtsQueryDiagnostics(AllTokensFilteredAsStopwordsReason, stopwords);
+
+        return FtsQueryDiagnostics.None;
     }
 
     /// <summary>
@@ -269,10 +297,20 @@ public partial class DbReader
         return new QueryCountResult(count, fileCount);
     }
 
-    private static string NormalizeLiteralSearchQuery(string query, string? lang) =>
-        string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase)
-            ? CSharpVerbatimNameNormalizer.Normalize(query)
-            : query;
+    private static string NormalizeLiteralSearchQuery(string query, string? lang)
+    {
+        var normalized = query.Normalize(NormalizationForm.FormC);
+        return string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase)
+            ? CSharpVerbatimNameNormalizer.Normalize(normalized)
+            : normalized;
+    }
+
+    private static readonly string[] CommonFtsStopwords =
+    [
+        "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from", "if", "in", "into",
+        "is", "it", "no", "not", "of", "on", "or", "such", "that", "the", "their", "then", "there",
+        "these", "they", "this", "to", "was", "will", "with"
+    ];
 
     internal static string ValidateRawFtsQuery(string query)
     {
