@@ -181,6 +181,7 @@ public static partial class IndexCommandRunner
                 currentHeadCommit,
                 priorSymbolKindFilterSignature,
                 initialCwd,
+                showNextSteps: false,
                 cancellationToken);
         }
 
@@ -1205,6 +1206,11 @@ public static partial class IndexCommandRunner
             if (cwdDriftDetected)
                 ConsoleUi.PrintWarning(cwdDriftNotice!);
         }
+
+        if (!options.Json && !options.Quiet && stopwatch.Elapsed >= TimeSpan.FromSeconds(5))
+            ConsoleUi.EmitCompletionNotification(
+                options.NotifyMode,
+                $"cdidx index update complete ({ConsoleUi.Counted(updated + removed + skipped, "file", format: "N0")})");
 
         return CommandExitCodes.Success;
     }

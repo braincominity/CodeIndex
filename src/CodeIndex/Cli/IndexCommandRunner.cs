@@ -247,7 +247,7 @@ public static partial class IndexCommandRunner
 
         initialExitCode = isUpdateMode
             ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexCancellation.Token)
-            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexCancellation.Token);
+            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, showNextSteps: !databaseExistedBeforeIndex, indexCancellation.Token);
         if (initialExitCode == CommandExitCodes.Success)
             db.RunPlannerStatisticsMaintenance(forceAnalyze: !databaseExistedBeforeIndex);
             }
@@ -1268,6 +1268,7 @@ public sealed class IndexCommandOptions
     public bool OptimizeOnly { get; init; }
     public int? WatchDebounceMs { get; init; }
     public DurationOutputFormat DurationFormat { get; init; } = DurationOutputFormat.Auto;
+    public CompletionNotificationMode NotifyMode { get; init; } = CompletionNotificationMode.Auto;
     public long? MaxFileSizeBytes { get; init; }
     public int Parallelism { get; init; } = IndexCommandRunner.DefaultIndexParallelism();
     public bool MemoryTrace { get; init; }

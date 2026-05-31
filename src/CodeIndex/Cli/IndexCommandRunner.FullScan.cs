@@ -1422,7 +1422,14 @@ public static partial class IndexCommandRunner
                 ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, sqlGraphContractReadyAfter, hotspotFamilyReadyAfter, csharpSymbolNameReadyAfter, csharpMetadataTargetReadyAfter, foldReadyAfter, foldReadyReasonAfter, projectRoot, resolvedDbPath));
             if (cwdDriftDetected)
                 ConsoleUi.PrintWarning(cwdDriftNotice!);
+            if (errors == 0 && showNextSteps)
+                ConsoleUi.PrintIndexCompleteSummary(projectRoot, resolvedDbPath, incremental: !options.Rebuild, files.Count, languageCounts);
         }
+
+        if (!options.Json && !options.Quiet && stopwatch.Elapsed >= TimeSpan.FromSeconds(5))
+            ConsoleUi.EmitCompletionNotification(
+                options.NotifyMode,
+                $"cdidx index complete ({ConsoleUi.Counted(files.Count, "file", format: "N0")})");
 
         return CommandExitCodes.Success;
     }

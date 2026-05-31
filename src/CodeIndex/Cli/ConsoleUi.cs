@@ -50,6 +50,14 @@ public enum DurationOutputFormat
     Hms = 2,
 }
 
+public enum CompletionNotificationMode
+{
+    Auto = 0,
+    None = 1,
+    Bell = 2,
+    Osc9 = 3,
+}
+
 /// <summary>
 /// Console UI helpers: spinner, progress bar, banner, and easter egg messages.
 /// コンソールUIヘルパー: スピナー、プログレスバー、バナー、イースターエッグメッセージ。
@@ -60,7 +68,7 @@ public static class ConsoleUi
 
     private static readonly (string Command, string Usage)[] CommandUsageLines =
     [
-        ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--optimize] [--verbose] [--dry-run] [--force] [--quiet] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--follow-symlinks <none|internal|all>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]] [--watch [--debounce <ms>]]"),
+        ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--optimize] [--verbose] [--dry-run] [--force] [--quiet] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--notify <auto|bell|osc9|desktop|none>] [--max-file-bytes <bytes>] [--follow-symlinks <none|internal|all>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]] [--watch [--debounce <ms>]]"),
         ("hooks", "cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]"),
         ("backfill-fold", "cdidx backfill-fold [--db <path>] [--json]"),
         ("optimize", "cdidx optimize [--db <path>] [--json]"),
@@ -501,6 +509,55 @@ public static class ConsoleUi
         Console.WriteLine(banner);
     }
 
+    public static void PrintIndexCompleteSummary(
+        string projectRoot,
+        string resolvedDbPath,
+        bool incremental,
+        int filesScanned,
+        IReadOnlyDictionary<string, int> languageCounts)
+    {
+        Console.WriteLine(incremental ? "Next steps (incremental):" : "Next steps:");
+        Console.WriteLine("  - Search code: cdidx search \"authenticate\" --path src/");
+        Console.WriteLine("  - Find a definition: cdidx definition SymbolName");
+        Console.WriteLine($"  - Start MCP: cdidx mcp --db {QuoteForDisplay(resolvedDbPath)}");
+        Console.WriteLine($"  - Database: {resolvedDbPath}");
+        Console.WriteLine("  - Exclude paths with .gitignore or .cdidxignore, then rerun cdidx index .");
+        Console.WriteLine($"  - Scanned {Counted(filesScanned, "file", format: "N0")} under {projectRoot}");
+        if (languageCounts.Count > 0)
+        {
+            var summary = string.Join(
+                ", ",
+                languageCounts
+                    .OrderByDescending(static pair => pair.Value)
+                    .ThenBy(static pair => pair.Key, StringComparer.Ordinal)
+                    .Take(6)
+                    .Select(static pair => $"{pair.Key} {pair.Value.ToString("N0", CultureInfo.InvariantCulture)}"));
+            Console.WriteLine($"  - Languages: {summary}");
+        }
+        Console.WriteLine();
+    }
+
+    public static void EmitCompletionNotification(CompletionNotificationMode mode, string message)
+    {
+        var resolved = mode == CompletionNotificationMode.Auto
+            ? ShouldUseInteractiveConsole() ? CompletionNotificationMode.Bell : CompletionNotificationMode.None
+            : mode;
+        if (resolved == CompletionNotificationMode.None)
+            return;
+
+        var safeMessage = message.Replace('\r', ' ').Replace('\n', ' ');
+        if (resolved == CompletionNotificationMode.Osc9)
+            Console.Error.Write($"\u001b]9;{safeMessage}\a");
+        else
+            Console.Error.Write('\a');
+        Console.Error.Flush();
+    }
+
+    private static string QuoteForDisplay(string value)
+        => value.IndexOfAny([' ', '\t', '"']) < 0
+            ? value
+            : $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
+
     // --- Easter eggs / イースターエッグ ---
 
     /// <summary>
@@ -791,6 +848,7 @@ public static class ConsoleUi
         Console.WriteLine("  --memory-trace             Include phase memory samples in index JSON output");
         Console.WriteLine("  --quiet, -q, --silent      Suppress informational stderr output; errors still print (also honors CDIDX_QUIET=1)");
         Console.WriteLine("  --duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms");
+        WriteHelpLine("  --notify <mode>           Long index completion signal: auto, bell, osc9, desktop, or none (also honors CDIDX_NOTIFY; quiet/json suppress it)");
         WriteHelpLine("  --max-file-bytes <bytes>  Index only files up to this size (default: 4MiB; also honors CDIDX_MAX_FILE_BYTES; accepts K/M/G suffixes)");
         WriteHelpLine("  --parallelism <n>         Full-scan extraction workers (default: CPU count capped at 16; also honors CDIDX_INDEX_PARALLELISM)");
         WriteHelpLine("  --follow-symlinks <mode>  Directory symlink policy: none (default), internal, or all");
