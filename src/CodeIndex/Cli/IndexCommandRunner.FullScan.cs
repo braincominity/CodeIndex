@@ -1043,7 +1043,8 @@ public static partial class IndexCommandRunner
                     }
                     if (existingId != null)
                     {
-                        if (writer.CountSymbolsForFile(existingId.Value) > options.MaxSymbolsPerFile)
+                        if (writer.CountSymbolsForFile(existingId.Value) > options.MaxSymbolsPerFile
+                            || writer.HasIssueForFile(existingId.Value, "symbol_count_exceeded"))
                         {
                             existingId = null;
                         }

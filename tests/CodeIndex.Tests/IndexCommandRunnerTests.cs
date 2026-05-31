@@ -282,6 +282,14 @@ public class IndexCommandRunnerTests
             Assert.Equal("generated.py", issue.Path);
             Assert.Equal(0, issue.Line);
             Assert.Contains("--max-symbols-per-file", issue.Message);
+
+            var (raisedExitCode, raisedJson) = RunAndCaptureJson([projectRoot, "--max-symbols-per-file", "10", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, raisedExitCode);
+            Assert.Equal("success", raisedJson.GetProperty("status").GetString());
+            Assert.True(CountRows(dbPath, "chunks") > 0);
+            Assert.True(CountRows(dbPath, "symbols") > 0);
+            Assert.Empty(reader.GetIssues("symbol_count_exceeded"));
         }
         finally
         {

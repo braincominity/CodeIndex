@@ -702,7 +702,8 @@ public static partial class IndexCommandRunner
                         && (statReusableLanguage != "sql" || sqlGraphContractMatchesCurrent));
                 if (statMatchedId != null)
                 {
-                    if (writer.CountSymbolsForFile(statMatchedId.Value) > options.MaxSymbolsPerFile)
+                    if (writer.CountSymbolsForFile(statMatchedId.Value) > options.MaxSymbolsPerFile
+                        || writer.HasIssueForFile(statMatchedId.Value, "symbol_count_exceeded"))
                     {
                         statMatchedId = null;
                     }
@@ -743,7 +744,8 @@ public static partial class IndexCommandRunner
                         && (record.Lang != "sql" || sqlGraphContractMatchesCurrent));
                 if (existingId != null)
                 {
-                    if (writer.CountSymbolsForFile(existingId.Value) > options.MaxSymbolsPerFile)
+                    if (writer.CountSymbolsForFile(existingId.Value) > options.MaxSymbolsPerFile
+                        || writer.HasIssueForFile(existingId.Value, "symbol_count_exceeded"))
                     {
                         existingId = null;
                     }
