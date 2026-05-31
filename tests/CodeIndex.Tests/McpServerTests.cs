@@ -479,6 +479,43 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_StartupLogSanitizesDbPathByDefault_Issue1469()
+    {
+        using var error = new StringWriter();
+        var previousDebug = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, null);
+            await Task.Run(() =>
+            {
+                lock (TestConsoleLock.Gate)
+                {
+                    var previousError = Console.Error;
+                    try
+                    {
+                        Console.SetError(error);
+#pragma warning disable xUnit1031
+                        _server.RunAsync(new QueueMcpTransport(), CancellationToken.None).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                    }
+                    finally
+                    {
+                        Console.SetError(previousError);
+                    }
+                }
+            });
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previousDebug);
+        }
+
+        var log = error.ToString();
+        Assert.Contains("db: " + Path.GetFileName(_dbPath), log);
+        Assert.DoesNotContain(_dbPath, log);
+    }
+
+    [Fact]
     public void Initialize_AdvertisesResourcesAndPrompts()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""")!;
@@ -984,6 +1021,23 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolCall_TypeMismatch_ReturnsInvalidParams_Issue1417()
+    {
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Run","limit":"not-an-int"}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["result"]);
+        var error = response["error"]!;
+        Assert.Equal(-32602, error["code"]!.GetValue<int>());
+        Assert.Equal("invalid_argument", error["data"]!["category"]!.GetValue<string>());
+        Assert.Equal("limit", error["data"]!["parameter"]!.GetValue<string>());
+        Assert.Equal("integer", error["data"]!["expected"]!.GetValue<string>());
+        Assert.Equal("string", error["data"]!["actual"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void Initialize_ReturnsInstructions()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""")!;
@@ -1408,13 +1462,23 @@ public class McpServerTests : IDisposable
         // exception type should reach the wire; full detail stays in stderr.
         var ex = new InvalidOperationException("near 'SECRET_LITERAL': syntax error");
 
-        var message = McpServer.BuildSanitizedToolErrorMessage("search", ex);
+        var previous = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
+        string message;
+        try
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, null);
+            message = McpServer.BuildSanitizedToolErrorMessage("search", ex);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previous);
+        }
 
-        Assert.Contains("Error executing search", message);
-        Assert.Contains(nameof(InvalidOperationException), message);
+        Assert.Equal("Tool 'search' failed. See cdidx server stderr for details.", message);
         Assert.Contains("server stderr", message);
         Assert.DoesNotContain("SECRET_LITERAL", message);
         Assert.DoesNotContain("syntax error", message);
+        Assert.DoesNotContain(nameof(InvalidOperationException), message);
     }
 
     [Fact]
@@ -1424,13 +1488,44 @@ public class McpServerTests : IDisposable
         // outer JSON-RPC loop catch-all (#1530).
         var ex = new InvalidOperationException("PRAGMA failed: secret table 'leaky_table' missing");
 
-        var message = McpServer.BuildSanitizedLoopErrorMessage(ex);
+        var previous = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
+        string message;
+        try
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, null);
+            message = McpServer.BuildSanitizedLoopErrorMessage(ex);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previous);
+        }
 
-        Assert.Contains("Internal error", message);
-        Assert.Contains(nameof(InvalidOperationException), message);
+        Assert.Equal("Internal MCP error. See cdidx server stderr for details.", message);
         Assert.Contains("server stderr", message);
         Assert.DoesNotContain("leaky_table", message);
         Assert.DoesNotContain("PRAGMA failed", message);
+        Assert.DoesNotContain(nameof(InvalidOperationException), message);
+    }
+
+    [Fact]
+    public void BuildSanitizedToolErrorMessage_UnsafeDebugIncludesExceptionType()
+    {
+        var previous = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, "unsafe");
+            var ex = new InvalidOperationException("near 'SECRET_LITERAL': syntax error");
+
+            var message = McpServer.BuildSanitizedToolErrorMessage("search", ex);
+
+            Assert.Contains("Error executing search", message);
+            Assert.Contains(nameof(InvalidOperationException), message);
+            Assert.DoesNotContain("SECRET_LITERAL", message);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previous);
+        }
     }
 
     [Fact]
@@ -1449,7 +1544,17 @@ public class McpServerTests : IDisposable
             path: "/var/cdidx/state.db",
             hint: "Close other cdidx invocations.");
 
-        var message = McpServer.BuildSanitizedToolErrorMessage("search", ex);
+        var previous = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
+        string message;
+        try
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, "unsafe");
+            message = McpServer.BuildSanitizedToolErrorMessage("search", ex);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previous);
+        }
 
         Assert.Contains("Error executing search", message);
         Assert.Contains(nameof(CodeIndexException), message);
@@ -1638,7 +1743,17 @@ public class McpServerTests : IDisposable
             path: "/var/cdidx/state.db",
             hint: "Close other cdidx invocations.");
 
-        var message = McpServer.BuildSanitizedLoopErrorMessage(ex);
+        var previous = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
+        string message;
+        try
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, "unsafe");
+            message = McpServer.BuildSanitizedLoopErrorMessage(ex);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previous);
+        }
 
         Assert.Contains("Internal error", message);
         Assert.Contains(nameof(CodeIndexException), message);
@@ -1656,7 +1771,17 @@ public class McpServerTests : IDisposable
             category: CodeIndexExceptionCategory.Database,
             message: "Generic failure.");
 
-        var message = McpServer.BuildSanitizedToolErrorMessage("status", ex);
+        var previous = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
+        string message;
+        try
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, "unsafe");
+            message = McpServer.BuildSanitizedToolErrorMessage("status", ex);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previous);
+        }
 
         Assert.Contains("[E008_DB_ERROR/database]", message);
         Assert.DoesNotContain("path=", message);
@@ -6379,10 +6504,10 @@ public class McpServerTests : IDisposable
         var results = structured["results"]!.AsArray();
         Assert.Equal(3, results.Count);
         Assert.False(results[0]!["ok"]!.GetValue<bool>());
-        Assert.Contains("Invalid argument 'limit'", results[0]!["error"]!.GetValue<string>());
+        Assert.Contains("Invalid type for argument 'limit'", results[0]!["error"]!.GetValue<string>());
         Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, results[0]!["category"]!.GetValue<string>());
         Assert.False(results[1]!["ok"]!.GetValue<bool>());
-        Assert.Contains("Invalid argument 'format'", results[1]!["error"]!.GetValue<string>());
+        Assert.Contains("Invalid type for argument 'format'", results[1]!["error"]!.GetValue<string>());
         Assert.True(results[2]!["ok"]!.GetValue<bool>());
     }
 

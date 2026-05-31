@@ -50,6 +50,14 @@ public enum DurationOutputFormat
     Hms = 2,
 }
 
+public enum CompletionNotificationMode
+{
+    Auto = 0,
+    None = 1,
+    Bell = 2,
+    Osc9 = 3,
+}
+
 /// <summary>
 /// Console UI helpers: spinner, progress bar, banner, and easter egg messages.
 /// コンソールUIヘルパー: スピナー、プログレスバー、バナー、イースターエッグメッセージ。
@@ -60,7 +68,7 @@ public static class ConsoleUi
 
     private static readonly (string Command, string Usage)[] CommandUsageLines =
     [
-        ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--optimize] [--verbose] [--dry-run] [--force] [--quiet] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--follow-symlinks <none|internal|all>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]] [--watch [--debounce <ms>]]"),
+        ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--optimize] [--verbose] [--dry-run] [--force] [--quiet] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--notify <auto|bell|osc9|desktop|none>] [--max-file-bytes <bytes>] [--follow-symlinks <none|internal|all>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]] [--watch [--debounce <ms>]]"),
         ("hooks", "cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]"),
         ("backfill-fold", "cdidx backfill-fold [--db <path>] [--dry-run] [--json]"),
         ("optimize", "cdidx optimize [--db <path>] [--json]"),
@@ -129,6 +137,12 @@ public static class ConsoleUi
             : count.ToString(format, CultureInfo.InvariantCulture);
         return $"{formatted} {(count == 1 ? singular : plural ?? singular + "s")}";
     }
+
+    internal static string FormatNumber(long value, string format = "N0")
+        => value.ToString(format, CultureInfo.InvariantCulture);
+
+    internal static string FormatNumber(int value, string format = "N0")
+        => value.ToString(format, CultureInfo.InvariantCulture);
 
     internal static string FoundSummary(int count, string singular, string? plural = null)
     {
@@ -367,6 +381,9 @@ public static class ConsoleUi
     // Track last progress line length for clearing / クリア用に最後のプログレス行の長さを記録
     private static int _lastProgressLineLength;
     private static bool _asciiOutputForced;
+    private static bool _widthDetectionFailed;
+    private static bool _widthDetectionTraceWritten;
+    private static bool _traceWidthDetectionFailures;
 
     /// <summary>
     /// Set progress bar spinner theme (reuses GetSpinnerFrames).
@@ -424,7 +441,9 @@ public static class ConsoleUi
     {
         const int barWidth = 32;
         var pct = (double)current / total;
-        var percentAndCounts = $"{pct * 100,5:F1}%  [{current:N0}/{total:N0}]";
+        var percentAndCounts = string.Create(
+            CultureInfo.InvariantCulture,
+            $"{pct * 100,5:F1}%  [{current:N0}/{total:N0}]");
 
         if (useUnicodeGlyphs && windowWidth < 40)
             return percentAndCounts;
@@ -506,6 +525,55 @@ public static class ConsoleUi
             """;
         Console.WriteLine(banner);
     }
+
+    public static void PrintIndexCompleteSummary(
+        string projectRoot,
+        string resolvedDbPath,
+        bool incremental,
+        int filesScanned,
+        IReadOnlyDictionary<string, int> languageCounts)
+    {
+        Console.WriteLine(incremental ? "Next steps (incremental):" : "Next steps:");
+        Console.WriteLine("  - Search code: cdidx search \"authenticate\" --path src/");
+        Console.WriteLine("  - Find a definition: cdidx definition SymbolName");
+        Console.WriteLine($"  - Start MCP: cdidx mcp --db {QuoteForDisplay(resolvedDbPath)}");
+        Console.WriteLine($"  - Database: {resolvedDbPath}");
+        Console.WriteLine("  - Exclude paths with .gitignore or .cdidxignore, then rerun cdidx index .");
+        Console.WriteLine($"  - Scanned {Counted(filesScanned, "file", format: "N0")} under {projectRoot}");
+        if (languageCounts.Count > 0)
+        {
+            var summary = string.Join(
+                ", ",
+                languageCounts
+                    .OrderByDescending(static pair => pair.Value)
+                    .ThenBy(static pair => pair.Key, StringComparer.Ordinal)
+                    .Take(6)
+                    .Select(static pair => $"{pair.Key} {pair.Value.ToString("N0", CultureInfo.InvariantCulture)}"));
+            Console.WriteLine($"  - Languages: {summary}");
+        }
+        Console.WriteLine();
+    }
+
+    public static void EmitCompletionNotification(CompletionNotificationMode mode, string message)
+    {
+        var resolved = mode == CompletionNotificationMode.Auto
+            ? ShouldUseInteractiveConsole() ? CompletionNotificationMode.Bell : CompletionNotificationMode.None
+            : mode;
+        if (resolved == CompletionNotificationMode.None)
+            return;
+
+        var safeMessage = message.Replace('\r', ' ').Replace('\n', ' ');
+        if (resolved == CompletionNotificationMode.Osc9)
+            Console.Error.Write($"\u001b]9;{safeMessage}\a");
+        else
+            Console.Error.Write('\a');
+        Console.Error.Flush();
+    }
+
+    private static string QuoteForDisplay(string value)
+        => value.IndexOfAny([' ', '\t', '"']) < 0
+            ? value
+            : $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
 
     // --- Easter eggs / イースターエッグ ---
 
@@ -799,6 +867,7 @@ public static class ConsoleUi
         Console.WriteLine("  --memory-trace             Include phase memory samples in index JSON output");
         Console.WriteLine("  --quiet, -q, --silent      Suppress informational stderr output; errors still print (also honors CDIDX_QUIET=1)");
         Console.WriteLine("  --duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms");
+        WriteHelpLine("  --notify <mode>           Long index completion signal: auto, bell, osc9, desktop, or none (also honors CDIDX_NOTIFY; quiet/json suppress it)");
         WriteHelpLine("  --max-file-bytes <bytes>  Index only files up to this size (default: 4MiB; also honors CDIDX_MAX_FILE_BYTES; accepts K/M/G suffixes)");
         WriteHelpLine("  --parallelism <n>         Full-scan extraction workers (default: CPU count capped at 16; also honors CDIDX_INDEX_PARALLELISM)");
         WriteHelpLine("  --follow-symlinks <mode>  Directory symlink policy: none (default), internal, or all");
@@ -2027,6 +2096,10 @@ public static class ConsoleUi
 
     internal static bool IsAsciiOutputForced() => _asciiOutputForced;
 
+    internal static bool WidthDetectionFailed => _widthDetectionFailed;
+
+    internal static void SetWidthDetectionTracing(bool enabled) => _traceWidthDetectionFailures = enabled;
+
     /// <summary>
     /// Get console window width safely (some environments throw IOException).
     /// コンソール幅を安全に取得する（一部環境ではIOExceptionが発生する）。
@@ -2039,12 +2112,32 @@ public static class ConsoleUi
         try
         {
             var w = Console.WindowWidth;
-            return w > 0 ? w : 80;
+            if (w > 0)
+                return w;
         }
-        catch
+        catch (IOException ex)
         {
-            return 80;
+            return GetFallbackWindowWidth(ex);
         }
+        catch (NotSupportedException ex)
+        {
+            return GetFallbackWindowWidth(ex);
+        }
+
+        return GetFallbackWindowWidth(null);
+    }
+
+    private static int GetFallbackWindowWidth(Exception? exception)
+    {
+        _widthDetectionFailed = true;
+        if (_traceWidthDetectionFailures && !_widthDetectionTraceWritten)
+        {
+            var suffix = exception == null ? string.Empty : $" ({exception.GetType().Name}: {exception.Message})";
+            Console.Error.WriteLine($"cdidx: console width detection failed; using COLUMNS or 80 columns{suffix}");
+            _widthDetectionTraceWritten = true;
+        }
+
+        return TryGetColumnsEnvironmentWidth(out var columnsWidth) ? columnsWidth : 80;
     }
 
     private static bool TryGetColumnsEnvironmentWidth(out int width)
