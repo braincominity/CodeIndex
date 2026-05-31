@@ -26,6 +26,51 @@ public class ConsoleUiTests
         .ToDictionary(opCode => (short)(opCode.Value & 0xff));
 
     [Fact]
+    public void TryWriteErrorLine_IgnoresClosedErrorWriter()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            var closedError = new StringWriter();
+            closedError.Dispose();
+            Console.SetError(closedError);
+            try
+            {
+                ConsoleUi.TryWriteErrorLine("diagnostic");
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    [Fact]
+    public void TryWriteErrorLine_IgnoresErrorWriterIoFailures()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalError = Console.Error;
+            Console.SetError(new ThrowingTextWriter());
+            try
+            {
+                ConsoleUi.TryWriteErrorLine("diagnostic");
+            }
+            finally
+            {
+                Console.SetError(originalError);
+            }
+        }
+    }
+
+    private sealed class ThrowingTextWriter : TextWriter
+    {
+        public override Encoding Encoding => Encoding.UTF8;
+
+        public override void WriteLine(string? value) => throw new IOException("closed pipe");
+    }
+
+    [Fact]
     public void StartSpinner_BackgroundLoop_DoesNotBlockOnTaskWait()
     {
         var methods = typeof(ConsoleUi).GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
@@ -61,7 +106,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]", output);
         Assert.Contains("cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>]", output);
         Assert.Contains("cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>]", output);
-        Assert.Contains("cdidx backfill-fold [--db <path>] [--json]", output);
+        Assert.Contains("cdidx backfill-fold [--db <path>] [--dry-run] [--json]", output);
         Assert.Contains("cdidx optimize [--db <path>] [--json]", output);
         Assert.Contains("cdidx license", output);
         Assert.Contains("cdidx completions <shell>", output);
@@ -73,7 +118,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]", output);
         Assert.Contains("cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]", output);
         Assert.Contains("cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]", output);
-        Assert.Contains("--snippet-lines <n>        Search snippet length (1-20, default: 8)", output);
+        Assert.Contains("--snippet-lines <n>        search/find snippet length (1-20, default: search 8; find 1)", output);
         Assert.Contains("--snippet-focus <mode>     search only: long-line focus mode (leftmost|quality|proximity, default: quality)", output);
         Assert.Contains("--max-line-width <n>       search/references/callers/callees/find/excerpt/impact/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: 512)", output);
         Assert.Contains("cdidx find <query> --path <glob>", output);
@@ -99,8 +144,8 @@ public class ConsoleUiTests
         Assert.Contains("--duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms", output);
         Assert.Contains("--ascii                    Use ASCII spinner/progress glyphs", output);
         Assert.Contains("cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--verbose]", output);
-        Assert.Contains("--focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)", output);
-        Assert.Contains("--focus-line <line>        excerpt: line whose focused column should stay visible", output);
+        Assert.Contains("--focus-column <n>         find/excerpt: focus a specific 1-based column", output);
+        Assert.Contains("--focus-line <line>        find/excerpt: focus a specific line", output);
         Assert.Contains("cdidx map [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes]", output);
         Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]", output);
         Assert.Contains("cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]", output);
@@ -708,7 +753,7 @@ public class ConsoleUiTests
     [Theory]
     [InlineData("bash")]
     [InlineData("zsh")]
-    public void PrintCompletions_BashAndZshKeepFocusOptionsExcerptOnly(string shell)
+    public void PrintCompletions_BashAndZshIncludeFindFocusOptions(string shell)
     {
         var output = ConsoleUi.GetCompletionScript(shell);
         Assert.Contains("find", output);
@@ -723,7 +768,7 @@ public class ConsoleUiTests
             Assert.Contains("elif [ \"$cmd\" = \"excerpt\" ]; then", output);
             var findBranch = ExtractBetween(output, "if [ \"$cmd\" = \"find\" ]", "elif [ \"$cmd\" = \"excerpt\" ]; then");
             var excerptBranch = ExtractBetween(output, "elif [ \"$cmd\" = \"excerpt\" ]; then", "elif [ \"$cmd\" = \"references\" ]; then");
-            Assert.DoesNotContain("--focus-column", findBranch);
+            Assert.Contains("--focus-column", findBranch);
             Assert.Contains("--focus-column", excerptBranch);
         }
         else
@@ -732,7 +777,7 @@ public class ConsoleUiTests
             Assert.Contains("elif [[ $subcmd == excerpt ]]; then", output);
             var findBranch = ExtractBetween(output, "if [[ $subcmd == find ]]; then", "elif [[ $subcmd == excerpt ]]; then");
             var excerptBranch = ExtractBetween(output, "elif [[ $subcmd == excerpt ]]; then", "elif [[ $subcmd == references ]]; then");
-            Assert.DoesNotContain("focus-column", findBranch);
+            Assert.Contains("focus-column", findBranch);
             Assert.Contains("focus-column", excerptBranch);
         }
     }
