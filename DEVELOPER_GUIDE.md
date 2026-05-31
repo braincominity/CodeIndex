@@ -2800,12 +2800,14 @@ mock に頼らないリリース前検証として、`install.sh --reinstall-rea
 `XDG_CACHE_HOME/cdidx/logs/`、`XDG_RUNTIME_DIR/cdidx/logs/` の順に
 見つかった場所を使い、その後に platform default として Windows では
 `%LOCALAPPDATA%\cdidx\logs\`、macOS では `~/Library/Logs/cdidx/`、
-Linux では `~/.local/state/cdidx/logs/` を使う。ファイル名は `stderr-YYYYMMDD.log`。
+Linux では `~/.local/state/cdidx/logs/` を使う。ファイル名はプロセス ID と
+開始時刻を含む `stderr-YYYYMMDD-p<PID>-HHMMSS.log`。
 `CDIDX_LOG_FORMAT=json` または `--log-format json` で 1 行 1 JSON object
 （`ts`、`level`、`msg`）の JSONL に切り替えられる。`CDIDX_LOG_RETAIN` /
 `--log-retain-count` は保持ファイル数、`CDIDX_LOG_MAX_SIZE_MB` /
-`--log-max-size-mb` は日次ファイルのサイズローテーション上限を指定する。
-保持世代の既定は新しい 30 ファイルまで。通常の開発/テストサイクルで
+`--log-max-size-mb` または `CDIDX_GLOBAL_TOOL_LOG_MAX_BYTES` は日次ファイルの
+サイズローテーション上限を指定する。サイズ上限の既定は 50 MiB、保持世代の
+既定は新しい 30 ファイルまで。通常の開発/テストサイクルで
 ワークツリー直下に永続ログが増えないよう、`src/CodeIndex/bin/...`
 と `tests/.../bin/...` からのリポジトリ内開発実行は既定で対象外として
 いる。完全に無効化したい場合は `CDIDX_DISABLE_PERSISTENT_LOG=1`、
