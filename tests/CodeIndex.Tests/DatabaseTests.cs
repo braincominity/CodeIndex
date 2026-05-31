@@ -469,6 +469,30 @@ public class DatabaseTests : IDisposable
         }
     }
 
+    [Fact]
+    public void Dispose_AfterSchemaInitializationOnly_DoesNotCheckpointWal()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_schema_checkpoint_{Guid.NewGuid():N}.db");
+        var checkpointAttempted = false;
+        DbContext.WalCheckpointTruncateExecutedForTesting = _ => checkpointAttempted = true;
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+            }
+
+            Assert.False(checkpointAttempted);
+        }
+        finally
+        {
+            DbContext.WalCheckpointTruncateExecutedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
     private long UpsertTestFile(string path, string checksum)
         => _writer.UpsertFile(new FileRecord
         {

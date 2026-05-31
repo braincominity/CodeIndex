@@ -40,6 +40,7 @@ public class DbContext : IDisposable
     private PreparedCommandCache? _preparedCommands;
     private bool _suppressWriteWorkTracking = true;
     private bool _hasWriteWork;
+    private bool _hasWalCheckpointableWriteWork;
     private bool _rebuildFtsAfterSchemaMigration;
 
     internal static Action<string>? OptimizePragmaExecutedForTesting { get; set; }
@@ -2030,7 +2031,7 @@ public class DbContext : IDisposable
             cmd.Transaction = _activeMigrationTransaction;
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
-        MarkWriteWork();
+        MarkWriteWork(walCheckpointable: false);
     }
 
     private void EnsureForeignKeysEnabled()
@@ -2414,10 +2415,14 @@ public class DbContext : IDisposable
         stamp.ExecuteNonQuery();
     }
 
-    internal void MarkWriteWork()
+    internal void MarkWriteWork(bool walCheckpointable = true)
     {
         if (!_isReadOnly && !_suppressWriteWorkTracking)
+        {
             _hasWriteWork = true;
+            if (walCheckpointable)
+                _hasWalCheckpointableWriteWork = true;
+        }
     }
 
     internal void RunPlannerStatisticsMaintenance(bool forceAnalyze)
@@ -2460,8 +2465,9 @@ public class DbContext : IDisposable
         _preparedCommands?.Dispose();
         _preparedCommands = null;
         var hadWriteWork = _hasWriteWork;
+        var hadWalCheckpointableWriteWork = _hasWalCheckpointableWriteWork;
         RunOptimizeOnCloseIfNeeded();
-        if (hadWriteWork)
+        if (hadWalCheckpointableWriteWork)
             TryCheckpointWalTruncate();
         _connection.Dispose();
     }
