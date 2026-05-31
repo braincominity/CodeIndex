@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.Json;
+using System.Diagnostics;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -79,6 +80,68 @@ public class McpServerTests : IDisposable
         }]);
 
         _server = new McpServer(_dbPath, ConsoleUi.LoadVersion());
+    }
+
+    [Fact]
+    public void ProcessFrame_UsesTraceParentFromMetaAsActivityParent()
+    {
+        var parentTraceId = ActivityTraceId.CreateRandom();
+        var parentSpanId = ActivitySpanId.CreateRandom();
+        var traceParent = $"00-{parentTraceId}-{parentSpanId}-01";
+        var stopped = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == CodeIndex.CodeIndexTelemetry.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activity => stopped.Add(activity),
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 123,
+            ["method"] = "tools/list",
+            ["params"] = new JsonObject
+            {
+                ["_meta"] = new JsonObject
+                {
+                    ["traceparent"] = traceParent,
+                },
+            },
+        };
+
+        var response = _server.ProcessFrame(request.ToJsonString());
+
+        Assert.NotNull(response);
+        var activity = Assert.Single(stopped.Where(activity => activity.OperationName == "mcp.request"));
+        Assert.Equal(parentTraceId, activity.TraceId);
+        Assert.Equal(parentSpanId, activity.ParentSpanId);
+        Assert.Equal("tools/list", activity.GetTagItem("rpc.method"));
+    }
+
+    [Fact]
+    public void ProcessFrame_IgnoresNonStringTraceParent()
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 123,
+            ["method"] = "tools/list",
+            ["params"] = new JsonObject
+            {
+                ["_meta"] = new JsonObject
+                {
+                    ["traceparent"] = 42,
+                },
+            },
+        };
+
+        var response = _server.ProcessFrame(request.ToJsonString());
+
+        Assert.NotNull(response);
+        using var document = JsonDocument.Parse(response);
+        Assert.True(document.RootElement.TryGetProperty("result", out _));
     }
 
     private void InsertIndexedFile(string path, string lang, string content, bool generated = false)
