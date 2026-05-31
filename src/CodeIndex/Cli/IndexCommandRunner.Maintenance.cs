@@ -10,6 +10,7 @@ public static partial class IndexCommandRunner
     private static readonly string[] AcceptedBackfillFoldFlags =
     [
         "--db", "--json", "--dry-run", "--help",
+        "--no-checkpoint",
     ];
 
     public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions) =>
@@ -191,6 +192,9 @@ public static partial class IndexCommandRunner
             }
             else
             {
+                if (!options.NoCheckpoint)
+                    DbCommandRunner.CreateAutomaticCheckpoint(options.DbPath);
+
                 using var transaction = writer.BeginTransaction();
                 (symbols, symbolReferences) = writer.BackfillFoldedColumns(
                     rewriteAll,
@@ -321,6 +325,7 @@ public static partial class IndexCommandRunner
         var dbPath = Path.Combine(".cdidx", "codeindex.db");
         var json = false;
         var dryRun = false;
+        var noCheckpoint = false;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -335,8 +340,11 @@ public static partial class IndexCommandRunner
                 case "--dry-run":
                     dryRun = true;
                     break;
+                case "--no-checkpoint":
+                    noCheckpoint = true;
+                    break;
                 case "--help" or "-h":
-                    return new BackfillFoldCommandOptions { ShowHelp = true, DbPath = dbPath, Json = json, DryRun = dryRun };
+                    return new BackfillFoldCommandOptions { ShowHelp = true, DbPath = dbPath, Json = json, DryRun = dryRun, NoCheckpoint = noCheckpoint };
                 default:
                     if (args[i].StartsWith('-'))
                     {
@@ -360,6 +368,7 @@ public static partial class IndexCommandRunner
             DbPath = dbPath,
             Json = json,
             DryRun = dryRun,
+            NoCheckpoint = noCheckpoint,
         };
     }
 
