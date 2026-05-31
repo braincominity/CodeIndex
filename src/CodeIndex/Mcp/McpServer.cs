@@ -89,6 +89,11 @@ public partial class McpServer : IDisposable
     // (ファイルハンドル / rotation) は ProgramRunner 側で所有する。
     private readonly AuditLogSink? _auditLog;
     private readonly TimeSpan _requestTimeout;
+    private readonly DateTimeOffset _startedAt = DateTimeOffset.UtcNow;
+    private DateTimeOffset _lastRequestAt = DateTimeOffset.UtcNow;
+    private DateTimeOffset? _lastDbCheckAt;
+    private bool? _lastDbCheckOk;
+    private string? _lastDbCheckError;
     private readonly SemaphoreSlim _textWriterGate = new(1, 1);
     // `initialize.clientInfo` echoed into every audit record so the trail can answer
     // "which client issued this call?" without a second log source. Updated on every
@@ -422,7 +427,10 @@ public partial class McpServer : IDisposable
         Console.Error.WriteLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {_dbPath}, transport: {transport.Name} @ {transport.Endpoint}, max in-flight: {MaxConcurrency})");
 
         if (transport is HttpMcpTransport httpTransport)
+        {
             httpTransport.OutOfBandFrameHandler = ProcessFrame;
+            httpTransport.HealthJsonProvider = BuildHealthJson;
+        }
 
         try
         {
@@ -503,7 +511,10 @@ public partial class McpServer : IDisposable
         finally
         {
             if (transport is HttpMcpTransport httpTransportToClear)
+            {
                 httpTransportToClear.OutOfBandFrameHandler = null;
+                httpTransportToClear.HealthJsonProvider = null;
+            }
         }
 
         Console.Error.WriteLine("[cdidx-mcp] Server stopped. Restart `cdidx mcp` when your client reconnects.");
@@ -1016,6 +1027,8 @@ public partial class McpServer : IDisposable
                 suggestion: "Send a JSON-RPC 2.0 object (e.g. {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}).",
                 retrySafe: false);
 
+        _lastRequestAt = DateTimeOffset.UtcNow;
+
         // Extract `method` defensively: a non-string `method` (e.g. `"method":42`) must not
         // throw before the auth gate runs, otherwise a token-protected server would surface
         // `-32603 "Internal error"` to an unauthenticated caller instead of `-32001
@@ -1116,12 +1129,62 @@ public partial class McpServer : IDisposable
             "prompts/list" => Task.FromResult<JsonNode>(HandlePromptsList(id)),
             "prompts/get" => Task.FromResult<JsonNode>(HandlePromptsGet(id, request["params"])),
             "logging/setLevel" => Task.FromResult<JsonNode>(HandleLoggingSetLevel(id, request["params"])),
-            "ping" => Task.FromResult<JsonNode>(CreateSuccessResponse(hasId, id, new JsonObject())),
+            "ping" => Task.FromResult<JsonNode>(CreateSuccessResponse(hasId, id, BuildHealthResult())),
             _ => Task.FromResult<JsonNode>(CreateErrorResponse(hasId: true, id: id, code: -32601, message: $"Method not found: {method}",
                 category: McpErrorEnvelope.CategoryMethodNotFound,
                 suggestion: "Supported methods: initialize, tools/list, tools/call, resources/list, resources/read, prompts/list, prompts/get, logging/setLevel, ping, notifications/initialized, notifications/cancelled, notifications/shutdown.",
                 retrySafe: false)),
         }).ConfigureAwait(false);
+    }
+
+    private string BuildHealthJson()
+        => BuildHealthResult().ToJsonString(_jsonOptions);
+
+    private JsonObject BuildHealthResult()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var dbOpen = ProbeDbHealth(now, out var dbError);
+        var result = new JsonObject
+        {
+            ["status"] = dbOpen ? "ok" : "degraded",
+            ["uptime_s"] = Math.Max(0, (long)Math.Floor((now - _startedAt).TotalSeconds)),
+            ["last_request_at"] = _lastRequestAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            ["db_open"] = dbOpen,
+            ["last_db_check_at"] = _lastDbCheckAt?.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            ["transport_ready"] = _running,
+        };
+        if (!string.IsNullOrWhiteSpace(dbError))
+            result["db_error"] = dbError;
+        return result;
+    }
+
+    private bool ProbeDbHealth(DateTimeOffset now, out string? error)
+    {
+        try
+        {
+            var builder = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+            {
+                DataSource = _dbPath,
+                Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly,
+            };
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection(builder.ConnectionString);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT 1;";
+            _ = command.ExecuteScalar();
+            _lastDbCheckAt = now;
+            _lastDbCheckOk = true;
+            _lastDbCheckError = null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException or InvalidOperationException)
+        {
+            _lastDbCheckAt = now;
+            _lastDbCheckOk = false;
+            _lastDbCheckError = ex.GetType().Name;
+        }
+
+        error = _lastDbCheckError;
+        return _lastDbCheckOk == true;
     }
 
     private async Task<JsonNode?> HandleBatchMessageAsync(JsonArray batch, bool isolateRequestDb)

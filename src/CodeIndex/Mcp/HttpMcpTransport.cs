@@ -75,6 +75,8 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     internal Func<string, string?>? OutOfBandFrameHandler { get; set; }
 
+    internal Func<string>? HealthJsonProvider { get; set; }
+
     /// <summary>
     /// Resolve a `host:port` listen spec into the corresponding HTTP prefix. Ephemeral ports
     /// (port `0`) are resolved up-front by binding a temporary <see cref="TcpListener"/> so the
@@ -220,6 +222,22 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
         if (!await TryAuthorizeAsync(request).ConfigureAwait(false))
             return;
+
+        if (IsHealthPath(context.Request.Url?.AbsolutePath))
+        {
+            if (!string.Equals(context.Request.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase))
+            {
+                context.Response.AddHeader("Allow", "GET");
+                await RespondAsync(context, (int)HttpStatusCode.MethodNotAllowed, "MCP health endpoint only accepts GET.\n").ConfigureAwait(false);
+                LogRequest(request, (int)HttpStatusCode.MethodNotAllowed);
+                return;
+            }
+
+            var healthJson = HealthJsonProvider?.Invoke() ?? """{"status":"starting","db_open":false}""";
+            await RespondJsonAsync(context, (int)HttpStatusCode.OK, healthJson).ConfigureAwait(false);
+            LogRequest(request, (int)HttpStatusCode.OK);
+            return;
+        }
 
         if (IsEventsPath(context.Request.Url?.AbsolutePath))
         {
@@ -432,8 +450,28 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
         }
     }
 
+    private static async Task RespondJsonAsync(HttpListenerContext context, int statusCode, string body)
+    {
+        try
+        {
+            context.Response.StatusCode = statusCode;
+            context.Response.ContentType = "application/json; charset=utf-8";
+            var bytes = Encoding.UTF8.GetBytes(body);
+            context.Response.ContentLength64 = bytes.LongLength;
+            await context.Response.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
+            context.Response.OutputStream.Close();
+        }
+        catch
+        {
+            try { context.Response.Abort(); } catch { /* ignore */ }
+        }
+    }
+
     private static bool IsEventsPath(string? path)
         => string.Equals(path, "/events", StringComparison.Ordinal);
+
+    private static bool IsHealthPath(string? path)
+        => string.Equals(path, "/healthz", StringComparison.Ordinal);
 
     private async Task RunEventStreamAsync(PendingRequest request, CancellationToken cancellationToken)
     {

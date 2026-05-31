@@ -110,6 +110,27 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_Healthz_ReturnsStructuredHealth()
+    {
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+
+        using var client = new HttpClient();
+        using var response = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "healthz"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType!.MediaType);
+        var body = await response.Content.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+        Assert.Equal("ok", root.GetProperty("status").GetString());
+        Assert.True(root.GetProperty("uptime_s").GetInt64() >= 0);
+        Assert.True(root.GetProperty("db_open").GetBoolean());
+        Assert.True(root.GetProperty("transport_ready").GetBoolean());
+        Assert.True(DateTimeOffset.TryParse(root.GetProperty("last_request_at").GetString(), out _));
+        Assert.True(DateTimeOffset.TryParse(root.GetProperty("last_db_check_at").GetString(), out _));
+    }
+
+    [Fact]
     public async Task HttpTransport_RequestLogger_RecordsMethodStatusDurationAndAuthOutcome()
     {
         var records = new ConcurrentQueue<HttpMcpTransport.HttpRequestLogRecord>();
