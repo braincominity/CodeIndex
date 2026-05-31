@@ -14,7 +14,7 @@ public static partial class IndexCommandRunner
     [
         "--db", "--data-dir", "--rebuild", "--verbose", "--json", "--dry-run", "--force",
         "--yes", "--watch", "--debounce", "--duration-format", "--max-file-bytes",
-        "--parallelism", "--memory-trace",
+        "--parallelism", "--memory-trace", "--follow-symlinks",
         "--commits", "--changed-between", "--files", "--solution", "--project",
         "--include-symbol-kind", "--exclude-symbol-kind", "--optimize", "--help",
         "--read-only", "--immutable",
@@ -42,6 +42,7 @@ public static partial class IndexCommandRunner
         var durationFormat = DurationOutputFormat.Auto;
         long? maxFileSizeBytes = ReadMaxFileSizeBytesFromEnvironment();
         var parallelism = ReadIndexParallelismFromEnvironment();
+        var symlinkPolicy = FileIndexer.SymlinkPolicy.None;
         string? easterEgg = null;
         int spinnerFlagCount = 0;
         bool randomSpinner = false;
@@ -147,6 +148,12 @@ public static partial class IndexCommandRunner
                     break;
                 case var option when option.StartsWith("--parallelism=", StringComparison.Ordinal):
                     parallelism = ParseIndexParallelism(option["--parallelism=".Length..], parallelism, "--parallelism");
+                    break;
+                case "--follow-symlinks" when i + 1 < args.Length:
+                    symlinkPolicy = ParseSymlinkPolicy(args[++i], symlinkPolicy, ref parseError);
+                    break;
+                case var option when option.StartsWith("--follow-symlinks=", StringComparison.Ordinal):
+                    symlinkPolicy = ParseSymlinkPolicy(option["--follow-symlinks=".Length..], symlinkPolicy, ref parseError);
                     break;
                 case "--commits":
                     while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
@@ -294,8 +301,25 @@ public static partial class IndexCommandRunner
             DurationFormat = durationFormat,
             MaxFileSizeBytes = maxFileSizeBytes,
             Parallelism = parallelism,
+            SymlinkPolicy = symlinkPolicy,
             SymbolKindFilter = SymbolKindFilter.Create(includeSymbolKinds, excludeSymbolKinds, symbolKindFilterError),
         };
+    }
+
+    private static FileIndexer.SymlinkPolicy ParseSymlinkPolicy(string value, FileIndexer.SymlinkPolicy fallback, ref string? parseError)
+    {
+        switch (value.Trim().ToLowerInvariant())
+        {
+            case "none":
+                return FileIndexer.SymlinkPolicy.None;
+            case "internal":
+                return FileIndexer.SymlinkPolicy.Internal;
+            case "all":
+                return FileIndexer.SymlinkPolicy.All;
+            default:
+                parseError ??= $"invalid --follow-symlinks value '{value}': expected none, internal, or all";
+                return fallback;
+        }
     }
 
     private static string BuildUnknownIndexOptionError(string token)

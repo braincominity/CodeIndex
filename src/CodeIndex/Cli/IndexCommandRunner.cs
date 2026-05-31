@@ -240,7 +240,7 @@ public static partial class IndexCommandRunner
         AddToGitExclude(options.ProjectPath, dbPath);
 
         var writer = new DbWriter(db);
-        var indexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot, options.MaxFileSizeBytes);
+        var indexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot, options.MaxFileSizeBytes, directoryIgnoreCaseProbe: null, symlinkPolicy: options.SymlinkPolicy);
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var projectRoot = Path.GetFullPath(options.ProjectPath!);
 
@@ -454,8 +454,16 @@ public static partial class IndexCommandRunner
             && matchesCurrent;
     }
 
-    private static bool IsOutsideProjectRoot(string relativePath) =>
-        relativePath == ".." || relativePath.StartsWith("../", StringComparison.Ordinal);
+    internal static bool IsOutsideProjectRoot(string relativePath)
+    {
+        if (Path.IsPathRooted(relativePath))
+            return true;
+
+        var normalized = OperatingSystem.IsWindows()
+            ? relativePath.Replace('\\', '/')
+            : relativePath;
+        return normalized == ".." || normalized.StartsWith("../", StringComparison.Ordinal);
+    }
 
     private static bool ContainsIgnoreFilePath(IEnumerable<string> paths)
         => paths.Any(FileIndexer.IsIgnoreFilePath);
@@ -1262,6 +1270,7 @@ public sealed class IndexCommandOptions
     public long? MaxFileSizeBytes { get; init; }
     public int Parallelism { get; init; } = IndexCommandRunner.DefaultIndexParallelism();
     public bool MemoryTrace { get; init; }
+    public FileIndexer.SymlinkPolicy SymlinkPolicy { get; init; } = FileIndexer.SymlinkPolicy.None;
     public SymbolKindFilter SymbolKindFilter { get; init; } = SymbolKindFilter.Empty;
 }
 

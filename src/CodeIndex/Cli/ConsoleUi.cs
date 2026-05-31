@@ -60,7 +60,7 @@ public static class ConsoleUi
 
     private static readonly (string Command, string Usage)[] CommandUsageLines =
     [
-        ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--optimize] [--verbose] [--dry-run] [--force] [--quiet] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]] [--watch [--debounce <ms>]]"),
+        ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--optimize] [--verbose] [--dry-run] [--force] [--quiet] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--follow-symlinks <none|internal|all>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]] [--watch [--debounce <ms>]]"),
         ("hooks", "cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]"),
         ("backfill-fold", "cdidx backfill-fold [--db <path>] [--json]"),
         ("optimize", "cdidx optimize [--db <path>] [--json]"),
@@ -777,6 +777,7 @@ public static class ConsoleUi
         Console.WriteLine("  --duration-format <format> Index elapsed time format: `auto` (default), `seconds`, or `hms`; JSON keeps raw elapsed_ms");
         WriteHelpLine("  --max-file-bytes <bytes>  Index only files up to this size (default: 4MiB; also honors CDIDX_MAX_FILE_BYTES; accepts K/M/G suffixes)");
         WriteHelpLine("  --parallelism <n>         Full-scan extraction workers (default: CPU count capped at 16; also honors CDIDX_INDEX_PARALLELISM)");
+        WriteHelpLine("  --follow-symlinks <mode>  Directory symlink policy: none (default), internal, or all");
         WriteHelpLine("  --include-symbol-kind <kind>[,<kind>]  Keep only matching symbol kinds during indexing");
         WriteHelpLine("  --exclude-symbol-kind <kind>[,<kind>]  Drop matching symbol kinds during indexing");
         Console.WriteLine("  --commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)");
