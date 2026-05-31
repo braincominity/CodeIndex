@@ -11,10 +11,6 @@ public static partial class SymbolExtractor
         "unquote",
         "unquote-splicing",
         "function",
-        "eval-when",
-        "let",
-        "let*",
-        "lambda",
     };
 
     internal static string[] MaskLispCodeLines(IReadOnlyList<string> lines)

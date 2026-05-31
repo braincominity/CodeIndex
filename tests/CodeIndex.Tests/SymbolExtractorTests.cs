@@ -21490,6 +21490,19 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CommonLisp_PreservesDefinitionsInsideEvalWhen()
+    {
+        var content = """
+            (eval-when (:compile-toplevel :load-toplevel :execute)
+              (defun real-wrapper-function () nil))
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "commonlisp", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "real-wrapper-function");
+    }
+
+    [Fact]
     public void Extract_Racket_DetectsModuleAndDefinitions()
     {
         // Racket: module, define, define-syntaxes, struct, require / Racket: module、define、define-syntaxes、struct、require
