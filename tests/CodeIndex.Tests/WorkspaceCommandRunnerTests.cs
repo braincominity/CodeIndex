@@ -190,6 +190,38 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void WorkspaceUse_RejectsNamedWorkspaceWithoutManifest()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_no_manifest");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_workspace_use_no_manifest_config");
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture("XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+
+            var previous = Environment.CurrentDirectory;
+            try
+            {
+                Environment.CurrentDirectory = root;
+                var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "typo"], _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Contains("workspace manifest was not found", stderr);
+                Assert.False(File.Exists(ActiveWorkspace.StatePath));
+            }
+            finally
+            {
+                Environment.CurrentDirectory = previous;
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
     public void WorkspaceUseDefault_DoesNotSelectFirstManifestMember()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_default");

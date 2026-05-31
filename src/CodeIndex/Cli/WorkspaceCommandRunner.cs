@@ -66,6 +66,9 @@ internal static class WorkspaceCommandRunner
         var name = args[0];
         var manifest = WorkspaceManifestLoader.Find(Environment.CurrentDirectory);
         var useDefault = string.Equals(name, "default", StringComparison.OrdinalIgnoreCase);
+        if (manifest == null && !useDefault)
+            return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace manifest was not found.", CommandExitCodes.UsageError, "run `cdidx workspace use <name>` from a manifest member or pass `default`.");
+
         var member = useDefault
             ? null
             : manifest?.Members.FirstOrDefault(m => string.Equals(Path.GetFileName(m.Path), name, StringComparison.OrdinalIgnoreCase));
