@@ -22,6 +22,7 @@ public class SuggestionStore
 {
     private readonly string _filePath;
     private readonly string _lockPath;
+    private readonly TimeProvider _timeProvider;
     private readonly string _archivePath;
     private static readonly TimeSpan s_inFlightSubmitRetryDelay = TimeSpan.FromMinutes(1);
     internal const FileShare StreamingReadFileShare = FileShare.ReadWrite | FileShare.Delete;
@@ -96,12 +97,18 @@ public class SuggestionStore
     /// 拡張子なしのデータベースファイル名（任意、デフォルトは "codeindex"）。
     /// </param>
     public SuggestionStore(string cdidxDir, string? dbName = null)
+        : this(cdidxDir, dbName, TimeProvider.System)
+    {
+    }
+
+    internal SuggestionStore(string cdidxDir, string? dbName, TimeProvider timeProvider)
     {
         // Derive a safe store filename from the DB identity.
         // DB固有の安全なストアファイル名を導出する。
         var safeName = string.IsNullOrWhiteSpace(dbName) ? "codeindex" : dbName;
         _filePath = Path.Combine(cdidxDir, $"suggestions-{safeName}.json");
         _lockPath = Path.Combine(cdidxDir, $"suggestions-{safeName}.lock");
+        _timeProvider = timeProvider;
         _archivePath = Path.Combine(cdidxDir, $"suggestions-{safeName}.archive.jsonl");
     }
 
@@ -144,6 +151,7 @@ public class SuggestionStore
                 return false;
             }
 
+            StampCreatedAt(record);
             existing.Add(record);
             PruneUnlocked(existing);
             SaveUnlocked(existing);
@@ -220,6 +228,7 @@ public class SuggestionStore
 
             if (isNew)
             {
+                StampCreatedAt(record);
                 existing.Add(record);
                 PruneUnlocked(existing);
                 SaveUnlocked(existing);
@@ -229,7 +238,7 @@ public class SuggestionStore
             var current = found!;
             if (!alreadySubmitted && submitToGitHub != null && ShouldAttemptSubmit(current))
             {
-                var attemptedAt = DateTime.UtcNow;
+                var attemptedAt = GetUtcNow();
                 StampSubmitAttempt(current, attemptedAt, null, attemptedAt.Add(s_inFlightSubmitRetryDelay));
                 SaveUnlocked(existing);
                 return new SubmitReservation(
@@ -403,7 +412,7 @@ public class SuggestionStore
             if (record == null)
                 return;
 
-            MarkSubmitted(record, issueUrl, DateTime.UtcNow);
+            MarkSubmitted(record, issueUrl, GetUtcNow());
             SaveUnlocked(all);
         });
     }
@@ -756,19 +765,23 @@ public class SuggestionStore
         record.GitHubIssueUrl = null;
     }
 
-    private static bool ShouldAttemptSubmit(SuggestionRecord record)
+    private bool ShouldAttemptSubmit(SuggestionRecord record)
     {
         if (record.NextRetryAt == null)
             return true;
 
-        return record.NextRetryAt.Value <= DateTime.UtcNow;
+        return record.NextRetryAt.Value <= GetUtcNow();
     }
+
+    private void StampCreatedAt(SuggestionRecord record) => record.CreatedAt = GetUtcNow();
+
+    private DateTime GetUtcNow() => _timeProvider.GetUtcNow().UtcDateTime;
 
     private bool PruneUnlocked(List<SuggestionRecord> records)
     {
         var maxAge = ResolveMaxAge();
         var maxCount = ResolveMaxCount();
-        var cutoff = DateTime.UtcNow.Subtract(maxAge);
+        var cutoff = GetUtcNow().Subtract(maxAge);
         var pruned = records
             .Where(record => record.CreatedAt != default && record.CreatedAt < cutoff)
             .ToList();
@@ -794,7 +807,7 @@ public class SuggestionStore
         ArchivePrunedRecords(pruned);
         try
         {
-            Console.Error.WriteLine($"[cdidx] Pruned {pruned.Count} stale suggestion record(s) to {_archivePath}.");
+            ConsoleUi.TryWriteErrorLine($"[cdidx] Pruned {pruned.Count} stale suggestion record(s) to {_archivePath}.");
         }
         catch (ObjectDisposedException)
         {
