@@ -113,8 +113,11 @@ internal static class RReferenceExtractor
     private static readonly Regex S4SetMethodCallRegex = new(
         @"^\s*(?:(?:[\w.]+)::)?setMethod\s*\(\s*(?:(?:f|generic|name)\s*=\s*)?(?:`(?<genericBacktick>[^`]+)`|['""](?<genericQuoted>[^'""]+)['""]|(?<generic>[A-Za-z.][\w.]*))\s*,(?<tail>.*)$",
         RegexOptions.Compiled);
+    private static readonly Regex S4SignatureCallRegex = new(
+        @"signature\s*\((?<body>[^)]*)\)",
+        RegexOptions.Compiled);
     private static readonly Regex S4SignatureClassRegex = new(
-        @"(?:signature\s*\(|,)\s*(?:(?<parameter>[A-Za-z.][\w.]*)\s*=\s*)?(?:`(?<backtickName>[^`]+)`|['""](?<quotedName>[^'""]+)['""]|(?<name>[A-Za-z.][\w.]*))",
+        @"(?:^|,)\s*(?:(?<parameter>[A-Za-z.][\w.]*)\s*=\s*)?(?:`(?<backtickName>[^`]+)`|['""](?<quotedName>[^'""]+)['""]|(?<name>[A-Za-z.][\w.]*))",
         RegexOptions.Compiled);
 
     public static void EmitNamespaceReferences(
@@ -469,7 +472,12 @@ internal static class RReferenceExtractor
             container);
 
         var tailGroup = methodMatch.Groups["tail"];
-        foreach (Match signatureMatch in S4SignatureClassRegex.Matches(tailGroup.Value))
+        var signatureCall = S4SignatureCallRegex.Match(tailGroup.Value);
+        if (!signatureCall.Success)
+            return;
+
+        var signatureBody = signatureCall.Groups["body"];
+        foreach (Match signatureMatch in S4SignatureClassRegex.Matches(signatureBody.Value))
         {
             var classToken = GetNamespaceDirectiveToken(
                 signatureMatch,
@@ -479,7 +487,7 @@ internal static class RReferenceExtractor
             if (classToken == null)
                 continue;
 
-            var absoluteIndex = tailGroup.Index + classToken.Value.Index;
+            var absoluteIndex = tailGroup.Index + signatureBody.Index + classToken.Value.Index;
             ReferenceExtractor.AddReference(
                 references,
                 seen,

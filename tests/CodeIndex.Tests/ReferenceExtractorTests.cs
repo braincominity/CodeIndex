@@ -18377,6 +18377,9 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference =>
             reference.SymbolName == "show.ExpressionSet"
             && reference.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "function" or "exprs.function" or "show.function"
+            && reference.ReferenceKind is "type_reference" or "reference");
     }
 
     [Fact]
