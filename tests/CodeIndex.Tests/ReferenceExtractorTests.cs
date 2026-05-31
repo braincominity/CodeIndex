@@ -2933,6 +2933,18 @@ public class ReferenceExtractorTests
             output "instance_ids" {
               value = aws_instance.web[*].id
             }
+
+            resource "aws:s3_bucket" "data" {
+              bucket = "example-data"
+            }
+
+            output "endpoint" {
+              value = module.network.outputs.endpoint
+            }
+
+            output "bucket" {
+              value = aws:s3_bucket.data.id
+            }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "terraform", content);
@@ -2950,7 +2962,7 @@ public class ReferenceExtractorTests
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "ubuntu"
             && reference.ReferenceKind == "reference"));
-        Assert.Equal(2, references.Count(reference =>
+        Assert.Equal(3, references.Count(reference =>
             reference.SymbolName == "network"
             && reference.ReferenceKind == "reference"));
         Assert.Single(references.Where(reference =>
@@ -2959,9 +2971,15 @@ public class ReferenceExtractorTests
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "foo"
             && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "endpoint"
+            && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "data"
+            && reference.ReferenceKind == "reference"));
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
-            && reference.SymbolName is "region" or "instance_count" or "common_tags" or "ubuntu" or "network" or "web" or "foo");
+            && reference.SymbolName is "region" or "instance_count" or "common_tags" or "ubuntu" or "network" or "web" or "foo" or "endpoint" or "data");
     }
 
     [Fact]
@@ -13398,6 +13416,11 @@ public class ReferenceExtractorTests
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """
+            sealed class Shape {}
+            sealed class Circle extends Shape with Paintable, Serializable {}
+            extension ShapeFormatting on Shape {
+              String label() => Shape.label();
+            }
             class Screen extends BaseScreen with Trackable implements RouteAware {
               @override
               Widget build(BuildContext context) {
@@ -13419,11 +13442,19 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "BaseScreen" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Trackable" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "RouteAware" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "sealed_subtype");
+        Assert.DoesNotContain(references, r => r.SymbolName == "BaseScreen" && r.ReferenceKind == "sealed_subtype");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "extension_of");
+        Assert.Contains(references, r => r.SymbolName == "Paintable" && r.ReferenceKind == "mixin_in");
+        Assert.Contains(references, r => r.SymbolName == "Serializable" && r.ReferenceKind == "mixin_in");
+        Assert.Contains(references, r => r.SymbolName == "Trackable" && r.ReferenceKind == "mixin_in");
+        Assert.Contains(references, r => r.SymbolName == "Shape.label" && r.ReferenceKind == "named_ctor_call");
         Assert.Contains(references, r => r.SymbolName == "BuildContext" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "override" && r.ReferenceKind == "annotation");
         Assert.Contains(references, r => r.SymbolName == "UserCard" && r.ReferenceKind == "instantiate");
         Assert.Contains(references, r => r.SymbolName == "User.fromJson" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "User.fromJson" && r.ReferenceKind == "named_ctor_call");
         Assert.Contains(references, r => r.SymbolName == "afterRaw" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Phantom");
         Assert.DoesNotContain(references, r => r.SymbolName == "fromJson" && r.ReferenceKind == "instantiate");
