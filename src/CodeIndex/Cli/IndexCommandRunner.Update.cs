@@ -655,226 +655,226 @@ public static partial class IndexCommandRunner
                         continue;
                     }
 
-                if (FileIndexer.TryGetFileIdentity(absPath, out var identity) && !visitedFileIdentities.Add(identity))
-                {
-                    var message = "Skipped hardlinked file because the same file content was already indexed from another path.";
-                    warnings++;
-                    warningList.Add(new CliJsonMessage(relPath, message));
-                    if (!options.Json && !options.Quiet)
+                    if (FileIndexer.TryGetFileIdentity(absPath, out var identity) && !visitedFileIdentities.Add(identity))
+                    {
+                        var message = "Skipped hardlinked file because the same file content was already indexed from another path.";
+                        warnings++;
+                        warningList.Add(new CliJsonMessage(relPath, message));
+                        if (!options.Json && !options.Quiet)
+                        {
+                            PauseUpdateSpinnerForConsoleWrite();
+                            ConsoleUi.PrintWarning($"{relPath}: {message}");
+                            ResumeUpdateSpinnerAfterConsoleWrite();
+                        }
+
+                        if (!writer.HasFileAtPath(dbPath))
+                        {
+                            skipped++;
+                            continue;
+                        }
+
+                        DemoteReadinessOnce();
+                        using var deleteTxn = writer.BeginTransaction();
+                        if (writer.DeleteFileByPath(dbPath))
+                        {
+                            WriteProjectRootOnce();
+                            deleteTxn.Commit();
+                            removed++;
+                            ftsMutated = true;
+                        }
+                        else
+                        {
+                            skipped++;
+                        }
+                        continue;
+                    }
+
+                    var statReusableLanguage = TryDetectStatReusableLanguage(absPath);
+                    var statMatchedId = TryGetUnchangedFileIdFromStat(
+                        writer,
+                        projectRoot,
+                        absPath,
+                        statReusableLanguage,
+                        allowReuse: symbolKindFilterMatchesPrior
+                            && statReusableLanguage is not ("javascript" or "typescript")
+                            && (statReusableLanguage != "csharp" || csharpSymbolNameContractMatchesCurrent)
+                            && (statReusableLanguage != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
+                            && (statReusableLanguage != "sql" || sqlGraphContractMatchesCurrent));
+                    if (statMatchedId != null)
+                    {
+                        if (writer.CountSymbolsForFile(statMatchedId.Value) > options.MaxSymbolsPerFile
+                            || writer.HasIssueForFile(statMatchedId.Value, "symbol_count_exceeded"))
+                        {
+                            statMatchedId = null;
+                        }
+                    }
+                    if (statMatchedId != null)
+                    {
+                        skipped++;
+                        if (options.Verbose && !options.Json && !options.Quiet)
+                        {
+                            PauseUpdateSpinnerForConsoleWrite();
+                            Console.WriteLine($"  [SKIP] {relPath} (unchanged)");
+                            ResumeUpdateSpinnerAfterConsoleWrite();
+                        }
+                        continue;
+                    }
+
+                    var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(absPath, cancellationToken);
+
+                    if (warning != null && !options.Json && !options.Quiet)
                     {
                         PauseUpdateSpinnerForConsoleWrite();
-                        ConsoleUi.PrintWarning($"{relPath}: {message}");
+                        ConsoleUi.PrintWarning(warning);
                         ResumeUpdateSpinnerAfterConsoleWrite();
                     }
 
-                    if (!writer.HasFileAtPath(dbPath))
+                    var existingId = writer.GetUnchangedFileId(
+                        record.Path,
+                        record.Modified,
+                        record.Checksum,
+                        size: record.Size,
+                        lines: record.Lines,
+                        language: record.Lang,
+                        generated: record.Generated,
+                        allowReuse: symbolKindFilterMatchesPrior
+                            && record.Lang is not ("javascript" or "typescript")
+                            && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
+                            && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
+                            && (record.Lang != "sql" || sqlGraphContractMatchesCurrent));
+                    if (existingId != null)
                     {
+                        if (writer.CountSymbolsForFile(existingId.Value) > options.MaxSymbolsPerFile
+                            || writer.HasIssueForFile(existingId.Value, "symbol_count_exceeded"))
+                        {
+                            existingId = null;
+                        }
+                    }
+                    if (existingId != null)
+                    {
+                        using var purgeTxn = writer.BeginTransaction();
+                        var purged = writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum)
+                            + (projectRootWritten
+                                ? writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path)
+                                : 0);
+                        if (purged > 0)
+                        {
+                            DemoteReadinessOnce();
+                            WriteProjectRootOnce();
+                            purgeTxn.Commit();
+                            removed += purged;
+                            ftsMutated = true;
+                        }
                         skipped++;
+                        if (options.Verbose && !options.Json && !options.Quiet)
+                        {
+                            PauseUpdateSpinnerForConsoleWrite();
+                            Console.WriteLine(purged > 0
+                                ? $"  [SKIP] {relPath} (unchanged; purged {purged:N0} stale renamed path(s))"
+                                : $"  [SKIP] {relPath} (unchanged)");
+                            ResumeUpdateSpinnerAfterConsoleWrite();
+                        }
                         continue;
                     }
 
                     DemoteReadinessOnce();
-                    using var deleteTxn = writer.BeginTransaction();
-                    if (writer.DeleteFileByPath(dbPath))
+                    writer.MarkBatchInProgress();
+                    fileBatchMarked = true;
+                    using var txn = writer.BeginTransaction();
+                    writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
+                    if (projectRootWritten)
+                        writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path);
+                    WriteProjectRootOnce();
+                    var fileId = writer.UpsertFile(record);
+                    currentUpdatePath = FormatIndexPhasePath(relPath, "chunking");
+                    var chunks = ChunkSplitter.Split(fileId, content);
+                    currentUpdatePath = FormatIndexPhasePath(relPath, "symbols");
+                    var symbols = ExtractSymbolsWithStallTimeout(
+                        fileId,
+                        record.Lang,
+                        content,
+                        absPath,
+                        Path.GetFullPath(options.ProjectPath!),
+                        currentUpdatePath,
+                        cancellationToken);
+                    if (symbols.Count > options.MaxSymbolsPerFile)
                     {
-                        WriteProjectRootOnce();
-                        deleteTxn.Commit();
-                        removed++;
+                        var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                        writer.InsertSymbols([]);
+                        writer.InsertReferences([]);
+                        writer.InsertIssues(fileId, [issue]);
+                        writer.ClearBatchInProgress();
+                        txn.Commit();
+                        fileBatchMarked = false;
+                        updated++;
                         ftsMutated = true;
+                        WriteUpdateVerboseStatus($"  [SKIP] {relPath} ({issue.Message})");
+                        continue;
                     }
-                    else
+                    SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
+                    var fileContext = new FileContext(projectRoot, record.Path, absPath, record.Lang);
+                    postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
+                    symbolsDroppedByKindFilter += options.SymbolKindFilter.Apply(symbols);
+                    if (symbols.Count > options.MaxSymbolsPerFile)
                     {
-                        skipped++;
-                    }
-                    continue;
-                }
-
-                var statReusableLanguage = TryDetectStatReusableLanguage(absPath);
-                var statMatchedId = TryGetUnchangedFileIdFromStat(
-                    writer,
-                    projectRoot,
-                    absPath,
-                    statReusableLanguage,
-                    allowReuse: symbolKindFilterMatchesPrior
-                        && statReusableLanguage is not ("javascript" or "typescript")
-                        && (statReusableLanguage != "csharp" || csharpSymbolNameContractMatchesCurrent)
-                        && (statReusableLanguage != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
-                        && (statReusableLanguage != "sql" || sqlGraphContractMatchesCurrent));
-                if (statMatchedId != null)
-                {
-                    if (writer.CountSymbolsForFile(statMatchedId.Value) > options.MaxSymbolsPerFile
-                        || writer.HasIssueForFile(statMatchedId.Value, "symbol_count_exceeded"))
-                    {
-                        statMatchedId = null;
-                    }
-                }
-                if (statMatchedId != null)
-                {
-                    skipped++;
-                    if (options.Verbose && !options.Json && !options.Quiet)
-                    {
-                        PauseUpdateSpinnerForConsoleWrite();
-                        Console.WriteLine($"  [SKIP] {relPath} (unchanged)");
-                        ResumeUpdateSpinnerAfterConsoleWrite();
-                    }
-                    continue;
-                }
-
-                var (record, content, rawBytes, warning) = indexer.BuildRecordWithRawBytes(absPath, cancellationToken);
-
-                if (warning != null && !options.Json && !options.Quiet)
-                {
-                    PauseUpdateSpinnerForConsoleWrite();
-                    ConsoleUi.PrintWarning(warning);
-                    ResumeUpdateSpinnerAfterConsoleWrite();
-                }
-
-                var existingId = writer.GetUnchangedFileId(
-                    record.Path,
-                    record.Modified,
-                    record.Checksum,
-                    size: record.Size,
-                    lines: record.Lines,
-                    language: record.Lang,
-                    generated: record.Generated,
-                    allowReuse: symbolKindFilterMatchesPrior
-                        && record.Lang is not ("javascript" or "typescript")
-                        && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
-                        && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
-                        && (record.Lang != "sql" || sqlGraphContractMatchesCurrent));
-                if (existingId != null)
-                {
-                    if (writer.CountSymbolsForFile(existingId.Value) > options.MaxSymbolsPerFile
-                        || writer.HasIssueForFile(existingId.Value, "symbol_count_exceeded"))
-                    {
-                        existingId = null;
-                    }
-                }
-                if (existingId != null)
-                {
-                    using var purgeTxn = writer.BeginTransaction();
-                    var purged = writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum)
-                        + (projectRootWritten
-                            ? writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path)
-                            : 0);
-                    if (purged > 0)
-                    {
-                        DemoteReadinessOnce();
-                        WriteProjectRootOnce();
-                        purgeTxn.Commit();
-                        removed += purged;
+                        var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
+                        writer.InsertSymbols([]);
+                        writer.InsertReferences([]);
+                        writer.InsertIssues(fileId, [issue]);
+                        writer.ClearBatchInProgress();
+                        txn.Commit();
+                        fileBatchMarked = false;
+                        updated++;
                         ftsMutated = true;
+                        WriteUpdateVerboseStatus($"  [SKIP] {relPath} ({issue.Message})");
+                        continue;
                     }
-                    skipped++;
-                    if (options.Verbose && !options.Json && !options.Quiet)
-                    {
-                        PauseUpdateSpinnerForConsoleWrite();
-                        Console.WriteLine(purged > 0
-                            ? $"  [SKIP] {relPath} (unchanged; purged {purged:N0} stale renamed path(s))"
-                            : $"  [SKIP] {relPath} (unchanged)");
-                        ResumeUpdateSpinnerAfterConsoleWrite();
-                    }
-                    continue;
-                }
-
-                DemoteReadinessOnce();
-                writer.MarkBatchInProgress();
-                fileBatchMarked = true;
-                using var txn = writer.BeginTransaction();
-                writer.PurgeStaleFilesSharingChecksum(projectRoot, record.Path, record.Checksum);
-                if (projectRootWritten)
-                    writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, record.Path);
-                WriteProjectRootOnce();
-                var fileId = writer.UpsertFile(record);
-                currentUpdatePath = FormatIndexPhasePath(relPath, "chunking");
-                var chunks = ChunkSplitter.Split(fileId, content);
-                currentUpdatePath = FormatIndexPhasePath(relPath, "symbols");
-                var symbols = ExtractSymbolsWithStallTimeout(
-                    fileId,
-                    record.Lang,
-                    content,
-                    absPath,
-                    Path.GetFullPath(options.ProjectPath!),
-                    currentUpdatePath,
-                    cancellationToken);
-                if (symbols.Count > options.MaxSymbolsPerFile)
-                {
-                    var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
-                    writer.InsertSymbols([]);
-                    writer.InsertReferences([]);
-                    writer.InsertIssues(fileId, [issue]);
+                    writer.InsertChunks(chunks);
+                    FileIndexer.ValidateSymbolLineRanges(record, symbols);
+                    writer.InsertSymbols(symbols);
+                    currentUpdatePath = FormatIndexPhasePath(relPath, "references");
+                    var references = ReferenceExtractor.Extract(
+                        fileId,
+                        record.Lang,
+                        content,
+                        symbols,
+                        record.Path,
+                        record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
+                        cancellationToken);
+                    postExtractionHooks.OnReferencesExtracted(fileContext, references);
+                    writer.InsertReferences(references);
+                    // Validate content for encoding issues / エンコーディング問題を検証
+                    currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
+                    var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+                    writer.InsertIssues(fileId, issues);
+                    currentUpdatePath = FormatIndexPhasePath(relPath, "committing");
                     writer.ClearBatchInProgress();
                     txn.Commit();
-                    fileBatchMarked = false;
+
                     updated++;
                     ftsMutated = true;
-                    WriteUpdateVerboseStatus($"  [SKIP] {relPath} ({issue.Message})");
-                    continue;
+                    ThrowIfUpdateCancelled();
+                    WriteUpdateVerboseStatus($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
                 }
-                SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
-                var fileContext = new FileContext(projectRoot, record.Path, absPath, record.Lang);
-                postExtractionHooks.OnSymbolsExtracted(fileContext, symbols);
-                symbolsDroppedByKindFilter += options.SymbolKindFilter.Apply(symbols);
-                if (symbols.Count > options.MaxSymbolsPerFile)
+                catch (IndexExtractionStalledException)
                 {
-                    var issue = BuildSymbolCountExceededIssue(record.Path, symbols.Count, options.MaxSymbolsPerFile);
-                    writer.InsertSymbols([]);
-                    writer.InsertReferences([]);
-                    writer.InsertIssues(fileId, [issue]);
-                    writer.ClearBatchInProgress();
-                    txn.Commit();
-                    fileBatchMarked = false;
-                    updated++;
-                    ftsMutated = true;
-                    WriteUpdateVerboseStatus($"  [SKIP] {relPath} ({issue.Message})");
-                    continue;
+                    throw;
                 }
-                writer.InsertChunks(chunks);
-                FileIndexer.ValidateSymbolLineRanges(record, symbols);
-                writer.InsertSymbols(symbols);
-                currentUpdatePath = FormatIndexPhasePath(relPath, "references");
-                var references = ReferenceExtractor.Extract(
-                    fileId,
-                    record.Lang,
-                    content,
-                    symbols,
-                    record.Path,
-                    record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                    cancellationToken);
-                postExtractionHooks.OnReferencesExtracted(fileContext, references);
-                writer.InsertReferences(references);
-                // Validate content for encoding issues / エンコーディング問題を検証
-                currentUpdatePath = FormatIndexPhasePath(relPath, "validating");
-                var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
-                writer.InsertIssues(fileId, issues);
-                currentUpdatePath = FormatIndexPhasePath(relPath, "committing");
-                writer.ClearBatchInProgress();
-                txn.Commit();
-
-                updated++;
-                ftsMutated = true;
-                ThrowIfUpdateCancelled();
-                WriteUpdateVerboseStatus($"  [OK  ] {relPath} ({chunks.Count} chunks, {symbols.Count} symbols, {references.Count} refs)");
-            }
-            catch (IndexExtractionStalledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                if (ex is FileIndexer.BinaryFileSkippedException)
+                catch (Exception ex)
                 {
-                    warnings++;
-                    warningList.Add(new CliJsonMessage(relPath, ex.Message));
-                    if (!options.Json && !options.Quiet)
+                    if (ex is FileIndexer.BinaryFileSkippedException)
                     {
-                        PauseUpdateSpinnerForConsoleWrite();
-                        ConsoleUi.PrintWarning(ex.Message);
-                        ResumeUpdateSpinnerAfterConsoleWrite();
-                    }
+                        warnings++;
+                        warningList.Add(new CliJsonMessage(relPath, ex.Message));
+                        if (!options.Json && !options.Quiet)
+                        {
+                            PauseUpdateSpinnerForConsoleWrite();
+                            ConsoleUi.PrintWarning(ex.Message);
+                            ResumeUpdateSpinnerAfterConsoleWrite();
+                        }
 
-                    if (writer.HasFileAtPath(dbPath))
-                    {
+                        if (writer.HasFileAtPath(dbPath))
+                        {
                             DemoteReadinessOnce();
                             using var deleteTxn = writer.BeginTransaction();
                             if (writer.DeleteFileByPath(dbPath))
