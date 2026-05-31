@@ -5802,6 +5802,45 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptTypeAliasShadowedByScope_UsesActiveAliasBinding()
+    {
+        const string content = """
+            class One {}
+            class Two {}
+            type MyAlias = One;
+            namespace Inner {
+                type MyAlias = Two;
+                export class B extends MyAlias {}
+            }
+            class A extends MyAlias {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "One"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "A"
+            && reference.Context == "class A extends MyAlias {}");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Two"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "A"
+            && reference.Context == "class A extends MyAlias {}");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Two"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "B"
+            && reference.Context == "export class B extends MyAlias {}");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "One"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "B"
+            && reference.Context == "export class B extends MyAlias {}");
+    }
+
+    [Fact]
     public void Extract_CsharpIndentedRawStringBeforeBlockComment_DoesNotLeakXmlDocReferences()
     {
         // Regression: BuildCSharpBlockCommentLines must recognize the closing delimiter of an
@@ -26303,6 +26342,45 @@ public class ReferenceExtractorTests
 
         Assert.Single(expanded);
         Assert.Equal(8, expanded[0].Column);
+    }
+
+    [Fact]
+    public void Extract_SwiftTypealiasShadowedByScope_UsesActiveAliasBinding()
+    {
+        const string content = """
+            class One {}
+            class Two {}
+            typealias MyAlias = One
+            enum Inner {
+                typealias MyAlias = Two
+                class B: MyAlias {}
+            }
+            class A: MyAlias {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "One"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "A"
+            && reference.Context == "class A: MyAlias {}");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Two"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "A"
+            && reference.Context == "class A: MyAlias {}");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Two"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "B"
+            && reference.Context == "class B: MyAlias {}");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "One"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "B"
+            && reference.Context == "class B: MyAlias {}");
     }
 
     [Fact]

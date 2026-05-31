@@ -5,6 +5,8 @@ namespace CodeIndex.Indexer;
 
 internal static class SwiftReferenceExtractor
 {
+    internal readonly record struct TypeAliasBinding(string Alias, string Target, int BindingLine, int? EndLine, int BraceDepth);
+
     private static readonly string[] DeclarationKeywords = ["let", "var"];
     private static readonly string[] TypeOperatorKeywords = ["is", "as"];
     private static readonly Regex PropertyWrapperDeclarationRegex = new(
@@ -80,18 +82,25 @@ internal static class SwiftReferenceExtractor
             resolveContainerForColumn);
     }
 
-    public static Dictionary<string, string> BuildTypeAliasTargets(IReadOnlyList<string> preparedLines)
+    public static IReadOnlyList<TypeAliasBinding> BuildTypeAliasTargets(IReadOnlyList<string> preparedLines)
     {
-        var aliases = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var line in preparedLines)
+        var aliases = new List<TypeAliasBinding>();
+        var braceDepths = BuildBraceDepthsBeforeLine(preparedLines);
+        for (var index = 0; index < preparedLines.Count; index++)
         {
+            var line = preparedLines[index];
             var match = TypeAliasRegex.Match(line);
             if (!match.Success)
                 continue;
 
             var target = match.Groups["target"].Value.Trim();
             if (target.Length > 0)
-                aliases[TrimSwiftBackticks(match.Groups["alias"].Value)] = target;
+                aliases.Add(new TypeAliasBinding(
+                    TrimSwiftBackticks(match.Groups["alias"].Value),
+                    target,
+                    index + 1,
+                    FindScopedAliasEndLine(preparedLines, braceDepths, index),
+                    braceDepths[index]));
         }
 
         return aliases;
@@ -99,7 +108,7 @@ internal static class SwiftReferenceExtractor
 
     public static void EmitAliasTargetReferences(
         string preparedLine,
-        IReadOnlyDictionary<string, string> aliases,
+        IReadOnlyList<TypeAliasBinding> aliases,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -110,7 +119,7 @@ internal static class SwiftReferenceExtractor
         if (aliases.Count == 0 || TypeAliasRegex.IsMatch(preparedLine))
             return;
 
-        foreach (var (alias, target) in aliases)
+        foreach (var alias in aliases.Select(binding => binding.Alias).Distinct(StringComparer.Ordinal))
         {
             var searchStart = 0;
             while (searchStart < preparedLine.Length)
@@ -133,8 +142,12 @@ internal static class SwiftReferenceExtractor
                     continue;
                 }
 
+                var binding = FindActiveTypeAliasBinding(aliases, alias, lineNumber);
+                if (binding is null)
+                    continue;
+
                 TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
-                    target,
+                    binding.Value.Target,
                     index,
                     "swift",
                     references,
@@ -145,6 +158,69 @@ internal static class SwiftReferenceExtractor
                     resolveContainerForColumn(index));
             }
         }
+    }
+
+    private static TypeAliasBinding? FindActiveTypeAliasBinding(
+        IReadOnlyList<TypeAliasBinding> aliases,
+        string alias,
+        int lineNumber)
+    {
+        TypeAliasBinding? best = null;
+        foreach (var binding in aliases)
+        {
+            if (!string.Equals(binding.Alias, alias, StringComparison.Ordinal)
+                || lineNumber <= binding.BindingLine
+                || (binding.EndLine is int endLine && lineNumber > endLine))
+            {
+                continue;
+            }
+
+            if (best is null
+                || binding.BraceDepth > best.Value.BraceDepth
+                || (binding.BraceDepth == best.Value.BraceDepth && binding.BindingLine > best.Value.BindingLine))
+            {
+                best = binding;
+            }
+        }
+
+        return best;
+    }
+
+    private static int? FindScopedAliasEndLine(
+        IReadOnlyList<string> preparedLines,
+        IReadOnlyList<int> braceDepths,
+        int bindingLineIndex)
+    {
+        var bindingDepth = braceDepths[bindingLineIndex];
+        if (bindingDepth <= 0)
+            return null;
+
+        for (var index = bindingLineIndex + 1; index < preparedLines.Count; index++)
+        {
+            if (braceDepths[index] < bindingDepth)
+                return index;
+        }
+
+        return preparedLines.Count;
+    }
+
+    private static int[] BuildBraceDepthsBeforeLine(IReadOnlyList<string> preparedLines)
+    {
+        var depths = new int[preparedLines.Count];
+        var depth = 0;
+        for (var index = 0; index < preparedLines.Count; index++)
+        {
+            depths[index] = depth;
+            foreach (var ch in preparedLines[index])
+            {
+                if (ch == '{')
+                    depth++;
+                else if (ch == '}' && depth > 0)
+                    depth--;
+            }
+        }
+
+        return depths;
     }
 
     private static string TrimSwiftBackticks(string value) =>
