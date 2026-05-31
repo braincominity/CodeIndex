@@ -19,7 +19,8 @@ target frameworks when validating the full CI-equivalent test matrix.
 CI uses `tests/CodeIndex.Tests/CodeIndex.Tests.runsettings` plus VSTest blame
 crash/hang collection and a bounded one-time retry to distinguish repeatable
 failures from pass-on-retry flakes. For test suite structure, shared helpers,
-timeout diagnostics, and test-writing conventions, see [TESTING_GUIDE.md](TESTING_GUIDE.md).
+state-isolation rules, timeout diagnostics, and test-writing conventions, see
+[TESTING_GUIDE.md](TESTING_GUIDE.md).
 
 ## Release Distribution Checklist
 

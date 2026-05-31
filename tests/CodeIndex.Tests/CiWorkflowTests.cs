@@ -38,6 +38,19 @@ public class CiWorkflowTests
             document.Root?.Element("RunConfiguration")?.Element("ResultsDirectory")?.Value);
     }
 
+    [Fact]
+    public void TestingGuide_DocumentsSharedStateParallelismInventory()
+    {
+        var guide = File.ReadAllText(Path.Combine(GetRepositoryRoot(), "TESTING_GUIDE.md"));
+
+        Assert.Contains("Shared state and parallelism audit", guide);
+        Assert.Contains("SQLite pool sensitive", guide);
+        Assert.Contains("EnvironmentVariableScope.Capture", guide);
+        Assert.Contains("TestConsoleLock.Gate", guide);
+        Assert.Contains("TestProjectHelper", guide);
+        Assert.Contains("共有状態と並列実行の監査", guide);
+    }
+
     private static string GetRepositoryRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

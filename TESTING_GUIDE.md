@@ -87,6 +87,16 @@ The test project mirrors the production areas closely.
 - When a production comment or error string is bilingual, preserve that expectation in tests where it matters.
 - If a behavior change is user-visible, update tests, `CHANGELOG.md`, and any affected docs together.
 
+### Shared state and parallelism audit
+
+Use the inventory below before adding or moving a test class:
+
+- SQLite pool resets, direct `SqliteConnection.ClearAllPools()` calls, process current-directory changes, or process-global environment variable mutation: put the class in the `SQLite pool sensitive` non-parallel collection.
+- Environment variables: use `EnvironmentVariableScope.Capture(...)` so setup failures and assertion failures restore the original values through one cleanup path.
+- `Console.Out` or `Console.Error` replacement: lock `TestConsoleLock.Gate` around the whole capture/swap window.
+- Temporary repositories and files: create them through `TestProjectHelper` when practical, and do not depend on user-level git config.
+- Long-running or performance-oriented tests: keep them skipped by default or give them broad deterministic budgets; if CI reports them in xUnit long-running diagnostics, first check runner load before tightening thresholds.
+
 ## Shared Helpers
 
 ### `TestProjectHelper`
@@ -274,6 +284,16 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - 境界を証明するテストでは、その境界をまたぐ最小の fixture を使う。1 ページ、1 chunk、1 cache、1 offset overflow で十分なら、それ以上に synthetic data を増やさない。ただし、より大きいサイズ自体が契約の一部なら例外です。
 - 本番コードのコメントやエラー文字列が英日併記前提なら、重要な箇所ではその期待もテストに反映する。
 - ユーザーに見える挙動を変えたら、テストに加えて `CHANGELOG.md` と関連ドキュメントも同じ変更に含める。
+
+### 共有状態と並列実行の監査
+
+テストクラスを追加または移動する前に、次の一覧を確認してください。
+
+- SQLite pool reset、`SqliteConnection.ClearAllPools()` の直接呼び出し、プロセスの current directory 変更、process-global な環境変数変更: クラスを non-parallel な `SQLite pool sensitive` collection に入れる。
+- 環境変数: `EnvironmentVariableScope.Capture(...)` を使い、setup failure や assertion failure でも単一の cleanup 経路で元の値に戻す。
+- `Console.Out` / `Console.Error` の差し替え: capture / swap 期間全体を `TestConsoleLock.Gate` で lock する。
+- 一時 repo / file: 可能な限り `TestProjectHelper` 経由で作り、user-level の git config に依存しない。
+- 長時間または performance 系テスト: デフォルト skip にするか、決定的で十分広い budget を与える。CI の xUnit long-running 診断に出た場合は、閾値を締める前に runner 負荷を確認する。
 
 ## 共通ヘルパー
 
