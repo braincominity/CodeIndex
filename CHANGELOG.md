@@ -11,6 +11,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.27.1] - 2026-06-01
+
+#### Security
+
+- **Installer checksum manifests can now be GPG-verified (#1795)** — `install.sh` downloads `sha256sums.txt.asc`, verifies it with GPG when available, supports `--strict-verify` / `CDIDX_STRICT_VERIFY=1`, and can pin the expected release signing fingerprint with `CDIDX_RELEASE_GPG_FINGERPRINT`.
+
+#### Internal
+
+- **CI now guards the Release solution build used to catch AOT analyzer regressions (#2791)** — the ubuntu net8.0 lane runs the documented Release solution build command with shared compilation disabled, so IL3050 regressions in JSON serialization call sites fail during CI instead of surfacing later in pre-PR validation.
+
 ### [1.27.0] - 2026-06-01
 
 #### Added
@@ -3166,6 +3176,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.27.1] - 2026-06-01
+
+#### セキュリティ
+
+- **installer の checksum manifest を GPG 検証できるようになりました (#1795)** — `install.sh` は `sha256sums.txt.asc` を取得し、GPG が利用可能な場合は検証します。`--strict-verify` / `CDIDX_STRICT_VERIFY=1` と、期待する release signing fingerprint を固定する `CDIDX_RELEASE_GPG_FINGERPRINT` に対応しました。
+
+#### 内部変更
+
+- **AOT analyzer 退行を検出する Release solution build を CI で検証するようにしました (#2791)** — ubuntu net8.0 lane で shared compilation を無効にしたドキュメント記載の Release solution build コマンドを実行し、JSON serialization call site の IL3050 退行が PR 前検証で後から見つかるのではなく CI 上で失敗するようにしました。
+
 ### [1.27.0] - 2026-06-01
 
 #### 追加
@@ -6310,7 +6330,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.27.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.27.1...HEAD
+[1.27.1]: https://github.com/Widthdom/CodeIndex/compare/v1.27.0...v1.27.1
 [1.27.0]: https://github.com/Widthdom/CodeIndex/compare/v1.26.3...v1.27.0
 [1.26.3]: https://github.com/Widthdom/CodeIndex/compare/v1.26.2...v1.26.3
 [1.26.2]: https://github.com/Widthdom/CodeIndex/compare/v1.26.1...v1.26.2
