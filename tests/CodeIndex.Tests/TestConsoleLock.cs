@@ -86,10 +86,6 @@ internal sealed class ConsoleCapture : IDisposable
 
         Restore();
         disposed = true;
-        if (Out is not null)
-            Out.Dispose();
-        if (Error is not null)
-            Error.Dispose();
         System.Threading.Monitor.Exit(TestConsoleLock.Gate);
     }
 
