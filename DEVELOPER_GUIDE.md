@@ -86,6 +86,15 @@ cdidx search AuthService --db /artifacts/codeindex.db --immutable
 Mutating commands such as `index`, `backfill-fold`, `optimize`, and `vacuum`
 require writable storage and reject read-only database opens.
 
+For CI jobs that want to publish a reusable index artifact, run
+`cdidx export codeindex.cdidx.zip` after indexing and upload that archive. A
+consumer can run `cdidx import codeindex.cdidx.zip --db <path>` before query
+commands. Use `--prune-paths` on import when the archive comes from another
+checkout and the restored DB should advertise the current workspace root. The
+archive contains `manifest.json` plus `codeindex.db`; import validates the
+embedded SQLite file as a CodeIndex database before replacing the destination
+DB.
+
 Use `cdidx db checkpoint <name>` to take a filesystem snapshot of
 `codeindex.db` plus existing WAL/SHM sidecars before risky maintenance, and use
 `cdidx db restore <name>` to roll back. Checkpoints live next to the DB under
@@ -103,7 +112,11 @@ without mutating the DB or stamping FoldReady. The MCP `backfill_fold` tool
 accepts the same preview as `dry_run: true`, and also accepts `force: true` to
 rewrite all folded keys when an operator needs to recover from suspicious fold
 metadata or row state even though the stored version/fingerprint appears
-current.
+current. Non-dry-run row rewrites are resumable after interruption: completed
+row updates remain durable, and the final FoldReady metadata is stamped only
+after verification succeeds. MCP responses include `progress.rows_done`,
+`progress.rows_total`, and `progress.fraction` so clients can report and retry
+long backfills.
 
 ## Filesystem Permissions
 

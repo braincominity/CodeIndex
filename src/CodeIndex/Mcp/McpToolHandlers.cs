@@ -551,7 +551,7 @@ public partial class McpServer
         "validate" => new HashSet<string>(StringComparer.Ordinal) { "path", "lang", "limit", "excludePaths", "excludeTests", "project", "solution" },
         "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "path", "excludePaths", "excludeTests", "project", "solution" },
         "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
-        "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "db", "rebuild", "parallelism", "files", "commits", "changedBetween", "dryRun", "optimize" },
+        "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "db", "rebuild", "parallelism", "maxFileBytes", "files", "commits", "changedBetween", "dryRun", "optimize" },
         "backfill_fold" => new HashSet<string>(StringComparer.Ordinal) { "dry_run", "dryRun", "force" },
         "suggest_improvement" => new HashSet<string>(StringComparer.Ordinal) { "category", "language", "description", "context", "toolInvocationContext" },
         _ => new HashSet<string>(StringComparer.Ordinal),
@@ -3869,22 +3869,26 @@ public partial class McpServer
                 || !foldMetadataCurrentBefore;
             var symbols = 0;
             var symbolReferences = 0;
+            var totalSymbols = 0;
+            var totalSymbolReferences = 0;
             var verified = false;
             var userVersionAfter = userVersionBefore;
 
+            (totalSymbols, totalSymbolReferences) = writer.CountBackfillFoldedColumns(rewriteAll);
             if (dryRun)
             {
-                (symbols, symbolReferences) = writer.CountBackfillFoldedColumns(rewriteAll);
+                symbols = totalSymbols;
+                symbolReferences = totalSymbolReferences;
             }
             else
             {
                 EmitProgressNotification(progressToken, 0, null, "Backfilling folded-name keys.");
-                using var transaction = writer.BeginTransaction();
                 (symbols, symbolReferences) = writer.BackfillFoldedColumns(rewriteAll);
-                EmitProgressNotification(progressToken, symbols + symbolReferences, null, "Verifying folded-name keys.");
-                // Verify and stamp in the same transaction as the row rewrite so crash recovery
-                // never leaves current fold metadata without a matching FoldReady stamp.
-                // 行の再生成と同じ transaction で検証・stamp し、metadata だけが先に残らないようにする。
+                EmitProgressNotification(progressToken, symbols + symbolReferences, totalSymbols + totalSymbolReferences, "Verifying folded-name keys.");
+                // Row rewrites are intentionally committed before the final FoldReady stamp so
+                // interrupted MCP backfills can resume from the remaining rows.
+                // 行更新は FoldReady stamp より前に永続化し、中断後に残り行から再開できるようにする。
+                using var transaction = writer.BeginTransaction();
                 verified = writer.MarkFoldReady();
                 if (!verified)
                     return CreateToolErrorResponse(id, "Folded-name backfill verification failed: some rows still have NULL folded values. Re-run backfill_fold.");
@@ -3919,6 +3923,7 @@ public partial class McpServer
                 ["fold_key_version_after"] = dryRun ? storedFoldVersion : currentFoldVersion,
                 ["fold_key_fingerprint_before"] = storedFoldFingerprint,
                 ["fold_key_fingerprint_after"] = dryRun ? storedFoldFingerprint : currentFoldFingerprint,
+                ["progress"] = BuildBackfillProgressJson(symbols + symbolReferences, totalSymbols + totalSymbolReferences),
             };
 
             var summary = dryRun
@@ -3932,6 +3937,17 @@ public partial class McpServer
         {
             return CreateToolErrorResponse(id, $"Failed to backfill folded-name columns: {ex.Message}");
         }
+    }
+
+    private static JsonObject BuildBackfillProgressJson(int rowsDone, int rowsTotal)
+    {
+        var fraction = rowsTotal <= 0 ? 1.0 : Math.Min(1.0, rowsDone / (double)rowsTotal);
+        return new JsonObject
+        {
+            ["rows_done"] = rowsDone,
+            ["rows_total"] = rowsTotal,
+            ["fraction"] = fraction,
+        };
     }
 
     /// <summary>
@@ -4045,7 +4061,8 @@ public partial class McpServer
         // Build GitHub submission callback (null if no token configured).
         // GitHub 送信コールバックを構築（トークン未設定なら null）。
         Func<SuggestionRecord, Task<SuggestionStore.SubmitAttemptResult>>? githubCallback = null;
-        if (GitHubIssueReporter.ResolveToken() != null)
+        var githubTokenConfigured = GitHubIssueReporter.ResolveToken() != null;
+        if (githubTokenConfigured)
         {
             var version = _version;
             var cancellationToken = _currentRequestToken.Value;
@@ -4066,9 +4083,12 @@ public partial class McpServer
                         ? "This suggestion was already recorded. GitHub submission retried successfully."
                         : "This suggestion has already been recorded.",
                 ["submitted_to_github"] = result.AlreadySubmitted || result.UpstreamUrl != null,
+                ["github_submission_reason"] = ResolveGitHubSubmissionReason(result, githubTokenConfigured),
                 ["lifecycle_status"] = JsonNamingPolicy.SnakeCaseLower.ConvertName(result.Status.ToString()),
                 ["cdidx_dir"] = cdidxDir,
             };
+            if (result.SubmissionError != null)
+                dupPayload["github_submission_error"] = result.SubmissionError;
             if (result.DuplicateOfHash != null)
                 dupPayload["duplicate_of"] = result.DuplicateOfHash;
             if (result.DuplicateScore != null)
@@ -4090,9 +4110,12 @@ public partial class McpServer
             ["language"] = language,
             ["stored_locally"] = true,
             ["submitted_to_github"] = result.UpstreamUrl != null,
+            ["github_submission_reason"] = ResolveGitHubSubmissionReason(result, githubTokenConfigured),
             ["lifecycle_status"] = JsonNamingPolicy.SnakeCaseLower.ConvertName(result.Status.ToString()),
             ["cdidx_dir"] = cdidxDir,
         };
+        if (result.SubmissionError != null)
+            payload["github_submission_error"] = result.SubmissionError;
         if (result.UpstreamUrl != null)
         {
             payload["upstream_url"] = result.UpstreamUrl;
@@ -4103,6 +4126,26 @@ public partial class McpServer
         if (sampling?.Tags is { Length: > 0 })
             payload["sampled_tags"] = new JsonArray(sampling.Tags.Select(tag => JsonValue.Create(tag)).ToArray<JsonNode?>());
         return CreateToolResult(id, "Suggestion recorded. Thank you for the feedback.", payload);
+    }
+
+    private static string ResolveGitHubSubmissionReason(SuggestionStore.AddAndSubmitResult result, bool githubTokenConfigured)
+    {
+        if (result.AlreadySubmitted || result.UpstreamUrl != null)
+            return "submitted";
+        if (!githubTokenConfigured)
+            return "token_not_configured";
+        if (result.SubmissionError != null)
+            return StartsWithHttpStatusCode(result.SubmissionError) ? "api_error" : "network_error";
+        return "repo_not_configured";
+    }
+
+    private static bool StartsWithHttpStatusCode(string value)
+    {
+        return value.Length >= 4
+            && char.IsDigit(value[0])
+            && char.IsDigit(value[1])
+            && char.IsDigit(value[2])
+            && value[3] == ':';
     }
 
     private sealed record SuggestionSamplingResult(string? Title, string[]? Tags);
