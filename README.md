@@ -172,14 +172,14 @@ The documented `status --json` trust contract covers these fields:
 <tr><td><code>fold_ready</code></td><td><code>fold_ready_reason</code></td><td><code>graph_table_available</code></td><td><code>issues_table_available</code></td></tr>
 <tr><td><code>file_issues_data_current</code></td><td><code>migration_in_progress</code></td><td><code>degraded_root_cause</code></td><td><code>readiness_degradations</code></td></tr>
 <tr><td><code>sql_graph_contract_ready</code></td><td><code>sql_graph_contract_degraded_reason</code></td><td><code>hotspot_family_ready</code></td><td><code>hotspot_family_degraded_reason</code></td></tr>
-<tr><td><code>csharp_symbol_name_ready</code></td><td><code>csharp_metadata_target_ready</code></td><td><code>csharp_metadata_target_degraded_reason</code></td><td><code>indexed_head_commit</code></td></tr>
-<tr><td><code>worktree_head_changed</code></td><td><code>indexed_head_sha</code></td><td><code>indexed_head_branch</code></td><td><code>indexed_head_timestamp</code></td></tr>
-<tr><td><code>commits_ahead_of_indexed_head</code></td><td><code>index_writer_version</code></td><td><code>index_newer_than_reader</code></td><td><code>index_newer_than_reader_reason</code></td></tr>
-<tr><td><code>unknown_extension_file_count</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td><td><code>data_dir_source</code></td></tr>
-<tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_size_bytes</code></td><td><code>wal_size_bytes</code></td></tr>
-<tr><td><code>db_pragma_settings</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td><td><code>last_index_run</code></td></tr>
-<tr><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td><td><code>degraded_reason</code></td></tr>
-<tr><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td></td></tr>
+<tr><td><code>language_readiness</code></td><td><code>csharp_symbol_name_ready</code></td><td><code>csharp_metadata_target_ready</code></td><td><code>csharp_metadata_target_degraded_reason</code></td></tr>
+<tr><td><code>indexed_head_commit</code></td><td><code>worktree_head_changed</code></td><td><code>indexed_head_sha</code></td><td><code>indexed_head_branch</code></td></tr>
+<tr><td><code>indexed_head_timestamp</code></td><td><code>commits_ahead_of_indexed_head</code></td><td><code>index_writer_version</code></td><td><code>index_newer_than_reader</code></td></tr>
+<tr><td><code>index_newer_than_reader_reason</code></td><td><code>unknown_extension_file_count</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td></tr>
+<tr><td><code>data_dir_source</code></td><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_size_bytes</code></td></tr>
+<tr><td><code>wal_size_bytes</code></td><td><code>db_pragma_settings</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td></tr>
+<tr><td><code>last_index_run</code></td><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td></tr>
+<tr><td><code>degraded_reason</code></td><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td></tr>
 </tbody>
 </table>
 
@@ -408,14 +408,14 @@ upgrade / downgrade 後はインストール済み補完 script を再生成し�
 <tr><td><code>fold_ready</code></td><td><code>fold_ready_reason</code></td><td><code>graph_table_available</code></td><td><code>issues_table_available</code></td></tr>
 <tr><td><code>file_issues_data_current</code></td><td><code>migration_in_progress</code></td><td><code>degraded_root_cause</code></td><td><code>readiness_degradations</code></td></tr>
 <tr><td><code>sql_graph_contract_ready</code></td><td><code>sql_graph_contract_degraded_reason</code></td><td><code>hotspot_family_ready</code></td><td><code>hotspot_family_degraded_reason</code></td></tr>
-<tr><td><code>csharp_symbol_name_ready</code></td><td><code>csharp_metadata_target_ready</code></td><td><code>csharp_metadata_target_degraded_reason</code></td><td><code>indexed_head_commit</code></td></tr>
-<tr><td><code>worktree_head_changed</code></td><td><code>indexed_head_sha</code></td><td><code>indexed_head_branch</code></td><td><code>indexed_head_timestamp</code></td></tr>
-<tr><td><code>commits_ahead_of_indexed_head</code></td><td><code>index_writer_version</code></td><td><code>index_newer_than_reader</code></td><td><code>index_newer_than_reader_reason</code></td></tr>
-<tr><td><code>unknown_extension_file_count</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td><td><code>data_dir_source</code></td></tr>
-<tr><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_size_bytes</code></td><td><code>wal_size_bytes</code></td></tr>
-<tr><td><code>db_pragma_settings</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td><td><code>last_index_run</code></td></tr>
-<tr><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td><td><code>degraded_reason</code></td></tr>
-<tr><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td><td></td></tr>
+<tr><td><code>language_readiness</code></td><td><code>csharp_symbol_name_ready</code></td><td><code>csharp_metadata_target_ready</code></td><td><code>csharp_metadata_target_degraded_reason</code></td></tr>
+<tr><td><code>indexed_head_commit</code></td><td><code>worktree_head_changed</code></td><td><code>indexed_head_sha</code></td><td><code>indexed_head_branch</code></td></tr>
+<tr><td><code>indexed_head_timestamp</code></td><td><code>commits_ahead_of_indexed_head</code></td><td><code>index_writer_version</code></td><td><code>index_newer_than_reader</code></td></tr>
+<tr><td><code>index_newer_than_reader_reason</code></td><td><code>unknown_extension_file_count</code></td><td><code>path_case_sensitive</code></td><td><code>data_dir</code></td></tr>
+<tr><td><code>data_dir_source</code></td><td><code>data_dir_mode</code></td><td><code>mac_profile</code></td><td><code>db_size_bytes</code></td></tr>
+<tr><td><code>wal_size_bytes</code></td><td><code>db_pragma_settings</code></td><td><code>symbols_by_language</code></td><td><code>process</code></td></tr>
+<tr><td><code>last_index_run</code></td><td><code>hooks</code></td><td><code>stale_after_seconds</code></td><td><code>index_age_seconds</code></td></tr>
+<tr><td><code>degraded_reason</code></td><td><code>recommended_action</code></td><td><code>alternative_action</code></td><td><code>mcp_session</code></td></tr>
 </tbody>
 </table>
 

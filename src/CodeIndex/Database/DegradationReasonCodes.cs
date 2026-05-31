@@ -19,6 +19,7 @@ public static class DegradationReasonCodes
     public const string HotspotFamilySupportNotIndexed = "hotspot_family_support_not_indexed";
     public const string HotspotFamilyMetadataStale = "hotspot_family_metadata_stale";
     public const string HotspotFamilyDisabledAtIndexTime = "hotspot_family_disabled_at_index_time";
+    public const string HotspotFamilyRowsIncomplete = "partial_family_key_population";
     public const string GraphTableMissing = "graph_table_available=false";
     public const string IssuesTableMissing = "issues_table_available=false";
     public const string FileIssuesDataStale = "file_issues_data_current=false";
@@ -42,6 +43,7 @@ public static class DegradationReasonCodes
         HotspotFamilySupportNotIndexed,
         HotspotFamilyMetadataStale,
         HotspotFamilyDisabledAtIndexTime,
+        HotspotFamilyRowsIncomplete,
         GraphTableMissing,
         IssuesTableMissing,
         FileIssuesDataStale,
@@ -145,6 +147,11 @@ public static class DegradationReasonCodes
                 code,
                 "Cross-file hotspot grouping metadata was stamped without marker fingerprints, so authoritative family grouping cannot be trusted.",
                 "Run `cdidx index <projectPath>` to rebuild and stamp authoritative hotspot families.",
+                "Run `cdidx index <projectPath> --rebuild` for a full rebuild."),
+            HotspotFamilyRowsIncomplete => new(
+                code,
+                "Cross-file hotspot grouping metadata is stamped, but some indexed symbols still lack family keys.",
+                "Run `cdidx index <projectPath>` to restamp authoritative hotspot families.",
                 "Run `cdidx index <projectPath> --rebuild` for a full rebuild."),
             GraphTableMissing => new(
                 code,

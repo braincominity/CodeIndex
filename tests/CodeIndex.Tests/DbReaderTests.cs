@@ -4217,6 +4217,65 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetHotspotFamilySignal_CurrentStampWithPartialFamilyRowsIsDegraded()
+    {
+        InsertIndexedFile("src/Api.Part1.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/Api.Part2.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """);
+
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = """
+                UPDATE symbols
+                SET family_key = NULL
+                WHERE file_id IN (
+                    SELECT id FROM files WHERE path = 'src/Api.Part2.cs'
+                )
+                """;
+            cmd.ExecuteNonQuery();
+        }
+
+        var reader = new DbReader(_db.Connection);
+        var signal = reader.GetHotspotFamilySignal("csharp");
+
+        Assert.True(signal.Relevant);
+        Assert.False(signal.Ready);
+        Assert.Contains("partial_family_key_population=csharp", signal.DegradedReason);
+    }
+
+    [Fact]
+    public void GetStatus_ExposesPerLanguageReadinessMap()
+    {
+        InsertIndexedFile("src/Api.Part1.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run() { }
+            }
+            """);
+
+        var reader = new DbReader(_db.Connection);
+        var status = reader.GetStatus();
+
+        Assert.NotNull(status.LanguageReadiness);
+        Assert.True(status.LanguageReadiness!.ContainsKey("csharp"));
+        Assert.True(status.LanguageReadiness["csharp"]["hotspot_family"].Ready);
+        Assert.True(status.LanguageReadiness["csharp"].ContainsKey("symbol_name"));
+        Assert.True(status.LanguageReadiness["csharp"].ContainsKey("metadata_target"));
+    }
+
+    [Fact]
     public void GetHotspotFamilySignal_MissingMarkerFingerprintIsStillDegraded()
     {
         InsertIndexedFile("src/Api.Part1.cs", "csharp",
