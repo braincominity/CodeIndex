@@ -22,6 +22,14 @@ public class SearchResult
 
 public readonly record struct QueryCountResult(int Count, int FileCount, bool IncludesSql = false);
 
+public sealed record FtsQueryDiagnostics(
+    [property: JsonPropertyName("query_degraded_reason")] string? QueryDegradedReason,
+    [property: JsonPropertyName("tokens_dropped")] IReadOnlyList<string> TokensDropped)
+{
+    public static FtsQueryDiagnostics None { get; } = new(null, []);
+    public bool HasDegradation => QueryDegradedReason != null;
+}
+
 public enum ReferenceRankMode
 {
     Weighted,
@@ -161,6 +169,8 @@ public class DefinitionResult : SymbolResult
     public string? Uri { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public LspRange? Range { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Disambiguator { get; set; }
     public string Content { get; set; } = string.Empty;
     public string? BodyContent { get; set; }
     public int? Complexity { get; set; }
@@ -410,6 +420,10 @@ public class ImpactAnalysisResult
     public bool GraphTableAvailable { get; set; } = true;
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ZeroResultReason { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? ImpactFailureChain { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SuggestionType { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Suggestion { get; set; }
 }

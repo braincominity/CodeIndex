@@ -147,6 +147,18 @@ public partial class McpServer
             payload["freshness_degraded_reason"] = freshness.FreshnessDegradedReason;
     }
 
+    private static void AddFtsQueryDiagnostics(JsonObject payload, FtsQueryDiagnostics diagnostics)
+    {
+        if (!diagnostics.HasDegradation)
+            return;
+
+        payload["query_degraded_reason"] = diagnostics.QueryDegradedReason;
+        var dropped = new JsonArray();
+        foreach (var token in diagnostics.TokensDropped)
+            dropped.Add(token);
+        payload["tokens_dropped"] = dropped;
+    }
+
     private static void AddExactZeroHint(JsonObject payload, ExactZeroHintResult? exactZeroHint)
     {
         if (exactZeroHint == null)
@@ -936,10 +948,13 @@ public partial class McpServer
                 payload["rawQuery"] = rawQuery;
                 payload["path"] = PathEcho(pathPatterns);
                 payload["excludeTests"] = excludeTests;
+                if (countResults.Count == 0)
+                    AddFtsQueryDiagnostics(payload, DbReader.AnalyzeFtsQuery(query, rawQuery, prefix, lang));
                 return CreateToolResult(id, $"Counted {countResults.Count} search result(s).", payload);
             }
 
             var results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix);
+            var ftsDiagnostics = DbReader.AnalyzeFtsQuery(query, rawQuery, prefix, lang);
             var truncated = TrimToRequestedLimit(results, limit);
             if (results.Count == 0)
             {
@@ -953,6 +968,7 @@ public partial class McpServer
                     ["excludeTests"] = excludeTests,
                     ["results"] = new JsonArray()
                 };
+                AddFtsQueryDiagnostics(payload, ftsDiagnostics);
                 AddResultEnvelope(payload, 0, 0, truncated: false);
                 AddRecoveryHint(
                     payload,
@@ -2848,6 +2864,7 @@ public partial class McpServer
                     ["top_files"] = topFiles,
                     ["results"] = new JsonArray(),
                 };
+                AddImpactFailureFields(countOnlyPayload, analysis);
                 AddSqlGraphContractSignal(countOnlyPayload, sqlGraphSignal);
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(count, "impact result")}.", countOnlyPayload);
             }
@@ -2904,6 +2921,7 @@ public partial class McpServer
                 payload["warnings"] = warnings;
             if (analysis.ZeroResultReason != null)
                 payload["zero_result_reason"] = analysis.ZeroResultReason;
+            AddImpactFailureFields(payload, analysis);
             if (analysis.Suggestion != null)
                 payload["suggestion"] = analysis.Suggestion;
 
@@ -2948,6 +2966,20 @@ public partial class McpServer
                 payload["note"] = "file_impacts are heuristic hints only; the current graph does not record resolved target file/type for each call.";
             return CreateToolResult(id, summary, payload);
         });
+    }
+
+    private static void AddImpactFailureFields(JsonObject payload, ImpactAnalysisResult analysis)
+    {
+        if (analysis.ImpactFailureChain is { Count: > 0 })
+        {
+            var chain = new JsonArray();
+            foreach (var code in analysis.ImpactFailureChain)
+                chain.Add(JsonValue.Create(code));
+            payload["impact_failure_chain"] = chain;
+        }
+
+        if (analysis.SuggestionType != null)
+            payload["suggestion_type"] = analysis.SuggestionType;
     }
 
     private JsonNode ExecuteValidate(JsonNode? id, JsonNode? args)
