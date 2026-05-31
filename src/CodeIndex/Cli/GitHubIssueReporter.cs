@@ -437,17 +437,37 @@ internal static class GitHubIssueReporter
 
     internal static string BuildIssueTitle(string category, string description)
     {
-        var prefix = $"[AI Suggestion] {category}: ";
+        var sanitizedCategory = SanitizeIssueTitleText(category);
+        if (sanitizedCategory.Length > 40)
+            sanitizedCategory = sanitizedCategory[..40].TrimEnd();
+
+        var prefix = $"[AI Suggestion] {sanitizedCategory}: ";
         if (prefix.Length >= MaxGitHubIssueTitleLength)
             return prefix[..MaxGitHubIssueTitleLength];
 
-        var scrubbedForTitle = ScrubInlineCode(description).Replace("\r", " ").Replace("\n", " ").Trim();
+        var scrubbedForTitle = SanitizeIssueTitleText(ScrubInlineCode(description));
         var maxDescriptionLength = MaxGitHubIssueTitleLength - prefix.Length;
         var shortDesc = TruncateWithEllipsis(scrubbedForTitle, Math.Min(63, maxDescriptionLength));
         var title = prefix + shortDesc;
         return title.Length <= MaxGitHubIssueTitleLength
             ? title
             : title[..MaxGitHubIssueTitleLength];
+    }
+
+    internal static string SanitizeIssueTitleText(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return string.Empty;
+
+        var builder = new StringBuilder(value.Length);
+        foreach (var c in value.Replace("\r", " ").Replace("\n", " "))
+        {
+            if (c is '[' or ']' or '(' or ')' or '`')
+                continue;
+            builder.Append(c);
+        }
+
+        return builder.ToString().Trim();
     }
 
     private static string TruncateWithEllipsis(string value, int maxLength)
