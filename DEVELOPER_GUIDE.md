@@ -212,7 +212,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `file_module` | File-scoped module/package declarations | Namespace-like context symbol |
 | `function` | Functions, methods, constructors, delegates, tasks, and callable bindings that do not have a narrower kind | Primary callable definition; participates in callers/callees through reference rows |
 | `generator` | JavaScript/TypeScript generator declarations | Callable definition; participates in callers/callees through reference rows |
-| `heading` | Markdown headings | Outline symbol |
+| `heading` | Markdown headings and language section markers such as C# regions, Python module docstrings, and JavaScript/TypeScript `@module` docblocks | Outline symbol |
 | `hook` | JavaScript/TypeScript React custom hook bindings | Callable-like search/filter symbol |
 | `implements` | Razor `@implements` directives | Context/search symbol |
 | `import` | Imports, using directives, aliases, and package includes | Search/filter symbol |

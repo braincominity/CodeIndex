@@ -21183,6 +21183,45 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsRegionHeadings()
+    {
+        var symbols = SymbolExtractor.Extract(1, "csharp", """
+            public class Service
+            {
+                #region Validation
+                public void Check() { }
+                #endregion
+            }
+            """);
+
+        Assert.Contains(symbols, s => s.Kind == "heading" && s.Name == "Validation");
+    }
+
+    [Fact]
+    public void Extract_Python_DetectsModuleDocstringHeading()
+    {
+        var content = "\"\"\"Payments API helpers.\"\"\"\n\n"
+            + "def charge():\n"
+            + "    pass\n";
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "heading" && s.Name == "Payments API helpers.");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsModuleDocHeading()
+    {
+        var symbols = SymbolExtractor.Extract(1, "javascript", """
+            /**
+             * @module payments/service
+             */
+            export function charge() {}
+            """);
+
+        Assert.Contains(symbols, s => s.Kind == "heading" && s.Name == "payments/service");
+    }
+
+    [Fact]
     public void Extract_Gradle_DetectsSymbols()
     {
         // Both legacy apply plugin: and modern plugins { id '...' } forms
