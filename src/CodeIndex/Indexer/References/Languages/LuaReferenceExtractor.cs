@@ -32,6 +32,12 @@ internal static class LuaReferenceExtractor
     public static void EmitAdditionalCallReferences(
         string preparedLine,
         Action<string, int> addCallLikeReference,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
         IReadOnlySet<string>? definitionNames)
     {
         LanguageReferenceExtractionSupport.EmitAdditionalCallReferences(
@@ -39,12 +45,12 @@ internal static class LuaReferenceExtractor
             preparedLine,
             preparedLine,
             addCallLikeReference,
-            [],
-            [],
-            0,
-            string.Empty,
-            0,
-            _ => null,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn,
             definitionNames);
     }
 }

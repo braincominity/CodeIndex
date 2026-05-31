@@ -17,6 +17,8 @@ internal static class GlobalToolLog
     internal const string LogFormatEnvironmentVariable = "CDIDX_LOG_FORMAT";
     internal const string LogRetainEnvironmentVariable = "CDIDX_LOG_RETAIN";
     internal const string LogMaxSizeMbEnvironmentVariable = "CDIDX_LOG_MAX_SIZE_MB";
+    internal const string GlobalToolLogMaxBytesEnvironmentVariable = "CDIDX_GLOBAL_TOOL_LOG_MAX_BYTES";
+    private const long DefaultLogMaxSizeBytes = 50L * 1024L * 1024L;
     private const string RedactedValue = "<redacted>";
     internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
     private static readonly AsyncLocal<Session?> CurrentSession = new();
@@ -379,18 +381,25 @@ internal static class GlobalToolLog
     private static string ResolveLogPath(string logDirectory, LogOptions options)
     {
         var date = TimeProvider.GetUtcNow().UtcDateTime.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture);
+        var processSuffix = CreateProcessLogSuffix();
         if (options.MaxSizeBytes <= 0)
-            return Path.Combine(logDirectory, $"stderr-{date}.log");
+            return Path.Combine(logDirectory, $"stderr-{date}-{processSuffix}.log");
 
         for (var index = 0; index < 10_000; index++)
         {
             var suffix = index == 0 ? "" : $"-{index}";
-            var candidate = Path.Combine(logDirectory, $"stderr-{date}{suffix}.log");
+            var candidate = Path.Combine(logDirectory, $"stderr-{date}-{processSuffix}{suffix}.log");
             if (!File.Exists(candidate) || new FileInfo(candidate).Length < options.MaxSizeBytes)
                 return candidate;
         }
 
-        return Path.Combine(logDirectory, $"stderr-{date}-{Guid.NewGuid():N}.log");
+        return Path.Combine(logDirectory, $"stderr-{date}-{processSuffix}-{Guid.NewGuid():N}.log");
+    }
+
+    private static string CreateProcessLogSuffix()
+    {
+        var startTime = TimeProvider.GetUtcNow().UtcDateTime.ToString("HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+        return FormattableString.Invariant($"p{Environment.ProcessId}-{startTime}");
     }
 
     private static void PruneOldLogs(string logDirectory, int retainedLogFileCount)
@@ -625,9 +634,11 @@ internal static class GlobalToolLog
             if (int.TryParse(Environment.GetEnvironmentVariable(LogRetainEnvironmentVariable), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedRetain))
                 retainCount = Math.Clamp(parsedRetain, 1, 10_000);
 
-            long maxSizeBytes = 0;
+            var maxSizeBytes = DefaultLogMaxSizeBytes;
             if (int.TryParse(Environment.GetEnvironmentVariable(LogMaxSizeMbEnvironmentVariable), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedMb) && parsedMb > 0)
                 maxSizeBytes = parsedMb * 1024L * 1024L;
+            else if (long.TryParse(Environment.GetEnvironmentVariable(GlobalToolLogMaxBytesEnvironmentVariable), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedBytes) && parsedBytes > 0)
+                maxSizeBytes = parsedBytes;
 
             return new LogOptions(format, retainCount, maxSizeBytes);
         }

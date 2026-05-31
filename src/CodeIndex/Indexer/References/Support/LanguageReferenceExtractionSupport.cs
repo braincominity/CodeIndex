@@ -517,6 +517,12 @@ internal static class LanguageReferenceExtractionSupport
     private static readonly Regex LuaCommandCallRegex = new(
         @"^\s*(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s+(?=[""'{A-Za-z_])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex LuaColonCallRegex = new(
+        @"(?<![\w.])(?:[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*):(?<name>[A-Za-z_]\w*)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex LuaTableFieldReferenceRegex = new(
+        @"(?<![\w.])(?:[A-Za-z_]\w*\.)+(?<name>[A-Za-z_]\w*)\b(?!\s*(?:=|function\b|\())",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex SmalltalkClassDeclarationRegex = new(
         @"^\s*(?:(?:[A-Za-z_]\w*)\s+subclass:|Class\s+named:|Object\s+subclass:)\s*#",
@@ -624,7 +630,7 @@ internal static class LanguageReferenceExtractionSupport
                 EmitElixirParenlessCallReferences(preparedLine, addCallLikeReference, definitionNames);
                 break;
             case "lua":
-                EmitLuaCommandCallReferences(preparedLine, addCallLikeReference, definitionNames);
+                EmitLuaCallReferences(preparedLine, addCallLikeReference, references, seen, fileId, context, lineNumber, resolveContainerForColumn, definitionNames);
                 break;
             case "smalltalk":
                 EmitSmalltalkMessageReferences(preparedLine, addCallLikeReference, definitionNames);
@@ -4570,16 +4576,48 @@ internal static class LanguageReferenceExtractionSupport
         }
     }
 
-    private static void EmitLuaCommandCallReferences(string preparedLine, Action<string, int> addCallLikeReference, IReadOnlySet<string>? definitionNames)
+    private static void EmitLuaCallReferences(
+        string preparedLine,
+        Action<string, int> addCallLikeReference,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlySet<string>? definitionNames)
     {
         var match = LuaCommandCallRegex.Match(preparedLine);
-        if (!match.Success)
-            return;
+        if (match.Success)
+        {
+            var name = LastQualifiedSegment(match.Groups["name"].Value);
+            if (definitionNames?.Contains(name) != true)
+                addCallLikeReference(name, match.Groups["name"].Index + match.Groups["name"].Value.LastIndexOf(name, StringComparison.Ordinal));
+        }
 
-        var name = LastQualifiedSegment(match.Groups["name"].Value);
-        if (definitionNames?.Contains(name) == true)
-            return;
-        addCallLikeReference(name, match.Groups["name"].Index + match.Groups["name"].Value.LastIndexOf(name, StringComparison.Ordinal));
+        foreach (Match colonMatch in LuaColonCallRegex.Matches(preparedLine))
+        {
+            var name = colonMatch.Groups["name"].Value;
+            if (definitionNames?.Contains(name) == true)
+                continue;
+            addCallLikeReference(name, colonMatch.Groups["name"].Index);
+        }
+
+        foreach (Match fieldMatch in LuaTableFieldReferenceRegex.Matches(preparedLine))
+        {
+            var trimmed = preparedLine.TrimStart();
+            if (trimmed.StartsWith("function ", StringComparison.Ordinal)
+                || trimmed.StartsWith("local function ", StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            var name = fieldMatch.Groups["name"].Value;
+            if (definitionNames?.Contains(name) == true)
+                continue;
+            var index = fieldMatch.Groups["name"].Index;
+            ReferenceExtractor.AddReference(references, seen, fileId, name, index, "reference", context, lineNumber, resolveContainerForColumn(index));
+        }
     }
 
     private static void EmitSmalltalkMessageReferences(string preparedLine, Action<string, int> addCallLikeReference, IReadOnlySet<string>? definitionNames)

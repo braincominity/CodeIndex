@@ -33,7 +33,8 @@ internal static class TypedLanguageReferenceExtractor
                 fileId,
                 context,
                 lineNumber,
-                container))
+                container,
+                ignoredSegments))
         {
             return;
         }
@@ -59,7 +60,8 @@ internal static class TypedLanguageReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        SymbolRecord? container)
+        SymbolRecord? container,
+        IReadOnlySet<string>? ignoredSegments = null)
     {
         var leading = CountLeadingWhitespace(expression, 0, expression.Length);
         var trailing = CountTrailingWhitespace(expression, leading, expression.Length - leading);
@@ -95,7 +97,8 @@ internal static class TypedLanguageReferenceExtractor
             fileId,
             context,
             lineNumber,
-            container);
+            container,
+            ignoredSegments);
 
         var returnStart = SkipTypePrefixTrivia(normalizedExpression, arrowIndex + 2);
         if (returnStart >= normalizedExpression.Length)
@@ -114,7 +117,8 @@ internal static class TypedLanguageReferenceExtractor
             fileId,
             context,
             lineNumber,
-            container);
+            container,
+            ignoredSegments);
 
         return true;
     }
@@ -129,7 +133,8 @@ internal static class TypedLanguageReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        SymbolRecord? container)
+        SymbolRecord? container,
+        IReadOnlySet<string>? ignoredSegments)
     {
         if (paramStart < 0 || paramEnd <= paramStart || paramStart >= expression.Length)
             return;
@@ -160,7 +165,8 @@ internal static class TypedLanguageReferenceExtractor
                 fileId,
                 context,
                 lineNumber,
-                container);
+                container,
+                ignoredSegments);
         }
     }
 
