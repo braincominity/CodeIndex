@@ -31,25 +31,27 @@ internal static class ActiveWorkspace
         if (!File.Exists(LongPath.EnsureWindowsPrefix(path)))
             return null;
 
-        using var document = JsonDocument.Parse(File.ReadAllText(path));
-        var root = document.RootElement;
-        var name = ReadString(root, "name") ?? "default";
-        var workspaceRoot = ReadString(root, "root") ?? Environment.CurrentDirectory;
-        var dbPath = ReadString(root, "db_path");
-        if (string.IsNullOrWhiteSpace(dbPath))
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(LongPath.EnsureWindowsPrefix(path)));
+            var root = document.RootElement;
+            var name = ReadString(root, "name") ?? "default";
+            var workspaceRoot = ReadString(root, "root") ?? Environment.CurrentDirectory;
+            var dbPath = ReadString(root, "db_path");
+            if (string.IsNullOrWhiteSpace(dbPath))
+                return null;
+            return new ActiveWorkspaceState(name, Path.GetFullPath(workspaceRoot), Path.GetFullPath(dbPath));
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
             return null;
-        return new ActiveWorkspaceState(name, Path.GetFullPath(workspaceRoot), Path.GetFullPath(dbPath));
+        }
     }
 
     internal static void Save(ActiveWorkspaceState state)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(StatePath)!);
-        var payload = new Dictionary<string, string>
-        {
-            ["name"] = state.Name,
-            ["root"] = Path.GetFullPath(state.Root),
-            ["db_path"] = Path.GetFullPath(state.DbPath),
-        };
+        var payload = new ActiveWorkspaceState(state.Name, Path.GetFullPath(state.Root), Path.GetFullPath(state.DbPath));
         File.WriteAllText(StatePath, JsonSerializer.Serialize(payload, ProgramRunner.CreateDefaultJsonOptions()));
     }
 

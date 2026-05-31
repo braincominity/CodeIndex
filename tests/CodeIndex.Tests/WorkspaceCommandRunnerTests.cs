@@ -97,6 +97,31 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void MalformedActiveWorkspaceState_DoesNotOverrideQueryResolution()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_active_workspace_malformed_project");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_active_workspace_malformed_config");
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+            Directory.CreateDirectory(Path.GetDirectoryName(ActiveWorkspace.StatePath)!);
+            File.WriteAllText(ActiveWorkspace.StatePath, "{");
+
+            var query = DbPathResolver.ResolveForQuery(projectRoot, explicitDbPath: null, explicitDataDir: null);
+
+            Assert.Equal(Path.Combine(projectRoot, ".cdidx", "codeindex.db"), query.DbPath);
+            Assert.Equal(DbPathResolver.DataDirSourceWorkspace, query.DataDirSource);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
     public void WorkspaceUse_RejectsUnknownManifestMember()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_unknown");
@@ -117,6 +142,45 @@ public class WorkspaceCommandRunnerTests
                 Assert.Equal(CommandExitCodes.UsageError, exitCode);
                 Assert.Contains("workspace member was not found", stderr);
                 Assert.False(File.Exists(ActiveWorkspace.StatePath));
+            }
+            finally
+            {
+                Environment.CurrentDirectory = previous;
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceUseDefault_DoesNotSelectFirstManifestMember()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_default");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_workspace_use_default_config");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "src", "A"));
+            Directory.CreateDirectory(Path.Combine(root, "src", "B"));
+            File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """{ "members": ["src/A", "src/B"] }""");
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+
+            var previous = Environment.CurrentDirectory;
+            try
+            {
+                Environment.CurrentDirectory = root;
+                var (exitCode, _, _) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "default"], _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                var state = ActiveWorkspace.Load();
+                Assert.NotNull(state);
+                var expectedRoot = Path.GetFullPath(Environment.CurrentDirectory);
+                Assert.Equal(expectedRoot, state.Root);
+                Assert.Equal(Path.GetFullPath(Path.Combine(expectedRoot, ".cdidx", "codeindex.db")), state.DbPath);
             }
             finally
             {
