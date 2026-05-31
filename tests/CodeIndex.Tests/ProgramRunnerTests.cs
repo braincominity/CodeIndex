@@ -12,6 +12,36 @@ namespace CodeIndex.Tests;
 public class ProgramRunnerTests
 {
     [Theory]
+    [InlineData("foo.cs", false)]
+    [InlineData("./foo", true)]
+    [InlineData(".", true)]
+    public void IsProjectPathArg_CommonForms_ReturnsExpectedValue(string arg, bool expected)
+    {
+        Assert.Equal(expected, ProgramRunner.IsProjectPathArg(arg));
+    }
+
+    [Fact]
+    public void IsProjectPathArg_PosixLiteralBackslashFileName_IsNotPathSyntax()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        Assert.False(ProgramRunner.IsProjectPathArg(@"weird\name.txt"));
+    }
+
+    [Theory]
+    [InlineData(@"C:\foo")]
+    [InlineData("C:")]
+    [InlineData(@"\\server\share\foo")]
+    public void IsProjectPathArg_WindowsPathForms_ReturnTrueOnWindows(string arg)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        Assert.True(ProgramRunner.IsProjectPathArg(arg));
+    }
+
+    [Theory]
     [InlineData("--json")]
     [InlineData("--json=array")]
     [InlineData("--json-envelope")]
@@ -24,6 +54,37 @@ public class ProgramRunnerTests
     public void ContainsJsonOutputFlag_AfterPassthrough_ReturnsFalse()
     {
         Assert.False(ProgramRunner.ContainsJsonOutputFlag(["search", "--", "--json"]));
+    }
+
+    [Fact]
+    public void Run_TestExtractor_PrintsIsolatedSymbols()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_extractor_{Guid.NewGuid():N}");
+            try
+            {
+                Directory.CreateDirectory(tempDir);
+                var file = Path.Combine(tempDir, "app.py");
+                File.WriteAllText(file, "def hello():\n    pass\n");
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["test-extractor", "--language", "python", "--file", file, "--json"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stderr);
+                using var document = JsonDocument.Parse(stdout);
+                Assert.Contains(document.RootElement.EnumerateArray(), item =>
+                    item.GetProperty("Kind").GetString() == "function"
+                    && item.GetProperty("Name").GetString() == "hello");
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, recursive: true);
+            }
+        }
     }
 
     [Fact]

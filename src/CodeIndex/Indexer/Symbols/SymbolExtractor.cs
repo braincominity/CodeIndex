@@ -2139,6 +2139,7 @@ public static partial class SymbolExtractor
         string? originalLang,
         string content,
         string? filePath,
+        string? projectRoot,
         CancellationToken cancellationToken,
         out string? lang,
         out string preparedContent,
@@ -2182,6 +2183,7 @@ public static partial class SymbolExtractor
             content = content.Replace("\r\n", "\n").Replace("\r", "\n");
         preparedContent = FileIndexer.StripLineLeadingInvisibles(content);
         cancellationToken.ThrowIfCancellationRequested();
+        ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
 
         if (pluginLanguage != null
             && !PatternCache.ContainsKey(pluginLanguage)
@@ -2215,6 +2217,7 @@ public static partial class SymbolExtractor
             originalLang,
             content,
             filePath,
+            projectRoot,
             cancellationToken,
             out lang,
             out content,
