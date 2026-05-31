@@ -374,6 +374,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(FileIssue))]
 [JsonSerializable(typeof(FileResult))]
 [JsonSerializable(typeof(FreshnessHintResult))]
+[JsonSerializable(typeof(FtsQueryDiagnostics))]
 [JsonSerializable(typeof(GroupedHotspotResult))]
 [JsonSerializable(typeof(GroupedSymbolHotspotJsonResult))]
 [JsonSerializable(typeof(ImpactAnalysisResult))]

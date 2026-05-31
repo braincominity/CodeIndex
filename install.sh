@@ -1086,10 +1086,10 @@ download_and_install() {
     if ! stage_dir="$(mktemp -d "${INSTALL_DIR}/.cdidx-stage.XXXXXX")"; then
         error "Failed to create staging directory under ${INSTALL_DIR}."
     fi
-    STAGE_DIR_CLEANUP="$stage_dir"
-    if ! chmod 0700 "$stage_dir"; then
+    if ! chmod 700 "$stage_dir"; then
         error "Failed to restrict staging directory permissions under ${INSTALL_DIR}."
     fi
+    STAGE_DIR_CLEANUP="$stage_dir"
 
     for asset in $required_files; do
         cp "${extract_dir}/${asset}" "${stage_dir}/${asset}"

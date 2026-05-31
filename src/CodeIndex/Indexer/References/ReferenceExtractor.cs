@@ -222,9 +222,13 @@ public static partial class ReferenceExtractor
             "import", "importFrom", "export", "exportClasses", "exportMethods", "S3method", "useDynLib",
         },
         // PowerShell keywords / PowerShell キーワード
-        ["powershell"] = new HashSet<string>(StringComparer.Ordinal)
+        ["powershell"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "param", "begin", "process", "Write", "trap", "finally", "elseif",
+            "function", "filter", "configuration", "workflow", "class", "enum",
+            "param", "begin", "process", "end", "dynamicparam",
+            "if", "else", "elseif", "for", "foreach", "while", "do", "until", "switch",
+            "try", "catch", "finally", "trap", "return", "throw", "break", "continue",
+            "using", "data", "in", "Write",
         },
         // Shell keywords / Shell キーワード
         ["shell"] = new HashSet<string>(StringComparer.Ordinal)

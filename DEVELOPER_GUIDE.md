@@ -23,6 +23,10 @@ such as replacement characters, BOMs, NUL bytes, mixed line endings, UTF-16 BOMs
 and likely non-UTF8 content. Keep its CLI usage, README entry, and help summary
 in sync when adding validation issue kinds or filters.
 
+`cdidx doctor` is the copy-pasteable environment summary for support requests.
+Keep it redacted by default: secret-like `CDIDX_*` values must not be printed,
+and new diagnostic fields should be stable enough for issue triage.
+
 Generated shell completion scripts include a comment with the `cdidx` version
 that produced them. When command or flag schema changes, update completion
 tests and keep the README guidance that installed completions should be
@@ -259,7 +263,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `file_module` | File-scoped module/package declarations | Namespace-like context symbol |
 | `function` | Functions, methods, constructors, delegates, tasks, and callable bindings that do not have a narrower kind | Primary callable definition; participates in callers/callees through reference rows |
 | `generator` | JavaScript/TypeScript generator declarations | Callable definition; participates in callers/callees through reference rows |
-| `heading` | Markdown headings | Outline symbol |
+| `heading` | Markdown headings and language section markers such as C# regions, Python module docstrings, and JavaScript/TypeScript `@module` docblocks | Outline symbol |
 | `hook` | JavaScript/TypeScript React custom hook bindings | Callable-like search/filter symbol |
 | `implements` | Razor `@implements` directives | Context/search symbol |
 | `import` | Imports, using directives, aliases, and package includes | Search/filter symbol |
@@ -272,12 +276,12 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `operator` | C# operator overload and conversion operator declarations | Callable definition; participates in callers/callees through reference rows |
 | `object` | Object-literal/object container context used by nested extracted symbols | Container context |
 | `package` | Package declarations | Namespace-like context symbol |
-| `property` | Properties and property-like fields | Definition target; not treated as a call edge by itself |
+| `property` | Properties, property-like fields, and GraphQL input fields | Definition target; not treated as a call edge by itself |
 | `procedure` | Procedure declarations in languages such as Fortran | Callable definition |
 | `program` | Program block declarations in languages such as Fortran | Definition target and container |
 | `protocol` | Protocol declarations in languages that distinguish protocols from interfaces | Definition target and container |
 | `protocol_impl` | Elixir `defimpl` protocol implementation declarations | Definition target and container for implementation blocks |
-| `reference` | Secondary extracted symbolic references, such as HTML classes or metadata keys | Search/filter symbol |
+| `reference` | Secondary extracted symbolic references, such as HTML classes, metadata keys, or GraphQL union variants | Search/filter symbol |
 | `rule` | CSS/SCSS rule container context used by nested references | Container context |
 | `route` | Razor route directives | Context/search symbol |
 | `service` | Service declarations in IDL/protobuf-like languages | Definition target and container |

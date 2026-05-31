@@ -112,6 +112,58 @@ public class PerformanceTests : IDisposable
         Assert.Equal(4_000, symbols.Count);
     }
 
+    [Fact]
+    public void SymbolExtraction_CsharpHotPath_StaysWithinAllocationBudget()
+    {
+        var content = BuildCSharpHotPathFixture(typeCount: 120);
+        _ = SymbolExtractor.Extract(1, "csharp", content);
+
+        var allocatedBytes = MeasureAllocatedBytes(() => SymbolExtractor.Extract(1, "csharp", content));
+
+        Assert.True(allocatedBytes < 18_000_000, $"Symbol extraction allocated {allocatedBytes:N0} bytes");
+    }
+
+    [Fact]
+    public void ReferenceExtraction_CsharpHotPath_StaysWithinAllocationBudget()
+    {
+        var content = BuildCSharpHotPathFixture(typeCount: 80);
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        _ = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var allocatedBytes = MeasureAllocatedBytes(() => ReferenceExtractor.Extract(1, "csharp", content, symbols));
+
+        Assert.True(allocatedBytes < 18_000_000, $"Reference extraction allocated {allocatedBytes:N0} bytes");
+    }
+
+    private static long MeasureAllocatedBytes(Action action)
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        action();
+        return GC.GetAllocatedBytesForCurrentThread() - before;
+    }
+
+    private static string BuildCSharpHotPathFixture(int typeCount)
+    {
+        return string.Join(
+            "\n",
+            Enumerable.Range(0, typeCount).Select(i => $$"""
+                public sealed class Service{{i}}
+                {
+                    private readonly Dependency{{i}} dependency;
+                    public Service{{i}}(Dependency{{i}} dependency) => this.dependency = dependency;
+                    public Result{{i}} Execute(Request{{i}} request)
+                    {
+                        var value = dependency.Transform(request.Value);
+                        return new Result{{i}}(value);
+                    }
+                }
+                """));
+    }
+
     public void Dispose()
     {
         _db.Dispose();

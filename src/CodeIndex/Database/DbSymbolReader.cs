@@ -71,6 +71,34 @@ public partial class DbReader
     private const int UnusedPublicCandidateBudget = 2048;
     private const string SymbolLanguageFileIdFilter = " AND s.file_id IN (SELECT id FROM files WHERE lang = @lang)";
 
+    private sealed class NormalizedSymbolSearchQueryList : List<string>
+    {
+        public NormalizedSymbolSearchQueryList(IEnumerable<string> queries)
+            : base(queries)
+        {
+        }
+    }
+
+    private static IReadOnlyList<string>? NormalizeSymbolSearchQueries(IReadOnlyList<string>? queries, string? lang, bool exact)
+    {
+        if (queries == null)
+            return null;
+        if (queries is NormalizedSymbolSearchQueryList)
+            return queries;
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var normalized = new List<string>();
+        foreach (var query in queries)
+        {
+            var value = NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact) ?? query ?? string.Empty;
+            if (value.Length == 0 || !seen.Add(value))
+                continue;
+            normalized.Add(value);
+        }
+
+        return new NormalizedSymbolSearchQueryList(normalized);
+    }
+
     private void AppendVisibilityFilters(ref string sql, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
     {
         if (visibilityFilters is { Count: > 0 })
@@ -204,7 +232,7 @@ public partial class DbReader
 
     public bool AnySearchSymbols(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
-        var validQueries = queries?.Select(query => NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var validQueries = NormalizeSymbolSearchQueries(queries, lang, exact);
         if (validQueries == null || validQueries.Count == 0)
             return CountSearchSymbols(validQueries, 1, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact) > 0;
 
@@ -222,7 +250,7 @@ public partial class DbReader
         if (HasVisibilityFilters(visibilityFilters, excludeVisibilityFilters))
             return SearchSymbols(queries, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters).Count;
 
-        var validQueries = queries?.Select(query => NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var validQueries = NormalizeSymbolSearchQueries(queries, lang, exact);
         if (validQueries != null && validQueries.Count > 1)
             return SearchSymbols(validQueries, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters).Count;
 
@@ -324,7 +352,7 @@ public partial class DbReader
                 JOIN files f ON s.file_id = f.id
                 WHERE 1=1";
 
-        var effectiveQueries = queries?.Select(query => NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var effectiveQueries = NormalizeSymbolSearchQueries(queries, lang, exact);
         if (effectiveQueries != null && effectiveQueries.Count > 0)
         {
             var orClauses = exact
@@ -419,7 +447,7 @@ public partial class DbReader
         // public `limit` contract stays "Max total results", not per-name.
         // 複数名指定: 名前ごとに独立検索して候補プールを確保した上で、round-robin で統合し、
         // 最終的に全体で `limit` 件に収める。`limit` は従来どおり「合計の上限」。
-        var validQueries = queries?.Select(query => NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var validQueries = NormalizeSymbolSearchQueries(queries, lang, exact);
         if (validQueries != null && validQueries.Count > 1)
         {
             var perName = new List<List<SymbolResult>>(validQueries.Count);
@@ -467,7 +495,7 @@ public partial class DbReader
             JOIN files f ON s.file_id = f.id
             WHERE 1=1";
 
-        var effectiveQueries = queries?.Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var effectiveQueries = validQueries;
         if (effectiveQueries != null && effectiveQueries.Count > 0)
         {
             // --exact: Unicode-aware equality when FoldReady (#86), else ASCII COLLATE NOCASE.
@@ -1662,6 +1690,7 @@ public partial class DbReader
     private static int FindOutlineContainerIndex(List<OutlineSymbol> symbols, int childIndex, string containerName, string? containerKind)
     {
         var child = symbols[childIndex];
+        var expectedContainerPath = GetOutlineContainerPath(child);
         for (var i = childIndex - 1; i >= 0; i--)
         {
             var candidate = symbols[i];
@@ -1669,6 +1698,11 @@ public partial class DbReader
                 continue;
             if (containerKind != null && !string.Equals(candidate.Kind, containerKind, StringComparison.Ordinal))
                 continue;
+            if (expectedContainerPath != null
+                && !string.Equals(candidate.Path, expectedContainerPath, StringComparison.Ordinal))
+            {
+                continue;
+            }
             if (candidate.Line > child.Line)
                 continue;
             if (IsOutlineContainerMatch(candidate, child.Line))
@@ -1676,6 +1710,17 @@ public partial class DbReader
         }
 
         return -1;
+    }
+
+    private static string? GetOutlineContainerPath(OutlineSymbol symbol)
+    {
+        if (string.IsNullOrWhiteSpace(symbol.Path) || string.IsNullOrWhiteSpace(symbol.Name))
+            return null;
+
+        var suffix = "." + symbol.Name;
+        return symbol.Path.EndsWith(suffix, StringComparison.Ordinal)
+            ? symbol.Path[..^suffix.Length]
+            : null;
     }
 
     private static bool IsOutlineContainerMatch(OutlineSymbol candidate, int childLine)

@@ -128,6 +128,27 @@ public class DbReaderTests : IDisposable
         Assert.Equal(1, counts.FileCount);
     }
 
+    [Fact]
+    public void AnalyzeFtsQuery_AllTokensTooLong_ReturnsDegradedReason()
+    {
+        var query = new string('x', DbReader.FtsUnicode61MaxTokenLength + 1);
+
+        var diagnostics = DbReader.AnalyzeFtsQuery(query);
+
+        Assert.Equal(DbReader.AllTokensFilteredByLengthReason, diagnostics.QueryDegradedReason);
+        Assert.Equal([query], diagnostics.TokensDropped);
+    }
+
+    [Fact]
+    public void Search_ExplicitPrefixMatchesLatinDiacriticToken()
+    {
+        InsertIndexedFile("src/cafe.md", "markdown", "menu café_au_lait\n");
+
+        var results = _reader.Search("café*", lang: "markdown");
+
+        Assert.Contains(results, r => r.Path == "src/cafe.md");
+    }
+
     [Theory]
     [InlineData("rowid:authenticate", "rowid:")]
     [InlineData("title:authenticate", "title:")]
@@ -248,6 +269,33 @@ public class DbReaderTests : IDisposable
 
         var planAfterAnalyze = ExplainQueryPlan(sql);
         Assert.Contains("idx_symbol_refs_name_kind", planAfterAnalyze);
+    }
+
+    [Fact]
+    public void FileCountHelpers_UseGroupedReferenceCounts()
+    {
+        var joinSql = InvokePrivateStringMethod(_reader, "BuildFileReferenceCountJoinSql", "file_page");
+        var countSql = GetPrivateStringProperty(_reader, "FileReferenceCountSql");
+
+        Assert.Contains("GROUP BY r.file_id", joinSql, StringComparison.Ordinal);
+        Assert.Contains("JOIN file_page file_set ON file_set.id = r.file_id", joinSql, StringComparison.Ordinal);
+        Assert.DoesNotContain("WHERE file_id = f.id", joinSql, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("COALESCE(reference_counts.reference_count, 0)", countSql);
+    }
+
+    [Fact]
+    public void NormalizeSymbolSearchQueries_SkipsAlreadyNormalizedInput()
+    {
+        var method = typeof(DbReader).GetMethod(
+            "NormalizeSymbolSearchQueries",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var normalized = Assert.IsAssignableFrom<IReadOnlyList<string>>(method!.Invoke(null, [new[] { "module.exports.fetchData", "module.exports.fetchData" }, "javascript", false]));
+        var secondPass = Assert.IsAssignableFrom<IReadOnlyList<string>>(method.Invoke(null, [normalized, "javascript", false]));
+
+        Assert.Same(normalized, secondPass);
+        Assert.Equal(["fetchData"], normalized);
     }
 
     [Theory]
@@ -416,6 +464,20 @@ public class DbReaderTests : IDisposable
         while (reader.Read())
             plan.AppendLine(reader.GetString(3));
         return plan.ToString();
+    }
+
+    private static string GetPrivateStringProperty(DbReader reader, string name)
+    {
+        var property = typeof(DbReader).GetProperty(name, BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(property);
+        return Assert.IsType<string>(property!.GetValue(reader));
+    }
+
+    private static string InvokePrivateStringMethod(DbReader reader, string name, params object[] args)
+    {
+        var method = typeof(DbReader).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        return Assert.IsType<string>(method!.Invoke(reader, args));
     }
 
     private SqliteCommand CreateSearchReferencesCommandForSql(string query)
@@ -12994,6 +13056,44 @@ public class DbReaderTests : IDisposable
                 Assert.Equal("Method", symbol.Name);
                 Assert.Equal(5, symbol.Depth);
             });
+    }
+
+    [Fact]
+    public void GetOutline_UsesQualifiedContainerPathForAmbiguousNames()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/ambiguous.cs",
+            Lang = "csharp",
+            Size = 300,
+            Lines = 20,
+            Modified = new DateTime(2025, 6, 2, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([new ChunkRecord
+        {
+            FileId = fileId,
+            ChunkIndex = 0,
+            StartLine = 1,
+            EndLine = 20,
+            Content = """
+            class A { class Wrapper { } }
+            class B { class Wrapper { void Target() { } } }
+            """,
+        }]);
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = fileId, Kind = "class", Name = "A", Line = 1, StartLine = 1, EndLine = 5, BodyStartLine = 1, BodyEndLine = 5, ContainerQualifiedName = null },
+            new SymbolRecord { FileId = fileId, Kind = "class", Name = "Wrapper", Line = 2, StartLine = 2, EndLine = 4, BodyStartLine = 2, BodyEndLine = 4, ContainerKind = "class", ContainerName = "A", ContainerQualifiedName = "A" },
+            new SymbolRecord { FileId = fileId, Kind = "class", Name = "B", Line = 6, StartLine = 6, EndLine = 15, BodyStartLine = 6, BodyEndLine = 15, ContainerQualifiedName = null },
+            new SymbolRecord { FileId = fileId, Kind = "class", Name = "Wrapper", Line = 7, StartLine = 7, EndLine = 14, BodyStartLine = 7, BodyEndLine = 14, ContainerKind = "class", ContainerName = "B", ContainerQualifiedName = "B" },
+            new SymbolRecord { FileId = fileId, Kind = "function", Name = "Target", Line = 8, StartLine = 8, EndLine = 8, ContainerKind = "class", ContainerName = "Wrapper", ContainerQualifiedName = "B.Wrapper" },
+        ]);
+
+        var outline = _reader.GetOutline("src/ambiguous.cs");
+
+        Assert.NotNull(outline);
+        var target = Assert.Single(outline!.Symbols.Where(symbol => symbol.Name == "Target"));
+        Assert.Equal("B.Wrapper.Target", target.Path);
+        Assert.Equal(2, target.Depth);
     }
 
     [Fact]

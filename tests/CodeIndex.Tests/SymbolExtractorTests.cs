@@ -129,6 +129,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpManyMethods_DoesNotRescanMethodBodiesAsFieldCandidates()
+    {
+        var methods = Enumerable.Range(0, 80).Select(i => $$"""
+                public void M{{i}}()
+                {
+                    var value = {{i}};
+                    value++;
+                }
+            """);
+        var content = "public class ManyMethods\n{\n" + string.Join('\n', methods) + "\n}";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Equal(80, symbols.Count(symbol => symbol.Kind == "function" && symbol.Name.StartsWith("M", StringComparison.Ordinal)));
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "function" && symbol.Signature?.Contains("value++", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
     public void Extract_PythonDataclassField_IndexesFieldAndMetadataKeys()
     {
         const string content = """
@@ -21065,7 +21083,10 @@ public class SymbolExtractorTests
             input CreateUserInput {
               name: String!
               email: String!
+              roles: [Role!]!
             }
+
+            union SearchResult @deprecated(reason: "legacy") = User | Organization | Team @deprecated # returned by search
 
             enum Role {
               ADMIN
@@ -21084,6 +21105,14 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "CreateUserInput");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.ContainerName == "CreateUserInput");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "email" && s.ContainerName == "CreateUserInput");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "roles" && s.ContainerName == "CreateUserInput");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "SearchResult");
+        Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "User" && s.ContainerName == "SearchResult");
+        Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "Organization" && s.ContainerName == "SearchResult");
+        Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "Team" && s.ContainerName == "SearchResult");
+        Assert.DoesNotContain(symbols, s => s.Kind == "reference" && s.Name is "deprecated" or "reason" or "legacy" or "returned" or "search");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Role");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetUser");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreateUser");
@@ -21127,13 +21156,22 @@ public class SymbolExtractorTests
 
             extend input ExtendedCreateUserInput {
               email: String
+              phone: String
             }
 
             extend enum ExtendedRole {
               GUEST
             }
 
-            extend union SearchResult = User | Organization
+            extend union SearchResult =
+              | User
+              # organization result
+              | Organization
+              | Team @deprecated(reason: "legacy")
+
+            union ExternalSearchResult @deprecated(reason: "legacy")
+              = User
+              | Organization
 
             extend scalar DateTime
 
@@ -21156,11 +21194,58 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ExtendedUser");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ExtendedNode");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ExtendedCreateUserInput");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "email" && s.ContainerName == "ExtendedCreateUserInput");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "phone" && s.ContainerName == "ExtendedCreateUserInput");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ExtendedRole");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "SearchResult");
+        Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "User" && s.ContainerName == "SearchResult");
+        Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "Organization" && s.ContainerName == "SearchResult");
+        Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "Team" && s.ContainerName == "SearchResult");
+        Assert.DoesNotContain(symbols, s => s.Kind == "reference" && s.Name is "organization" or "result" or "deprecated" or "reason" or "legacy");
+        Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "User" && s.ContainerName == "ExternalSearchResult");
+        Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "Organization" && s.ContainerName == "ExternalSearchResult");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DateTime");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetUser");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreateUser");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsRegionHeadings()
+    {
+        var symbols = SymbolExtractor.Extract(1, "csharp", """
+            public class Service
+            {
+                #region Validation
+                public void Check() { }
+                #endregion
+            }
+            """);
+
+        Assert.Contains(symbols, s => s.Kind == "heading" && s.Name == "Validation");
+    }
+
+    [Fact]
+    public void Extract_Python_DetectsModuleDocstringHeading()
+    {
+        var content = "\"\"\"Payments API helpers.\"\"\"\n\n"
+            + "def charge():\n"
+            + "    pass\n";
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "heading" && s.Name == "Payments API helpers.");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsModuleDocHeading()
+    {
+        var symbols = SymbolExtractor.Extract(1, "javascript", """
+            /**
+             * @module payments/service
+             */
+            export function charge() {}
+            """);
+
+        Assert.Contains(symbols, s => s.Kind == "heading" && s.Name == "payments/service");
     }
 
     [Fact]

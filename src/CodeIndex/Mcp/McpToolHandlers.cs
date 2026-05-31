@@ -18,6 +18,7 @@ namespace CodeIndex.Mcp;
 public partial class McpServer
 {
     private const int DefaultBatchQueryResponseByteLimit = MaxLineByteLength;
+    private const int DefaultExcerptOutputByteLimit = MaxLineByteLength;
     private const string BatchQueryResponseByteLimitEnvVar = "CDIDX_MCP_BATCH_RESPONSE_MAX_BYTES";
     internal const int MaxMcpArrayFilterCount = 100;
     internal const int MaxMcpArrayFilterStringLength = 4096;
@@ -144,6 +145,18 @@ public partial class McpServer
         payload["freshness_available"] = freshness.FreshnessAvailable;
         if (!freshness.FreshnessAvailable && freshness.FreshnessDegradedReason != null)
             payload["freshness_degraded_reason"] = freshness.FreshnessDegradedReason;
+    }
+
+    private static void AddFtsQueryDiagnostics(JsonObject payload, FtsQueryDiagnostics diagnostics)
+    {
+        if (!diagnostics.HasDegradation)
+            return;
+
+        payload["query_degraded_reason"] = diagnostics.QueryDegradedReason;
+        var dropped = new JsonArray();
+        foreach (var token in diagnostics.TokensDropped)
+            dropped.Add(token);
+        payload["tokens_dropped"] = dropped;
     }
 
     private static void AddExactZeroHint(JsonObject payload, ExactZeroHintResult? exactZeroHint)
@@ -384,6 +397,7 @@ public partial class McpServer
                     ["unknown_argument"] = property.Key,
                 };
             }
+
         }
 
         if (ValidateToolArgumentTypes(toolName, obj) is JsonObject typeError)
@@ -416,7 +430,7 @@ public partial class McpServer
 
     private static bool TryGetExpectedJsonType(string toolName, string argumentName, out string expected)
     {
-        if (argumentName is "path" or "project" or "excludePaths" or "names")
+        if (argumentName is "path" or "project" or "excludePaths" or "names" or "files" or "commits" or "changedBetween")
         {
             expected = string.Empty;
             return false;
@@ -426,7 +440,7 @@ public partial class McpServer
         {
             "limit" or "offset" or "snippetLines" or "maxLineWidth" or "before" or "after" or
                 "focusLine" or "focusColumn" or "focusLength" or "startLine" or "endLine" or
-                "maxHops" or "maxDepth" or "depth" or "parallelism" => "integer",
+                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" => "integer",
             "excludeTests" or "includeGenerated" or "rawQuery" or "noDedup" or "exactSubstring" or
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
                 "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or "optimize" => "boolean",
@@ -894,7 +908,7 @@ public partial class McpServer
         if (query.Length > QueryLimits.MaxQueryLength)
             return CreateToolErrorResponse(id, QueryLimits.FormatQueryTooLongError());
 
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
         var snippetLines = SearchSnippetFormatter.ClampSnippetLines(args?["snippetLines"]?.GetValue<int>() ?? SearchSnippetFormatter.DefaultSnippetLines);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
@@ -934,10 +948,13 @@ public partial class McpServer
                 payload["rawQuery"] = rawQuery;
                 payload["path"] = PathEcho(pathPatterns);
                 payload["excludeTests"] = excludeTests;
+                if (countResults.Count == 0)
+                    AddFtsQueryDiagnostics(payload, DbReader.AnalyzeFtsQuery(query, rawQuery, prefix, lang));
                 return CreateToolResult(id, $"Counted {countResults.Count} search result(s).", payload);
             }
 
             var results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix);
+            var ftsDiagnostics = DbReader.AnalyzeFtsQuery(query, rawQuery, prefix, lang);
             var truncated = TrimToRequestedLimit(results, limit);
             if (results.Count == 0)
             {
@@ -951,6 +968,7 @@ public partial class McpServer
                     ["excludeTests"] = excludeTests,
                     ["results"] = new JsonArray()
                 };
+                AddFtsQueryDiagnostics(payload, ftsDiagnostics);
                 AddResultEnvelope(payload, 0, 0, truncated: false);
                 AddRecoveryHint(
                     payload,
@@ -1014,7 +1032,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "'names' is present but contains no usable entries (all were empty or whitespace).");
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
         var pathPatterns = ReadScopedPathList(args);
@@ -1109,7 +1127,7 @@ public partial class McpServer
 
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
         var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
         var lspCompatible = args?["lsp_compatible"]?.GetValue<bool>() ?? false;
         var pathPatterns = ReadScopedPathList(args);
@@ -1190,7 +1208,7 @@ public partial class McpServer
 
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
         var lspCompatible = args?["lsp_compatible"]?.GetValue<bool>() ?? false;
         var offset = ReadOffset(args);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
@@ -1295,7 +1313,7 @@ public partial class McpServer
         if (IsNonCallGraphReferenceKind(kind))
             return CreateToolErrorResponse(id, BuildNonCallGraphKindRejectionMessage("callers", kind!));
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
         var offset = ReadOffset(args);
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -1389,7 +1407,7 @@ public partial class McpServer
         if (IsNonCallGraphReferenceKind(kind))
             return CreateToolErrorResponse(id, BuildNonCallGraphKindRejectionMessage("callees", kind!));
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
         var offset = ReadOffset(args);
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -1476,7 +1494,7 @@ public partial class McpServer
         if (query != null && query.Length > QueryLimits.MaxQueryLength)
             return CreateToolErrorResponse(id, QueryLimits.FormatQueryTooLongError());
         var lang = QueryCommandRunner.NormalizeLangFilterValue(args?["lang"]?.GetValue<string>());
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -1524,16 +1542,37 @@ public partial class McpServer
     private JsonNode ExecuteMap(JsonNode? id, JsonNode? args)
     {
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 10);
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultMapLimit);
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
+        var sections = ReadStringList(args, "sections").Select(section => section.ToLowerInvariant()).ToHashSet(StringComparer.Ordinal);
+        var depth = args?["depth"]?.GetValue<int>();
 
         return WithDbReader(id, args, reader =>
         {
             var map = reader.GetRepoMap(limit, lang, pathPatterns, excludePaths, excludeTests);
             WorkspaceMetadataEnricher.Enrich(map, _dbPath, _dbPathExplicit);
             var structured = JsonSerializer.SerializeToNode(map, _jsonOptions)!.AsObject();
+            if (depth is >= 0)
+            {
+                var modules = structured["modules"] as JsonArray;
+                if (modules != null)
+                {
+                    var kept = new JsonArray(modules
+                        .Where(node =>
+                        {
+                            var module = node?["module"]?.GetValue<string>() ?? string.Empty;
+                            return module.Split('/', StringSplitOptions.RemoveEmptyEntries).Length <= depth.Value;
+                        })
+                        .Select(node => node!.DeepClone())
+                        .ToArray());
+                    structured["modules"] = kept;
+                }
+                structured["depth"] = depth.Value;
+            }
+            if (sections.Count > 0)
+                ApplyMapSectionFilter(structured, sections);
             structured["limit"] = limit;
             structured["lang"] = lang;
             structured["path"] = PathEcho(pathPatterns);
@@ -1548,6 +1587,33 @@ public partial class McpServer
         });
     }
 
+    private static void ApplyMapSectionFilter(JsonObject structured, IReadOnlySet<string> sections)
+    {
+        var keep = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "api_version", "fileCount", "totalLines", "totalSymbols", "totalReferences",
+            "indexedAt", "latestModified", "workspaceIndexedAt", "workspaceLatestModified",
+            "projectRoot", "gitHead", "gitIsDirty", "indexed_head_commit", "worktree_head_changed",
+            "graphTableAvailable", "limit", "lang", "path", "excludeTests", "depth",
+        };
+        if (sections.Contains("languages"))
+            keep.Add("languages");
+        if (sections.Contains("tree") || sections.Contains("modules"))
+            keep.Add("modules");
+        if (sections.Contains("hotspots"))
+        {
+            keep.Add("topFiles");
+            keep.Add("symbolRichFiles");
+            keep.Add("referenceRichFiles");
+            keep.Add("entrypoints");
+        }
+        if (sections.Contains("metrics"))
+            keep.Add("largestFiles");
+        foreach (var key in structured.Select(property => property.Key).Where(key => !keep.Contains(key)).ToList())
+            structured.Remove(key);
+        structured["sections"] = new JsonArray(sections.Select(section => JsonValue.Create(section)).ToArray<JsonNode?>());
+    }
+
     private JsonNode ExecuteAnalyzeSymbol(JsonNode? id, JsonNode? args)
     {
         if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
@@ -1557,7 +1623,7 @@ public partial class McpServer
         if (IsBareVerbatimQueryToken(query))
             return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 10);
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultMapLimit);
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
@@ -1956,6 +2022,8 @@ public partial class McpServer
         var explicitFocusLength = args?["focusLength"] != null;
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
+        if (!TryReadMaxOutputBytes(args, out var maxOutputBytes, out var maxOutputBytesError))
+            return CreateToolErrorResponse(id, maxOutputBytesError!);
 
         if (focusLine.HasValue && focusLine.Value <= 0)
             return CreateToolErrorResponse(id, "focusLine must be greater than or equal to 1");
@@ -2016,6 +2084,8 @@ public partial class McpServer
             }
 
             var payload = JsonSerializer.SerializeToNode(excerpt, _jsonOptions)!.AsObject();
+            ApplyExcerptOutputBudget(payload, maxOutputBytes);
+            payload["maxOutputBytes"] = maxOutputBytes;
             payload["before"] = before;
             payload["after"] = after;
             payload["contextTruncated"] = contextTruncated;
@@ -2033,6 +2103,45 @@ public partial class McpServer
         });
     }
 
+    private static bool TryReadMaxOutputBytes(JsonNode? args, out int maxOutputBytes, out string? error)
+    {
+        maxOutputBytes = DefaultExcerptOutputByteLimit;
+        error = null;
+        if (args?["maxOutputBytes"] is not JsonNode node)
+            return true;
+        var requested = node.GetValue<int>();
+        if (requested <= 0)
+        {
+            error = "maxOutputBytes must be greater than or equal to 1";
+            return false;
+        }
+        maxOutputBytes = Math.Min(requested, DefaultExcerptOutputByteLimit);
+        return true;
+    }
+
+    internal static void ApplyExcerptOutputBudget(JsonObject payload, int maxOutputBytes)
+    {
+        var contentKey = payload.ContainsKey("content") ? "content" : "Content";
+        if (payload[contentKey]?.GetValue<string>() is not string content)
+            return;
+        if (Encoding.UTF8.GetByteCount(content) <= maxOutputBytes)
+            return;
+
+        var builder = new StringBuilder();
+        foreach (var line in content.Replace("\r\n", "\n").Split('\n'))
+        {
+            var candidate = builder.Length == 0 ? line : builder.ToString() + "\n" + line;
+            if (Encoding.UTF8.GetByteCount(candidate) > maxOutputBytes)
+                break;
+            builder.Clear();
+            builder.Append(candidate);
+        }
+        payload[contentKey] = builder.ToString();
+        payload["contentTruncated"] = true;
+        payload["truncated"] = true;
+        payload["truncation_reason"] = "output_size_cap";
+    }
+
     private JsonNode ExecuteFindInFile(JsonNode? id, JsonNode? args)
     {
         if (!TryReadRequiredStringParameter(args, "query", out var query, out var requiredError))
@@ -2046,7 +2155,7 @@ public partial class McpServer
                 ? "Parameter \"path\" cannot be empty or whitespace-only"
                 : "Missing required parameter: path");
 
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -2145,9 +2254,11 @@ public partial class McpServer
         var totalStopwatch = Stopwatch.StartNew();
         int successCount = 0;
         int failureCount = 0;
+        int? cascadeStartedAtIndex = null;
         var truncated = false;
         var responseByteLimit = GetBatchQueryResponseByteLimit();
         var estimatedResponseBytes = EstimateBatchResponseBytes(id, "Executed 0 queries.", queries.Count, successCount, failureCount,
+            GetBatchFailureScope(queries.Count, successCount, failureCount, cascadeStartedAtIndex), cascadeStartedAtIndex,
             responseByteLimit, resultsArray, truncated: false, truncatedQueries);
 
         bool TryAppendResult(JsonObject entry, string? toolName, JsonNode? toolArgs, int requestIndex, bool successfulSlot = false, bool failedSlot = false)
@@ -2161,10 +2272,12 @@ public partial class McpServer
                 ? $"Executed {candidateExecutedCount} of {queries.Count} queries in 0 ms (all succeeded)."
                 : $"Executed {candidateExecutedCount} of {queries.Count} queries in 0 ms ({candidateSuccessCount} succeeded, {candidateFailureCount} failed).";
             var candidateBytes = EstimateBatchResponseBytes(id, candidateSummary, queries.Count, candidateSuccessCount, candidateFailureCount,
+                GetBatchFailureScope(queries.Count, candidateSuccessCount, candidateFailureCount, cascadeStartedAtIndex), cascadeStartedAtIndex,
                 responseByteLimit, candidateResults, truncated: false, truncatedQueries);
             if (candidateBytes > responseByteLimit)
             {
                 truncated = true;
+                cascadeStartedAtIndex ??= requestIndex;
                 truncatedQueries.Add(new JsonObject
                 {
                     ["request_index"] = requestIndex,
@@ -2264,6 +2377,7 @@ public partial class McpServer
             if (truncated)
             {
                 slotStopwatch.Stop();
+                cascadeStartedAtIndex ??= requestIndex;
                 truncatedQueries.Add(new JsonObject
                 {
                     ["request_index"] = requestIndex,
@@ -2467,6 +2581,12 @@ public partial class McpServer
         JsonObject BuildPayload() => new()
         {
             ["count"] = resultsArray.Count,
+            ["total_count"] = queries.Count,
+            ["success_count"] = successCount,
+            ["failure_count"] = failureCount,
+            ["partial_failure"] = failureCount > 0 || cascadeStartedAtIndex.HasValue,
+            ["failure_scope"] = GetBatchFailureScope(queries.Count, successCount, failureCount, cascadeStartedAtIndex),
+            ["cascade_started_at_index"] = cascadeStartedAtIndex,
             ["metadata"] = new JsonObject
             {
                 ["submitted"] = queries.Count,
@@ -2543,11 +2663,17 @@ public partial class McpServer
         Encoding.UTF8.GetByteCount(node.ToJsonString(_jsonOptions));
 
     private int EstimateBatchResponseBytes(JsonNode? id, string summary, int submittedCount, int successCount, int failureCount,
-        int responseByteLimit, JsonArray resultsArray, bool truncated, JsonArray truncatedQueries)
+        string failureScope, int? cascadeStartedAtIndex, int responseByteLimit, JsonArray resultsArray, bool truncated, JsonArray truncatedQueries)
     {
         var payload = new JsonObject
         {
             ["count"] = resultsArray.Count,
+            ["total_count"] = submittedCount,
+            ["success_count"] = successCount,
+            ["failure_count"] = failureCount,
+            ["partial_failure"] = failureCount > 0 || cascadeStartedAtIndex.HasValue,
+            ["failure_scope"] = failureScope,
+            ["cascade_started_at_index"] = cascadeStartedAtIndex,
             ["metadata"] = new JsonObject
             {
                 ["submitted"] = submittedCount,
@@ -2568,6 +2694,13 @@ public partial class McpServer
         }
 
         return EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload));
+    }
+
+    private static string GetBatchFailureScope(int submittedCount, int successCount, int failureCount, int? cascadeStartedAtIndex)
+    {
+        if (cascadeStartedAtIndex.HasValue && cascadeStartedAtIndex.Value < submittedCount)
+            return "cascading";
+        return failureCount == 0 ? "none" : "isolated";
     }
 
     private static JsonArray CloneJsonArray(JsonArray source)
@@ -2615,12 +2748,14 @@ public partial class McpServer
 
     private JsonNode ExecuteDeps(JsonNode? id, JsonNode? args)
     {
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultImpactLimit);
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var reverse = args?["reverse"]?.GetValue<bool>() ?? false;
+        var cyclesOnly = args?["cycles"]?.GetValue<bool>() ?? false;
+        var format = args?["format"]?.GetValue<string>()?.ToLowerInvariant() ?? "edgelist";
 
         return WithDbReader(id, args, reader =>
         {
@@ -2633,19 +2768,37 @@ public partial class McpServer
                     baseSqlGraphSignal,
                     results.SelectMany(result => new[] { result.SourcePath, result.TargetPath }),
                     lang);
-            var payload = new JsonObject
-            {
-                ["count"] = results.Count,
-                ["edges"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
-            };
+            List<List<string>> cycles = [];
+            var outputEdges = cyclesOnly ? QueryCommandRunner.FilterCycleEdges(results, out cycles) : results;
+            var payload = new JsonObject { ["count"] = cyclesOnly ? cycles.Count : results.Count };
+            if (cyclesOnly)
+                payload["cycles"] = QueryCommandRunner.BuildDependencyCyclesJson(cycles);
+            else if (format == "json-graph")
+                payload["graph"] = BuildJsonGraphPayload(outputEdges);
+            else
+                payload["edges"] = JsonSerializer.SerializeToNode(outputEdges, _jsonOptions);
+            payload["format"] = format;
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
-            var summary = results.Count > 0
-                ? $"Found {ConsoleUi.Counted(results.Count, "dependency edge")}."
+            var summary = payload["count"]!.GetValue<int>() > 0
+                ? cyclesOnly ? $"Found {ConsoleUi.Counted(cycles.Count, "dependency cycle")}." : $"Found {ConsoleUi.Counted(results.Count, "dependency edge")}."
                 : "No file dependencies found.";
             if (results.Count == 0)
                 AddFreshnessHint(payload, reader);
             return CreateToolResult(id, summary, payload);
         });
+    }
+
+    private static JsonObject BuildJsonGraphPayload(IReadOnlyList<FileDependencyResult> edges)
+    {
+        var nodes = edges
+            .SelectMany(edge => new[] { edge.SourcePath, edge.TargetPath })
+            .Distinct(StringComparer.Ordinal)
+            .Select(path => new JsonObject { ["id"] = path })
+            .ToArray<JsonNode?>();
+        var graphEdges = edges
+            .Select(edge => new JsonObject { ["source"] = edge.SourcePath, ["target"] = edge.TargetPath, ["reference_count"] = edge.ReferenceCount })
+            .ToArray<JsonNode?>();
+        return new JsonObject { ["nodes"] = new JsonArray(nodes), ["edges"] = new JsonArray(graphEdges) };
     }
 
     private JsonNode ExecuteImpactAnalysis(JsonNode? id, JsonNode? args)
@@ -2660,7 +2813,7 @@ public partial class McpServer
         var usedDeprecatedMaxDepth = deprecatedMaxDepthNode != null;
         var maxDepthRequested = maxHopsNode?.GetValue<int>() ?? deprecatedMaxDepthNode?.GetValue<int>() ?? 5;
         var maxDepth = Math.Clamp(maxDepthRequested, 0, MaxImpactDepth);
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultImpactLimit);
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadScopedPathList(args);
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -2835,7 +2988,7 @@ public partial class McpServer
 
     private JsonNode ExecuteSymbolHotspots(JsonNode? id, JsonNode? args)
     {
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultQueryLimit);
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var groupBy = args?["groupBy"]?.GetValue<string>()?.ToLowerInvariant()
@@ -2947,7 +3100,7 @@ public partial class McpServer
 
     private JsonNode ExecuteUnusedSymbols(JsonNode? id, JsonNode? args)
     {
-        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
+        var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? QueryCommandRunner.DefaultImpactLimit);
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadScopedPathList(args);
@@ -3064,6 +3217,67 @@ public partial class McpServer
     }
 
     private JsonNode ExecuteIndex(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
+        => ExecuteIndexAsync(id, args, progressToken).GetAwaiter().GetResult();
+
+    private async Task RefreshClientRootsIfNeededAsync()
+    {
+        if (!_clientRootsStale || !HasClientCapability("roots"))
+            return;
+
+        var result = await SendClientRequestAsync("roots/list", null, _currentRequestToken.Value).ConfigureAwait(false);
+        if (result?["roots"] is not JsonArray roots)
+            return;
+
+        var refreshed = new JsonArray();
+        foreach (var root in roots)
+        {
+            var uri = TryReadStringValue(root?["uri"]) ?? TryReadStringValue(root);
+            if (!string.IsNullOrWhiteSpace(uri))
+                refreshed.Add(uri);
+        }
+        _clientRoots = refreshed;
+        _clientRootsStale = false;
+    }
+
+    private bool IsPathWithinClientRoots(string path)
+    {
+        if (!HasClientCapability("roots"))
+            return true;
+
+        var rootPaths = _clientRoots
+            .Select(root => TryReadStringValue(root))
+            .Select(TryResolveRootPath)
+            .Where(root => !string.IsNullOrWhiteSpace(root))
+            .Cast<string>()
+            .ToArray();
+        if (rootPaths.Length == 0)
+            return false;
+
+        var fullPath = Path.GetFullPath(path);
+        return rootPaths.Any(root => IsPathWithinDirectory(root, fullPath));
+    }
+
+    private static string? TryResolveRootPath(string? root)
+    {
+        if (string.IsNullOrWhiteSpace(root))
+            return null;
+        if (Uri.TryCreate(root, UriKind.Absolute, out var uri))
+        {
+            if (!string.Equals(uri.Scheme, Uri.UriSchemeFile, StringComparison.OrdinalIgnoreCase))
+                return null;
+            return Path.GetFullPath(Uri.UnescapeDataString(uri.LocalPath));
+        }
+        try
+        {
+            return Path.GetFullPath(root);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+    }
+
+    private async Task<JsonNode> ExecuteIndexAsync(JsonNode? id, JsonNode? args, JsonNode? progressToken = null)
     {
         if (!TryReadRequiredStringParameter(args, "path", out var path, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
@@ -3092,6 +3306,9 @@ public partial class McpServer
         var cwd = Path.GetFullPath(".");
         if (!IsPathWithinDirectory(cwd, projectPath))
             return CreateToolErrorResponse(id, "Path must be within the current working directory");
+        await RefreshClientRootsIfNeededAsync().ConfigureAwait(false);
+        if (!IsPathWithinClientRoots(projectPath))
+            return CreateToolErrorResponse(id, "Path must be within an MCP client root");
 
         if (!Directory.Exists(projectPath))
             return CreateToolErrorResponse(id, "Directory not found");
@@ -3713,6 +3930,8 @@ public partial class McpServer
         if (toolInvocationContext != null && SourceCodeDetector.ContainsSourceCode(toolInvocationContext))
             return CreateToolErrorResponse(id, "Tool invocation context appears to contain source code. Please describe the invocation without including code.");
 
+        var sampling = await TrySampleSuggestionMetadataAsync(category, language, description, context, toolInvocationContext).ConfigureAwait(false);
+
         // 4. Compute dedup hash / 重複排除ハッシュを計算
         var hash = SuggestionStore.ComputeHash(category, language, description);
 
@@ -3751,6 +3970,8 @@ public partial class McpServer
             McpClientName = _clientName,
             McpClientVersion = _clientVersion,
             ToolInvocationContext = toolInvocationContext,
+            SampledTitle = sampling?.Title,
+            SampledTags = sampling?.Tags,
         };
 
         // Build GitHub submission callback (null if no token configured).
@@ -3809,7 +4030,126 @@ public partial class McpServer
             payload["upstream_url"] = result.UpstreamUrl;
             payload["github_issue_url"] = result.UpstreamUrl;
         }
+        if (sampling?.Title != null)
+            payload["sampled_title"] = sampling.Title;
+        if (sampling?.Tags is { Length: > 0 })
+            payload["sampled_tags"] = new JsonArray(sampling.Tags.Select(tag => JsonValue.Create(tag)).ToArray<JsonNode?>());
         return CreateToolResult(id, "Suggestion recorded. Thank you for the feedback.", payload);
+    }
+
+    private sealed record SuggestionSamplingResult(string? Title, string[]? Tags);
+
+    private async Task<SuggestionSamplingResult?> TrySampleSuggestionMetadataAsync(
+        string category,
+        string? language,
+        string description,
+        string? context,
+        string? toolInvocationContext)
+    {
+        if (!IsSamplingEnabled() || !HasClientCapability("sampling"))
+            return null;
+
+        var prompt = new StringBuilder();
+        prompt.AppendLine("Extract structured metadata for a cdidx improvement suggestion.");
+        prompt.AppendLine("Return only compact JSON with keys: title (one line, <=80 chars) and tags (array of 1-6 lowercase identifiers).");
+        prompt.AppendLine("Do not include source code.");
+        prompt.AppendLine($"category: {category}");
+        if (!string.IsNullOrWhiteSpace(language))
+            prompt.AppendLine($"language: {language}");
+        prompt.AppendLine($"description: {description}");
+        if (!string.IsNullOrWhiteSpace(context))
+            prompt.AppendLine($"context: {context}");
+        if (!string.IsNullOrWhiteSpace(toolInvocationContext))
+            prompt.AppendLine($"tool_invocation_context: {toolInvocationContext}");
+
+        var result = await SendClientRequestAsync("sampling/createMessage", new JsonObject
+        {
+            ["messages"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["role"] = "user",
+                    ["content"] = new JsonObject
+                    {
+                        ["type"] = "text",
+                        ["text"] = prompt.ToString(),
+                    }
+                }
+            },
+            ["maxTokens"] = 200,
+        }, _currentRequestToken.Value).ConfigureAwait(false);
+
+        var text = ExtractSamplingText(result);
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+        try
+        {
+            var parsed = JsonNode.Parse(text);
+            var title = SanitizeSampledTitle(TryReadStringValue(parsed?["title"]));
+            var tags = parsed?["tags"] is JsonArray tagArray
+                ? tagArray.Select(TryReadStringValue)
+                    .Where(t => !string.IsNullOrWhiteSpace(t))
+                    .Select(SanitizeSampledTag)
+                    .Where(t => t != null)
+                    .Cast<string>()
+                    .Distinct(StringComparer.Ordinal)
+                    .Take(6)
+                    .ToArray()
+                : null;
+            if (title == null && (tags == null || tags.Length == 0))
+                return null;
+            return new SuggestionSamplingResult(title, tags is { Length: > 0 } ? tags : null);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private bool HasClientCapability(string name)
+        => _clientCapabilities is JsonObject obj
+            && obj.TryGetPropertyValue(name, out var node)
+            && node is not null;
+
+    private static bool IsSamplingEnabled()
+    {
+        var raw = Environment.GetEnvironmentVariable(SamplingEnabledEnvironmentVariable);
+        return raw is null || !(raw.Equals("0", StringComparison.OrdinalIgnoreCase)
+            || raw.Equals("false", StringComparison.OrdinalIgnoreCase)
+            || raw.Equals("off", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string? ExtractSamplingText(JsonNode? result)
+    {
+        if (result is null)
+            return null;
+        if (TryReadStringValue(result["content"]?["text"]) is { Length: > 0 } contentText)
+            return contentText;
+        if (result["content"] is JsonArray contentArray)
+        {
+            foreach (var item in contentArray)
+            {
+                if (TryReadStringValue(item?["text"]) is { Length: > 0 } itemText)
+                    return itemText;
+            }
+        }
+        return TryReadStringValue(result["text"]);
+    }
+
+    private static string? SanitizeSampledTitle(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+            return null;
+        title = title.Trim();
+        return title.Length <= 80 ? title : title[..80];
+    }
+
+    private static string? SanitizeSampledTag(string? tag)
+    {
+        if (string.IsNullOrWhiteSpace(tag))
+            return null;
+        var normalized = new string(tag.Trim().ToLowerInvariant().Select(ch => char.IsLetterOrDigit(ch) || ch == '_' || ch == '-' ? ch : '_').ToArray()).Trim('_');
+        return normalized.Length == 0 ? null : normalized.Length <= 40 ? normalized : normalized[..40];
     }
 
     private static bool TryProbeCdidxDirectoryWritable(string cdidxDir, out string? error)

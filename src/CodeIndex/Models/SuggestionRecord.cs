@@ -89,6 +89,12 @@ public class SuggestionRecord
     /// <summary>Optional natural-language invocation context supplied by the caller / 呼び出し元が渡す任意の自然言語コンテキスト</summary>
     public string? ToolInvocationContext { get; set; }
 
+    /// <summary>One-line title extracted by MCP sampling, when available / MCP sampling で抽出された1行タイトル（取得可能な場合）</summary>
+    public string? SampledTitle { get; set; }
+
+    /// <summary>Structured tags extracted by MCP sampling, when available / MCP sampling で抽出された構造化タグ（取得可能な場合）</summary>
+    public string[]? SampledTags { get; set; }
+
     /// <summary>Upstream GitHub Issue number when known / 判明している場合の upstream GitHub Issue 番号</summary>
     public int? UpstreamIssueNumber { get; set; }
 

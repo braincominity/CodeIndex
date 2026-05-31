@@ -17,6 +17,9 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class QueryCommandRunner
 {
+    internal const int DefaultQueryLimit = 20;
+    internal const int DefaultMapLimit = 10;
+    internal const int DefaultImpactLimit = 50;
     internal const string DefaultLimitEnvironmentVariable = "CDIDX_DEFAULT_LIMIT";
     internal const string DefaultSnippetLinesEnvironmentVariable = "CDIDX_DEFAULT_SNIPPET_LINES";
     internal const string DefaultMaxLineWidthEnvironmentVariable = "CDIDX_DEFAULT_MAX_LINE_WIDTH";
@@ -94,6 +97,7 @@ public static class QueryCommandRunner
         "--slow-query-ms",
         "--format",
         "--min-entrypoint-confidence",
+        "--sections",
     ];
     private sealed record StatusReadinessField(
         string FieldName,
@@ -190,6 +194,7 @@ public static class QueryCommandRunner
         "--silent",
         "--by-bucket",
         "--all",
+        "--cycles",
         "--group-by-name",
         "--with-paths",
         "--bytes",
@@ -207,6 +212,10 @@ public static class QueryCommandRunner
     private const string OutputFormatCompact = "compact";
     private const string OutputFormatCsv = "csv";
     private const string OutputFormatTsv = "tsv";
+    private const string OutputFormatDot = "dot";
+    private const string OutputFormatGraphMl = "graphml";
+    private const string OutputFormatJsonGraph = "json-graph";
+    private const string OutputFormatEdgeList = "edgelist";
     private static readonly HashSet<string> InlineValueOptions =
         new(ValueTakingOptions.Concat(["--json"]), StringComparer.Ordinal);
     private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
@@ -409,10 +418,11 @@ public static class QueryCommandRunner
             if (options.CountOnly)
             {
                 var counts = reader.CountSearchResults(options.Query, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank);
+                var queryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
                 if (counts.Count == 0)
                 {
                     Console.WriteLine(options.Json
-                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, query: options.Query, queryOptions: options).ToJsonString(jsonOptions)
+                        ? BuildJsonZeroResultPayload(reader, jsonOptions, includeFiles: true, query: options.Query, ftsQueryDiagnostics: queryDiagnostics, queryOptions: options).ToJsonString(jsonOptions)
                         : "0");
                     return CommandExitCodes.Success;
                 }
@@ -424,6 +434,7 @@ public static class QueryCommandRunner
             }
 
             var results = reader.Search(options.Query, options.Limit, options.Lang, options.RawFts, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, !options.NoDedup, options.Since, exact, options.Prefix, !options.NoVisibilityRank);
+            var ftsQueryDiagnostics = DbReader.AnalyzeFtsQuery(options.Query, options.RawFts, options.Prefix, options.Lang);
             if (results.Count == 0)
             {
                 if (options.Json && TryWriteEmptyFormattedResult(options, jsonOptions))
@@ -440,7 +451,7 @@ public static class QueryCommandRunner
                     }
                     else
                     {
-                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, queryOptions: options).ToJsonString(jsonOptions));
+                        Console.WriteLine(BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: "results", query: options.Query, ftsQueryDiagnostics: ftsQueryDiagnostics, queryOptions: options).ToJsonString(jsonOptions));
                         jsonDoneCount = 0;
                     }
                 }
@@ -2343,8 +2354,14 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        if (!TryExtractDepsFormat(cmdArgs, out var depsFormat, out var parseArgs, out var depsFormatError))
+        {
+            Console.Error.WriteLine(depsFormatError);
+            return CommandExitCodes.UsageError;
+        }
+
         var options = ParseArgs(
-            cmdArgs,
+            parseArgs,
             jsonDefault: false,
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false);
@@ -2359,6 +2376,8 @@ public static class QueryCommandRunner
         {
             var map = reader.GetRepoMap(options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.MinEntrypointConfidence);
             WorkspaceMetadataEnricher.Enrich(map, options.DbPath, options.DbPathExplicit);
+            if (options.ContextAfterExplicit)
+                ApplyRepoMapDepth(map, options.ContextAfter);
 
             // Return not-found only when a narrowing filter is active and produces zero files.
             // Unfiltered empty indexes return success (valid state for health probes).
@@ -2380,7 +2399,8 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(map, CliJsonSerializerContextFactory.Create(jsonOptions).RepoMapResult));
+                var payload = BuildRepoMapJsonPayload(map, options, jsonOptions);
+                Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
             else
             {
@@ -2402,21 +2422,90 @@ public static class QueryCommandRunner
                     Console.WriteLine($"Git Dirty  : {map.GitIsDirty}");
                 if (!map.GraphTableAvailable)
                     Console.WriteLine("WARN       : symbol_references table missing — reference counts are synthesized 0. Do not use ReferenceRich / reference-derived ranking as authoritative.");
-                WriteRepoMapSection("Languages", map.Languages.Select(item => $"{item.Lang,-12} {item.Files,4} files  {item.Symbols,5} syms  {item.References,5} refs"));
-                WriteRepoMapSection("Modules", map.Modules.Select(item => $"{item.Module,-24} {item.Files,4} files  {item.Symbols,5} syms  {item.References,5} refs"));
-                WriteRepoMapSection("Top files", map.TopFiles.Select(item => $"{item.Path}  [score {item.Score}, {item.SymbolCount} syms, {item.ReferenceCount} refs]"));
-                WriteRepoMapSection("Largest files", map.LargestFiles.Select(item =>
+                if (MapSectionEnabled(options, "languages"))
+                    WriteRepoMapSection("Languages", map.Languages.Select(item => $"{item.Lang,-12} {item.Files,4} files  {item.Symbols,5} syms  {item.References,5} refs"));
+                if (MapSectionEnabled(options, "tree"))
+                    WriteRepoMapSection("Modules", map.Modules.Select(item => $"{item.Module,-24} {item.Files,4} files  {item.Symbols,5} syms  {item.References,5} refs"));
+                if (MapSectionEnabled(options, "hotspots"))
+                {
+                    WriteRepoMapSection("Top files", map.TopFiles.Select(item => $"{item.Path}  [score {item.Score}, {item.SymbolCount} syms, {item.ReferenceCount} refs]"));
+                    WriteRepoMapSection("Symbol-rich files", map.SymbolRichFiles.Select(item => $"{item.Path}  [{item.SymbolCount} syms, {item.ReferenceCount} refs]"));
+                    WriteRepoMapSection("Reference-rich files", map.ReferenceRichFiles.Select(item => $"{item.Path}  [{item.ReferenceCount} refs, {item.SymbolCount} syms]"));
+                    WriteRepoMapSection("Entrypoints", map.Entrypoints.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.Line}  [score {item.Score}, confidence {item.Confidence:0.###}, {item.MatchType}, hint #{item.HintRank}]"));
+                }
+                if (MapSectionEnabled(options, "metrics"))
+                    WriteRepoMapSection("Largest files", map.LargestFiles.Select(item =>
                 {
                     var size = options.RawBytes ? $"{item.Size.ToString(CultureInfo.InvariantCulture)} bytes" : ConsoleUi.FormatBytes(item.Size);
                     return $"{item.Path}  [{item.Lines} lines, {size}]";
                 }));
-                WriteRepoMapSection("Symbol-rich files", map.SymbolRichFiles.Select(item => $"{item.Path}  [{item.SymbolCount} syms, {item.ReferenceCount} refs]"));
-                WriteRepoMapSection("Reference-rich files", map.ReferenceRichFiles.Select(item => $"{item.Path}  [{item.ReferenceCount} refs, {item.SymbolCount} syms]"));
-                WriteRepoMapSection("Entrypoints", map.Entrypoints.Select(item => $"{item.Kind,-10} {item.Name,-24} {item.Path}:{item.Line}  [score {item.Score}, confidence {item.Confidence:0.###}, {item.MatchType}, hint #{item.HintRank}]"));
             }
 
             return CommandExitCodes.Success;
         });
+    }
+
+    private static bool MapSectionEnabled(QueryCommandOptions options, string section)
+        => options.MapSections == null || options.MapSections.Contains(section, StringComparer.Ordinal);
+
+    private static void ApplyRepoMapDepth(RepoMapResult map, int depth)
+    {
+        map.Modules = map.Modules
+            .Where(module => GetPathDepth(module.Module) <= depth)
+            .ToList();
+    }
+
+    private static int GetPathDepth(string path)
+        => string.IsNullOrEmpty(path) ? 0 : path.Split('/', StringSplitOptions.RemoveEmptyEntries).Length;
+
+    private static JsonObject BuildRepoMapJsonPayload(RepoMapResult map, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        var payload = JsonSerializer.SerializeToNode(map, CliJsonSerializerContextFactory.Create(jsonOptions).RepoMapResult)!.AsObject();
+        if (options.MapSections == null)
+        {
+            if (options.ContextAfterExplicit)
+                payload["depth"] = options.ContextAfter;
+            return payload;
+        }
+
+        var keep = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "api_version",
+            "fileCount",
+            "totalLines",
+            "totalSymbols",
+            "totalReferences",
+            "indexedAt",
+            "latestModified",
+            "workspaceIndexedAt",
+            "workspaceLatestModified",
+            "projectRoot",
+            "gitHead",
+            "gitIsDirty",
+            "indexed_head_commit",
+            "worktree_head_changed",
+            "graphTableAvailable",
+        };
+        if (MapSectionEnabled(options, "languages"))
+            keep.Add("languages");
+        if (MapSectionEnabled(options, "tree"))
+            keep.Add("modules");
+        if (MapSectionEnabled(options, "hotspots"))
+        {
+            keep.Add("topFiles");
+            keep.Add("symbolRichFiles");
+            keep.Add("referenceRichFiles");
+            keep.Add("entrypoints");
+        }
+        if (MapSectionEnabled(options, "metrics"))
+            keep.Add("largestFiles");
+
+        foreach (var propertyName in payload.Select(property => property.Key).Where(key => !keep.Contains(key)).ToList())
+            payload.Remove(propertyName);
+        payload["sections"] = new JsonArray(options.MapSections.Select(section => JsonValue.Create(section)).ToArray<JsonNode?>());
+        if (options.ContextAfterExplicit)
+            payload["depth"] = options.ContextAfter;
+        return payload;
     }
 
     public static int RunInspect(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -3465,8 +3554,14 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        if (!TryExtractDepsFormat(cmdArgs, out var depsFormat, out var parseArgs, out var depsFormatError))
+        {
+            Console.Error.WriteLine(depsFormatError);
+            return CommandExitCodes.UsageError;
+        }
+
         var options = ParseArgs(
-            cmdArgs,
+            parseArgs,
             jsonDefault: false,
             validateDefaultSnippetLines: false,
             validateDefaultMaxLineWidth: false);
@@ -3504,18 +3599,47 @@ public static class QueryCommandRunner
                 return ZeroResultExitCode(options);
             }
 
+            List<List<string>> cycles = [];
+            var outputEdges = options.DependencyCycles ? FilterCycleEdges(results, out cycles) : results;
+            if (options.DependencyCycles && cycles.Count == 0)
+            {
+                if (options.Json)
+                    Console.WriteLine(new JsonObject { ["count"] = 0, ["cycles"] = new JsonArray() }.ToJsonString(jsonOptions));
+                else
+                    Console.Error.WriteLine(BuildZeroResultLine("No dependency cycles found", options));
+                return ZeroResultExitCode(options);
+            }
+
+            if (depsFormat is OutputFormatDot or OutputFormatGraphMl or OutputFormatJsonGraph)
+            {
+                WriteDependencyGraph(outputEdges, depsFormat, jsonOptions);
+                return CommandExitCodes.Success;
+            }
+
             if (options.Json)
             {
                 var payload = new JsonObject
                 {
-                    ["count"] = results.Count,
-                    ["edges"] = JsonSerializer.SerializeToNode(results, CliJsonSerializerContextFactory.Create(jsonOptions).ListFileDependencyResult)
+                    ["count"] = options.DependencyCycles ? cycles.Count : results.Count,
                 };
+                if (options.DependencyCycles)
+                    payload["cycles"] = BuildDependencyCyclesJson(cycles);
+                else
+                    payload["edges"] = JsonSerializer.SerializeToNode(results, CliJsonSerializerContextFactory.Create(jsonOptions).ListFileDependencyResult);
                 AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                 Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
             else
             {
+                if (options.DependencyCycles)
+                {
+                    foreach (var cycle in cycles)
+                        Console.WriteLine(string.Join(" -> ", cycle.Concat([cycle[0]])));
+                    Console.Error.WriteLine($"({cycles.Count} dependency cycles)");
+                    WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
+                    return CommandExitCodes.Success;
+                }
+
                 foreach (var r in results)
                 {
                     var syms = r.Symbols.Length > 60 ? r.Symbols[..57] + "..." : r.Symbols;
@@ -3527,6 +3651,184 @@ public static class QueryCommandRunner
             return CommandExitCodes.Success;
         });
     }
+
+    private static bool TryExtractDepsFormat(string[] args, out string format, out string[] parseArgs, out string? error)
+    {
+        format = OutputFormatEdgeList;
+        error = null;
+        var rewritten = new List<string>(args.Length);
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg.StartsWith("--format=", StringComparison.Ordinal))
+            {
+                var rawFormat = arg["--format=".Length..];
+                if (!TryNormalizeDepsFormat(rawFormat, out format, out error))
+                {
+                    parseArgs = args;
+                    return false;
+                }
+                rewritten.Add(format == OutputFormatJsonGraph ? "--format=json" : "--format=text");
+                continue;
+            }
+
+            if (arg == "--format" && i + 1 < args.Length)
+            {
+                var rawFormat = args[++i];
+                if (!TryNormalizeDepsFormat(rawFormat, out format, out error))
+                {
+                    parseArgs = args;
+                    return false;
+                }
+                rewritten.Add("--format");
+                rewritten.Add(format == OutputFormatJsonGraph ? "json" : "text");
+                continue;
+            }
+
+            rewritten.Add(arg);
+        }
+
+        parseArgs = rewritten.ToArray();
+        return true;
+    }
+
+    private static bool TryNormalizeDepsFormat(string rawFormat, out string format, out string? error)
+    {
+        format = rawFormat.ToLowerInvariant();
+        error = null;
+        switch (format)
+        {
+            case OutputFormatText:
+            case OutputFormatJson:
+            case OutputFormatEdgeList:
+                format = OutputFormatEdgeList;
+                return true;
+            case OutputFormatDot:
+            case OutputFormatGraphMl:
+            case OutputFormatJsonGraph:
+                return true;
+            default:
+                error = $"Error: deps --format must be one of edgelist, dot, graphml, or json-graph; got '{rawFormat}'.";
+                return false;
+        }
+    }
+
+    internal static List<FileDependencyResult> FilterCycleEdges(List<FileDependencyResult> results, out List<List<string>> cycles)
+    {
+        cycles = FindDependencyCycles(results);
+        if (cycles.Count == 0)
+            return [];
+        var cycleNodes = cycles.SelectMany(cycle => cycle).ToHashSet(StringComparer.Ordinal);
+        return results
+            .Where(edge => cycleNodes.Contains(edge.SourcePath) && cycleNodes.Contains(edge.TargetPath))
+            .ToList();
+    }
+
+    internal static List<List<string>> FindDependencyCycles(IReadOnlyList<FileDependencyResult> edges)
+    {
+        var adjacency = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var edge in edges)
+        {
+            if (!adjacency.TryGetValue(edge.SourcePath, out var targets))
+                adjacency[edge.SourcePath] = targets = [];
+            targets.Add(edge.TargetPath);
+            adjacency.TryAdd(edge.TargetPath, []);
+        }
+
+        var index = 0;
+        var stack = new Stack<string>();
+        var onStack = new HashSet<string>(StringComparer.Ordinal);
+        var indexes = new Dictionary<string, int>(StringComparer.Ordinal);
+        var lowLinks = new Dictionary<string, int>(StringComparer.Ordinal);
+        var cycles = new List<List<string>>();
+
+        void Visit(string node)
+        {
+            indexes[node] = index;
+            lowLinks[node] = index;
+            index++;
+            stack.Push(node);
+            onStack.Add(node);
+
+            foreach (var target in adjacency[node])
+            {
+                if (!indexes.ContainsKey(target))
+                {
+                    Visit(target);
+                    lowLinks[node] = Math.Min(lowLinks[node], lowLinks[target]);
+                }
+                else if (onStack.Contains(target))
+                {
+                    lowLinks[node] = Math.Min(lowLinks[node], indexes[target]);
+                }
+            }
+
+            if (lowLinks[node] != indexes[node])
+                return;
+
+            var component = new List<string>();
+            string popped;
+            do
+            {
+                popped = stack.Pop();
+                onStack.Remove(popped);
+                component.Add(popped);
+            } while (!string.Equals(popped, node, StringComparison.Ordinal));
+
+            var selfCycle = component.Count == 1 && adjacency[component[0]].Contains(component[0], StringComparer.Ordinal);
+            if (component.Count > 1 || selfCycle)
+                cycles.Add(component.OrderBy(path => path, StringComparer.Ordinal).ToList());
+        }
+
+        foreach (var node in adjacency.Keys.OrderBy(path => path, StringComparer.Ordinal).ToList())
+            if (!indexes.ContainsKey(node))
+                Visit(node);
+
+        return cycles;
+    }
+
+    internal static JsonArray BuildDependencyCyclesJson(IReadOnlyList<List<string>> cycles)
+    {
+        var array = new JsonArray();
+        foreach (var cycle in cycles)
+        {
+            array.Add(new JsonObject
+            {
+                ["length"] = cycle.Count,
+                ["nodes"] = new JsonArray(cycle.Select(node => JsonValue.Create(node)).ToArray<JsonNode?>())
+            });
+        }
+        return array;
+    }
+
+    private static void WriteDependencyGraph(IReadOnlyList<FileDependencyResult> edges, string format, JsonSerializerOptions jsonOptions)
+    {
+        switch (format)
+        {
+            case OutputFormatDot:
+                Console.WriteLine("digraph deps {");
+                foreach (var edge in edges)
+                    Console.WriteLine($"  \"{EscapeDot(edge.SourcePath)}\" -> \"{EscapeDot(edge.TargetPath)}\" [label=\"{edge.ReferenceCount}\"];");
+                Console.WriteLine("}");
+                break;
+            case OutputFormatGraphMl:
+                Console.WriteLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+                Console.WriteLine("<graphml xmlns=\"http://graphml.graphdrawing.org/xmlns\"><graph edgedefault=\"directed\">");
+                foreach (var node in edges.SelectMany(edge => new[] { edge.SourcePath, edge.TargetPath }).Distinct(StringComparer.Ordinal))
+                    Console.WriteLine($"<node id=\"{System.Security.SecurityElement.Escape(node)}\" />");
+                foreach (var edge in edges)
+                    Console.WriteLine($"<edge source=\"{System.Security.SecurityElement.Escape(edge.SourcePath)}\" target=\"{System.Security.SecurityElement.Escape(edge.TargetPath)}\"><data key=\"references\">{edge.ReferenceCount}</data></edge>");
+                Console.WriteLine("</graph></graphml>");
+                break;
+            case OutputFormatJsonGraph:
+                var nodes = edges.SelectMany(edge => new[] { edge.SourcePath, edge.TargetPath }).Distinct(StringComparer.Ordinal).Select(path => new JsonObject { ["id"] = path }).ToArray<JsonNode?>();
+                var graphEdges = edges.Select(edge => new JsonObject { ["source"] = edge.SourcePath, ["target"] = edge.TargetPath, ["reference_count"] = edge.ReferenceCount }).ToArray<JsonNode?>();
+                Console.WriteLine(new JsonObject { ["nodes"] = new JsonArray(nodes), ["edges"] = new JsonArray(graphEdges) }.ToJsonString(jsonOptions));
+                break;
+        }
+    }
+
+    private static string EscapeDot(string value) => value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
 
     private static List<FileDependencyResult> GetWorkspaceFileDependencies(DbReader primaryReader, QueryCommandOptions options, bool reverse)
     {
@@ -4365,7 +4667,7 @@ public static class QueryCommandRunner
     // `--kind replacement_chra` のようなタイプミスを did-you-mean で救うため、
     // FileIndexer.cs 内の `Kind = "..."` 代入と同期させる (#1582)。
     private static readonly string[] AllValidValidateKinds =
-        ["bom", "cr_only_line_endings", "file_too_large", "line_too_long", "mixed_line_endings", "mixed_line_endings_three_way", "non_utf8_likely", "null_byte", "replacement_char", "utf16_bom"];
+        ["bom", "cr_only_line_endings", "file_too_large", "fts_token_too_long", "line_too_long", "mixed_line_endings", "mixed_line_endings_three_way", "non_utf8_likely", "null_byte", "replacement_char", "utf16_bom"];
 
     public static int RunValidate(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -4552,7 +4854,7 @@ public static class QueryCommandRunner
         string? dataDir = null;
         bool? json = null;
         string jsonOutputFormat = JsonOutputFormatNdjson;
-        int limit = ResolveDefaultPositiveInt(DefaultLimitEnvironmentVariable, 20, "--limit", out var defaultLimitError);
+        int limit = ResolveDefaultPositiveInt(DefaultLimitEnvironmentVariable, DefaultQueryLimit, "--limit", out var defaultLimitError);
         string? lang = null;
         string? kind = null;
         string? query = null;
@@ -4613,6 +4915,8 @@ public static class QueryCommandRunner
         var rankMode = ReferenceRankMode.Weighted;
         var extraNames = new List<string>();
         bool impactDeprecatedDepthUsed = false;
+        List<string>? mapSections = null;
+        bool dependencyCycles = false;
 
         void AddParseError(string error)
         {
@@ -4752,7 +5056,9 @@ public static class QueryCommandRunner
                         if (TryParseOutputFormat(formatValue!, out var parsedOutputFormat))
                         {
                             outputFormat = parsedOutputFormat;
-                            if (parsedOutputFormat != OutputFormatText)
+                            if (parsedOutputFormat != OutputFormatText &&
+                                parsedOutputFormat != OutputFormatDot &&
+                                parsedOutputFormat != OutputFormatGraphMl)
                                 json = true;
                         }
                         else
@@ -4847,6 +5153,15 @@ public static class QueryCommandRunner
                     else
                         AddParseError(rankByError!);
                     break;
+                case "--sections":
+                    if (TryReadStringOptionValue(args, ref i, "--sections", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var sectionsValue, out var sectionsError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--sections", sectionsValue!);
+                        mapSections = ParseMapSections(sectionsValue!, AddParseError);
+                    }
+                    else
+                        AddParseError(sectionsError!);
+                    break;
                 case "--fts":
                     rawFts = true;
                     break;
@@ -4855,6 +5170,9 @@ public static class QueryCommandRunner
                     break;
                 case "--count":
                     countOnly = true;
+                    break;
+                case "--cycles":
+                    dependencyCycles = true;
                     break;
                 case "--strict-not-found":
                     strictNotFound = true;
@@ -5301,8 +5619,38 @@ public static class QueryCommandRunner
             StatusConfig = statusConfig,
             RankMode = rankMode,
             ExtraNames = extraNames,
+            MapSections = mapSections,
+            DependencyCycles = dependencyCycles,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
+    }
+
+    private static List<string> ParseMapSections(string rawValue, Action<string> addParseError)
+    {
+        var sections = new List<string>();
+        foreach (var rawSection in rawValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var section = rawSection.ToLowerInvariant();
+            switch (section)
+            {
+                case "tree":
+                case "modules":
+                    sections.Add("tree");
+                    break;
+                case "languages":
+                case "hotspots":
+                case "metrics":
+                    sections.Add(section);
+                    break;
+                default:
+                    addParseError($"Error: --sections contains unsupported section '{rawSection}'. Use one or more of tree, languages, hotspots, metrics.");
+                    break;
+            }
+        }
+
+        if (sections.Count == 0)
+            addParseError("Error: --sections cannot be empty. Use one or more of tree, languages, hotspots, metrics.");
+        return sections.Distinct(StringComparer.Ordinal).ToList();
     }
 
     private static void ValidateQueryPathOptionValues(
@@ -6492,6 +6840,7 @@ public static class QueryCommandRunner
         string? resultsKey = null,
         string? query = null,
         ExactZeroHintResult? exactZeroHint = null,
+        FtsQueryDiagnostics? ftsQueryDiagnostics = null,
         bool includeFiles = false,
         bool? graphTableAvailable = null,
         bool? degraded = null,
@@ -6522,6 +6871,11 @@ public static class QueryCommandRunner
         }
         if (exactZeroHint != null)
             payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, CliJsonSerializerContextFactory.Create(jsonOptions).ExactZeroHintResult);
+        if (ftsQueryDiagnostics is { HasDegradation: true })
+        {
+            payload["query_degraded_reason"] = ftsQueryDiagnostics.QueryDegradedReason;
+            payload["tokens_dropped"] = JsonSerializer.SerializeToNode(ftsQueryDiagnostics.TokensDropped.ToList(), CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+        }
         if (queryOptions != null)
             payload["query_context"] = BuildQueryContextJson(queryOptions, jsonOptions);
         extraFields?.Invoke(payload);
@@ -7550,6 +7904,7 @@ public static class QueryCommandRunner
         ["--stale-after"] = "pass a compact positive duration, e.g. `--stale-after 30m`, `--stale-after 2h`, or `--stale-after 7d`.",
         ["--slow-query-ms"] = "pass a non-negative millisecond threshold, e.g. `--slow-query-ms 500`; use 0 to log every profiled SQL statement.",
         ["--min-entrypoint-confidence"] = "pass a decimal from 0.0 through 1.0, e.g. `--min-entrypoint-confidence 0.6`.",
+        ["--sections"] = "pass a comma-separated map section list, e.g. `--sections tree,languages`. Supported sections: tree, languages, hotspots, metrics.",
     };
 
     // Build a missing-value error string with optional caller-supplied hint lines first, then the
@@ -7930,5 +8285,7 @@ public sealed class QueryCommandOptions
     public bool StatusConfig { get; init; }
     public ReferenceRankMode RankMode { get; init; } = ReferenceRankMode.Weighted;
     public List<string> ExtraNames { get; init; } = [];
+    public List<string>? MapSections { get; init; }
+    public bool DependencyCycles { get; init; }
     public string? ParseError { get; init; }
 }
