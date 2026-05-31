@@ -9046,4 +9046,26 @@ public class IndexCommandRunnerTests
                 File.Delete(lockPath);
         }
     }
+
+    [Fact]
+    public void Run_ReadOnlyFlag_ReturnsUsageError()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_index_readonly_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hi')\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--read-only", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("query commands", json.GetProperty("message").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
 }
