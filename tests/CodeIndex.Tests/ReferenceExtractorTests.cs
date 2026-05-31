@@ -11515,6 +11515,41 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PhpPropertyHooks_EmitReferencesInsideHookBodies()
+    {
+        const string content = """
+            <?php
+            class User {
+                public string $displayName {
+                    get => $this->firstName . ' ' . $this->lastName;
+                    set => $this->_displayName = strtoupper($value);
+                }
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "firstName"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "displayName.get");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "lastName"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "displayName.get");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "_displayName"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "displayName.set");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "strtoupper"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "displayName.set");
+    }
+
+    [Fact]
     public void Extract_PhpLanguageConstructCalls_AreIgnored()
     {
         const string content = """
