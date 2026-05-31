@@ -136,9 +136,13 @@ public class SuggestionStore
         return WithFileLock(() =>
         {
             var existing = ReadUnlocked();
-            PruneUnlocked(existing);
+            var prunedBeforeDuplicateCheck = PruneUnlocked(existing);
             if (FindDuplicate(existing, record, ResolveDedupThreshold()).Record != null)
+            {
+                if (prunedBeforeDuplicateCheck)
+                    SaveUnlocked(existing);
                 return false;
+            }
 
             existing.Add(record);
             PruneUnlocked(existing);
@@ -207,7 +211,7 @@ public class SuggestionStore
         var reservation = WithFileLock(() =>
         {
             var existing = ReadUnlocked();
-            PruneUnlocked(existing);
+            var prunedBeforeDuplicateCheck = PruneUnlocked(existing);
             var duplicate = FindDuplicate(existing, record, ResolveDedupThreshold());
             var found = duplicate.Record;
 
@@ -239,6 +243,9 @@ public class SuggestionStore
                     isNew ? null : current.Hash,
                     isNew ? null : duplicate.Score);
             }
+
+            if (prunedBeforeDuplicateCheck)
+                SaveUnlocked(existing);
 
             return new SubmitReservation(
                 isNew,
@@ -757,7 +764,7 @@ public class SuggestionStore
         return record.NextRetryAt.Value <= DateTime.UtcNow;
     }
 
-    private void PruneUnlocked(List<SuggestionRecord> records)
+    private bool PruneUnlocked(List<SuggestionRecord> records)
     {
         var maxAge = ResolveMaxAge();
         var maxCount = ResolveMaxCount();
@@ -782,7 +789,7 @@ public class SuggestionStore
         }
 
         if (pruned.Count == 0)
-            return;
+            return false;
 
         ArchivePrunedRecords(pruned);
         try
@@ -792,6 +799,8 @@ public class SuggestionStore
         catch (ObjectDisposedException)
         {
         }
+
+        return true;
     }
 
     private void ArchivePrunedRecords(IEnumerable<SuggestionRecord> records)

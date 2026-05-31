@@ -793,6 +793,24 @@ public class SuggestionStoreTests : IDisposable
     }
 
     [Fact]
+    public void TryAdd_DuplicateStillPersistsPrunedRecords()
+    {
+        var old = MakeRecord("other", null, "Old suggestion");
+        old.CreatedAt = DateTime.UtcNow.AddDays(-400);
+        var duplicate = MakeRecord("other", null, "Duplicate suggestion");
+        Assert.True(_store.TryAdd(old));
+        Assert.True(_store.TryAdd(duplicate));
+
+        Assert.False(_store.TryAdd(MakeRecord("other", null, "Duplicate suggestion")));
+
+        var all = _store.LoadAll();
+        Assert.Single(all);
+        Assert.Equal("Duplicate suggestion", all[0].Description);
+        var archivePath = Path.Combine(_tempDir, "suggestions-codeindex.archive.jsonl");
+        Assert.Equal(1, File.ReadAllText(archivePath).Split("Old suggestion").Length - 1);
+    }
+
+    [Fact]
     public void TryAdd_MoveFailure_DoesNotLeaveOrphanTmpFile()
     {
         // Force File.Move to fail by pre-creating the destination as a directory.
