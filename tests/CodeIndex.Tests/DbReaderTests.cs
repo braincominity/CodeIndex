@@ -129,15 +129,6 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void AnalyzeFtsQuery_AllStopwords_ReturnsDegradedReason()
-    {
-        var diagnostics = DbReader.AnalyzeFtsQuery("and or the");
-
-        Assert.Equal(DbReader.AllTokensFilteredAsStopwordsReason, diagnostics.QueryDegradedReason);
-        Assert.Equal(["and", "or", "the"], diagnostics.TokensDropped);
-    }
-
-    [Fact]
     public void AnalyzeFtsQuery_AllTokensTooLong_ReturnsDegradedReason()
     {
         var query = new string('x', DbReader.FtsUnicode61MaxTokenLength + 1);

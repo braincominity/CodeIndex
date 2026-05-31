@@ -10,7 +10,6 @@ namespace CodeIndex.Database;
 public partial class DbReader
 {
     internal const int FtsUnicode61MaxTokenLength = 1000;
-    internal const string AllTokensFilteredAsStopwordsReason = "all_tokens_filtered_as_stopwords";
     internal const string AllTokensFilteredByLengthReason = "all_tokens_filtered_by_length";
     internal const int MaxRawFtsQueryLength = 2000;
     internal const int MaxRawFtsBooleanOperators = 64;
@@ -60,10 +59,6 @@ public partial class DbReader
         var tooLong = tokens.Where(token => token.EnumerateRunes().Count() > FtsUnicode61MaxTokenLength).Distinct(StringComparer.Ordinal).ToArray();
         if (tooLong.Length == tokens.Length)
             return new FtsQueryDiagnostics(AllTokensFilteredByLengthReason, tooLong);
-
-        var stopwords = tokens.Where(token => CommonFtsStopwords.Contains(token.Normalize(NormalizationForm.FormC), StringComparer.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        if (stopwords.Length == tokens.Length)
-            return new FtsQueryDiagnostics(AllTokensFilteredAsStopwordsReason, stopwords);
 
         return FtsQueryDiagnostics.None;
     }
@@ -304,13 +299,6 @@ public partial class DbReader
             ? CSharpVerbatimNameNormalizer.Normalize(normalized)
             : normalized;
     }
-
-    private static readonly string[] CommonFtsStopwords =
-    [
-        "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from", "if", "in", "into",
-        "is", "it", "no", "not", "of", "on", "or", "such", "that", "the", "their", "then", "there",
-        "these", "they", "this", "to", "was", "will", "with"
-    ];
 
     internal static string ValidateRawFtsQuery(string query)
     {
