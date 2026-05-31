@@ -253,10 +253,11 @@ public class DbReaderTests : IDisposable
     [Fact]
     public void FileCountHelpers_UseGroupedReferenceCounts()
     {
-        var joinSql = GetPrivateStringProperty(_reader, "FileReferenceCountJoinSql");
+        var joinSql = InvokePrivateStringMethod(_reader, "BuildFileReferenceCountJoinSql", "file_page");
         var countSql = GetPrivateStringProperty(_reader, "FileReferenceCountSql");
 
-        Assert.Contains("GROUP BY file_id", joinSql, StringComparison.Ordinal);
+        Assert.Contains("GROUP BY r.file_id", joinSql, StringComparison.Ordinal);
+        Assert.Contains("JOIN file_page file_set ON file_set.id = r.file_id", joinSql, StringComparison.Ordinal);
         Assert.DoesNotContain("WHERE file_id = f.id", joinSql, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("COALESCE(reference_counts.reference_count, 0)", countSql);
     }
@@ -449,6 +450,13 @@ public class DbReaderTests : IDisposable
         var property = typeof(DbReader).GetProperty(name, BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(property);
         return Assert.IsType<string>(property!.GetValue(reader));
+    }
+
+    private static string InvokePrivateStringMethod(DbReader reader, string name, params object[] args)
+    {
+        var method = typeof(DbReader).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        return Assert.IsType<string>(method!.Invoke(reader, args));
     }
 
     private SqliteCommand CreateSearchReferencesCommandForSql(string query)

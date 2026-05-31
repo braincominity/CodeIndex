@@ -878,13 +878,14 @@ public partial class DbReader : IDisposable
         }
     }
 
-    private string FileReferenceCountJoinSql =>
+    private string BuildFileReferenceCountJoinSql(string fileSetCteName) =>
         _hasReferencesTable
-            ? @"
+            ? $@"
             LEFT JOIN (
-                SELECT file_id, COUNT(*) AS reference_count
-                FROM symbol_references
-                GROUP BY file_id
+                SELECT r.file_id, COUNT(*) AS reference_count
+                FROM symbol_references r
+                JOIN {fileSetCteName} file_set ON file_set.id = r.file_id
+                GROUP BY r.file_id
             ) AS reference_counts ON reference_counts.file_id = f.id"
             : string.Empty;
 
@@ -1417,20 +1418,13 @@ public partial class DbReader : IDisposable
         using var cmd = _conn.CreateCommand();
 
         var sql = $@"
-            SELECT f.path, f.lang, f.size, f.lines,
-                   COALESCE(symbol_counts.symbol_count, 0) AS symbol_count,
-                   {FileReferenceCountSql} AS reference_count,
-                   {GetFileColumnSql("checksum")} AS checksum,
-                   {GetFileColumnSql("modified")} AS modified,
-                   {GetFileColumnSql("indexed_at")} AS indexed_at
-            FROM files f
-            LEFT JOIN (
-                SELECT file_id, COUNT(*) AS symbol_count
-                FROM symbols
-                GROUP BY file_id
-            ) AS symbol_counts ON symbol_counts.file_id = f.id
-            {FileReferenceCountJoinSql}
-            WHERE 1=1";
+            WITH file_page AS (
+                SELECT f.id, f.path, f.lang, f.size, f.lines,
+                       {GetFileColumnSql("checksum")} AS checksum,
+                       {GetFileColumnSql("modified")} AS modified,
+                       {GetFileColumnSql("indexed_at")} AS indexed_at
+                FROM files f
+                WHERE 1=1";
 
         if (query != null)
             sql += " AND f.path LIKE @query ESCAPE '\\'";
@@ -1440,6 +1434,24 @@ public partial class DbReader : IDisposable
             sql += " AND f.modified >= @since";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += $" ORDER BY {PathBucketOrder}, f.path LIMIT @limit";
+
+        sql += $@"
+            )
+            SELECT f.path, f.lang, f.size, f.lines,
+                   COALESCE(symbol_counts.symbol_count, 0) AS symbol_count,
+                   {FileReferenceCountSql} AS reference_count,
+                   f.checksum,
+                   f.modified,
+                   f.indexed_at
+            FROM file_page f
+            LEFT JOIN (
+                SELECT s.file_id, COUNT(*) AS symbol_count
+                FROM symbols s
+                JOIN file_page file_set ON file_set.id = s.file_id
+                GROUP BY s.file_id
+            ) AS symbol_counts ON symbol_counts.file_id = f.id
+            {BuildFileReferenceCountJoinSql("file_page")}
+            ORDER BY {PathBucketOrder}, f.path";
 
         cmd.CommandText = sql;
         if (query != null)
