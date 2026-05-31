@@ -265,6 +265,40 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Go_GenericMethodsEmitTypeParameterAndParameterReferences()
+    {
+        const string content = """
+            package demo
+
+            type Repo struct {}
+            type Constraint interface {}
+            type Input struct {}
+
+            func (r *Repo) Get[T Constraint](input Input) T {
+                var zero T
+                return zero
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        var references = ReferenceExtractor.Extract(1, "go", content, symbols);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "Get");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Constraint"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Get");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Input"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Get");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "T"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Get");
+    }
+
+    [Fact]
     public void TryGetExtractor_RegisteredLanguage_ReturnsAddressableExtractor()
     {
         const string content = """
@@ -11481,6 +11515,43 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PhpPropertyHooks_EmitReferencesInsideHookBodies()
+    {
+        const string content = """
+            <?php
+            class User {
+                public string $displayName {
+                    get => $this->firstName . ' ' . $this->lastName;
+                    set {
+                        $this->_displayName = strtoupper($value);
+                    }
+                }
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "firstName"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "displayName.get");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "lastName"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "displayName.get");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "_displayName"
+            && reference.ReferenceKind == "reference"
+            && reference.ContainerName == "displayName.set");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "strtoupper"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "displayName.set");
+    }
+
+    [Fact]
     public void Extract_PhpLanguageConstructCalls_AreIgnored()
     {
         const string content = """
@@ -13640,6 +13711,7 @@ public class ReferenceExtractorTests
 
             <UserCard User="CurrentUser" />
             <Shared.DetailPanel />
+            <MyApp.Components.Forms.LoginButton OnClick="HandleClick" />
             <button @onclick="HandleClick">Save</button>
             <button @onclick="@HandleClick">Save explicit</button>
             <button @onclick="InheritedClick">Inherited</button>
@@ -13670,14 +13742,19 @@ public class ReferenceExtractorTests
         var qualifiedComponentColumn = content
             .Split('\n')
             .Single(line => line.Contains("Shared.DetailPanel", StringComparison.Ordinal))
-            .IndexOf("DetailPanel", StringComparison.Ordinal) + 1;
+            .IndexOf("Shared.DetailPanel", StringComparison.Ordinal) + 1;
+        var nestedComponentColumn = content
+            .Split('\n')
+            .Single(line => line.Contains("MyApp.Components.Forms.LoginButton", StringComparison.Ordinal))
+            .IndexOf("MyApp.Components.Forms.LoginButton", StringComparison.Ordinal) + 1;
 
         Assert.Contains(references, r => r.SymbolName == "BasePage" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "IUserActions" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Authorize" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "UserService" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "UserCard" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "DetailPanel" && r.ReferenceKind == "call" && r.Column == qualifiedComponentColumn);
+        Assert.Contains(references, r => r.SymbolName == "Shared.DetailPanel" && r.ReferenceKind == "call" && r.Column == qualifiedComponentColumn);
+        Assert.Contains(references, r => r.SymbolName == "MyApp.Components.Forms.LoginButton" && r.ReferenceKind == "call" && r.Column == nestedComponentColumn);
         Assert.Contains(references, r => r.SymbolName == "HandleClick" && r.ReferenceKind == "razor_event_binding");
         Assert.DoesNotContain(references, r =>
             r.SymbolName == "HandleClick"

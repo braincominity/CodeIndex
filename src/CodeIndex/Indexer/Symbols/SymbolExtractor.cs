@@ -645,6 +645,9 @@ public static partial class SymbolExtractor
     private static readonly Regex JavaCompactConstructorRegex = new(
         @"^\s*(?:(?<visibility>public|private|protected)\s+)?(?<name>\w+)\s*(?=\{|$)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex PhpPropertyHookAccessorRegex = new(
+        @"^\s*(?<name>get|set)\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex DartClassDeclarationRegex = new(
         @"^\s*(?:(?:abstract|base|final|interface|sealed)\s+)*(?:mixin\s+)?class\s+\w+",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -4060,6 +4063,8 @@ public static partial class SymbolExtractor
             ExtractPhpDocblockTypeAliasSymbols(fileId, lines, symbols);
         if (lang == "php")
             ExtractPhpDocblockImportTypeSymbols(fileId, lines, symbols);
+        if (lang == "php")
+            ExtractPhpPropertyHookSupplementalSymbols(fileId, lines, structuralLines, symbols);
         if (lang == "swift")
             ExtractSwiftPropertySupplementalSymbols(fileId, lines, structuralLines, symbols);
         if (lang == "sql")
@@ -4855,6 +4860,83 @@ public static partial class SymbolExtractor
            && name.StartsWith("use", StringComparison.Ordinal)
            && IsJavaScriptTypeScriptIdentifierStart(name[3])
            && char.IsUpper(name[3]);
+
+    private static void ExtractPhpPropertyHookSupplementalSymbols(
+        long fileId,
+        string[] lines,
+        string[] structuralLines,
+        List<SymbolRecord> symbols)
+    {
+        var existing = new HashSet<string>(
+            symbols.Select(symbol => $"{symbol.Kind}:{symbol.Name}:{symbol.Line}"),
+            StringComparer.Ordinal);
+
+        foreach (var property in symbols
+                     .Where(symbol => symbol.Kind == "property"
+                                      && symbol.Line >= 1
+                                      && symbol.Line <= lines.Length)
+                     .ToArray())
+        {
+            var lineIndex = property.Line - 1;
+            var openBraceColumn = structuralLines[lineIndex].IndexOf('{', StringComparison.Ordinal);
+            if (openBraceColumn < 0)
+                continue;
+
+            var closeBraceLine = FindBraceRangeEndLine(structuralLines, lineIndex, openBraceColumn);
+            if (closeBraceLine <= lineIndex)
+                continue;
+
+            var sawAccessor = false;
+            for (var accessorLine = lineIndex + 1; accessorLine <= closeBraceLine; accessorLine++)
+            {
+                var accessorMatch = PhpPropertyHookAccessorRegex.Match(structuralLines[accessorLine]);
+                if (!accessorMatch.Success)
+                    continue;
+
+                var accessorName = accessorMatch.Groups["name"].Value;
+                var symbolName = $"{property.Name}.{accessorName}";
+                var key = $"accessor:{symbolName}:{accessorLine + 1}";
+                if (!existing.Add(key))
+                    continue;
+
+                var accessorBodyEndLine = accessorLine;
+                var accessorNameEnd = accessorMatch.Groups["name"].Index + accessorMatch.Groups["name"].Length;
+                var accessorOpenBraceColumn = structuralLines[accessorLine].IndexOf('{', accessorNameEnd);
+                if (accessorOpenBraceColumn >= 0)
+                {
+                    var accessorCloseBraceLine = FindBraceRangeEndLine(structuralLines, accessorLine, accessorOpenBraceColumn);
+                    if (accessorCloseBraceLine > accessorLine && accessorCloseBraceLine <= closeBraceLine)
+                        accessorBodyEndLine = accessorCloseBraceLine;
+                }
+
+                sawAccessor = true;
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "accessor",
+                    Name = symbolName,
+                    Line = accessorLine + 1,
+                    StartLine = accessorLine + 1,
+                    StartColumn = accessorMatch.Groups["name"].Index,
+                    EndLine = accessorBodyEndLine + 1,
+                    BodyStartLine = accessorLine + 1,
+                    BodyEndLine = accessorBodyEndLine + 1,
+                    Signature = lines[accessorLine].Trim(),
+                    ContainerKind = "property",
+                    ContainerName = property.Name,
+                    ContainerQualifiedName = property.ContainerQualifiedName,
+                });
+            }
+
+            if (sawAccessor)
+            {
+                property.SubKind = CombineSubKinds(property.SubKind, "php_property_hook");
+                property.EndLine = Math.Max(property.EndLine, closeBraceLine + 1);
+                property.BodyStartLine = lineIndex + 1;
+                property.BodyEndLine = closeBraceLine + 1;
+            }
+        }
+    }
 
     private static void ExtractSwiftPropertySupplementalSymbols(
         long fileId,

@@ -535,7 +535,7 @@ internal static class LanguageReferenceExtractionSupport
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex RazorComponentTagRegex = new(
-        @"<(?<name>[A-Z][A-Za-z0-9_]*(?:\.[A-Za-z_]\w*)?)(?=[\s>/])",
+        @"<(?<name>[A-Z][A-Za-z0-9_]*(?:\.[A-Za-z_]\w*)*)(?=[\s>/])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex RazorDirectiveTypeRegex = new(
         @"^\s*@(?:inherits|implements|model)\s+(?<type>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)",
@@ -660,11 +660,10 @@ internal static class LanguageReferenceExtractionSupport
         {
             var group = match.Groups["name"];
             var rawName = group.Value;
-            var name = LastQualifiedSegment(rawName);
+            var name = rawName;
             if (definitionNames?.Contains(name) == true)
                 continue;
-            var nameOffset = rawName.LastIndexOf(name, StringComparison.Ordinal);
-            var nameIndex = group.Index + Math.Max(0, nameOffset);
+            var nameIndex = group.Index;
 
             ReferenceExtractor.AddReference(
                 references,
@@ -4725,8 +4724,29 @@ internal static class LanguageReferenceExtractionSupport
                 if (nextParen > afterReceiver)
                 {
                     EmitGoParameterListTypes(preparedLine, firstParen + 1, receiverClose, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-                    parameterOpen = nextParen;
                     functionHeaderStart = afterReceiver;
+
+                    var afterName = afterReceiver + 1;
+                    while (afterName < preparedLine.Length && IsSimpleIdentifierPart(preparedLine[afterName]))
+                        afterName++;
+                    while (afterName < preparedLine.Length && char.IsWhiteSpace(preparedLine[afterName]))
+                        afterName++;
+
+                    if (afterName < preparedLine.Length && preparedLine[afterName] == '[')
+                    {
+                        var typeParameterClose = ReferenceExtractor.FindMatchingChar(preparedLine, afterName, '[', ']');
+                        if (typeParameterClose > afterName)
+                        {
+                            EmitGoTypeParameterConstraints(preparedLine, afterName, typeParameterClose + 1, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+                            var valueParameterOpen = preparedLine.IndexOf('(', typeParameterClose + 1);
+                            if (valueParameterOpen < 0)
+                                return;
+
+                            nextParen = valueParameterOpen;
+                        }
+                    }
+
+                    parameterOpen = nextParen;
                 }
             }
         }
