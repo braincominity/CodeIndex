@@ -15,6 +15,13 @@ namespace CodeIndex.Indexer;
 /// </summary>
 public class FileIndexer
 {
+    public enum SymlinkPolicy
+    {
+        None,
+        Internal,
+        All,
+    }
+
     internal enum FileProbeStatus
     {
         Supported,
@@ -49,7 +56,8 @@ public class FileIndexer
         IReadOnlySet<string> CheckpointedDirectories,
         IReadOnlyList<string> AncestorIgnoreDirectories,
         IReadOnlyList<string> AttributePrunedDirectories,
-        IReadOnlyList<string> NestedRepositories)
+        IReadOnlyList<string> NestedRepositories,
+        IReadOnlyList<string> DanglingSymlinks)
     {
         public bool HadErrors => Errors.Any(error => error.IsFatal);
     }
@@ -413,6 +421,7 @@ public class FileIndexer
     private readonly Func<string, IEnumerable<string>> _enumerateFiles;
     private readonly Dictionary<string, bool> _directoryIgnoreCaseCache;
     private readonly long _maxFileSizeBytes;
+    private readonly SymlinkPolicy _symlinkPolicy;
     // Submodule working-tree paths declared in <ignoreRuleRoot>/.gitmodules, relative to
     // _projectRoot and slash-normalized. Used to override SkipDirs so that submodules
     // hosted under SkipDirs-named directories (e.g. vendor/foo) remain visible to the
@@ -927,7 +936,8 @@ public class FileIndexer
         string? ignoreRuleRoot,
         long? maxFileSizeBytes,
         Func<string, bool?>? directoryIgnoreCaseProbe,
-        Func<string, IEnumerable<string>>? enumerateFiles = null)
+        Func<string, IEnumerable<string>>? enumerateFiles = null,
+        SymlinkPolicy symlinkPolicy = SymlinkPolicy.None)
     {
         _projectRoot = Path.GetFullPath(projectRoot);
         _ignoreRuleRoot = NormalizeIgnoreRuleRoot(ignoreRuleRoot);
@@ -937,6 +947,7 @@ public class FileIndexer
         _enumerateFiles = enumerateFiles ?? (dir => Directory.EnumerateFiles(LongPath.EnsureWindowsPrefix(dir)));
         _directoryIgnoreCaseCache = new Dictionary<string, bool>(StringComparer.Ordinal);
         _maxFileSizeBytes = ResolveMaxFileSizeBytes(maxFileSizeBytes);
+        _symlinkPolicy = symlinkPolicy;
         var pathComparer = _ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         (_submodulePaths, _submoduleAncestorPaths) = LoadGitSubmodulePaths(_ignoreRuleRoot, _projectRoot, pathComparer);
     }
@@ -1286,6 +1297,97 @@ public class FileIndexer
         {
             return false;
         }
+    }
+
+    private static bool IsReparsePoint(string path)
+    {
+        try
+        {
+            return (File.GetAttributes(LongPath.EnsureWindowsPrefix(path)) & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
+    private bool ShouldSkipDirectoryLink(string subDir, List<ScanError> errors, HashSet<string> danglingSymlinks)
+    {
+        if (!IsReparsePoint(subDir))
+            return HasSkippedAttributes(subDir);
+
+        var relative = ToRelativePath(subDir);
+        DirectoryInfo info = new(LongPath.EnsureWindowsPrefix(subDir));
+        FileSystemInfo? target;
+        try
+        {
+            target = info.ResolveLinkTarget(returnFinalTarget: true);
+        }
+        catch (FileNotFoundException)
+        {
+            target = null;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            target = null;
+        }
+        catch (IOException)
+        {
+            target = null;
+        }
+
+        if (target?.FullName is not { Length: > 0 } targetPath || !Directory.Exists(LongPath.EnsureWindowsPrefix(targetPath)))
+        {
+            danglingSymlinks.Add(relative);
+            errors.Add(new ScanError(relative, "Skipped dangling symlink because its target could not be resolved.", ScanIssueSeverity.Warning));
+            return true;
+        }
+
+        if (_symlinkPolicy == SymlinkPolicy.All)
+            return false;
+
+        if (_symlinkPolicy == SymlinkPolicy.Internal && IsPathEqualOrParent(_projectRoot, targetPath))
+            return false;
+
+        errors.Add(new ScanError(relative, $"Skipped symlinked directory outside the active symlink policy: {targetPath}", ScanIssueSeverity.Warning));
+        return true;
+    }
+
+    private static string GetDirectoryTraversalIdentity(string directory)
+    {
+        if (!IsReparsePoint(directory))
+            return directory;
+
+        try
+        {
+            DirectoryInfo info = new(LongPath.EnsureWindowsPrefix(directory));
+            var target = info.ResolveLinkTarget(returnFinalTarget: true);
+            if (target?.FullName is { Length: > 0 } targetPath)
+                return targetPath;
+        }
+        catch (FileNotFoundException)
+        {
+        }
+        catch (DirectoryNotFoundException)
+        {
+        }
+        catch (IOException)
+        {
+        }
+
+        return directory;
     }
 
     internal static FileProbeStatus GetFileIndexability(string filePath)
@@ -1699,12 +1801,14 @@ public class FileIndexer
             : new HashSet<string>(StringComparer.Ordinal);
         var attributePrunedDirectories = new HashSet<string>(StringComparer.Ordinal);
         var nestedRepositories = new HashSet<string>(StringComparer.Ordinal);
+        var danglingSymlinks = new HashSet<string>(StringComparer.Ordinal);
         var visitedFileIdentities = new HashSet<FileIdentity>();
+        var visitedDirectories = new HashSet<string>(StringComparer.Ordinal) { NormalizePathForComparison(_projectRoot) };
         var fullyScanned = true;
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         if (preloadResult.IgnoreRulesAvailable)
         {
-            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeCheckpointedDirectories, attributePrunedDirectories, nestedRepositories, visitedFileIdentities, preloadResult.Rules, isProjectRoot: true, continueOnError, cancellationToken);
+            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeCheckpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, preloadResult.Rules, isProjectRoot: true, continueOnError, cancellationToken);
         }
         return new ScanFilesResult(
             files,
@@ -1717,7 +1821,8 @@ public class FileIndexer
             activeCheckpointedDirectories.Concat(fullyScannedDirectories).ToHashSet(StringComparer.Ordinal),
             _ancestorIgnoreDirectories.ToList(),
             attributePrunedDirectories.ToList(),
-            nestedRepositories.OrderBy(path => path, StringComparer.Ordinal).ToList());
+            nestedRepositories.OrderBy(path => path, StringComparer.Ordinal).ToList(),
+            danglingSymlinks.OrderBy(path => path, StringComparer.Ordinal).ToList());
     }
 
     private bool ScanDirectory(
@@ -1732,7 +1837,9 @@ public class FileIndexer
         HashSet<string> checkpointedDirectories,
         HashSet<string> attributePrunedDirectories,
         HashSet<string> nestedRepositories,
+        HashSet<string> danglingSymlinks,
         HashSet<FileIdentity> visitedFileIdentities,
+        HashSet<string> visitedDirectories,
         IgnoreRuleSet activeIgnoreRules,
         bool isProjectRoot = false,
         bool continueOnError = true,
@@ -1752,7 +1859,7 @@ public class FileIndexer
             return true;
         }
 
-        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, visitedFileIdentities, activeIgnoreRules, continueOnError, cancellationToken);
+        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, activeIgnoreRules, continueOnError, cancellationToken);
     }
 
     private bool IsNestedGitRepository(string dir)
@@ -1776,7 +1883,9 @@ public class FileIndexer
         HashSet<string> checkpointedDirectories,
         HashSet<string> attributePrunedDirectories,
         HashSet<string> nestedRepositories,
+        HashSet<string> danglingSymlinks,
         HashSet<FileIdentity> visitedFileIdentities,
+        HashSet<string> visitedDirectories,
         IgnoreRuleSet inheritedIgnoreRules,
         bool continueOnError,
         CancellationToken cancellationToken = default)
@@ -1929,6 +2038,21 @@ public class FileIndexer
             // 子サブツリー失敗が sibling file purge の authority を奪ってはいけない。
             listedDirectories.Add(ToRelativePath(dir));
 
+            foreach (var enumeratedEntry in Directory.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(dir)))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var entry = LongPath.RemoveWindowsPrefix(enumeratedEntry);
+                if (!IsReparsePoint(entry) || Directory.Exists(LongPath.EnsureWindowsPrefix(entry)))
+                    continue;
+
+                var relativeEntry = ToRelativePath(entry);
+                danglingSymlinks.Add(relativeEntry);
+                errors.Add(new ScanError(relativeEntry, "Skipped dangling symlink because its target could not be resolved.", ScanIssueSeverity.Warning));
+                listedDirectories.Add(relativeEntry);
+                fullyScannedDirectories.Add(relativeEntry);
+                attributePrunedDirectories.Add(relativeEntry);
+            }
+
             foreach (var enumeratedSubDir in Directory.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir)))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -1966,7 +2090,7 @@ public class FileIndexer
                 // drive root 走査で OS 管理 cache に降りないよう Hidden/System ディレクトリもスキップする。
                 // skip したディレクトリ自身を listed 扱い（immediate parent purge 用）かつ prune prefix として
                 // 記録することで、以前の実行でできた深い子孫エントリも purge walker が確実に削除できる。
-                if (HasSkippedAttributes(subDir))
+                if (ShouldSkipDirectoryLink(subDir, errors, danglingSymlinks))
                 {
                     var subRelative = ToRelativePath(subDir);
                     listedDirectories.Add(subRelative);
@@ -1975,7 +2099,18 @@ public class FileIndexer
                     continue;
                 }
 
-                var childFullyScanned = ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, visitedFileIdentities, activeIgnoreRules, continueOnError: continueOnError, cancellationToken: cancellationToken);
+                var resolvedSubDir = NormalizePathForComparison(GetDirectoryTraversalIdentity(subDir));
+                if (!visitedDirectories.Add(resolvedSubDir))
+                {
+                    var subRelative = ToRelativePath(subDir);
+                    errors.Add(new ScanError(subRelative, "Skipped symlinked directory because its resolved target was already scanned.", ScanIssueSeverity.Warning));
+                    listedDirectories.Add(subRelative);
+                    fullyScannedDirectories.Add(subRelative);
+                    attributePrunedDirectories.Add(subRelative);
+                    continue;
+                }
+
+                var childFullyScanned = ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, activeIgnoreRules, continueOnError: continueOnError, cancellationToken: cancellationToken);
                 fullyScanned &= childFullyScanned;
                 if (!continueOnError && !childFullyScanned)
                     break;
@@ -2523,8 +2658,8 @@ public class FileIndexer
         }
     }
 
-    private static string NormalizeIgnorePath(string path)
-        => path.Replace('\\', '/').TrimEnd('/');
+    internal static string NormalizeIgnorePath(string path)
+        => NormalizePathSeparators(path).TrimEnd('/');
 
     /// <summary>
     /// Normalize OS path separators to '/' for DB storage and lookup.
@@ -2594,46 +2729,52 @@ public class FileIndexer
         long sizeBytes;
         DateTime modifiedUtc;
         var ioPath = LongPath.EnsureWindowsPrefix(absolutePath);
-        using (var stream = new FileStream(
-            ioPath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            bufferSize: 4096,
-            useAsync: false))
+        for (var attempt = 0; ; attempt++)
         {
-            var initialLength = stream.Length;
-            if (initialLength > _maxFileSizeBytes)
-                throw new FileTooLargeSkippedException(
-                    normalizedRelativePath,
-                    initialLength,
-                    _maxFileSizeBytes,
-                    BuildFileTooLargeMessage(initialLength, grewDuringRead: false));
-
-            // Pre-size the accumulator to the observed length but cap initial capacity
-            // at the configured limit so a tampered Length cannot force a huge up-front allocation.
-            // 初期容量は観測した長さに合わせるが設定上限で打ち切り、Length を偽装
-            // されても巨大な事前確保を起こさないようにする。
-            var initialCapacity = (int)Math.Min(initialLength, _maxFileSizeBytes);
-            using var accumulator = new MemoryStream(initialCapacity);
-            var buffer = new byte[81920];
-            long total = 0;
-            int read;
-            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+            var modifiedBeforeRead = File.GetLastWriteTimeUtc(ioPath);
+            using (var stream = new FileStream(
+                ioPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 4096,
+                useAsync: false))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                total += read;
-                if (total > _maxFileSizeBytes)
+                var initialLength = stream.Length;
+                if (initialLength > _maxFileSizeBytes)
                     throw new FileTooLargeSkippedException(
                         normalizedRelativePath,
-                        total,
+                        initialLength,
                         _maxFileSizeBytes,
-                        BuildFileTooLargeMessage(total, grewDuringRead: true));
-                accumulator.Write(buffer, 0, read);
+                        BuildFileTooLargeMessage(initialLength, grewDuringRead: false));
+
+                // Pre-size the accumulator to the observed length but cap initial capacity
+                // at the configured limit so a tampered Length cannot force a huge up-front allocation.
+                // 初期容量は観測した長さに合わせるが設定上限で打ち切り、Length を偽装
+                // されても巨大な事前確保を起こさないようにする。
+                var initialCapacity = (int)Math.Min(initialLength, _maxFileSizeBytes);
+                using var accumulator = new MemoryStream(initialCapacity);
+                var buffer = new byte[81920];
+                long total = 0;
+                int read;
+                while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    total += read;
+                    if (total > _maxFileSizeBytes)
+                        throw new FileTooLargeSkippedException(
+                            normalizedRelativePath,
+                            total,
+                            _maxFileSizeBytes,
+                            BuildFileTooLargeMessage(total, grewDuringRead: true));
+                    accumulator.Write(buffer, 0, read);
+                }
+                bytes = accumulator.ToArray();
+                sizeBytes = total;
             }
-            bytes = accumulator.ToArray();
-            sizeBytes = total;
             modifiedUtc = File.GetLastWriteTimeUtc(ioPath);
+            if (modifiedUtc == modifiedBeforeRead || attempt > 0)
+                break;
         }
 
         // Compute the checksum on the byte stream after collapsing CRLF / CR to LF so

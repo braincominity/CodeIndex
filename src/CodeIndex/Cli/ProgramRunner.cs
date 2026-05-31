@@ -298,8 +298,30 @@ internal static class ProgramRunner
         }
     }
 
-    internal static bool IsProjectPathArg(string arg) =>
-        !arg.StartsWith('-') && (Directory.Exists(arg) || arg.Contains('/') || arg.Contains('\\') || arg == ".");
+    internal static bool IsProjectPathArg(string arg)
+    {
+        if (arg.StartsWith('-'))
+            return false;
+
+        if (arg == "." || Directory.Exists(arg) || Path.IsPathRooted(arg) || Path.IsPathFullyQualified(arg))
+            return true;
+
+        if (arg.Contains(Path.DirectorySeparatorChar))
+            return true;
+
+        if (Path.AltDirectorySeparatorChar != '\0'
+            && Path.AltDirectorySeparatorChar != Path.DirectorySeparatorChar
+            && arg.Contains(Path.AltDirectorySeparatorChar))
+            return true;
+
+        return OperatingSystem.IsWindows()
+            && (IsWindowsDrivePath(arg) || arg.StartsWith(@"\\", StringComparison.Ordinal));
+    }
+
+    private static bool IsWindowsDrivePath(string arg) =>
+        arg.Length >= 2
+        && arg[1] == ':'
+        && ((arg[0] >= 'A' && arg[0] <= 'Z') || (arg[0] >= 'a' && arg[0] <= 'z'));
 
     internal static void EnsureRedirectedStdoutUsesUtf8()
     {
