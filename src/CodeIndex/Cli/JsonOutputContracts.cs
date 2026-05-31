@@ -142,6 +142,7 @@ internal sealed record QueryCountFilesJsonResult(
 internal sealed record QueryFindCountJsonResult(
     [property: JsonPropertyName("count")] int Count,
     [property: JsonPropertyName("files")] int Files,
+    [property: Obsolete("Use the 'files' JSON field. The 'file_count' field is a deprecated compatibility alias for find --count --json.")]
     [property: JsonPropertyName("file_count")] int FileCount);
 
 internal sealed record QueryPathErrorJsonResult(

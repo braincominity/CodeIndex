@@ -306,6 +306,11 @@ cdidx search authenticate --json          # ndjson stream, one result per line
 cdidx search authenticate --json=array    # single JSON array
 ```
 
+For `cdidx find --count --json`, `files` is the canonical matched-file count.
+The older `file_count` field remains as a deprecated compatibility alias with
+the same value for the current major release; new consumers should read
+`files`.
+
 ## Flag compatibility and migrations
 
 `--exact` remains accepted for compatibility, but new usage should prefer the
@@ -3603,6 +3608,10 @@ AIエージェントがDBを直接SQL検索する場合、`sqlite3` CLIが必要
 ## 出力形式
 
 人間向けの出力では、ファイルサイズを2進単位（`KiB`、`MiB`、`GiB` など）で表示します。大きなリポジトリや `map` / `files` の一覧を読み取りやすくするためです。テキスト出力をシェルパイプラインで扱うなど、生のバイト数が必要な場合は `files` または `map` に `--bytes` を指定してください。JSON 出力（`--json`）では、機械処理向けに size フィールドを常に raw integer bytes のまま返します。
+
+`cdidx find --count --json` では、`files` が一致ファイル数の正規フィールドです。
+古い `file_count` フィールドは現在のメジャーリリース中、同じ値を返す非推奨の
+互換エイリアスとして残ります。新しい consumer は `files` を読んでください。
 
 `map` の entrypoint 候補は、従来の `score` に加えて `match_type`、`confidence`（0.0..1.0）、`hint_rank` を返します。`match_type` は候補が慣例的なファイルパス、シンボル名、またはその両方に一致したかを示し、`hint_rank` は一致した言語別 hint の 1-based 順位です。`0.8` 以上に近い confidence は path と symbol/name heuristic が一致したことを示し、`0.5` 前後は単一の弱い heuristic、さらに低い値は曖昧な重複名や file-only fallback のような参考候補です。弱い entrypoint を human / JSON 出力から除外するには `cdidx map --min-entrypoint-confidence <0.0..1.0>` を指定してください。
 

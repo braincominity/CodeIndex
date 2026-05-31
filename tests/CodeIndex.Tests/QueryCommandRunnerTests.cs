@@ -29319,7 +29319,7 @@ jobs:
     }
 
     [Fact]
-    public void RunFind_CountOnlyJsonIncludesVisibleMatchAndFileCounts()
+    public void RunFind_CountOnlyJsonUsesFilesAsCanonicalCountAndKeepsDeprecatedAlias_Issue1423()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_count");
         try
@@ -29343,6 +29343,7 @@ jobs:
             Assert.Equal(2, json.GetProperty("count").GetInt32());
             Assert.Equal(1, json.GetProperty("files").GetInt32());
             Assert.Equal(1, json.GetProperty("file_count").GetInt32());
+            Assert.Equal(json.GetProperty("files").GetInt32(), json.GetProperty("file_count").GetInt32());
         }
         finally
         {
