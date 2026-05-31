@@ -138,6 +138,16 @@ The normal build/test workflow also runs `dotnet list src/CodeIndex/CodeIndex.cs
 
 The release `dotnet publish` (per-RID) and `dotnet pack` (NuGet packaging) steps intentionally do **not** set `RestoreLockedMode=true`. Those steps run runtime-specific restores that legitimately add lock entries that did not exist at solution-restore time (e.g. `net8.0/<rid>` runtime sections, `Microsoft.NET.ILLink.Tasks` for trimming). They still consume locked versions because `RestorePackagesWithLockFile=true` from `Directory.Build.props` forces every restore on the machine to resolve through the lock file. The supply-chain guarantee for `Microsoft.Data.Sqlite` and its `SQLitePCLRaw.*` graph is enforced by the solution-level locked restore that runs first.
 
+After `dotnet pack`, the release workflow runs
+`dotnet run --project tools/CodeIndex.PackageNormalize -- nupkg/*.nupkg nupkg/*.snupkg`
+before validating, hashing, or publishing NuGet artifacts. NuGet's OPC package
+writer generates a random `package/services/metadata/core-properties/*.psmdcp`
+part name on each pack run; the normalizer rewrites that part to
+`package/services/metadata/core-properties/core-properties.psmdcp`, updates the
+matching content-type and relationship references, and gives ZIP entries stable
+timestamps. This is the package reproducibility boundary for `.nupkg` and
+`.snupkg` archives (#2756).
+
 When you intentionally update a dependency (or add a new direct `PackageReference`), regenerate the lock files locally and commit the diff in the same change:
 
 ```bash
@@ -2010,6 +2020,15 @@ CI 相当のフル検証を行う場合は、両方の target framework を rest
 CI（`.github/workflows/dotnet.yml`, `release.yml`, `codeql.yml`）はソリューションの restore を `--locked-mode` 付きで実行し、commit 済み lock ファイルと解決結果に差分があるとアーティファクトに混入する前にビルドが失敗します。ローカル開発の通常 restore は従来どおりで、`--locked-mode` は CI でのみ強制されます。
 
 release の `dotnet publish`（RID ごと）と `dotnet pack`（NuGet パッケージング）には意図的に `RestoreLockedMode=true` を設定していません。これらは runtime-specific な restore を走らせ、ソリューション restore 時には存在しなかった lock エントリ（`net8.0/<rid>` 等の runtime section や trimming 用の `Microsoft.NET.ILLink.Tasks`）を正当に追加します。それでも `Directory.Build.props` の `RestorePackagesWithLockFile=true` により、その実行マシン上の全 restore は lock ファイル経由で解決されるため版は固定されたままです。`Microsoft.Data.Sqlite` および `SQLitePCLRaw.*` グラフに対する supply-chain 保証は、先行する solution-level の locked restore で担保されます。
+
+`dotnet pack` 後、release workflow は NuGet artifact の検証、hash、publish の前に
+`dotnet run --project tools/CodeIndex.PackageNormalize -- nupkg/*.nupkg nupkg/*.snupkg`
+を実行します。NuGet の OPC package writer は
+`package/services/metadata/core-properties/*.psmdcp` part 名を pack ごとに
+ランダム生成するため、normalizer はその part を
+`package/services/metadata/core-properties/core-properties.psmdcp` に書き換え、
+対応する content-type / relationship 参照も更新し、ZIP entry timestamp を固定します。
+これが `.nupkg` / `.snupkg` archive の package 再現性境界です (#2756)。
 
 依存を意図的に更新する（あるいは直接 `PackageReference` を追加する）場合は、ローカルで lock ファイルを再生成し、同じ変更でコミットしてください:
 
