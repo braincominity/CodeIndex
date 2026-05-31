@@ -2,6 +2,7 @@ using CodeIndex.Changelog;
 
 namespace CodeIndex.Tests;
 
+[Collection("SQLite pool sensitive")]
 public sealed class ChangelogToolTests
 {
     [Fact]
