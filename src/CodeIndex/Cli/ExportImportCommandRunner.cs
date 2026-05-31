@@ -172,8 +172,9 @@ internal static class ExportImportCommandRunner
             using (var snapshotConnection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = snapshotPath }.ConnectionString))
             {
                 snapshotConnection.Open();
-                manifest = BuildManifest(snapshotConnection, snapshotPath, appVersion);
+                manifest = BuildManifest(snapshotConnection, appVersion);
             }
+            manifest = manifest with { DatabaseSha256 = ComputeSha256(snapshotPath) };
             if (File.Exists(outputPath))
                 File.Delete(outputPath);
 
@@ -274,7 +275,7 @@ internal static class ExportImportCommandRunner
         }
     }
 
-    private static ExportManifest BuildManifest(SqliteConnection connection, string dbPath, string appVersion)
+    private static ExportManifest BuildManifest(SqliteConnection connection, string appVersion)
     {
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "PRAGMA user_version";
@@ -283,7 +284,7 @@ internal static class ExportImportCommandRunner
         var projectRoot = cmd.ExecuteScalar() as string;
         cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'indexed_head_sha' LIMIT 1";
         var indexedHead = cmd.ExecuteScalar() as string;
-        return new ExportManifest("1", appVersion, userVersion, projectRoot, indexedHead, ComputeSha256(dbPath));
+        return new ExportManifest("1", appVersion, userVersion, projectRoot, indexedHead, string.Empty);
     }
 
     private static void AddTextEntry(ZipArchive archive, string name, string content)
