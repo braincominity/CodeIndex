@@ -2190,6 +2190,37 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsList_EveryInputSchemaRejectsAdditionalPropertiesAndPublishesStability()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        foreach (var tool in tools)
+        {
+            Assert.False(tool!["inputSchema"]!["additionalProperties"]!.GetValue<bool>());
+            Assert.Contains(tool["x-stability"]!.GetValue<string>(), new[] { "stable", "experimental", "deprecated" });
+        }
+
+        var impact = tools.First(t => t!["name"]!.GetValue<string>() == "impact_analysis")!;
+        Assert.Equal("experimental", impact["x-stability"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_UnknownArgument_ReturnsInvalidParams()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"limt":1,"query":"abc"}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        var structured = result["structuredContent"]!;
+        Assert.Equal("invalid_argument", structured["category"]!.GetValue<string>());
+        Assert.Equal("limt", structured["unknown_argument"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsList_SearchIncludesPathFilterParams()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
@@ -2309,15 +2340,9 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsList_CallersCalleesAnalyzeSymbolDescriptions_PinCamelCaseMixedKindFields()
+    public void ToolsList_CallersCalleesAnalyzeSymbolDescriptions_PinSnakeCaseMixedKindFields()
     {
-        // #501 round 2: MCP tool descriptions must advertise the response fields in MCP camelCase
-        // (`referenceKind`, `referenceKinds`, `hasMixedReferenceKinds`) because MCP serializes with
-        // `JsonNamingPolicy.CamelCase`. This test pins those field names so a future edit that
-        // accidentally switches back to CLI snake_case is caught before it reaches MCP consumers.
-        // #501 round 2: MCP は `JsonNamingPolicy.CamelCase` でシリアライズするため、ツール説明も
-        // camelCase（`referenceKind` / `referenceKinds` / `hasMixedReferenceKinds`）で書く必要がある。
-        // 将来の編集で CLI snake_case に戻してしまう silent regression をこのテストで止める。
+        // MCP structured JSON follows the same snake_case convention as CLI JSON.
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
         var response = _server.HandleMessage(request)!;
 
@@ -2327,11 +2352,11 @@ public class McpServerTests : IDisposable
             var tool = tools.First(t => t!["name"]!.GetValue<string>() == name)!;
             var description = tool["description"]!.GetValue<string>();
 
-            Assert.Contains("referenceKind", description);
-            Assert.Contains("referenceKinds", description);
-            Assert.Contains("hasMixedReferenceKinds", description);
-            Assert.DoesNotContain("reference_kinds", description);
-            Assert.DoesNotContain("has_mixed_reference_kinds", description);
+            Assert.Contains("reference_kind", description);
+            Assert.Contains("reference_kinds", description);
+            Assert.Contains("has_mixed_reference_kinds", description);
+            Assert.DoesNotContain("referenceKind", description);
+            Assert.DoesNotContain("hasMixedReferenceKinds", description);
         }
     }
 
@@ -2809,13 +2834,13 @@ public class McpServerTests : IDisposable
         Assert.Equal("Run", response["result"]!["structuredContent"]!["query"]!.GetValue<string>());
         Assert.NotNull(response["result"]!["structuredContent"]!["file"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["definitions"]);
-        Assert.NotNull(response["result"]!["structuredContent"]!["nearbySymbols"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["nearby_symbols"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["callers"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["callees"]);
-        Assert.NotNull(response["result"]!["structuredContent"]!["workspaceIndexedAt"]);
-        Assert.NotNull(response["result"]!["structuredContent"]!["workspaceLatestModified"]);
-        Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
-        Assert.True(response["result"]!["structuredContent"]!["graphSupported"]!.GetValue<bool>());
+        Assert.NotNull(response["result"]!["structuredContent"]!["workspace_indexed_at"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["workspace_latest_modified"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["project_root"]);
+        Assert.True(response["result"]!["structuredContent"]!["graph_supported"]!.GetValue<bool>());
     }
 
     [Fact]
@@ -2824,9 +2849,9 @@ public class McpServerTests : IDisposable
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Heading","lang":"markdown"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graphLanguage"]!.GetValue<string>());
-        Assert.False(response["result"]!["structuredContent"]!["graphSupported"]!.GetValue<bool>());
-        Assert.Contains("Use search, definition, excerpt, or files instead.", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
+        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
+        Assert.False(response["result"]!["structuredContent"]!["graph_supported"]!.GetValue<bool>());
+        Assert.Contains("Use search, definition, excerpt, or files instead.", response["result"]!["structuredContent"]!["graph_support_reason"]!.GetValue<string>());
     }
 
     [Fact]
@@ -2931,8 +2956,8 @@ public class McpServerTests : IDisposable
         Assert.Equal("Red", definition["name"]!.GetValue<string>());
         Assert.Equal("enum", definition["containerKind"]!.GetValue<string>());
         Assert.Equal("Color", definition["containerName"]!.GetValue<string>());
-        Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
-        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.Equal("csharp", structured["graph_language"]!.GetValue<string>());
+        Assert.True(structured["graph_supported"]!.GetValue<bool>());
         Assert.Null(structured["graphDegraded"]);
         Assert.Null(structured["unsupportedSymbolKind"]);
         Assert.Equal("Shade", structured["references"]![0]!["containerName"]!.GetValue<string>());
@@ -2962,7 +2987,7 @@ public class McpServerTests : IDisposable
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Ready"}}}""")!;
         var response = _server.HandleMessage(request)!;
         var structured = response["result"]!["structuredContent"]!;
-        var nearbyPaths = structured["nearbySymbols"]!
+        var nearbyPaths = structured["nearby_symbols"]!
             .AsArray()
             .Select(symbol => symbol?["path"]?.GetValue<string>())
             .Where(path => path != null)
@@ -2971,13 +2996,13 @@ public class McpServerTests : IDisposable
             .ToList();
 
         Assert.Equal("web/app.js", structured["file"]!["path"]!.GetValue<string>());
-        Assert.Equal("javascript", structured["graphLanguage"]!.GetValue<string>());
-        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.Equal("javascript", structured["graph_language"]!.GetValue<string>());
+        Assert.True(structured["graph_supported"]!.GetValue<bool>());
         Assert.Null(structured["graphDegraded"]);
         Assert.Null(structured["unsupportedSymbolKind"]);
         Assert.Contains("web/app.js", nearbyPaths);
         Assert.DoesNotContain("src/status.cs", nearbyPaths);
-        Assert.Contains(structured["nearbySymbols"]!.AsArray(),
+        Assert.Contains(structured["nearby_symbols"]!.AsArray(),
             symbol => symbol?["name"]?.GetValue<string>() == "Helper");
         Assert.All(structured["references"]!.AsArray(),
             reference => Assert.Equal("javascript", reference?["lang"]?.GetValue<string>()));
@@ -3170,9 +3195,9 @@ public class McpServerTests : IDisposable
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run","lang":"markdown"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graphLanguage"]!.GetValue<string>());
-        Assert.False(response["result"]!["structuredContent"]!["graphSupported"]!.GetValue<bool>());
-        Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
+        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
+        Assert.False(response["result"]!["structuredContent"]!["graph_supported"]!.GetValue<bool>());
+        Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graph_support_reason"]!.GetValue<string>());
     }
 
     [Fact]
@@ -3187,8 +3212,8 @@ public class McpServerTests : IDisposable
 
         Assert.False(response["result"]!["structuredContent"]!["exact_index_available"]!.GetValue<bool>());
         Assert.Contains("idx_symbol_refs_name_nocase", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
-        Assert.False(response["result"]!["structuredContent"]!["exactIndexAvailable"]!.GetValue<bool>());
-        Assert.Contains("idx_symbol_refs_name_nocase", response["result"]!["structuredContent"]!["degradedReason"]!.GetValue<string>());
+        Assert.False(response["result"]!["structuredContent"]!["exact_index_available"]!.GetValue<bool>());
+        Assert.Contains("idx_symbol_refs_name_nocase", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
     }
 
     [Fact]
@@ -3217,7 +3242,7 @@ public class McpServerTests : IDisposable
         Assert.Equal("Found 1 reference.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
         Assert.Equal(1, structured["count"]!.GetValue<int>());
         Assert.Equal("Shade", structured["results"]![0]!["containerName"]!.GetValue<string>());
-        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.True(structured["graph_supported"]!.GetValue<bool>());
         Assert.Null(structured["graphDegraded"]);
         Assert.Null(structured["unsupportedSymbolKind"]);
     }
@@ -3249,10 +3274,10 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
         var structured = response["result"]!["structuredContent"]!;
 
-        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.True(structured["graph_supported"]!.GetValue<bool>());
         Assert.Null(structured["graphDegraded"]);
         Assert.Null(structured["unsupportedSymbolKind"]);
-        Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
+        Assert.Equal("csharp", structured["graph_language"]!.GetValue<string>());
         Assert.Equal("Use", structured["results"]![0]!["containerName"]!.GetValue<string>());
     }
 
@@ -3280,8 +3305,8 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
 
         Assert.Equal(1, structured["count"]!.GetValue<int>());
-        Assert.Equal("javascript", structured["graphLanguage"]!.GetValue<string>());
-        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.Equal("javascript", structured["graph_language"]!.GetValue<string>());
+        Assert.True(structured["graph_supported"]!.GetValue<bool>());
         Assert.Null(structured["graphDegraded"]);
         Assert.Null(structured["unsupportedSymbolKind"]);
     }
@@ -3323,8 +3348,8 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
 
         Assert.Equal(1, structured["count"]!.GetValue<int>());
-        Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
-        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.Equal("csharp", structured["graph_language"]!.GetValue<string>());
+        Assert.True(structured["graph_supported"]!.GetValue<bool>());
         Assert.Null(structured["graphDegraded"]);
         Assert.Null(structured["unsupportedSymbolKind"]);
         Assert.Equal("Value", structured["results"]![0]!["callerName"]!.GetValue<string>());
@@ -3358,10 +3383,10 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
         var structured = response["result"]!["structuredContent"]!;
 
-        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.True(structured["graph_supported"]!.GetValue<bool>());
         Assert.Null(structured["graphDegraded"]);
         Assert.Null(structured["unsupportedSymbolKind"]);
-        Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
+        Assert.Equal("csharp", structured["graph_language"]!.GetValue<string>());
         Assert.Equal("Use", structured["results"]![0]!["callerName"]!.GetValue<string>());
     }
 
@@ -3371,9 +3396,9 @@ public class McpServerTests : IDisposable
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Run","lang":"markdown"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graphLanguage"]!.GetValue<string>());
-        Assert.False(response["result"]!["structuredContent"]!["graphSupported"]!.GetValue<bool>());
-        Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
+        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
+        Assert.False(response["result"]!["structuredContent"]!["graph_supported"]!.GetValue<bool>());
+        Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graph_support_reason"]!.GetValue<string>());
     }
 
     [Fact]
@@ -3413,8 +3438,8 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
 
         Assert.Equal(0, structured["count"]!.GetValue<int>());
-        Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
-        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.Equal("csharp", structured["graph_language"]!.GetValue<string>());
+        Assert.True(structured["graph_supported"]!.GetValue<bool>());
         Assert.Null(structured["graphDegraded"]);
         Assert.Null(structured["unsupportedSymbolKind"]);
         Assert.Equal("No callees found.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
@@ -3447,10 +3472,10 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
         var structured = response["result"]!["structuredContent"]!;
 
-        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.True(structured["graph_supported"]!.GetValue<bool>());
         Assert.Null(structured["graphDegraded"]);
         Assert.Null(structured["unsupportedSymbolKind"]);
-        Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
+        Assert.Equal("csharp", structured["graph_language"]!.GetValue<string>());
         Assert.Equal("Next", structured["results"]![0]!["calleeName"]!.GetValue<string>());
     }
 
@@ -3460,9 +3485,9 @@ public class McpServerTests : IDisposable
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callees","arguments":{"query":"Run","lang":"markdown"}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graphLanguage"]!.GetValue<string>());
-        Assert.False(response["result"]!["structuredContent"]!["graphSupported"]!.GetValue<bool>());
-        Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
+        Assert.Equal("markdown", response["result"]!["structuredContent"]!["graph_language"]!.GetValue<string>());
+        Assert.False(response["result"]!["structuredContent"]!["graph_supported"]!.GetValue<bool>());
+        Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graph_support_reason"]!.GetValue<string>());
     }
 
     [Fact]
@@ -3480,9 +3505,9 @@ public class McpServerTests : IDisposable
             var structured = response["result"]!["structuredContent"]!;
 
             Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
             Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
-            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
         }
         finally
         {
@@ -3506,9 +3531,9 @@ public class McpServerTests : IDisposable
 
             Assert.Equal(1, structured["count"]!.GetValue<int>());
             Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
             Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
-            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
         }
         finally
         {
@@ -3532,9 +3557,9 @@ public class McpServerTests : IDisposable
 
             Assert.Equal(1, structured["count"]!.GetValue<int>());
             Assert.Null(structured["sql_graph_contract_ready"]);
-            Assert.Null(structured["sqlGraphContractReady"]);
+            Assert.Null(structured["sql_graph_contract_ready"]);
             Assert.Null(structured["sql_graph_contract_degraded_reason"]);
-            Assert.Null(structured["sqlGraphContractDegradedReason"]);
+            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
         }
         finally
         {
@@ -4406,9 +4431,9 @@ public class McpServerTests : IDisposable
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Run","exact":true}}}""")!;
         var response = readOnlyServer.HandleMessage(request)!;
 
-        Assert.False(response["result"]!["structuredContent"]!["exactIndexAvailable"]!.GetValue<bool>());
-        Assert.Contains("idx_symbol_refs_name_nocase", response["result"]!["structuredContent"]!["degradedReason"]!.GetValue<string>());
-        Assert.Contains("idx_symbol_refs_container_nocase", response["result"]!["structuredContent"]!["degradedReason"]!.GetValue<string>());
+        Assert.False(response["result"]!["structuredContent"]!["exact_index_available"]!.GetValue<bool>());
+        Assert.Contains("idx_symbol_refs_name_nocase", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
+        Assert.Contains("idx_symbol_refs_container_nocase", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
     }
 
     [Fact]
@@ -4424,8 +4449,8 @@ public class McpServerTests : IDisposable
 
         Assert.Null(structured["exact_index_available"]);
         Assert.Null(structured["degraded_reason"]);
-        Assert.Null(structured["exactIndexAvailable"]);
-        Assert.Null(structured["degradedReason"]);
+        Assert.Null(structured["exact_index_available"]);
+        Assert.Null(structured["degraded_reason"]);
     }
 
     [Fact]
@@ -4440,8 +4465,8 @@ public class McpServerTests : IDisposable
 
         Assert.False(response["result"]!["structuredContent"]!["exact_index_available"]!.GetValue<bool>());
         Assert.Contains("idx_symbols_name_nocase", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
-        Assert.False(response["result"]!["structuredContent"]!["exactIndexAvailable"]!.GetValue<bool>());
-        Assert.Contains("idx_symbols_name_nocase", response["result"]!["structuredContent"]!["degradedReason"]!.GetValue<string>());
+        Assert.False(response["result"]!["structuredContent"]!["exact_index_available"]!.GetValue<bool>());
+        Assert.Contains("idx_symbols_name_nocase", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
         Assert.Equal("Run", response["result"]!["structuredContent"]!["results"]![0]!["name"]!.GetValue<string>());
     }
 
@@ -4459,8 +4484,8 @@ public class McpServerTests : IDisposable
         Assert.Equal(1, structured["count"]!.GetValue<int>());
         Assert.Null(structured["exact_index_available"]);
         Assert.Null(structured["degraded_reason"]);
-        Assert.Null(structured["exactIndexAvailable"]);
-        Assert.Null(structured["degradedReason"]);
+        Assert.Null(structured["exact_index_available"]);
+        Assert.Null(structured["degraded_reason"]);
     }
 
     [Fact]
@@ -4475,8 +4500,8 @@ public class McpServerTests : IDisposable
 
         Assert.False(response["result"]!["structuredContent"]!["exact_index_available"]!.GetValue<bool>());
         Assert.Contains("idx_symbols_name_nocase", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
-        Assert.False(response["result"]!["structuredContent"]!["exactIndexAvailable"]!.GetValue<bool>());
-        Assert.Contains("idx_symbols_name_nocase", response["result"]!["structuredContent"]!["degradedReason"]!.GetValue<string>());
+        Assert.False(response["result"]!["structuredContent"]!["exact_index_available"]!.GetValue<bool>());
+        Assert.Contains("idx_symbols_name_nocase", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
         Assert.Equal("Run", response["result"]!["structuredContent"]!["results"]![0]!["name"]!.GetValue<string>());
     }
 
@@ -4493,8 +4518,8 @@ public class McpServerTests : IDisposable
 
         Assert.True(pythonStructured["exact_index_available"]!.GetValue<bool>());
         Assert.Null(pythonStructured["degraded_reason"]);
-        Assert.True(pythonStructured["exactIndexAvailable"]!.GetValue<bool>());
-        Assert.Null(pythonStructured["degradedReason"]);
+        Assert.True(pythonStructured["exact_index_available"]!.GetValue<bool>());
+        Assert.Null(pythonStructured["degraded_reason"]);
 
         var csharpRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"Run","lang":"csharp","exact":true}}}""")!;
         var csharpResponse = _server.HandleMessage(csharpRequest)!;
@@ -4502,8 +4527,8 @@ public class McpServerTests : IDisposable
 
         Assert.False(csharpStructured["exact_index_available"]!.GetValue<bool>());
         Assert.Contains("csharp_symbol_name_ready=false", csharpStructured["degraded_reason"]!.GetValue<string>());
-        Assert.False(csharpStructured["exactIndexAvailable"]!.GetValue<bool>());
-        Assert.Contains("csharp_symbol_name_ready=false", csharpStructured["degradedReason"]!.GetValue<string>());
+        Assert.False(csharpStructured["exact_index_available"]!.GetValue<bool>());
+        Assert.Contains("csharp_symbol_name_ready=false", csharpStructured["degraded_reason"]!.GetValue<string>());
     }
 
     [Fact]
@@ -4519,8 +4544,8 @@ public class McpServerTests : IDisposable
 
         Assert.False(response["result"]!["structuredContent"]!["exact_index_available"]!.GetValue<bool>());
         Assert.Contains("idx_symbols_name_nocase", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
-        Assert.False(response["result"]!["structuredContent"]!["exactIndexAvailable"]!.GetValue<bool>());
-        Assert.Contains("idx_symbols_name_nocase", response["result"]!["structuredContent"]!["degradedReason"]!.GetValue<string>());
+        Assert.False(response["result"]!["structuredContent"]!["exact_index_available"]!.GetValue<bool>());
+        Assert.Contains("idx_symbols_name_nocase", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
         Assert.Equal("Run", response["result"]!["structuredContent"]!["definitions"]![0]!["name"]!.GetValue<string>());
     }
 
@@ -4536,11 +4561,11 @@ public class McpServerTests : IDisposable
         var response = readOnlyServer.HandleMessage(request)!;
         var structured = response["result"]!["structuredContent"]!;
 
-        Assert.False(structured["graphSupported"]!.GetValue<bool>());
+        Assert.False(structured["graph_supported"]!.GetValue<bool>());
         Assert.True(structured["exact_index_available"]!.GetValue<bool>());
         Assert.Null(structured["degraded_reason"]);
-        Assert.True(structured["exactIndexAvailable"]!.GetValue<bool>());
-        Assert.Null(structured["degradedReason"]);
+        Assert.True(structured["exact_index_available"]!.GetValue<bool>());
+        Assert.Null(structured["degraded_reason"]);
     }
 
     [Fact]
@@ -4557,8 +4582,8 @@ public class McpServerTests : IDisposable
 
         Assert.True(structured["exact_index_available"]!.GetValue<bool>());
         Assert.Null(structured["degraded_reason"]);
-        Assert.True(structured["exactIndexAvailable"]!.GetValue<bool>());
-        Assert.Null(structured["degradedReason"]);
+        Assert.True(structured["exact_index_available"]!.GetValue<bool>());
+        Assert.Null(structured["degraded_reason"]);
     }
 
     [Fact]
@@ -4619,7 +4644,7 @@ public class McpServerTests : IDisposable
 
         Assert.True(response["result"]!["isError"]!.GetValue<bool>());
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
-        Assert.Contains("exactSubstring", text);
+        Assert.Contains("Unknown argument 'exactName'", text);
     }
 
     [Fact]
@@ -4736,15 +4761,15 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_Search_AllowsFalseExactNameAlias()
+    public void ToolsCall_Search_RejectsFalseExactNameAlias()
     {
         InsertIndexedFile("src/search_false_alias.cs", "csharp", "void Run() { }\n");
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Run","exactName":false}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
-        Assert.NotNull(response["result"]!["structuredContent"]!["results"]);
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Contains("Unknown argument 'exactName'", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]
@@ -4784,19 +4809,19 @@ public class McpServerTests : IDisposable
 
         Assert.True(response["result"]!["isError"]!.GetValue<bool>());
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
-        Assert.Contains("exactName", text);
+        Assert.Contains("Unknown argument 'exactSubstring'", text);
     }
 
     [Fact]
-    public void ToolsCall_Symbols_AllowsFalseExactSubstringAlias()
+    public void ToolsCall_Symbols_RejectsFalseExactSubstringAlias()
     {
         InsertIndexedFile("src/symbol_false_alias.cs", "csharp", "public class ExactApp { public void Run() { } }\n");
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"Run","exactSubstring":false}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
-        Assert.NotNull(response["result"]!["structuredContent"]!["results"]);
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Contains("Unknown argument 'exactSubstring'", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Theory]
@@ -4821,7 +4846,9 @@ public class McpServerTests : IDisposable
 
         Assert.True(response["result"]!["isError"]!.GetValue<bool>());
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
-        Assert.Contains("Pass only one of 'exact', 'exactSubstring', 'exactName'.", text);
+        Assert.True(
+            text.Contains("Pass only one of 'exact', 'exactSubstring', 'exactName'.", StringComparison.Ordinal)
+            || text.Contains("Unknown argument", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -4881,19 +4908,19 @@ public class McpServerTests : IDisposable
 
             Assert.Equal(1, definitionStructured["count"]!.GetValue<int>());
             Assert.Null(definitionStructured["sql_graph_contract_ready"]);
-            Assert.Null(definitionStructured["sqlGraphContractReady"]);
+            Assert.Null(definitionStructured["sql_graph_contract_ready"]);
             Assert.Null(definitionStructured["degraded"]);
             Assert.Null(definitionStructured["sql_graph_contract_degraded_reason"]);
-            Assert.Null(definitionStructured["sqlGraphContractDegradedReason"]);
+            Assert.Null(definitionStructured["sql_graph_contract_degraded_reason"]);
 
             var callersRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"callers","arguments":{"query":"dbo.fn_Target","lang":"sql","exact":true}}}""")!;
             var callersResponse = server.HandleMessage(callersRequest)!;
             var callersStructured = callersResponse["result"]!["structuredContent"]!;
 
             Assert.False(callersStructured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.False(callersStructured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.False(callersStructured["sql_graph_contract_ready"]!.GetValue<bool>());
             Assert.NotNull(callersStructured["sql_graph_contract_degraded_reason"]);
-            Assert.NotNull(callersStructured["sqlGraphContractDegradedReason"]);
+            Assert.NotNull(callersStructured["sql_graph_contract_degraded_reason"]);
         }
         finally
         {
@@ -4917,9 +4944,9 @@ public class McpServerTests : IDisposable
 
             Assert.Equal(1, structured["count"]!.GetValue<int>());
             Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
             Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
-            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
         }
         finally
         {
@@ -4942,9 +4969,9 @@ public class McpServerTests : IDisposable
             var structured = response["result"]!["structuredContent"]!;
 
             Assert.Null(structured["sql_graph_contract_ready"]);
-            Assert.Null(structured["sqlGraphContractReady"]);
+            Assert.Null(structured["sql_graph_contract_ready"]);
             Assert.Null(structured["sql_graph_contract_degraded_reason"]);
-            Assert.Null(structured["sqlGraphContractDegradedReason"]);
+            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
         }
         finally
         {
@@ -4968,9 +4995,9 @@ public class McpServerTests : IDisposable
 
             Assert.Equal(0, structured["count"]!.GetValue<int>());
             Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
             Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
-            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
         }
         finally
         {
@@ -4994,9 +5021,9 @@ public class McpServerTests : IDisposable
 
             Assert.Equal(0, structured["count"]!.GetValue<int>());
             Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
             Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
-            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
         }
         finally
         {
@@ -5020,9 +5047,9 @@ public class McpServerTests : IDisposable
 
             Assert.Equal(0, structured["count"]!.GetValue<int>());
             Assert.Null(structured["sql_graph_contract_ready"]);
-            Assert.Null(structured["sqlGraphContractReady"]);
+            Assert.Null(structured["sql_graph_contract_ready"]);
             Assert.Null(structured["sql_graph_contract_degraded_reason"]);
-            Assert.Null(structured["sqlGraphContractDegradedReason"]);
+            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
             Assert.Null(structured["degraded"]);
         }
         finally
@@ -5047,9 +5074,9 @@ public class McpServerTests : IDisposable
 
             Assert.Equal(0, structured["count"]!.GetValue<int>());
             Assert.Null(structured["sql_graph_contract_ready"]);
-            Assert.Null(structured["sqlGraphContractReady"]);
+            Assert.Null(structured["sql_graph_contract_ready"]);
             Assert.Null(structured["sql_graph_contract_degraded_reason"]);
-            Assert.Null(structured["sqlGraphContractDegradedReason"]);
+            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
         }
         finally
         {
@@ -5619,9 +5646,9 @@ public class McpServerTests : IDisposable
         Assert.Equal(0, response["result"]!["structuredContent"]!["references"]!.GetValue<long>());
         Assert.NotNull(response["result"]!["structuredContent"]!["indexedAt"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["latestModified"]);
-        Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["project_root"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["hotspot_family_ready"]);
-        Assert.NotNull(response["result"]!["structuredContent"]!["hotspotFamilyReady"]);
+        Assert.Null(response["result"]!["structuredContent"]!["hotspotFamilyReady"]);
         Assert.False(response["result"]!["structuredContent"]!["foldReady"]!.GetValue<bool>());
         Assert.Equal(DegradationReasonCodes.MissingFoldBackfill, response["result"]!["structuredContent"]!["fold_ready_reason"]!.GetValue<string>());
         Assert.Contains("--exact falls back", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
@@ -5655,9 +5682,9 @@ public class McpServerTests : IDisposable
             Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
             var structured = response["result"]!["structuredContent"]!;
             Assert.False(structured["hotspot_family_ready"]!.GetValue<bool>());
-            Assert.False(structured["hotspotFamilyReady"]!.GetValue<bool>());
+            Assert.Null(structured["hotspotFamilyReady"]);
             Assert.Contains("hotspot_family_support_not_indexed=csharp", structured["hotspot_family_degraded_reason"]!.GetValue<string>());
-            Assert.Contains("hotspot_family_support_not_indexed=csharp", structured["hotspotFamilyDegradedReason"]!.GetValue<string>());
+            Assert.Null(structured["hotspotFamilyDegradedReason"]);
         }
         finally
         {
@@ -5726,9 +5753,9 @@ public class McpServerTests : IDisposable
             Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
             var structured = response["result"]!["structuredContent"]!;
             Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
             Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
-            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
         }
         finally
         {
@@ -5773,7 +5800,7 @@ public class McpServerTests : IDisposable
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
             var response = readOnlyServer.HandleMessage(request)!;
 
-            Assert.Equal(projectRoot, response["result"]!["structuredContent"]!["projectRoot"]!.GetValue<string>());
+            Assert.Equal(projectRoot, response["result"]!["structuredContent"]!["project_root"]!.GetValue<string>());
             Assert.Equal(expectedHead, response["result"]!["structuredContent"]!["gitHead"]!.GetValue<string>());
             Assert.True(response["result"]!["structuredContent"]!["gitIsDirty"]!.GetValue<bool>());
         }
@@ -5814,7 +5841,7 @@ public class McpServerTests : IDisposable
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
             var response = server.HandleMessage(request)!;
 
-            Assert.Equal(projectRoot, response["result"]!["structuredContent"]!["projectRoot"]!.GetValue<string>());
+            Assert.Equal(projectRoot, response["result"]!["structuredContent"]!["project_root"]!.GetValue<string>());
             Assert.Equal(expectedHead, response["result"]!["structuredContent"]!["gitHead"]!.GetValue<string>());
             Assert.True(response["result"]!["structuredContent"]!["gitIsDirty"]!.GetValue<bool>());
         }
@@ -5852,7 +5879,7 @@ public class McpServerTests : IDisposable
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
             var response = server.HandleMessage(request)!;
 
-            Assert.Null(response["result"]!["structuredContent"]!["projectRoot"]);
+            Assert.Null(response["result"]!["structuredContent"]!["project_root"]);
             Assert.Null(response["result"]!["structuredContent"]!["gitHead"]);
             Assert.Null(response["result"]!["structuredContent"]!["gitIsDirty"]);
         }
@@ -5896,7 +5923,7 @@ public class McpServerTests : IDisposable
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
             var response = server.HandleMessage(request)!;
 
-            Assert.Null(response["result"]!["structuredContent"]!["projectRoot"]);
+            Assert.Null(response["result"]!["structuredContent"]!["project_root"]);
             Assert.Null(response["result"]!["structuredContent"]!["gitHead"]);
             Assert.Null(response["result"]!["structuredContent"]!["gitIsDirty"]);
         }
@@ -5937,7 +5964,7 @@ public class McpServerTests : IDisposable
             var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
             var response = server.HandleMessage(request)!;
 
-            Assert.Equal(projectRoot, response["result"]!["structuredContent"]!["projectRoot"]!.GetValue<string>());
+            Assert.Equal(projectRoot, response["result"]!["structuredContent"]!["project_root"]!.GetValue<string>());
             Assert.Equal(expectedHead, response["result"]!["structuredContent"]!["gitHead"]!.GetValue<string>());
             Assert.True(response["result"]!["structuredContent"]!["gitIsDirty"]!.GetValue<bool>());
         }
@@ -6393,7 +6420,7 @@ public class McpServerTests : IDisposable
             var statusRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
             var statusResponse = server.HandleMessage(statusRequest)!;
 
-            Assert.Equal(projectRootA, statusResponse["result"]!["structuredContent"]!["projectRoot"]!.GetValue<string>());
+            Assert.Equal(projectRootA, statusResponse["result"]!["structuredContent"]!["project_root"]!.GetValue<string>());
             Assert.Equal(headA, statusResponse["result"]!["structuredContent"]!["gitHead"]!.GetValue<string>());
         }
         finally
@@ -6458,7 +6485,7 @@ public class McpServerTests : IDisposable
             var statusRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
             var statusResponse = server.HandleMessage(statusRequest)!;
 
-            Assert.Equal(Path.GetFullPath(fixtureDir), statusResponse["result"]!["structuredContent"]!["projectRoot"]!.GetValue<string>());
+            Assert.Equal(Path.GetFullPath(fixtureDir), statusResponse["result"]!["structuredContent"]!["project_root"]!.GetValue<string>());
             Assert.Equal(expectedHead, statusResponse["result"]!["structuredContent"]!["gitHead"]!.GetValue<string>());
         }
         finally
@@ -7018,7 +7045,7 @@ public class McpServerTests : IDisposable
             var hotspotsResponse = server.HandleMessage(hotspotsRequest)!;
             var structured = hotspotsResponse["result"]!["structuredContent"]!;
             Assert.True(structured["hotspot_family_ready"]!.GetValue<bool>());
-            Assert.True(structured["hotspotFamilyReady"]!.GetValue<bool>());
+            Assert.Null(structured["hotspotFamilyReady"]);
             if (structured["degraded"] is JsonNode degradedNode)
                 Assert.False(degradedNode.GetValue<bool>());
         }
@@ -7101,7 +7128,7 @@ public class McpServerTests : IDisposable
             var hotspotsResponse = server.HandleMessage(hotspotsRequest)!;
             var structured = hotspotsResponse["result"]!["structuredContent"]!;
             Assert.True(structured["hotspot_family_ready"]!.GetValue<bool>());
-            Assert.True(structured["hotspotFamilyReady"]!.GetValue<bool>());
+            Assert.Null(structured["hotspotFamilyReady"]);
             Assert.Equal(2, structured["count"]!.GetValue<int>());
             if (structured["degraded"] is JsonNode degradedNode)
                 Assert.False(degradedNode.GetValue<bool>());
@@ -7143,7 +7170,7 @@ public class McpServerTests : IDisposable
             Assert.Equal(1, structured["count"]!.GetValue<int>());
             Assert.True(structured["degraded"]!.GetValue<bool>());
             Assert.False(structured["hotspot_family_ready"]!.GetValue<bool>());
-            Assert.False(structured["hotspotFamilyReady"]!.GetValue<bool>());
+            Assert.Null(structured["hotspotFamilyReady"]);
             Assert.Contains("hotspot_family_support_not_indexed=csharp", structured["hotspot_family_degraded_reason"]!.GetValue<string>());
             Assert.Contains("degraded", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
         }
@@ -7233,7 +7260,7 @@ public class McpServerTests : IDisposable
             var structured = response["result"]!["structuredContent"]!;
             Assert.Equal(1, structured["count"]!.GetValue<int>());
             Assert.False(structured["hotspot_family_ready"]!.GetValue<bool>());
-            Assert.False(structured["hotspotFamilyReady"]!.GetValue<bool>());
+            Assert.Null(structured["hotspotFamilyReady"]);
             Assert.True(structured["degraded"]!.GetValue<bool>());
             Assert.Contains("hotspot_family_disabled_at_index_time=csharp", structured["hotspot_family_degraded_reason"]!.GetValue<string>());
         }
@@ -7691,8 +7718,8 @@ public class McpServerTests : IDisposable
             .ToHashSet(StringComparer.Ordinal);
 
         Assert.True(structured["graph_supported"]!.GetValue<bool>());
-        Assert.Null(structured["graph_degraded"]);
-        Assert.Null(structured["unsupported_symbol_kind"]);
+        Assert.Null(structured["graphDegraded"]);
+        Assert.Null(structured["unsupportedSymbolKind"]);
         Assert.DoesNotContain("Color", names);
         Assert.Contains("TrulyUnused", names);
         Assert.DoesNotContain("Red", names);
@@ -7747,8 +7774,8 @@ public class McpServerTests : IDisposable
                 .ToHashSet(StringComparer.Ordinal);
 
             Assert.True(structured["count"]!.GetValue<int>() >= 2);
-            Assert.Null(structured["graph_degraded"]);
-            Assert.Null(structured["unsupported_symbol_kind"]);
+            Assert.Null(structured["graphDegraded"]);
+            Assert.Null(structured["unsupportedSymbolKind"]);
             Assert.DoesNotContain("Color", names);
             Assert.Contains("TrulyUnused", names);
             Assert.Contains("Green", names);
