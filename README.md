@@ -109,6 +109,8 @@ Install choice and network notes:
 
 See [DISTRIBUTION.md](DISTRIBUTION.md) for the full channel matrix and
 [isolated network install notes](USER_GUIDE.md#isolated-networks-and-proxies).
+For database compatibility across `cdidx` upgrades and downgrades, see
+[COMPATIBILITY.md](COMPATIBILITY.md).
 
 ### Validate
 
@@ -336,6 +338,9 @@ extractor fixture を確認できます。詳細は
 | color と端末 capability | `--color auto` は対応する interactive terminal でだけ ANSI を出力します。`TERM=dumb`、`CI=true`、Unix で端末 hint が無い場合、`NO_COLOR`、`CLICOLOR=0` では ANSI / progress 制御シーケンスを抑止します。`--palette basic|256|truecolor` で `COLORTERM` / `TERM` による color-depth 判定を上書きできます。 |
 | UTF-8 JSON pipeline | CLI の `--json` 出力は BOM なし UTF-8 で書き出され、human output 向けに色を強制していても ANSI escape sequence を含みません。 |
 | script 向け query pipeline の stderr を静かにする | `--quiet`、`-q`、`--silent`、`CDIDX_QUIET=1` で informational stderr を抑制し、error 行だけを残します。`--quiet` は `--verbose` より優先されます。 |
+
+`cdidx` の upgrade / downgrade をまたぐ database 互換性については
+[COMPATIBILITY.md](COMPATIBILITY.md) を参照してください。
 
 ターミナル、スクリプト、CI、AI ツールから同じリポジトリを繰り返し検索する
 場合は `cdidx` が向いています。1回限りのテキスト検索には `rg` が向いています。

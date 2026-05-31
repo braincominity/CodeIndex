@@ -54,6 +54,11 @@ cdidx search AuthService --db /artifacts/codeindex.db --immutable
 Mutating commands such as `index`, `backfill-fold`, `optimize`, and `vacuum`
 require writable storage and reject read-only database opens.
 
+Database compatibility across `cdidx` binary upgrades and downgrades is
+documented in [COMPATIBILITY.md](COMPATIBILITY.md). Keep that policy updated
+whenever readiness bits, `codeindex_meta` contract stamps, or rebuild
+requirements change.
+
 `backfill-fold --dry-run` previews the folded-key rows that would be rewritten
 without mutating the DB or stamping FoldReady. The MCP `backfill_fold` tool
 accepts the same preview as `dry_run: true`, and also accepts `force: true` to
