@@ -29137,6 +29137,114 @@ jobs:
     }
 
     [Fact]
+    public void RunFind_SnippetLinesControlsMatchContext()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_snippet_lines");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Auth.cs",
+                "csharp",
+                "line one\nline two\nvoid Guard() {}\nline four\nline five\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["Guard", "--db", dbPath, "--path", "src/Auth.cs", "--snippet-lines", "5"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("line one", stdout);
+            Assert.Contains("line five", stdout);
+            Assert.Contains("1 matches in 1 file", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_FocusLineAndColumnRestrictMatch()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_focus");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Auth.cs",
+                "csharp",
+                "target here\nno match\nother target\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["target", "--db", dbPath, "--path", "src/Auth.cs", "--focus-line", "3", "--focus-column", "8"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("src/Auth.cs:3:7", stdout);
+            Assert.DoesNotContain("src/Auth.cs:1:1", stdout);
+            Assert.Contains("1 matches in 1 file", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_RegexMatchesAnchors()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_regex");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Auth.cs", "csharp", "alpha\nGuard()\nnot Guard()\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["^Guard", "--regex", "--db", dbPath, "--path", "src/Auth.cs"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("src/Auth.cs:2:1", stdout);
+            Assert.DoesNotContain("src/Auth.cs:3:5", stdout);
+            Assert.Contains("1 matches in 1 file", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_CountOnlyRegexAndFocusUseSameMatchingSemantics()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_count_regex_focus");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Auth.cs", "csharp", "Guard()\nnot Guard()\nGuardAgain()\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["^Guard", "--regex", "--db", dbPath, "--path", "src/Auth.cs", "--focus-line", "3", "--focus-column", "5", "--json", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+            Assert.Equal(1, json.GetProperty("file_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunFind_CountOnlyJsonIncludesVisibleMatchAndFileCounts()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_find_count");

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
@@ -21,8 +22,11 @@ public static class QueryCommandRunner
     internal const string DefaultMaxLineWidthEnvironmentVariable = "CDIDX_DEFAULT_MAX_LINE_WIDTH";
     internal const string StaleAfterEnvironmentVariable = "CDIDX_STALE_AFTER";
     internal static readonly TimeSpan DefaultStaleAfter = TimeSpan.FromHours(24);
+    internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
     [ThreadStatic]
     private static DbReader? s_batchReader;
+
+    private static DateTime GetUtcNow() => TimeProvider.GetUtcNow().UtcDateTime;
 
     // Cap OR-joined `symbols` names well below SQLite's 1000 expression-tree depth so oversized
     // batches fail fast with a clear usage error instead of a confusing SQLite exception.
@@ -205,7 +209,7 @@ public static class QueryCommandRunner
     private const string OutputFormatTsv = "tsv";
     private static readonly HashSet<string> InlineValueOptions =
         new(ValueTakingOptions.Concat(["--json"]), StringComparer.Ordinal);
-    private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
+    private const string FindUsage = "Usage: cdidx find <query> --path <glob> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]\n       cdidx find --query <query> --path <glob> [...]\n       cdidx find [options] -- <query>";
 
     public static int RunBatch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -2051,7 +2055,16 @@ public static class QueryCommandRunner
         {
             if (options.CountOnly)
             {
-                var counts = reader.CountFindInFiles(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact);
+                QueryCountResult counts;
+                try
+                {
+                    counts = reader.CountFindInFiles(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact, options.FocusLine, options.FocusColumn, options.Regex);
+                }
+                catch (Exception ex) when (options.Regex && (ex is ArgumentException || ex is RegexMatchTimeoutException))
+                {
+                    Console.Error.WriteLine($"Error: invalid regular expression: {ex.Message}");
+                    return CommandExitCodes.UsageError;
+                }
                 if (counts.Count == 0)
                 {
                     if (options.Json)
@@ -2075,7 +2088,22 @@ public static class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.ContextBefore, options.ContextAfter, options.Exact, options.MaxLineWidth);
+            var (contextBefore, contextAfter, snippetLines) = ResolveFindContext(options, preparedFindArgs);
+            List<FileFindResult> results;
+            try
+            {
+                results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, contextBefore, contextAfter, options.Exact, options.MaxLineWidth, options.FocusLine, options.FocusColumn, options.Regex);
+            }
+            catch (ArgumentException ex) when (options.Regex)
+            {
+                Console.Error.WriteLine($"Error: invalid regular expression: {ex.Message}");
+                return CommandExitCodes.UsageError;
+            }
+            catch (RegexMatchTimeoutException ex) when (options.Regex)
+            {
+                Console.Error.WriteLine($"Error: invalid regular expression: {ex.Message}");
+                return CommandExitCodes.UsageError;
+            }
             if (results.Count == 0)
             {
                 var candidateFileCount = reader.CountFindCandidateFiles(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
@@ -2088,9 +2116,12 @@ public static class QueryCommandRunner
                         payload["query"] = options.Query;
                         payload["path"] = JsonSerializer.SerializeToNode(options.PathPatterns, CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
                         payload["exclude_tests"] = options.ExcludeTests;
-                        payload["before"] = options.ContextBefore;
-                        payload["after"] = options.ContextAfter;
+                        payload["before"] = contextBefore;
+                        payload["after"] = contextAfter;
+                        if (snippetLines.HasValue)
+                            payload["snippet_lines"] = snippetLines.Value;
                         payload["exact"] = options.Exact;
+                        payload["regex"] = options.Regex;
                         payload["file_count"] = candidateFileCount;
                     });
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
@@ -2210,6 +2241,15 @@ public static class QueryCommandRunner
                     && NumericFlagUpperBounds.TryGetValue(arg, out var contextMax)
                     && contextCeil > contextMax)
                     return BuildNonNegativeIntegerUpperBoundError(arg, value, contextMax);
+                if (arg == "--snippet-lines" && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var snippetLines) || snippetLines <= 0))
+                    return BuildPositiveIntegerError(arg, value, arg);
+                if (arg == "--snippet-lines"
+                    && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var snippetLinesCeil)
+                    && NumericFlagUpperBounds.TryGetValue(arg, out var snippetLinesMax)
+                    && snippetLinesCeil > snippetLinesMax)
+                    return BuildPositiveIntegerUpperBoundError(arg, value, snippetLinesMax);
+                if ((arg == "--focus-line" || arg == "--focus-column") && (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var focus) || focus <= 0))
+                    return BuildPositiveIntegerError(arg, value, arg);
                 if (arg == "--query")
                 {
                     queryCount++;
@@ -2249,6 +2289,19 @@ public static class QueryCommandRunner
         }
 
         return null;
+    }
+
+    private static (int Before, int After, int? SnippetLines) ResolveFindContext(QueryCommandOptions options, string[] preparedFindArgs)
+    {
+        if (!HasOption(preparedFindArgs, "--snippet-lines"))
+            return (options.ContextBefore, options.ContextAfter, null);
+
+        var explicitBefore = HasOption(preparedFindArgs, "--before");
+        var explicitAfter = HasOption(preparedFindArgs, "--after");
+        var surroundingLines = Math.Max(0, options.SnippetLines - 1);
+        var before = explicitBefore ? options.ContextBefore : surroundingLines / 2;
+        var after = explicitAfter ? options.ContextAfter : surroundingLines - before;
+        return (before, after, options.SnippetLines);
     }
 
     private static string[] PrepareFindArgs(string[] args, out string? error)
@@ -2762,7 +2815,7 @@ public static class QueryCommandRunner
                     : null;
                 status.StaleAfterSeconds = (long)Math.Round(staleAfter.Value.TotalSeconds, MidpointRounding.AwayFromZero);
                 if (status.IndexedAt.HasValue)
-                    status.IndexAgeSeconds = Math.Max(0, (long)Math.Round((DateTime.UtcNow - status.IndexedAt.Value).TotalSeconds, MidpointRounding.AwayFromZero));
+                    status.IndexAgeSeconds = Math.Max(0, (long)Math.Round((GetUtcNow() - status.IndexedAt.Value).TotalSeconds, MidpointRounding.AwayFromZero));
             }
             // Attach runtime metadata / ランタイムメタデータを付加
             status.SymbolKinds = reader.GetSymbolKindCounts();
@@ -4532,6 +4585,7 @@ public static class QueryCommandRunner
         bool noDedup = false;
         bool noVisibilityRank = false;
         bool exact = false;
+        bool regex = false;
         bool prefix = false;
         List<string>? parseErrors = null;
         bool exactName = false;
@@ -4817,6 +4871,9 @@ public static class QueryCommandRunner
                     break;
                 case "--exact":
                     exact = true;
+                    break;
+                case "--regex":
+                    regex = true;
                     break;
                 case "--exact-name":
                     exactName = true;
@@ -5224,6 +5281,7 @@ public static class QueryCommandRunner
             NoDedup = noDedup,
             NoVisibilityRank = noVisibilityRank,
             Exact = exact,
+            Regex = regex,
             Prefix = prefix,
             ExactName = exactName,
             ExactSubstring = exactSubstring,
@@ -6283,7 +6341,7 @@ public static class QueryCommandRunner
 
         if (freshness.IndexedAt.HasValue)
         {
-            var age = DateTime.UtcNow - freshness.IndexedAt.Value;
+            var age = GetUtcNow() - freshness.IndexedAt.Value;
             if (age > staleAfter.Value)
                 Console.Error.WriteLine($"Hint: the index is {FormatDuration(age)} old (threshold: {FormatDuration(staleAfter.Value)}). Run 'cdidx index <projectPath>' to refresh.");
         }
@@ -6818,7 +6876,7 @@ public static class QueryCommandRunner
         if (!status.IndexedAt.HasValue)
             return;
 
-        var age = DateTime.UtcNow - status.IndexedAt.Value;
+        var age = GetUtcNow() - status.IndexedAt.Value;
         if (age < TimeSpan.Zero)
             age = TimeSpan.Zero;
 
@@ -7852,6 +7910,7 @@ public sealed class QueryCommandOptions
     public bool NoDedup { get; init; }
     public bool NoVisibilityRank { get; init; }
     public bool Exact { get; init; }
+    public bool Regex { get; init; }
     public bool Prefix { get; init; }
     public bool ExactName { get; init; }
     public bool ExactSubstring { get; init; }
