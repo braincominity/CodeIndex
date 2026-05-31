@@ -2344,6 +2344,35 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetDefinitions_CSharpAddsDefinitionDisambiguators()
+    {
+        InsertIndexedFile("src/disambiguators.cs", "csharp",
+            """
+            public partial class Widget
+            {
+                public void Convert(int value) { }
+                public void Convert(string value) { }
+                public static void Touch(this string value) { }
+            }
+
+            public partial class Widget
+            {
+            }
+            """);
+
+        var overloads = _reader.GetDefinitions("Convert", limit: 10, lang: "csharp", exact: true)
+            .OrderBy(result => result.Line)
+            .ToList();
+        Assert.Equal(["overload(int)", "overload(string)"], overloads.Select(result => result.Disambiguator).ToArray());
+
+        var partials = _reader.GetDefinitions("Widget", limit: 10, lang: "csharp", exact: true);
+        Assert.All(partials, result => Assert.Equal("partial-class", result.Disambiguator));
+
+        var extension = Assert.Single(_reader.GetDefinitions("Touch", limit: 10, lang: "csharp", exact: true));
+        Assert.Equal("extension-method-on(string)", extension.Disambiguator);
+    }
+
+    [Fact]
     public void SearchSymbols_MultipleNamesAreOrJoined()
     {
         var results = _reader.SearchSymbols(new[] { "authenticate", "fetchData" });
