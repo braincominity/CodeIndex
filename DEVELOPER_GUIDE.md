@@ -39,6 +39,13 @@ failures from pass-on-retry flakes. For test suite structure, shared helpers,
 state-isolation rules, timeout diagnostics, and test-writing conventions, see
 [TESTING_GUIDE.md](TESTING_GUIDE.md).
 
+The weekly `Mutation testing` workflow runs Stryker.NET against
+`src/CodeIndex/Database/DbWriter.cs` using `stryker-config.json`. Keep this
+scope focused on transaction, savepoint, rollback, and batch-write behavior
+unless the runtime budget is intentionally expanded. The mutation score gates
+are high 75, low 70, and break 65 so changes that weaken rollback or savepoint
+coverage fail outside the regular PR test path.
+
 ## CI / Artifact Distribution
 
 Query commands accept `--read-only` (alias `--immutable`) to open an existing

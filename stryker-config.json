@@ -1,0 +1,22 @@
+{
+  "stryker-config": {
+    "solution": "CodeIndex.sln",
+    "project": "src/CodeIndex/CodeIndex.csproj",
+    "test-projects": [
+      "tests/CodeIndex.Tests/CodeIndex.Tests.csproj"
+    ],
+    "mutate": [
+      "src/CodeIndex/Database/DbWriter.cs"
+    ],
+    "thresholds": {
+      "high": 75,
+      "low": 70,
+      "break": 65
+    },
+    "reporters": [
+      "progress",
+      "cleartext",
+      "html"
+    ]
+  }
+}
