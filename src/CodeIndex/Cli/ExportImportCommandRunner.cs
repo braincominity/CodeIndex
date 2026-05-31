@@ -85,9 +85,13 @@ internal static class ExportImportCommandRunner
 
             if (!DbContext.TryValidateExistingCodeIndexDb(tempPath, out var validationMessage, out _))
                 return WriteError($"archive database is invalid: {validationMessage}.", "re-export from a compatible CodeIndex database.", "cdidx import <archive> [--db <path>] [--prune-paths] [--json]");
+            SqliteConnection.ClearAllPools();
 
             if (prunePaths)
+            {
                 RewriteImportedProjectRoot(tempPath, Environment.CurrentDirectory);
+                SqliteConnection.ClearAllPools();
+            }
 
             DeleteSqliteSidecars(fullDbPath);
             File.Move(tempPath, fullDbPath, overwrite: true);
@@ -304,7 +308,7 @@ internal static class ExportImportCommandRunner
 
     private static void RewriteImportedProjectRoot(string dbPath, string projectRoot)
     {
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString);
+        using var connection = new SqliteConnection(CreateUnpooledConnectionString(dbPath));
         connection.Open();
         using var cmd = connection.CreateCommand();
         cmd.CommandText = @"
