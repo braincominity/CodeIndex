@@ -6451,6 +6451,23 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ApplyExcerptOutputBudget_TruncatesAtLineBoundary_Issue1605()
+    {
+        var payload = new JsonObject
+        {
+            ["content"] = "short\n" + new string('x', 200),
+            ["contentTruncated"] = false,
+        };
+
+        McpServer.ApplyExcerptOutputBudget(payload, 20);
+
+        Assert.True(payload["truncated"]!.GetValue<bool>());
+        Assert.Equal("output_size_cap", payload["truncation_reason"]!.GetValue<string>());
+        Assert.Equal("short", payload["content"]!.GetValue<string>());
+        Assert.True(payload["contentTruncated"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public void ToolsCall_BatchQuery_ArgsSummaryReflectsRequestedArguments_Issue1537()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"symbols","arguments":{"query":"App","lang":"csharp"}}]}}}""")!;

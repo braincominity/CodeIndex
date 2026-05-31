@@ -1905,7 +1905,7 @@ public partial class McpServer
         return true;
     }
 
-    private static void ApplyExcerptOutputBudget(JsonObject payload, int maxOutputBytes)
+    internal static void ApplyExcerptOutputBudget(JsonObject payload, int maxOutputBytes)
     {
         var contentKey = payload.ContainsKey("content") ? "content" : "Content";
         if (payload[contentKey]?.GetValue<string>() is not string content)
