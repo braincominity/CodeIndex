@@ -347,6 +347,30 @@ public class PreparedCommandCacheTests : IDisposable
     }
 
     [Fact]
+    public void DbWriter_WithCache_GetUnchangedFileIdDoesNotTouchWhenChecksumDrifts_Issue1735()
+    {
+        var writer = new DbWriter(_db);
+        var initial = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var touched = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        writer.UpsertFile(new FileRecord
+        {
+            Path = "src/drift.py", Lang = "python", Size = 1, Lines = 1,
+            Checksum = "old_checksum", Modified = initial,
+        });
+
+        Assert.Null(writer.GetUnchangedFileId("src/drift.py", touched, "new_checksum"));
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "SELECT modified, checksum FROM files WHERE path = @p";
+        cmd.Parameters.AddWithValue("@p", "src/drift.py");
+        using var reader = cmd.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.Equal(initial, reader.GetDateTime(0));
+        Assert.Equal("old_checksum", reader.GetString(1));
+    }
+
+    [Fact]
     public void DbReader_WithCache_ReusesCSharpResolutionCommandsAcrossReaders()
     {
         var writer = new DbWriter(_db);

@@ -482,6 +482,8 @@ public class DbWriter
         if (!SymbolExtractorVersionMatchesCurrent(language))
             return null;
 
+        // Keep the unchanged check and timestamp touch in one SQLite statement so
+        // concurrent row drift cannot slip between a SELECT and a later UPDATE (#1735).
         var cmd = RentCommand(
             @"UPDATE files
               SET modified = CASE
