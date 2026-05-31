@@ -1382,8 +1382,25 @@ internal static class ProgramRunner
             if (string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase))
                 return RunMcpHttp(server, listenSpec ?? DefaultMcpHttpListen);
 
-            server.RunAsync().GetAwaiter().GetResult();
-            return CommandExitCodes.Success;
+            try
+            {
+                server.RunAsync().GetAwaiter().GetResult();
+                return CommandExitCodes.Success;
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Out.Flush();
+                Console.Error.Flush();
+                return CommandExitCodes.CancelledBySignal;
+            }
+            catch (Exception ex)
+            {
+                GlobalToolLog.Error("mcp_server_failed " + GlobalToolLog.FormatExceptionChain(ex));
+                Console.Error.WriteLine($"Error: MCP server failed ({ex.GetType().Name}: {ex.Message}).");
+                Console.Out.Flush();
+                Console.Error.Flush();
+                return CommandExitCodes.DatabaseError;
+            }
         }
         finally
         {
@@ -1447,7 +1464,24 @@ internal static class ProgramRunner
                 else
                     Console.Error.WriteLine($"[cdidx-mcp] HTTP transport listening on {resolved.Prefix} (bearer auth required).");
 
-                server.RunAsync(transport, cts.Token).GetAwaiter().GetResult();
+                try
+                {
+                    server.RunAsync(transport, cts.Token).GetAwaiter().GetResult();
+                }
+                catch (OperationCanceledException)
+                {
+                    Console.Out.Flush();
+                    Console.Error.Flush();
+                    return CommandExitCodes.CancelledBySignal;
+                }
+                catch (Exception ex)
+                {
+                    GlobalToolLog.Error("mcp_http_server_failed " + GlobalToolLog.FormatExceptionChain(ex));
+                    Console.Error.WriteLine($"Error: MCP HTTP server failed ({ex.GetType().Name}: {ex.Message}).");
+                    Console.Out.Flush();
+                    Console.Error.Flush();
+                    return CommandExitCodes.DatabaseError;
+                }
             }
         }
         finally
