@@ -13709,6 +13709,7 @@ public class ReferenceExtractorTests
 
             <UserCard User="CurrentUser" />
             <Shared.DetailPanel />
+            <MyApp.Components.Forms.LoginButton OnClick="HandleClick" />
             <button @onclick="HandleClick">Save</button>
             <button @onclick="@HandleClick">Save explicit</button>
             <button @onclick="InheritedClick">Inherited</button>
@@ -13739,14 +13740,19 @@ public class ReferenceExtractorTests
         var qualifiedComponentColumn = content
             .Split('\n')
             .Single(line => line.Contains("Shared.DetailPanel", StringComparison.Ordinal))
-            .IndexOf("DetailPanel", StringComparison.Ordinal) + 1;
+            .IndexOf("Shared.DetailPanel", StringComparison.Ordinal) + 1;
+        var nestedComponentColumn = content
+            .Split('\n')
+            .Single(line => line.Contains("MyApp.Components.Forms.LoginButton", StringComparison.Ordinal))
+            .IndexOf("MyApp.Components.Forms.LoginButton", StringComparison.Ordinal) + 1;
 
         Assert.Contains(references, r => r.SymbolName == "BasePage" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "IUserActions" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Authorize" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "UserService" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "UserCard" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "DetailPanel" && r.ReferenceKind == "call" && r.Column == qualifiedComponentColumn);
+        Assert.Contains(references, r => r.SymbolName == "Shared.DetailPanel" && r.ReferenceKind == "call" && r.Column == qualifiedComponentColumn);
+        Assert.Contains(references, r => r.SymbolName == "MyApp.Components.Forms.LoginButton" && r.ReferenceKind == "call" && r.Column == nestedComponentColumn);
         Assert.Contains(references, r => r.SymbolName == "HandleClick" && r.ReferenceKind == "razor_event_binding");
         Assert.DoesNotContain(references, r =>
             r.SymbolName == "HandleClick"
