@@ -132,6 +132,8 @@ The repository root `nuget.config` is part of this supply-chain boundary. It cle
 
 CI (`.github/workflows/dotnet.yml`, `release.yml`, `codeql.yml`) restores the solution with `--locked-mode`, so any drift between the committed lock files and the resolution graph fails the build instead of slipping into artifacts. Local development restores normally; the lock file is only enforced in CI.
 
+The `CodeIndex` package project opts into deterministic builds and publishes repository metadata for Source Link. On GitHub Actions it also sets `ContinuousIntegrationBuild=true` and embeds untracked source inputs so PDBs and `.snupkg` artifacts can map back to the repository without local machine paths. Build metadata uses the Git commit date when available instead of the wall-clock build date so repeated builds of the same commit do not drift by timestamp. `Microsoft.SourceLink.GitHub` is a build-only dependency (`PrivateAssets=All`), not a runtime dependency.
+
 The normal build/test workflow also runs `dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive --no-restore` after locked restore and fails on any High or Critical NuGet advisory in direct or transitive runtime packages. Dependabot is configured for weekly NuGet and GitHub Actions update PRs in `.github/dependabot.yml`, so security fixes and routine dependency/action bumps are proposed before they become release surprises.
 
 The release `dotnet publish` (per-RID) and `dotnet pack` (NuGet packaging) steps intentionally do **not** set `RestoreLockedMode=true`. Those steps run runtime-specific restores that legitimately add lock entries that did not exist at solution-restore time (e.g. `net8.0/<rid>` runtime sections, `Microsoft.NET.ILLink.Tasks` for trimming). They still consume locked versions because `RestorePackagesWithLockFile=true` from `Directory.Build.props` forces every restore on the machine to resolve through the lock file. The supply-chain guarantee for `Microsoft.Data.Sqlite` and its `SQLitePCLRaw.*` graph is enforced by the solution-level locked restore that runs first.
@@ -626,7 +628,7 @@ Python extraction uses `function` for ordinary functions and methods, `class` fo
 
 ### Scala symbol taxonomy
 
-Scala extraction uses `class` for `class` / `case class` declarations and `object` for singleton `object`, `case object`, and sealed-object declarations. When a top-level `object X` appears in the same file as a top-level `class X`, `SubKind` records `companion_object` on the object and `has_companion_object` on the class so inspect/outline consumers can show the companion relationship without treating the singleton as an instantiable class (#1823, related taxonomy tracking in #1772).
+Scala extraction uses `class` for `class` / `case class` declarations and `object` for singleton `object`, `case object`, and sealed-object declarations. `implicit def` / `implicit val` / `implicit var` / `implicit class` declarations use `implicit`, and Scala 3 `given` declarations use `given`; their source, target, and evidence types are emitted as `type_reference` rows. `for`-comprehension generators also emit call edges for their generator sources. When a top-level `object X` appears in the same file as a top-level `class X`, `SubKind` records `companion_object` on the object and `has_companion_object` on the class so inspect/outline consumers can show the companion relationship without treating the singleton as an instantiable class (#1823, related taxonomy tracking in #1772).
 
 ### Extending reference extraction
 
@@ -860,7 +862,7 @@ Supported symbol kinds by language:
 | Perl | packages, subroutines, constants | `use`, `require`, `parent` / `base`, arrow method calls | yes |
 | C / C++ | functions, macros, structs, C++ classes, enums, enum classes | `#include`, type-position references | yes |
 | PHP | functions, constants, enum cases, classes, interfaces, traits, enums | `use`, `require`, `include` | yes |
-| Scala | `def`, classes, objects, traits, enums | imports, type aliases, block calls | yes |
+| Scala | `def`, `implicit` declarations, `given`, classes, objects, traits, enums | imports, type aliases, block calls, `for` generators, implicit conversion types, `given` / `using` evidence types | yes |
 | Elixir | `def`, `defp`, modules, protocols | `import`, `alias`, `use`, `require` | yes |
 | Common Lisp / Racket | packages/modules, functions/macros, classes, structs, variables | S-expression call heads, `#'name` function references, `make-instance` instantiation | yes |
 | SQL | procedures/functions/triggers, DDL objects, schemas, enum types, extensions | source/target dependencies, procedure calls, temp-object tracking | yes |
@@ -2235,7 +2237,7 @@ TypeScript decorator は decorator 名を `annotation` 行として出力し、d
 
 ### Scala symbol taxonomy
 
-Scala 抽出は `class` / `case class` 宣言を `class`、singleton の `object` / `case object` / sealed object 宣言を `object` として記録する。同じファイルに top-level の `class X` と top-level の `object X` がある場合、`SubKind` は object 側に `companion_object`、class 側に `has_companion_object` を記録し、singleton をインスタンス化可能な class と扱わずに inspect / outline consumer が companion 関係を表示できるようにする (#1823、taxonomy tracking は #1772 に関連)。
+Scala 抽出は `class` / `case class` 宣言を `class`、singleton の `object` / `case object` / sealed object 宣言を `object` として記録する。`implicit def` / `implicit val` / `implicit var` / `implicit class` 宣言は `implicit`、Scala 3 の `given` 宣言は `given` とし、それらの source / target / evidence type は `type_reference` 行として出力する。`for` comprehension の generator も generator source への call edge を出力する。同じファイルに top-level の `class X` と top-level の `object X` がある場合、`SubKind` は object 側に `companion_object`、class 側に `has_companion_object` を記録し、singleton をインスタンス化可能な class と扱わずに inspect / outline consumer が companion 関係を表示できるようにする (#1823、taxonomy tracking は #1772 に関連)。
 
 ### TypeScript type-graph extraction
 
@@ -2794,12 +2796,14 @@ mock に頼らないリリース前検証として、`install.sh --reinstall-rea
 `XDG_CACHE_HOME/cdidx/logs/`、`XDG_RUNTIME_DIR/cdidx/logs/` の順に
 見つかった場所を使い、その後に platform default として Windows では
 `%LOCALAPPDATA%\cdidx\logs\`、macOS では `~/Library/Logs/cdidx/`、
-Linux では `~/.local/state/cdidx/logs/` を使う。ファイル名は `stderr-YYYYMMDD.log`。
+Linux では `~/.local/state/cdidx/logs/` を使う。ファイル名はプロセス ID と
+開始時刻を含む `stderr-YYYYMMDD-p<PID>-HHMMSS.log`。
 `CDIDX_LOG_FORMAT=json` または `--log-format json` で 1 行 1 JSON object
 （`ts`、`level`、`msg`）の JSONL に切り替えられる。`CDIDX_LOG_RETAIN` /
 `--log-retain-count` は保持ファイル数、`CDIDX_LOG_MAX_SIZE_MB` /
-`--log-max-size-mb` は日次ファイルのサイズローテーション上限を指定する。
-保持世代の既定は新しい 30 ファイルまで。通常の開発/テストサイクルで
+`--log-max-size-mb` または `CDIDX_GLOBAL_TOOL_LOG_MAX_BYTES` は日次ファイルの
+サイズローテーション上限を指定する。サイズ上限の既定は 50 MiB、保持世代の
+既定は新しい 30 ファイルまで。通常の開発/テストサイクルで
 ワークツリー直下に永続ログが増えないよう、`src/CodeIndex/bin/...`
 と `tests/.../bin/...` からのリポジトリ内開発実行は既定で対象外として
 いる。完全に無効化したい場合は `CDIDX_DISABLE_PERSISTENT_LOG=1`、

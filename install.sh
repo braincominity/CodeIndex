@@ -18,6 +18,7 @@
 # Optional env vars / 任意環境変数:
 #   CDIDX_GITHUB_BASE_URL       Release download base URL override
 #   CDIDX_GITHUB_API_BASE_URL   API base URL override for latest-release lookup
+#   CDIDX_REQUIRE_ATTESTATION=1 Require GitHub provenance verification via gh
 #   CDIDX_LOCAL_MIRROR_PORT     Local self-test HTTP server port (default: 18765)
 #   HTTPS_PROXY / HTTP_PROXY    Proxy used by curl for release and API probes
 #   NO_PROXY                    Hosts that should bypass the proxy
@@ -76,6 +77,7 @@ BINARY_NAME="cdidx"
 MANIFEST_REQUIRED_VERSION="1.24.6"
 GITHUB_BASE_URL="${CDIDX_GITHUB_BASE_URL:-https://github.com}"
 GITHUB_API_BASE_URL="${CDIDX_GITHUB_API_BASE_URL:-https://api.github.com}"
+REQUIRE_ATTESTATION="${CDIDX_REQUIRE_ATTESTATION:-0}"
 # Normalize optional base URL overrides by removing a trailing slash.
 # 末尾スラッシュ付きでも URL 連結が壊れないようにする。
 GITHUB_BASE_URL="${GITHUB_BASE_URL%/}"
@@ -180,6 +182,49 @@ need_cmd() {
     if ! command -v "$1" > /dev/null 2>&1; then
         error "Required command not found: $1"
     fi
+}
+
+has_cmd() {
+    command -v "$1" > /dev/null 2>&1
+}
+
+release_attestation_supported() {
+    if [ "${CDIDX_INSTALL_SH_LIB_ONLY:-0}" = "1" ] && [ "${CDIDX_TEST_ENABLE_ATTESTATION:-0}" != "1" ]; then
+        return 1
+    fi
+
+    [ "$GITHUB_BASE_URL" = "https://github.com" ] && [ "${SELF_TEST_LOCAL_MIRROR:-0}" != "1" ]
+}
+
+verify_release_attestation() {
+    local artifact_path="$1"
+    local artifact_name="$2"
+
+    if ! release_attestation_supported; then
+        if [ "$REQUIRE_ATTESTATION" = "1" ]; then
+            error "GitHub provenance attestation verification is required, but the release host is not github.com. Unset CDIDX_REQUIRE_ATTESTATION or install from the public GitHub release."
+        fi
+        return 0
+    fi
+
+    if ! has_cmd gh; then
+        if [ "$REQUIRE_ATTESTATION" = "1" ]; then
+            error "GitHub provenance attestation verification is required, but the 'gh' command was not found. Install GitHub CLI or unset CDIDX_REQUIRE_ATTESTATION."
+        fi
+        warn "Skipping GitHub provenance attestation for ${artifact_name}: 'gh' command not found. Set CDIDX_REQUIRE_ATTESTATION=1 to require this verification."
+        return 0
+    fi
+
+    info "Verifying GitHub provenance attestation for ${artifact_name}..."
+    if gh attestation verify "$artifact_path" -R "$REPO" > /dev/null; then
+        return 0
+    fi
+
+    if [ "$REQUIRE_ATTESTATION" = "1" ]; then
+        error "GitHub provenance attestation verification failed for ${artifact_name}."
+    fi
+
+    warn "GitHub provenance attestation verification failed for ${artifact_name}; continuing with checksum verification. Set CDIDX_REQUIRE_ATTESTATION=1 to fail closed."
 }
 
 temp_root() {
@@ -989,9 +1034,11 @@ download_and_install() {
 
     info "Downloading ${archive_name}..."
     download_release_file "$archive_url" "${tmpdir}/${archive_name}" "${archive_name}"
+    verify_release_attestation "${tmpdir}/${archive_name}" "$archive_name"
 
     info "Downloading checksums..."
     download_release_file "$checksums_url" "${tmpdir}/sha256sums.txt" "sha256sums.txt"
+    verify_release_attestation "${tmpdir}/sha256sums.txt" "sha256sums.txt"
 
     # Verify checksum / チェックサム検証
     info "Verifying checksum..."
