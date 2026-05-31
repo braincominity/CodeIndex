@@ -26,6 +26,7 @@ namespace CodeIndex.Mcp;
 /// </summary>
 public partial class McpServer : IDisposable
 {
+    private static int s_nextClientRequestId;
     private readonly string _dbPath;
     private readonly bool _dbPathExplicit;
     private readonly string _version;
@@ -54,6 +55,7 @@ public partial class McpServer : IDisposable
     // JSON-RPC request id ごとの実行中 CTS。MCP `$/cancelRequest` 通知でサーバー全体ではなく
     // 対象ツール呼び出しだけを cancel するため (#1418)。
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _activeRequests = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonNode?>> _pendingClientRequests = new(StringComparer.Ordinal);
     // Token observed by the currently executing tool call. Set just before
     // `ProcessFrame` runs and reset afterwards so `WithDbReader` can hand a live
     // cancellation token to `DbReader` for SQLite work (#1567).
@@ -63,11 +65,13 @@ public partial class McpServer : IDisposable
     private readonly AsyncLocal<CancellationToken> _currentRequestToken = new();
     private readonly AsyncLocal<bool> _isolateDbForCurrentRequest = new();
     private readonly AsyncLocal<Action<string>?> _currentOutOfBandFrameWriter = new();
+    private readonly AsyncLocal<bool> _canAwaitClientResponses = new();
     private readonly AsyncLocal<List<Action>?> _deferredFrameLogs = new();
     private static readonly AsyncLocal<RequestCorrelationContext?> CurrentCorrelationContext = new();
     private volatile bool _running = true;
     private bool _initializedNotificationPending;
     private bool _initializedNotificationSent;
+    private bool _clientRootsStale = true;
     // Per-session DbContext reused across MCP tool calls. Holding the connection open
     // avoids reopening SQLite, reapplying pragmas, and re-registering every SQL function
     // on each invocation (issue #1494).
@@ -158,6 +162,7 @@ public partial class McpServer : IDisposable
     private const string MaxResponseBytesEnvVar = "CDIDX_MCP_RESPONSE_MAX_BYTES";
     private const string KeepAliveIntervalEnvironmentVariable = "CDIDX_MCP_KEEP_ALIVE_INTERVAL_S";
     internal const string DebugEnvironmentVariable = "CDIDX_DEBUG";
+    private const string SamplingEnabledEnvironmentVariable = "CDIDX_MCP_SAMPLING";
     internal const int MaxJsonDepth = 32;
     internal const int MaxBatchRequestCount = 100;
     // Stdio buffer for the JSON-RPC loop. Sized to fit typical large MCP payloads (e.g. batch_query)
@@ -489,6 +494,8 @@ public partial class McpServer : IDisposable
                         _currentOutOfBandFrameWriter.Value = transport is IOutOfBandMcpTransport outOfBandTransport
                             ? frameToWrite => outOfBandTransport.WriteOutOfBandFrameAsync(frameToWrite, loopToken).GetAwaiter().GetResult()
                             : null;
+                        _canAwaitClientResponses.Value = transport is IOutOfBandMcpTransport
+                            && (transport is not HttpMcpTransport httpResponseTransport || httpResponseTransport.HasEventStreams);
                         BeginDeferredFrameLogs();
                         response = await ProcessFrameAsync(frame).ConfigureAwait(false);
                     }
@@ -496,6 +503,7 @@ public partial class McpServer : IDisposable
                     {
                         _currentRequestToken.Value = CancellationToken.None;
                         _currentOutOfBandFrameWriter.Value = null;
+                        _canAwaitClientResponses.Value = false;
                         _concurrencyGate.Release();
                     }
 
@@ -590,6 +598,23 @@ public partial class McpServer : IDisposable
                 continue;
             }
 
+            if (IsServerResponseFrame(frame))
+            {
+                BeginDeferredFrameLogs();
+                var response = await ProcessFrameAsync(frame).ConfigureAwait(false);
+                await writeGate.WaitAsync(loopToken).ConfigureAwait(false);
+                try
+                {
+                    await WriteFrameSafelyAsync(transport, response, loopToken).ConfigureAwait(false);
+                    FlushDeferredFrameLogs();
+                }
+                finally
+                {
+                    writeGate.Release();
+                }
+                continue;
+            }
+
             await _concurrencyGate.WaitAsync(loopToken).ConfigureAwait(false);
             tasks.Add(Task.Run(async () =>
             {
@@ -600,6 +625,7 @@ public partial class McpServer : IDisposable
                     try
                     {
                         _currentRequestToken.Value = loopToken;
+                        _canAwaitClientResponses.Value = true;
                         _currentOutOfBandFrameWriter.Value = frameToWrite =>
                         {
                             writeGate.Wait(loopToken);
@@ -618,6 +644,7 @@ public partial class McpServer : IDisposable
                     finally
                     {
                         _currentRequestToken.Value = CancellationToken.None;
+                        _canAwaitClientResponses.Value = false;
                         _currentOutOfBandFrameWriter.Value = null;
                         normalFrameGate.Release();
                     }
@@ -792,6 +819,22 @@ public partial class McpServer : IDisposable
         return notification.ToJsonString(_jsonOptions);
     }
 
+    private static bool IsServerResponseFrame(string frame)
+    {
+        try
+        {
+            var node = JsonNode.Parse(frame);
+            return node is JsonObject obj
+                && obj.ContainsKey("id")
+                && obj["method"] is null
+                && (obj.ContainsKey("result") || obj.ContainsKey("error"));
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     private string BuildInvalidUtf8ParseErrorResponse(DecoderFallbackException ex)
     {
         DeferFrameLog(BuildInvalidUtf8ErrorLog(ex.Message));
@@ -841,6 +884,9 @@ public partial class McpServer : IDisposable
         {
             request = JsonNode.Parse(line, documentOptions: new JsonDocumentOptions { MaxDepth = MaxJsonDepth });
             if (request == null)
+                return null;
+
+            if (TryCompletePendingClientRequest(request))
                 return null;
 
             ExtractResponseId(request, out responseHasId, out responseId);
@@ -903,6 +949,76 @@ public partial class McpServer : IDisposable
         if (responseId != null)
             activity?.SetTag("rpc.request_id", responseId.ToJsonString());
         return activity;
+    }
+
+    private bool TryCompletePendingClientRequest(JsonNode request)
+    {
+        if (request is not JsonObject obj
+            || !obj.TryGetPropertyValue("id", out var id)
+            || obj["method"] is not null)
+            return false;
+
+        var key = id?.ToJsonString(_jsonOptions) ?? "null";
+        if (!_pendingClientRequests.TryRemove(key, out var pending))
+            return false;
+
+        if (obj.TryGetPropertyValue("error", out var error) && error is not null)
+            pending.TrySetException(new InvalidOperationException(error.ToJsonString(_jsonOptions)));
+        else
+            pending.TrySetResult(obj["result"]?.DeepClone());
+        return true;
+    }
+
+    private async Task<JsonNode?> SendClientRequestAsync(string method, JsonObject? @params, CancellationToken cancellationToken)
+    {
+        if (ClientRequestHandlerForTests is { } handler)
+            return handler(method, @params)?.DeepClone();
+
+        var writer = _currentOutOfBandFrameWriter.Value;
+        if (writer is null || !_canAwaitClientResponses.Value)
+            return null;
+
+        var id = "cdidx-" + Interlocked.Increment(ref s_nextClientRequestId).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var key = JsonSerializer.Serialize(id);
+        var pending = new TaskCompletionSource<JsonNode?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_pendingClientRequests.TryAdd(key, pending))
+            return null;
+
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id,
+            ["method"] = method,
+        };
+        if (@params is not null)
+            request["params"] = @params;
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
+        using var cancellationRegistration = timeoutCts.Token.Register(static state =>
+        {
+            var tuple = ((McpServer server, string key, TaskCompletionSource<JsonNode?> pending))state!;
+            if (tuple.server._pendingClientRequests.TryRemove(tuple.key, out var _))
+                tuple.pending.TrySetCanceled();
+        }, (this, key, pending));
+
+        try
+        {
+            writer(request.ToJsonString(_jsonOptions));
+            return await pending.Task.ConfigureAwait(false);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        finally
+        {
+            _pendingClientRequests.TryRemove(key, out var _);
+        }
     }
 
     private static string? TryGetMcpTraceParent(JsonNode request)
@@ -1110,6 +1226,12 @@ public partial class McpServer : IDisposable
         // Notifications (no id) don't get a response / 通知（idなし）にはレスポンスなし
         if (method == "notifications/initialized")
             return null;
+
+        if (method == "notifications/roots/list_changed")
+        {
+            _clientRootsStale = true;
+            return null;
+        }
 
         // Graceful shutdown via JSON-RPC notification (#1567). Without this, the only way to
         // stop a long-lived `cdidx mcp` server was to close the transport (stdin EOF / HTTP
@@ -1605,7 +1727,12 @@ public partial class McpServer : IDisposable
                 {
                     ["listChanged"] = false
                 },
-                ["logging"] = new JsonObject()
+                ["logging"] = new JsonObject(),
+                ["roots"] = new JsonObject
+                {
+                    ["listChanged"] = true
+                },
+                ["sampling"] = new JsonObject()
             },
             ["serverInfo"] = new JsonObject
             {
@@ -1656,6 +1783,7 @@ public partial class McpServer : IDisposable
         _clientVersion = null;
         if (initializeParams is not JsonObject obj)
             return;
+        _clientRootsStale = true;
         if (obj["clientInfo"] is not JsonObject info)
             return;
         _clientName = TryReadStringMember(info, "name");
@@ -1697,6 +1825,8 @@ public partial class McpServer : IDisposable
         .ToArray();
 
     internal string McpLogLevelForTests => _mcpLogLevel;
+
+    internal Func<string, JsonObject?, JsonNode?>? ClientRequestHandlerForTests { get; set; }
 
     private static string? TryReadStringMember(JsonObject obj, string key)
     {
@@ -2213,7 +2343,7 @@ public partial class McpServer : IDisposable
                         "unused_symbols" => ExecuteUnusedSymbols(id, args),
                         "symbol_hotspots" => ExecuteSymbolHotspots(id, args),
                         "ping" => ExecutePing(id),
-                        "index" => ExecuteIndex(id, args, progressToken),
+                        "index" => await ExecuteIndexAsync(id, args, progressToken).ConfigureAwait(false),
                         "backfill_fold" => ExecuteBackfillFold(id, args, progressToken),
                         "suggest_improvement" => await ExecuteSuggestImprovementAsync(id, args).ConfigureAwait(false),
                         _ => CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Unknown tool: {toolName}",
