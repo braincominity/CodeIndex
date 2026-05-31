@@ -878,12 +878,19 @@ public partial class DbReader : IDisposable
         }
     }
 
-    // Reference-count subquery that gracefully degrades to 0 when symbol_references is absent
-    // (legacy read-only DBs where TryMigrateForRead could not create the table).
-    // symbol_references が無いレガシー read-only DB では 0 にフォールバックする。
-    private string ReferenceCountByFileSubquery =>
+    private string FileReferenceCountJoinSql =>
         _hasReferencesTable
-            ? "(SELECT COUNT(*) FROM symbol_references WHERE file_id = f.id)"
+            ? @"
+            LEFT JOIN (
+                SELECT file_id, COUNT(*) AS reference_count
+                FROM symbol_references
+                GROUP BY file_id
+            ) AS reference_counts ON reference_counts.file_id = f.id"
+            : string.Empty;
+
+    private string FileReferenceCountSql =>
+        _hasReferencesTable
+            ? "COALESCE(reference_counts.reference_count, 0)"
             : "0";
 
     // Script-style top-level code emits reference rows without a container symbol.
@@ -1411,12 +1418,18 @@ public partial class DbReader : IDisposable
 
         var sql = $@"
             SELECT f.path, f.lang, f.size, f.lines,
-                   (SELECT COUNT(*) FROM symbols WHERE file_id = f.id) AS symbol_count,
-                   {ReferenceCountByFileSubquery} AS reference_count,
+                   COALESCE(symbol_counts.symbol_count, 0) AS symbol_count,
+                   {FileReferenceCountSql} AS reference_count,
                    {GetFileColumnSql("checksum")} AS checksum,
                    {GetFileColumnSql("modified")} AS modified,
                    {GetFileColumnSql("indexed_at")} AS indexed_at
             FROM files f
+            LEFT JOIN (
+                SELECT file_id, COUNT(*) AS symbol_count
+                FROM symbols
+                GROUP BY file_id
+            ) AS symbol_counts ON symbol_counts.file_id = f.id
+            {FileReferenceCountJoinSql}
             WHERE 1=1";
 
         if (query != null)

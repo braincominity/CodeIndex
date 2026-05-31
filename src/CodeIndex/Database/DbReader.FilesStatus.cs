@@ -408,12 +408,18 @@ public partial class DbReader
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = $@"
             SELECT f.path, f.lang, f.size, f.lines,
-                   (SELECT COUNT(*) FROM symbols WHERE file_id = f.id) AS symbol_count,
-                   {ReferenceCountByFileSubquery} AS reference_count,
+                   COALESCE(symbol_counts.symbol_count, 0) AS symbol_count,
+                   {FileReferenceCountSql} AS reference_count,
                    {GetFileColumnSql("checksum")} AS checksum,
                    {GetFileColumnSql("modified")} AS modified,
                    {GetFileColumnSql("indexed_at")} AS indexed_at
             FROM files f
+            LEFT JOIN (
+                SELECT file_id, COUNT(*) AS symbol_count
+                FROM symbols
+                GROUP BY file_id
+            ) AS symbol_counts ON symbol_counts.file_id = f.id
+            {FileReferenceCountJoinSql}
             WHERE f.path = @path";
         cmd.Parameters.AddWithValue("@path", path);
 

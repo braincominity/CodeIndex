@@ -250,6 +250,17 @@ public class DbReaderTests : IDisposable
         Assert.Contains("idx_symbol_refs_name_kind", planAfterAnalyze);
     }
 
+    [Fact]
+    public void FileCountHelpers_UseGroupedReferenceCounts()
+    {
+        var joinSql = GetPrivateStringProperty(_reader, "FileReferenceCountJoinSql");
+        var countSql = GetPrivateStringProperty(_reader, "FileReferenceCountSql");
+
+        Assert.Contains("GROUP BY file_id", joinSql, StringComparison.Ordinal);
+        Assert.DoesNotContain("WHERE file_id = f.id", joinSql, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("COALESCE(reference_counts.reference_count, 0)", countSql);
+    }
+
     [Theory]
     [InlineData("js")]
     [InlineData("JS")]
@@ -416,6 +427,13 @@ public class DbReaderTests : IDisposable
         while (reader.Read())
             plan.AppendLine(reader.GetString(3));
         return plan.ToString();
+    }
+
+    private static string GetPrivateStringProperty(DbReader reader, string name)
+    {
+        var property = typeof(DbReader).GetProperty(name, BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(property);
+        return Assert.IsType<string>(property!.GetValue(reader));
     }
 
     private SqliteCommand CreateSearchReferencesCommandForSql(string query)
