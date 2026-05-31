@@ -135,10 +135,6 @@ INLINE_INTERPRETER_RE = re.compile(r"(?i)^\s*(?:python|python3|ruby|perl|node)\b
 VARIABLE_COMMAND_RE = re.compile(r"^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$")
 
 _FORBIDDEN_COMMAND_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (SEARCH_OR_DISCOVERY_RE, "shell search/file-discovery command is blocked; use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead."),
-    (GLOBAL_CDIDX_RE, "global cdidx is blocked; use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead, or the fully expanded installed path documented in CLOUD_BOOTSTRAP_PROMPT.md for no-SDK cloud bootstrap."),
-    (GIT_GREP_RE, "git grep is blocked; use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead."),
-    (EVAL_RE, "eval is blocked; use a direct reviewed command or script file instead."),
     (re.compile(r"(?i)\brm\s+-[^\n;|&]*r[^\n;|&]*f\b|\brm\s+-[^\n;|&]*f[^\n;|&]*r\b"), "recursive forced rm is blocked"),
     (re.compile(r"(?i)\brm\s+-r\b"), "recursive rm is blocked"),
     (re.compile(r"(?i)\b(?:rmdir|unlink|shred|srm|truncate)\b"), "destructive filesystem command is blocked"),
@@ -152,7 +148,6 @@ _FORBIDDEN_COMMAND_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?i)\b(?:curl|wget)\b.*\|\s*(?:sh|bash|zsh|python|ruby|perl)\b"), "download-and-execute is blocked"),
     (re.compile(r"(?i)\b(?:ssh|scp|sftp|rsync|rclone|nc|ncat|netcat|socat|telnet|ftp)\b"), "remote shell/file transfer is blocked"),
     (re.compile(r"(?i)\b(?:pbcopy|pbpaste)\b"), "clipboard access is blocked"),
-    (re.compile(r"(?i)\b(?:open|osascript|automator)\b|\bshortcuts\s+run\b"), "macOS automation/app launching is blocked"),
     (re.compile(r"(?i)\b(?:launchctl|security|tccutil|spctl|csrutil|tmutil)\b"), "macOS security/system command is blocked"),
     (re.compile(r"(?i)\bdefaults\s+write\b|\bplutil\s+-replace\b"), "macOS preference modification is blocked"),
     (re.compile(r"(?i)\bgit\s+tag\b"), "git tag is blocked unless explicitly performed by the user"),
@@ -173,8 +168,6 @@ _FORBIDDEN_COMMAND_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 _SCRIPT_FORBIDDEN_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (SEARCH_OR_DISCOVERY_RE, "script contains shell search/file-discovery command"),
-    (GIT_GREP_RE, "script contains git grep"),
     *_FORBIDDEN_COMMAND_PATTERNS,
 ]
 
@@ -542,11 +535,15 @@ def _tokenized_forbidden_tokens_reason(tokens: list[str]) -> str | None:
     if _env_chdir_wrapper_present(tokens):
         return "env chdir wrappers are blocked; run from the target cwd directly"
 
-    for index, token in enumerate(tokens):
+    for segment in _token_segments(tokens):
+        segment = _strip_transparent_script_wrappers(_strip_leading_env_assignments(segment))
+        if not segment:
+            continue
+        token = segment[0]
         if not token or token.startswith("-") or _is_env_assignment(token):
             continue
         name = _token_command_name(token)
-        args = tokens[index + 1 :]
+        args = segment[1:]
         if name in _SEARCH_OR_DISCOVERY_COMMANDS:
             return "shell search/file-discovery command is blocked; use dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll instead."
         if name in _NETWORK_COMMANDS:

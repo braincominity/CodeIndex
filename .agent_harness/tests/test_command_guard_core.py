@@ -234,6 +234,18 @@ class CommandGuardCoreTests(TestCase):
                 decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
                 self.assertFalse(decision.allowed)
 
+    def test_allows_forbidden_command_words_inside_gh_arguments(self) -> None:
+        root = Path("/tmp")
+        for command in (
+            'gh issue create --title "find and open are issue words" --body "cdidx find appears in docs"',
+            'gh issue list --state open --search "grep in the issue body"',
+            'gh pr create --title "search: find hint" --body "users may type git grep or open here"',
+        ):
+            with self.subTest(command=command):
+                decision = core.evaluate_bash_command(command, cwd=root, project_root=root)
+
+                self.assertTrue(decision.allowed, decision.reason)
+
     def test_denies_quote_concatenated_high_risk_commands(self) -> None:
         root = Path("/tmp")
         for command in (
