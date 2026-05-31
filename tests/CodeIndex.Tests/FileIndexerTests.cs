@@ -4253,6 +4253,33 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void BuildRecord_GitLfsVersionLineWithoutPointerShapePreservesContent()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "example.txt");
+            var text = """
+                version https://git-lfs.github.com/spec/v1
+                This is documentation text, not a Git LFS pointer.
+                """;
+            File.WriteAllText(filePath, text);
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, content, rawBytes, _) = indexer.BuildRecordWithRawBytes(filePath);
+            var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
+
+            Assert.Equal(text, content);
+            Assert.DoesNotContain(issues, issue => issue.Kind == "lfs_pointer_skipped");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void BuildRecord_ThrowsFileTooLargeSkippedExceptionForOversizedFile()
     {
         // Files exceeding the default cap should carry structured skip metadata.

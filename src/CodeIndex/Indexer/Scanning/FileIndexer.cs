@@ -3203,14 +3203,62 @@ public class FileIndexer
         if (rawBytes.Length == 0 || rawBytes.Length >= GitLfsPointerMaxBytes)
             return false;
 
-        ReadOnlySpan<byte> firstLine = rawBytes;
-        var newlineIndex = firstLine.IndexOf((byte)'\n');
-        if (newlineIndex >= 0)
-            firstLine = firstLine[..newlineIndex];
-        if (firstLine.Length > 0 && firstLine[^1] == (byte)'\r')
-            firstLine = firstLine[..^1];
+        var pointerText = Encoding.UTF8.GetString(rawBytes).Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        var lines = pointerText.Split('\n');
+        if (lines.Length > 0 && lines[^1].Length == 0)
+            lines = lines[..^1];
+        if (lines.Length < 3)
+            return false;
+        if (!string.Equals(lines[0], "version https://git-lfs.github.com/spec/v1", StringComparison.Ordinal))
+            return false;
 
-        return firstLine.SequenceEqual("version https://git-lfs.github.com/spec/v1"u8);
+        var lineIndex = 1;
+        while (lineIndex < lines.Length && lines[lineIndex].StartsWith("ext-", StringComparison.Ordinal))
+            lineIndex++;
+
+        if (lineIndex + 1 >= lines.Length)
+            return false;
+        if (!IsGitLfsSha256OidLine(lines[lineIndex]))
+            return false;
+        lineIndex++;
+        if (!IsGitLfsSizeLine(lines[lineIndex]))
+            return false;
+
+        return lineIndex == lines.Length - 1;
+    }
+
+    private static bool IsGitLfsSha256OidLine(string line)
+    {
+        const string prefix = "oid sha256:";
+        if (!line.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+
+        var hash = line.AsSpan(prefix.Length);
+        if (hash.Length != 64)
+            return false;
+        foreach (var c in hash)
+        {
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+                return false;
+        }
+        return true;
+    }
+
+    private static bool IsGitLfsSizeLine(string line)
+    {
+        const string prefix = "size ";
+        if (!line.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+
+        var size = line.AsSpan(prefix.Length);
+        if (size.Length == 0)
+            return false;
+        foreach (var c in size)
+        {
+            if (c < '0' || c > '9')
+                return false;
+        }
+        return true;
     }
 
     /// <summary>
