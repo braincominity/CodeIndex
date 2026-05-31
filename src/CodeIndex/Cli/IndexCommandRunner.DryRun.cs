@@ -15,7 +15,7 @@ public static partial class IndexCommandRunner
         CancellationToken cancellationToken)
     {
         var projectPath = options.ProjectPath!;
-        var dryIndexer = new FileIndexer(projectPath, ignoreCase, ignoreRuleRoot, options.MaxFileSizeBytes);
+        var dryIndexer = new FileIndexer(projectPath, ignoreCase, ignoreRuleRoot, options.MaxFileSizeBytes, directoryIgnoreCaseProbe: null, symlinkPolicy: options.SymlinkPolicy);
         IReadOnlyList<string> dryCandidates;
         var errorList = new List<CliJsonMessage>();
         var dryScanErrorKeys = new HashSet<string>(StringComparer.Ordinal);

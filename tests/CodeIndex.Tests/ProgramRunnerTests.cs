@@ -57,6 +57,37 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void Run_TestExtractor_PrintsIsolatedSymbols()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_test_extractor_{Guid.NewGuid():N}");
+            try
+            {
+                Directory.CreateDirectory(tempDir);
+                var file = Path.Combine(tempDir, "app.py");
+                File.WriteAllText(file, "def hello():\n    pass\n");
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["test-extractor", "--language", "python", "--file", file, "--json"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stderr);
+                using var document = JsonDocument.Parse(stdout);
+                Assert.Contains(document.RootElement.EnumerateArray(), item =>
+                    item.GetProperty("Kind").GetString() == "function"
+                    && item.GetProperty("Name").GetString() == "hello");
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void TryConsumeQueryTraceFlag_StripsTraceAndPreservesEscapedQuery()
     {
         string[] args = ["needle", "--trace=stderr", "--lang", "csharp", "--", "--trace=file"];

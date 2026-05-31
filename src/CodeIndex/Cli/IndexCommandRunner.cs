@@ -239,7 +239,7 @@ public static partial class IndexCommandRunner
         AddToGitExclude(options.ProjectPath, dbPath);
 
         var writer = new DbWriter(db);
-        var indexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot, options.MaxFileSizeBytes);
+        var indexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot, options.MaxFileSizeBytes, directoryIgnoreCaseProbe: null, symlinkPolicy: options.SymlinkPolicy);
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var projectRoot = Path.GetFullPath(options.ProjectPath!);
 
@@ -1180,6 +1180,7 @@ public sealed class IndexCommandOptions
     public DurationOutputFormat DurationFormat { get; init; } = DurationOutputFormat.Auto;
     public long? MaxFileSizeBytes { get; init; }
     public int Parallelism { get; init; } = IndexCommandRunner.DefaultIndexParallelism();
+    public FileIndexer.SymlinkPolicy SymlinkPolicy { get; init; } = FileIndexer.SymlinkPolicy.None;
     public SymbolKindFilter SymbolKindFilter { get; init; } = SymbolKindFilter.Empty;
 }
 
