@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <RunConfiguration>
+    <ResultsDirectory>./TestResults</ResultsDirectory>
+    <TestSessionTimeout>1800000</TestSessionTimeout>
+  </RunConfiguration>
+  <xUnit>
+    <LongRunningTestSeconds>60</LongRunningTestSeconds>
+  </xUnit>
+</RunSettings>

@@ -1095,6 +1095,8 @@ public class FileIndexer
             merged.TryAdd($"{prefix}<suffix>", lang);
         foreach (var (extension, lang) in ExtractorPluginRegistry.LanguageExtensions)
             merged.TryAdd(extension, lang);
+        foreach (var (extension, lang) in LanguageMapOverrides.LoadEffectiveMap())
+            merged[extension] = lang;
         return merged;
     }
 
@@ -1128,6 +1130,9 @@ public class FileIndexer
         }
 
         var ext = Path.GetExtension(filePath);
+        if (TryDetectLanguageOverride(filePath, out var overrideLang))
+            return new LanguageDetectionResult(FileProbeStatus.Supported, overrideLang);
+
         if (LangMap.TryGetValue(ext, out var lang))
         {
             if (lang == "c" && string.Equals(ext, ".h", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(content))
@@ -1144,9 +1149,31 @@ public class FileIndexer
             return new LanguageDetectionResult(FileProbeStatus.Supported, pluginLang);
 
         if (!string.IsNullOrEmpty(ext))
+        {
+            ExtractorPluginRegistry.LoadPatternConfigsForPath(filePath);
+            if (ExtractorPluginRegistry.LanguageExtensions.TryGetValue(ext, out pluginLang))
+                return new LanguageDetectionResult(FileProbeStatus.Supported, pluginLang);
+
             return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
+        }
 
         return TryDetectLanguageFromShebang(filePath);
+    }
+
+    private static bool TryDetectLanguageOverride(string filePath, out string language)
+    {
+        language = string.Empty;
+        var fileName = Path.GetFileName(filePath);
+        foreach (var (extension, mappedLanguage) in LanguageMapOverrides.LoadEffectiveMap(filePath))
+        {
+            if (fileName.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+            {
+                language = mappedLanguage;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string? TryDetectCppHeaderLanguage(string content)
