@@ -14771,6 +14771,44 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_ScalaForImplicitGivenUsingReferences_AreIndexed()
+    {
+        const string content = """
+            trait Encoder[T]
+            class User
+            class UserDto
+
+            object Main {
+              implicit def userToDto(user: User): UserDto = UserDto()
+              implicit class UserOps(user: User) {
+                def active: Boolean = true
+              }
+              given userEncoder: Encoder[User] = Encoder.instance
+              def render(value: User)(using encoder: Encoder[User]): String =
+                for {
+                  raw <- users
+                  user <- loadUsers()
+                  dto <- convert(user)
+                  if dto.active
+                } yield dto.toString
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.Contains(symbols, symbol => symbol.Name == "userToDto" && symbol.Kind == "implicit");
+        Assert.Contains(symbols, symbol => symbol.Name == "UserOps" && symbol.Kind == "implicit");
+        Assert.Contains(symbols, symbol => symbol.Name == "userEncoder" && symbol.Kind == "given");
+        Assert.Contains(references, reference => reference.SymbolName == "users" && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference => reference.SymbolName == "loadUsers" && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference => reference.SymbolName == "convert" && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "UserDto" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Encoder[User]" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpEventSubscription_DetectsAsSubscribe()
     {
         const string content = """
@@ -18310,6 +18348,38 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r =>
             r.SymbolName == "[.indexed"
             && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsS4DispatchReferences()
+    {
+        const string content = """
+            setClass("ExpressionSet", slots = c(assayData = "AssayData"))
+            setGeneric("exprs", function(object) standardGeneric("exprs"))
+            setMethod("exprs", signature(object = "ExpressionSet"), function(object) object@assayData)
+            methods::setMethod("show", signature("ExpressionSet"), function(object) show(object))
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(symbols, symbol => symbol.Name == "ExpressionSet" && symbol.Kind == "class");
+        Assert.Contains(symbols, symbol => symbol.Name == "exprs" && symbol.Kind == "function");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ExpressionSet"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "exprs"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "exprs.ExpressionSet"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "show.ExpressionSet"
+            && reference.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "function" or "exprs.function" or "show.function"
+            && reference.ReferenceKind is "type_reference" or "reference");
     }
 
     [Fact]

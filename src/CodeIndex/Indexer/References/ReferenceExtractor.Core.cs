@@ -1498,6 +1498,15 @@ public static partial class ReferenceExtractor
                     ScalaReferenceExtractor.EmitTrailingBlockCallReferences(
                         preparedLine,
                         AddCallLikeReference);
+                    ScalaReferenceExtractor.EmitAdditionalReferences(
+                        preparedLine,
+                        references,
+                        seen,
+                        fileId,
+                        context,
+                        lineNumber,
+                        ResolveContainerForCall,
+                        AddCallLikeReference);
                 }
                 else if (language == "gradle")
                 {
@@ -2067,6 +2076,15 @@ public static partial class ReferenceExtractor
                     container,
                     definitionNames);
                 RReferenceExtractor.EmitNamespaceDirectiveReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+                RReferenceExtractor.EmitS4DispatchReferences(
                     preparedLine,
                     originalLine,
                     references,
