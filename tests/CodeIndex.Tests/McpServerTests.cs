@@ -44,7 +44,7 @@ public class McpServerTests : IDisposable
             Lang = "csharp",
             Size = 200,
             Lines = 10,
-            Modified = new DateTime(2024, 1, 1),
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
             Checksum = "abc123",
         });
         writer.InsertChunks([new ChunkRecord
@@ -155,7 +155,7 @@ public class McpServerTests : IDisposable
             Lang = lang,
             Size = normalized.Length,
             Lines = lines.Length,
-            Modified = new DateTime(2024, 1, 1),
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
             Checksum = Guid.NewGuid().ToString("N"),
             Generated = generated,
         });
@@ -178,6 +178,36 @@ public class McpServerTests : IDisposable
         var writer = new DbWriter(_db.Connection);
         writer.MarkFoldReady();
         writer.MarkCSharpSymbolNameContractReady();
+    }
+
+    [Fact]
+    public void ToolsCall_SearchFormatCompactEmitsFileLineOnly_Issue1642()
+    {
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Run","format":"compact"}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var row = Assert.Single(structured["results"]!.AsArray());
+
+        Assert.Equal("compact", structured["format"]!.GetValue<string>());
+        Assert.Equal("src/app.cs", row!["file"]!.GetValue<string>());
+        Assert.Equal(1, row["line"]!.GetValue<int>());
+        Assert.Null(row["snippet"]);
+    }
+
+    [Fact]
+    public void ToolsCall_SearchFormatCountAliasesCountOnly_Issue1642()
+    {
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"Run","format":"count"}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.True(structured["count_only"]!.GetValue<bool>());
+        Assert.True(structured["count"]!.GetValue<int>() > 0);
+        Assert.Empty(structured["results"]!.AsArray());
     }
 
     [Fact]
@@ -226,6 +256,74 @@ public class McpServerTests : IDisposable
         Assert.Contains("Alpha", allNames);
         Assert.Contains("Beta", allNames);
         Assert.Contains("Gamma", allNames);
+    }
+
+    [Fact]
+    public void ToolsCall_Search_WithResultsIncludesNextStepSuggestion()
+    {
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"public class App","limit":1}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var suggestion = structured["next_step_suggestion"]!;
+
+        Assert.Equal("excerpt", suggestion["tool"]!.GetValue<string>());
+        Assert.Equal("src/app.cs", suggestion["args"]!["path"]!.GetValue<string>());
+        Assert.True(suggestion["args"]!["startLine"]!.GetValue<int>() >= 1);
+        Assert.True(suggestion["args"]!["endLine"]!.GetValue<int>() >= suggestion["args"]!["startLine"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_References_WithResultsIncludesNextStepSuggestion()
+    {
+        InsertIndexedFile(
+            "src/reference-hint.cs",
+            "csharp",
+            """
+            class ReferenceHint {
+                void Caller() { Target(); }
+                void Target() { }
+            }
+            """);
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Target","lang":"csharp","exactName":true,"limit":1}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var suggestion = structured["next_step_suggestion"]!;
+
+        Assert.Equal("excerpt", suggestion["tool"]!.GetValue<string>());
+        Assert.Equal("src/reference-hint.cs", suggestion["args"]!["path"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Excerpt_WithResultIncludesNextStepSuggestion()
+    {
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"src/app.cs","startLine":1,"endLine":1}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var suggestion = structured["next_step_suggestion"]!;
+
+        Assert.Equal("outline", suggestion["tool"]!.GetValue<string>());
+        Assert.Equal("src/app.cs", suggestion["args"]!["path"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Callers_EmptyResultIncludesRecoveryHint()
+    {
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"MissingSymbol","lang":"csharp","exactName":true}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var hint = structured["recovery_hint"]!;
+
+        Assert.Equal("no_results", hint["reason"]!.GetValue<string>());
+        Assert.Equal("symbols", hint["tool"]!.GetValue<string>());
+        Assert.Equal("MissingSymbol", hint["args"]!["query"]!.GetValue<string>());
     }
 
     // --- Protocol tests / プロトコルテスト ---
@@ -5457,27 +5555,29 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_Excerpt_BeforeAboveCapReturnsError()
+    public void ToolsCall_Excerpt_BeforeAboveCapClampsContext()
     {
         InsertIndexedFile("dist/data-before-overflow.txt", "text", "line one\nline two");
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-before-overflow.txt","startLine":1,"before":2147483647}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("before must be in [0, 1000]", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1000, structured["before"]!.GetValue<int>());
+        Assert.True(structured["contextTruncated"]!.GetValue<bool>());
     }
 
     [Fact]
-    public void ToolsCall_Excerpt_AfterAboveCapReturnsError()
+    public void ToolsCall_Excerpt_AfterAboveCapClampsContext()
     {
         InsertIndexedFile("dist/data-after-overflow.txt", "text", "line one\nline two");
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-after-overflow.txt","startLine":1,"after":2147483647}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("after must be in [0, 1000]", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1000, structured["after"]!.GetValue<int>());
+        Assert.True(structured["contextTruncated"]!.GetValue<bool>());
     }
 
     [Fact]
@@ -5603,6 +5703,71 @@ public class McpServerTests : IDisposable
 
         Assert.True(response["result"]!["isError"]!.GetValue<bool>());
         Assert.Equal("after must be greater than or equal to 0", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_FindInFile_BeforeAfterAboveCapClampContext()
+    {
+        InsertIndexedFile("dist/search-context-overflow.txt", "text", "target");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"target","path":"dist/search-context-overflow.txt","before":2147483647,"after":2147483647}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal(1000, structured["before"]!.GetValue<int>());
+        Assert.Equal(1000, structured["after"]!.GetValue<int>());
+        Assert.True(structured["contextTruncated"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ToolsCall_FindInFile_SnippetLinesControlsMatchContext()
+    {
+        InsertIndexedFile("dist/search-snippet-lines.txt", "text", "line one\nline two\ntarget\nline four\nline five");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"target","path":"dist/search-snippet-lines.txt","snippetLines":5}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+        var structured = response["result"]!["structuredContent"]!;
+        var result = structured["results"]![0]!;
+
+        Assert.Equal(2, structured["before"]!.GetValue<int>());
+        Assert.Equal(2, structured["after"]!.GetValue<int>());
+        Assert.Equal(5, structured["snippetLines"]!.GetValue<int>());
+        Assert.Equal(1, result["startLine"]!.GetValue<int>());
+        Assert.Equal(5, result["endLine"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_FindInFile_FocusLineAndColumnRestrictMatch()
+    {
+        InsertIndexedFile("dist/search-focus.txt", "text", "target here\nno match\nother target");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"target","path":"dist/search-focus.txt","focusLine":3,"focusColumn":8}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var result = structured["results"]![0]!;
+
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal(3, result["line"]!.GetValue<int>());
+        Assert.Equal(7, result["column"]!.GetValue<int>());
+        Assert.Equal(3, structured["focusLine"]!.GetValue<int>());
+        Assert.Equal(8, structured["focusColumn"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_FindInFile_RegexMatchesAnchors()
+    {
+        InsertIndexedFile("dist/search-regex.txt", "text", "alpha\ntarget()\nnot target()");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"^target","path":"dist/search-regex.txt","regex":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var result = structured["results"]![0]!;
+
+        Assert.True(structured["regex"]!.GetValue<bool>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal(2, result["line"]!.GetValue<int>());
+        Assert.Equal(1, result["column"]!.GetValue<int>());
     }
 
     [Fact]
@@ -6058,14 +6223,16 @@ public class McpServerTests : IDisposable
     [Fact]
     public void ToolsCall_Ping_ReturnsVersionAndTimestamp()
     {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2032, 4, 5, 6, 7, 8, TimeSpan.Zero));
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false, null, null, null, null, McpServer.DefaultMaxConcurrency, clock);
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ping","arguments":{}}}""")!;
-        var response = _server.HandleMessage(request)!;
+        var response = server.HandleMessage(request)!;
 
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
         Assert.Contains("cdidx v", text);
         Assert.Contains("is ready", text);
         Assert.NotNull(response["result"]!["structuredContent"]!["version"]);
-        Assert.NotNull(response["result"]!["structuredContent"]!["timestamp"]);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime.ToString("O"), response["result"]!["structuredContent"]!["timestamp"]!.GetValue<string>());
         Assert.NotNull(response["result"]!["structuredContent"]!["db_exists"]);
     }
 
@@ -6582,11 +6749,15 @@ public class McpServerTests : IDisposable
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
         var response = _server.HandleMessage(request)!;
 
-        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
         var structured = response["result"]!["structuredContent"]!;
         Assert.Equal(2, structured["symbols"]!.GetValue<int>());
         Assert.Equal(0, structured["symbol_references"]!.GetValue<int>());
         Assert.True(structured["rewrite_all"]!.GetValue<bool>());
+        Assert.False(structured["dry_run"]!.GetValue<bool>());
+        Assert.False(structured["was_already_complete"]!.GetValue<bool>());
+        Assert.False(structured["fold_ready_before"]!.GetValue<bool>());
+        Assert.True(structured["fold_ready_after"]!.GetValue<bool>());
         Assert.True(structured["verified"]!.GetValue<bool>());
         Assert.Equal(3, structured["user_version_before"]!.GetValue<int>());
         Assert.Equal(7, structured["user_version_after"]!.GetValue<int>());
@@ -6596,6 +6767,67 @@ public class McpServerTests : IDisposable
         verifyDb.TryMigrateForRead();
         var reader = new DbReader(verifyDb.Connection);
         Assert.True(reader._foldReady);
+    }
+
+    [Fact]
+    public void ToolsCall_BackfillFold_DryRunDoesNotWrite()
+    {
+        var writer = new DbWriter(_db.Connection);
+        writer.BackfillFoldedColumns(rewriteAll: true);
+        writer.MarkFoldReady();
+        writer.SetMeta("fold_key_fingerprint", "DEADBEEFDEADBEEF");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{"dry_run":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.True(structured["dry_run"]!.GetValue<bool>());
+        Assert.Equal(2, structured["symbols"]!.GetValue<int>());
+        Assert.False(structured["verified"]!.GetValue<bool>());
+        Assert.False(structured["fold_ready_before"]!.GetValue<bool>());
+        Assert.False(structured["fold_ready_after"]!.GetValue<bool>());
+        Assert.False(structured["fold_ready"]!.GetValue<bool>());
+
+        Assert.Equal("DEADBEEFDEADBEEF", _db.GetMetaString("fold_key_fingerprint"));
+        Assert.Equal(7, _db.GetUserVersion());
+    }
+
+    [Fact]
+    public void ToolsCall_BackfillFold_SecondRunSignalsAlreadyComplete()
+    {
+        var first = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
+        Assert.False(_server.HandleMessage(first)!["result"]!["isError"]?.GetValue<bool>() ?? false);
+
+        var second = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
+        var response = _server.HandleMessage(second)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(0, structured["symbols"]!.GetValue<int>());
+        Assert.Equal(0, structured["symbol_references"]!.GetValue<int>());
+        Assert.False(structured["rewrite_all"]!.GetValue<bool>());
+        Assert.True(structured["was_already_complete"]!.GetValue<bool>());
+        Assert.True(structured["fold_ready_before"]!.GetValue<bool>());
+        Assert.True(structured["fold_ready_after"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ToolsCall_BackfillFold_ForceRewritesAlreadyCompleteRows()
+    {
+        var first = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
+        Assert.False(_server.HandleMessage(first)!["result"]!["isError"]?.GetValue<bool>() ?? false);
+
+        var forced = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"backfill_fold","arguments":{"force":true}}}""")!;
+        var response = _server.HandleMessage(forced)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.True(structured["force"]!.GetValue<bool>());
+        Assert.True(structured["rewrite_all"]!.GetValue<bool>());
+        Assert.Equal(2, structured["symbols"]!.GetValue<int>());
+        Assert.False(structured["was_already_complete"]!.GetValue<bool>());
+        Assert.True(structured["fold_ready_after"]!.GetValue<bool>());
     }
 
     [Fact]
