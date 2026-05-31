@@ -157,6 +157,7 @@ public partial class McpServer : IDisposable
     internal const int DefaultMaxResponseBytes = 10 * 1024 * 1024;
     private const string MaxResponseBytesEnvVar = "CDIDX_MCP_RESPONSE_MAX_BYTES";
     private const string KeepAliveIntervalEnvironmentVariable = "CDIDX_MCP_KEEP_ALIVE_INTERVAL_S";
+    internal const string DebugEnvironmentVariable = "CDIDX_DEBUG";
     internal const int MaxJsonDepth = 32;
     internal const int MaxBatchRequestCount = 100;
     // Stdio buffer for the JSON-RPC loop. Sized to fit typical large MCP payloads (e.g. batch_query)
@@ -436,7 +437,7 @@ public partial class McpServer : IDisposable
 
         // Use stderr for logging so stdout stays clean for JSON-RPC
         // stdoutをJSON-RPC用にクリーンに保つため、ログはstderrに出力
-        ConsoleUi.TryWriteErrorLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {_dbPath}, transport: {transport.Name} @ {transport.Endpoint}, max in-flight: {MaxConcurrency})");
+        ConsoleUi.TryWriteErrorLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {FormatDbPathForLog(_dbPath)}, transport: {transport.Name} @ {transport.Endpoint}, max in-flight: {MaxConcurrency})");
 
         if (transport is HttpMcpTransport httpTransport)
         {
@@ -2143,11 +2144,25 @@ public partial class McpServer : IDisposable
             if (ValidateToolArguments(toolName, args) is JsonObject argumentError)
             {
                 metricsError = "invalid_argument";
-                response = CreateToolErrorResponse(id, argumentError["message"]!.GetValue<string>(),
-                    category: McpErrorEnvelope.CategoryInvalidArgument,
-                    suggestion: "Use exactly the argument names advertised by tools/list for this tool.",
-                    retrySafe: false,
-                    extraData: argumentError);
+                if (argumentError["jsonrpc_invalid_params"] is JsonValue invalidParamsMarker
+                    && invalidParamsMarker.TryGetValue<bool>(out var invalidParams)
+                    && invalidParams)
+                {
+                    argumentError.Remove("jsonrpc_invalid_params");
+                    response = CreateErrorResponse(hasId: true, id: id, code: -32602, message: argumentError["message"]!.GetValue<string>(),
+                        category: McpErrorEnvelope.CategoryInvalidArgument,
+                        suggestion: "Use the JSON types advertised by tools/list for this tool.",
+                        retrySafe: false,
+                        extraData: argumentError);
+                }
+                else
+                {
+                    response = CreateToolErrorResponse(id, argumentError["message"]!.GetValue<string>(),
+                        category: McpErrorEnvelope.CategoryInvalidArgument,
+                        suggestion: "Use exactly the argument names advertised by tools/list for this tool.",
+                        retrySafe: false,
+                        extraData: argumentError);
+                }
             }
             else if (ValidateCommonListArguments(args) is JsonObject listArgumentError)
             {
@@ -2556,6 +2571,28 @@ public partial class McpServer : IDisposable
     internal static bool IsSupportedMcpLogLevel(string? level)
         => level is "debug" or "info" or "notice" or "warning" or "error" or "critical" or "alert" or "emergency";
 
+    internal static bool IsUnsafeDebugEnabled()
+        => string.Equals(Environment.GetEnvironmentVariable(DebugEnvironmentVariable), "unsafe", StringComparison.OrdinalIgnoreCase);
+
+    internal static string FormatDbPathForLog(string dbPath)
+    {
+        if (IsUnsafeDebugEnabled())
+            return dbPath;
+
+        try
+        {
+            var path = dbPath;
+            if (Uri.TryCreate(dbPath, UriKind.Absolute, out var uri) && uri.IsFile)
+                path = uri.LocalPath;
+            var fileName = Path.GetFileName(path);
+            return string.IsNullOrWhiteSpace(fileName) ? "(configured db)" : fileName;
+        }
+        catch
+        {
+            return "(configured db)";
+        }
+    }
+
     // Wire-safe error body for the tool catch-all. Mentions the tool and the
     // exception type so the client can branch (retry vs. surface to user)
     // while keeping bound values or matched content out of the response (#1530).
@@ -2569,6 +2606,8 @@ public partial class McpServer : IDisposable
     // #1530 で封じた ex.Message 漏れを再現させずに失敗詳細をクライアントへ届ける。
     internal static string BuildSanitizedToolErrorMessage(string toolName, Exception ex)
     {
+        if (!IsUnsafeDebugEnabled())
+            return $"Tool '{toolName}' failed. See cdidx server stderr for details.";
         if (ex is CodeIndexException codeIndexEx)
             return $"Error executing {toolName} ({ex.GetType().Name}) [{codeIndexEx.Code}/{codeIndexEx.Category}]{BuildPathFragment(codeIndexEx)}{BuildHintFragment(codeIndexEx)}. See cdidx server stderr for details.";
         return $"Error executing {toolName} ({ex.GetType().Name}). See cdidx server stderr for details.";
@@ -2579,6 +2618,8 @@ public partial class McpServer : IDisposable
     // JSON-RPC ループ catch-all のワイヤー向け本文。理由はツール catch-all と同じ（#1530, #1580）。
     internal static string BuildSanitizedLoopErrorMessage(Exception ex)
     {
+        if (!IsUnsafeDebugEnabled())
+            return "Internal MCP error. See cdidx server stderr for details.";
         if (ex is CodeIndexException codeIndexEx)
             return $"Internal error ({ex.GetType().Name}) [{codeIndexEx.Code}/{codeIndexEx.Category}]{BuildPathFragment(codeIndexEx)}{BuildHintFragment(codeIndexEx)}. See cdidx server stderr for details.";
         return $"Internal error ({ex.GetType().Name}). See cdidx server stderr for details.";
