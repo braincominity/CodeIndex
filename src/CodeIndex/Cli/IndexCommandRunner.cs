@@ -55,7 +55,7 @@ public static partial class IndexCommandRunner
 
         if (options.ShowHelp)
         {
-            ConsoleUi.PrintUsage();
+            ConsoleUi.PrintUsageFull();
             return CommandExitCodes.Success;
         }
 
