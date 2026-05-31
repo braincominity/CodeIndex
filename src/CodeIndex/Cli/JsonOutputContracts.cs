@@ -67,6 +67,26 @@ internal sealed record DbRestoreJsonResult(
     [property: JsonPropertyName("checkpoint_path")] string CheckpointPath,
     [property: JsonPropertyName("backup_path")] string BackupPath);
 
+internal sealed record DbSchemaEntryJsonResult(
+    [property: JsonPropertyName("type")] string Type,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("table_name")] string? TableName,
+    [property: JsonPropertyName("sql")] string? Sql);
+
+internal sealed record DbSchemaJsonResult(
+    [property: JsonPropertyName("db_path")] string DbPath,
+    [property: JsonPropertyName("user_version")] int UserVersion,
+    [property: JsonPropertyName("entries")] List<DbSchemaEntryJsonResult> Entries);
+
+internal sealed record DbPruneJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("db_path")] string DbPath,
+    [property: JsonPropertyName("dry_run")] bool DryRun,
+    [property: JsonPropertyName("orphan_symbol_references")] int OrphanSymbolReferences,
+    [property: JsonPropertyName("orphan_reference_lines")] int OrphanReferenceLines,
+    [property: JsonPropertyName("orphan_symbols")] int OrphanSymbols,
+    [property: JsonPropertyName("total")] int Total);
+
 internal sealed record DiffSummaryJsonResult(
     [property: JsonPropertyName("left_file_count")] long LeftFileCount,
     [property: JsonPropertyName("right_file_count")] long RightFileCount,
@@ -334,7 +354,10 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(DbCheckpointListEntryJsonResult))]
 [JsonSerializable(typeof(DbCheckpointListJsonResult))]
 [JsonSerializable(typeof(DbIntegrityCheckJsonResult))]
+[JsonSerializable(typeof(DbPruneJsonResult))]
 [JsonSerializable(typeof(DbRestoreJsonResult))]
+[JsonSerializable(typeof(DbSchemaEntryJsonResult))]
+[JsonSerializable(typeof(DbSchemaJsonResult))]
 [JsonSerializable(typeof(DefinitionResult))]
 [JsonSerializable(typeof(Dictionary<string, int>))]
 [JsonSerializable(typeof(Dictionary<string, long>))]

@@ -62,21 +62,21 @@ public static class ConsoleUi
     [
         ("index", "cdidx index <projectPath> [--db <path>] [--rebuild] [--optimize] [--verbose] [--dry-run] [--force] [--quiet] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--follow-symlinks <none|internal|all>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]] [--watch [--debounce <ms>]]"),
         ("hooks", "cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--json]"),
-        ("backfill-fold", "cdidx backfill-fold [--db <path>] [--dry-run] [--no-checkpoint] [--json]"),
+        ("backfill-fold", "cdidx backfill-fold [--db <path>] [--dry-run] [--json]"),
         ("optimize", "cdidx optimize [--db <path>] [--json]"),
         ("vacuum", "cdidx vacuum [--db <path>] [--json]"),
         ("index-commits", "cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-changed-between", "cdidx index <projectPath> --changed-between <old-ref> <new-ref> [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
         ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),
-        ("search", "cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json[=ndjson|array]] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup] [--no-visibility-rank]"),
-        ("definition", "cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
+        ("search", "cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json[=ndjson|array]] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--snippet-lines <n>] [--snippet-focus <leftmost|quality|proximity>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--prefix] [--count] [--since <datetime>] [--no-dedup] [--no-visibility-rank]"),
+        ("definition", "cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
         ("goto", "cdidx goto <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--all]"),
-        ("references", "cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
-        ("callers", "cdidx callers <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--rank-by <weighted|count|kind>] [--raw-kinds] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
-        ("callees", "cdidx callees <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--rank-by <weighted|count|kind>] [--raw-kinds] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
+        ("references", "cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
+        ("callers", "cdidx callers <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--rank-by <weighted|count|kind>] [--raw-kinds] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
+        ("callees", "cdidx callees <query>|--query <query>|-- <query> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--rank-by <weighted|count|kind>] [--raw-kinds] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
         ("symbols", "cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]"),
         ("files", "cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]"),
-        ("find", "cdidx find <query> --path <glob> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]"),
+        ("find", "cdidx find <query> --path <glob> [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--exclude-path <glob>] [--exclude-tests] [--before <n>] [--after <n>] [--snippet-lines <n>] [--focus-line <line>] [--focus-column <n>] [--max-line-width <n>] [--exact] [--regex] [--count]"),
         ("excerpt", "cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--verbose]"),
         ("map", "cdidx map [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes] [--min-entrypoint-confidence <0.0..1.0>]"),
         ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]"),
@@ -85,10 +85,10 @@ public static class ConsoleUi
         ("workspace", "cdidx workspace <list|status|use|current> [name] [--json]"),
         ("config", "cdidx config show [--json]"),
         ("validate-config", "cdidx validate-config"),
-        ("db", "cdidx db --integrity-check [--db <path>] [--json] | cdidx db checkpoint [name] [--db <path>] [--json] | cdidx db checkpoints --list [--db <path>] [--json] | cdidx db restore <name> [--db <path>] [--json]"),
+        ("db", "cdidx db --integrity-check|schema|prune [--dry-run|--apply] [--db <path>] [--json] | cdidx db checkpoint [name] [--db <path>] [--json] | cdidx db checkpoints --list [--db <path>] [--json] | cdidx db restore <name> [--db <path>] [--json]"),
         ("diff", "cdidx diff <db1> <db2> [--json] [--summary-only] [--detailed] [--limit <n>]"),
         ("report", "cdidx report --output <path> [--db <path>] [--json] [--log-lines <n>] [--no-log] [--include-args]"),
-        ("validate", "cdidx validate [--db <path>] [--json] [--verbose] [--kind <kind>] [--path <glob>]"),
+        ("validate", "cdidx validate [--db <path>] [--json] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--verbose] [--kind <kind>] [--path <glob>]"),
         ("impact", "cdidx impact <query>|--query <query>|-- <query> [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--max-hops <n>] [--count] [--with-paths]"),
         ("deps", "cdidx deps [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--reverse]"),
         ("unused", "cdidx unused [--db <path>] [--json] [--verbose] [--limit <n>|--top <n>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count]"),
@@ -155,6 +155,23 @@ public static class ConsoleUi
                 _synchronizedError = TextWriter.Synchronized(error);
                 Console.SetError(_synchronizedError);
             }
+        }
+    }
+
+    internal static void TryWriteErrorLine(string? value = null)
+    {
+        try
+        {
+            if (value == null)
+                Console.Error.WriteLine();
+            else
+                Console.Error.WriteLine(value);
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (IOException)
+        {
         }
     }
 
@@ -751,6 +768,8 @@ public static class ConsoleUi
         Console.WriteLine("  upgrade                    Check for and install the latest release via install.sh");
         Console.WriteLine("  validate-config            Validate .cdidx/config.json or .cdidxrc.json");
         Console.WriteLine("  db --integrity-check       Run SQLite `PRAGMA integrity_check` and report findings");
+        Console.WriteLine("  db schema                  Dump SQLite schema entries and PRAGMA user_version");
+        Console.WriteLine("  db prune --dry-run|--apply Count or delete orphaned DB rows");
         Console.WriteLine("  diff <db1> <db2>           Compare two index databases; exit 0 identical, 1 drift, 2 schema mismatch, 3 unreadable");
         Console.WriteLine("  report --output <path>     Build a redacted crash-repro tarball (.tgz) for bug reports");
         Console.WriteLine("  validate                   Report encoding issues (U+FFFD, BOM, null bytes, mixed line endings, UTF-16 BOM, likely non-UTF8)");

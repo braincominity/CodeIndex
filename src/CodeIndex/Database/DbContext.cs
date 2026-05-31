@@ -40,10 +40,12 @@ public class DbContext : IDisposable
     private PreparedCommandCache? _preparedCommands;
     private bool _suppressWriteWorkTracking = true;
     private bool _hasWriteWork;
+    private bool _hasWalCheckpointableWriteWork;
     private bool _rebuildFtsAfterSchemaMigration;
 
     internal static Action<string>? OptimizePragmaExecutedForTesting { get; set; }
     internal static Action<string, string>? PlannerStatisticsCommandExecutedForTesting { get; set; }
+    internal static Action<string>? WalCheckpointTruncateExecutedForTesting { get; set; }
 
     public SqliteConnection Connection => _connection;
     public bool IsReadOnly => _isReadOnly;
@@ -358,6 +360,28 @@ public class DbContext : IDisposable
         }
         catch (Exception ex) when (ex is SqliteException or CodeIndexException)
         {
+            return false;
+        }
+    }
+
+    public bool TryCheckpointWalTruncate()
+    {
+        if (_isReadOnly)
+            return false;
+
+        _walCheckpointAttempted = true;
+        try
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+            WalCheckpointTruncateExecutedForTesting?.Invoke(_connection.DataSource);
+            cmd.ExecuteNonQuery();
+            _walCheckpointSucceeded = true;
+            return true;
+        }
+        catch (Exception)
+        {
+            _walCheckpointSucceeded = false;
             return false;
         }
     }
@@ -2116,7 +2140,7 @@ public class DbContext : IDisposable
             cmd.Transaction = _activeMigrationTransaction;
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
-        MarkWriteWork();
+        MarkWriteWork(walCheckpointable: false);
     }
 
     private void EnsureForeignKeysEnabled()
@@ -2500,10 +2524,14 @@ public class DbContext : IDisposable
         stamp.ExecuteNonQuery();
     }
 
-    internal void MarkWriteWork()
+    internal void MarkWriteWork(bool walCheckpointable = true)
     {
         if (!_isReadOnly && !_suppressWriteWorkTracking)
+        {
             _hasWriteWork = true;
+            if (walCheckpointable)
+                _hasWalCheckpointableWriteWork = true;
+        }
     }
 
     internal void RunPlannerStatisticsMaintenance(bool forceAnalyze)
@@ -2545,7 +2573,11 @@ public class DbContext : IDisposable
         // connection teardown の競合を防ぐ。
         _preparedCommands?.Dispose();
         _preparedCommands = null;
+        var hadWriteWork = _hasWriteWork;
+        var hadWalCheckpointableWriteWork = _hasWalCheckpointableWriteWork;
         RunOptimizeOnCloseIfNeeded();
+        if (hadWalCheckpointableWriteWork)
+            TryCheckpointWalTruncate();
         _connection.Dispose();
     }
 }

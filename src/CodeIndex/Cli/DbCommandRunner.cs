@@ -1,12 +1,13 @@
 using System.Text.Json;
+using CodeIndex.Database;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
 
 /// <summary>
-/// Runs `db` subcommands that operate directly on the SQLite file (integrity check, etc.).
-/// SQLite ファイル本体に対する `db` サブコマンド（整合性チェックなど）を実行する。
+/// Runs `db` subcommands that operate directly on the SQLite file (integrity check, schema, prune).
+/// SQLite ファイル本体に対する `db` サブコマンド（整合性チェック、schema、prune）を実行する。
 /// </summary>
 public static class DbCommandRunner
 {
@@ -29,55 +30,30 @@ public static class DbCommandRunner
                 jsonOptions,
                 options.ParseError,
                 CommandExitCodes.UsageError,
-                "Run `cdidx db --help` to see the supported command shape.",
+                "Run `cdidx db --integrity-check --help` to see the supported command shape.",
                 CommandErrorCodes.UsageError);
 
-        return options.Mode switch
-        {
-            DbCommandMode.IntegrityCheck => RunIntegrityCheck(options, jsonOptions),
-            DbCommandMode.Checkpoint => RunCheckpoint(options, jsonOptions),
-            DbCommandMode.ListCheckpoints => RunListCheckpoints(options, jsonOptions),
-            DbCommandMode.Restore => RunRestore(options, jsonOptions),
-            _ => WriteCommandError(
-                options.Json,
-                jsonOptions,
-                "db requires a mode",
-                CommandExitCodes.UsageError,
-                "Use `--integrity-check`, `checkpoint`, `checkpoints --list`, or `restore <name>`.",
-                CommandErrorCodes.UsageError),
-        };
-    }
-
-    public static int RunIntegrityCheck(string[] cmdArgs, JsonSerializerOptions jsonOptions)
-    {
-        var options = ParseArgs(cmdArgs);
-        return options.ParseError == null && options.Mode == DbCommandMode.IntegrityCheck
-            ? RunIntegrityCheck(options, jsonOptions)
-            : Run(cmdArgs, jsonOptions);
-    }
-
-    internal static string CreateAutomaticCheckpoint(string dbPath)
-    {
-        var fullDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(dbPath));
-        var name = AutoCheckpointPrefix + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
-        return CreateCheckpoint(fullDbPath, name).CheckpointPath;
-    }
-
-    private static int RunIntegrityCheck(DbCommandOptions options, JsonSerializerOptions jsonOptions)
-    {
-        if (options.ShowHelp)
-        {
-            ConsoleUi.PrintUsage();
-            return CommandExitCodes.Success;
-        }
-
-        if (options.ParseError != null)
+        if (!options.IntegrityCheck && !options.Schema && !options.Prune && !options.Checkpoint && !options.ListCheckpoints && !options.Restore)
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
-                options.ParseError,
+                "db requires a mode flag",
                 CommandExitCodes.UsageError,
-                "Run `cdidx db --integrity-check --help` to see the supported command shape.",
+                "Pass `--integrity-check`, `schema`, `prune --dry-run|--apply`, `checkpoint [name]`, `checkpoints --list`, or `restore <name>`.",
+                CommandErrorCodes.UsageError);
+
+        if ((options.IntegrityCheck ? 1 : 0)
+            + (options.Schema ? 1 : 0)
+            + (options.Prune ? 1 : 0)
+            + (options.Checkpoint ? 1 : 0)
+            + (options.ListCheckpoints ? 1 : 0)
+            + (options.Restore ? 1 : 0) > 1)
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "db accepts exactly one mode",
+                CommandExitCodes.UsageError,
+                "Run one of `cdidx db --integrity-check`, `cdidx db schema`, `cdidx db prune --dry-run|--apply`, `cdidx db checkpoint [name]`, `cdidx db checkpoints --list`, or `cdidx db restore <name>`.",
                 CommandErrorCodes.UsageError);
 
         var dbPath = options.DbPath;
@@ -91,6 +67,35 @@ public static class DbCommandRunner
                 "Point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one.",
                 CommandErrorCodes.DbNotFound);
 
+        if (options.Schema)
+            return RunSchema(options, jsonOptions, dbPath, isUri);
+
+        if (options.Prune)
+            return RunPrune(options, jsonOptions, dbPath, isUri);
+
+        if (options.Checkpoint)
+            return RunCheckpoint(options, jsonOptions);
+
+        if (options.ListCheckpoints)
+            return RunListCheckpoints(options, jsonOptions);
+
+        if (options.Restore)
+            return RunRestore(options, jsonOptions);
+
+        return RunIntegrityCheck(options, jsonOptions, dbPath, isUri);
+    }
+
+    public static int RunIntegrityCheck(string[] cmdArgs, JsonSerializerOptions jsonOptions) => Run(cmdArgs, jsonOptions);
+
+    internal static string CreateAutomaticCheckpoint(string dbPath)
+    {
+        var fullDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(dbPath));
+        var name = AutoCheckpointPrefix + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
+        return CreateCheckpoint(fullDbPath, name).CheckpointPath;
+    }
+
+    private static int RunIntegrityCheck(DbCommandOptions options, JsonSerializerOptions jsonOptions, string dbPath, bool isUri)
+    {
         try
         {
             var issues = RunIntegrityCheckPragma(dbPath);
@@ -135,6 +140,124 @@ public static class DbCommandRunner
                 $"failed to run integrity check: {ex.Message}",
                 CommandExitCodes.DatabaseError,
                 "Retry `cdidx db --integrity-check`. If this persists, the DB may be unreadable; rebuild with `cdidx index <projectPath> --rebuild`.",
+                CommandErrorCodes.DbError);
+        }
+    }
+
+    private static int RunSchema(DbCommandOptions options, JsonSerializerOptions jsonOptions, string dbPath, bool isUri)
+    {
+        try
+        {
+            var schema = ReadSchema(dbPath);
+            var fullPath = Path.GetFullPath(isUri ? dbPath : dbPath);
+            if (options.Json)
+            {
+                var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
+                Console.WriteLine(JsonSerializer.Serialize(
+                    new DbSchemaJsonResult(fullPath, schema.UserVersion, schema.Entries),
+                    jsonContext.DbSchemaJsonResult));
+            }
+            else
+            {
+                Console.WriteLine("Database schema");
+                Console.WriteLine($"  database    : {fullPath}");
+                Console.WriteLine($"  user_version: {schema.UserVersion}");
+                foreach (var entry in schema.Entries)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine($"-- {entry.Type}: {entry.Name}");
+                    if (!string.IsNullOrWhiteSpace(entry.Sql))
+                        Console.WriteLine(entry.Sql);
+                }
+            }
+
+            return CommandExitCodes.Success;
+        }
+        catch (Exception ex)
+        {
+            if (JsonOutputFailure.TryHandle(ex, out var exitCode))
+                return exitCode;
+
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                $"failed to read schema: {ex.Message}",
+                CommandExitCodes.DatabaseError,
+                "Retry `cdidx db schema`. If this persists, rebuild with `cdidx index <projectPath> --rebuild`.",
+                CommandErrorCodes.DbError);
+        }
+    }
+
+    private static int RunPrune(DbCommandOptions options, JsonSerializerOptions jsonOptions, string dbPath, bool isUri)
+    {
+        if (!options.PruneApply && !options.PruneDryRun)
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "db prune requires --dry-run or --apply",
+                CommandExitCodes.UsageError,
+                "Use `cdidx db prune --dry-run` to inspect stale rows, then `cdidx db prune --apply` to delete them.",
+                CommandErrorCodes.UsageError);
+
+        if (options.PruneApply && options.PruneDryRun)
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "db prune accepts only one of --dry-run or --apply",
+                CommandExitCodes.UsageError,
+                "Choose `--dry-run` or `--apply`.",
+                CommandErrorCodes.UsageError);
+
+        if (isUri && DbPathResolver.UriRequestsReadOnly(dbPath))
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                $"database must be writable for prune: {dbPath}",
+                CommandExitCodes.DatabaseError,
+                "Point `--db` at a writable filesystem path, or omit read-only URI parameters such as `immutable=1` / `mode=ro`.",
+                CommandErrorCodes.DbNotWritable);
+
+        try
+        {
+            var result = PruneOrphans(dbPath, apply: options.PruneApply);
+            var fullPath = Path.GetFullPath(isUri ? dbPath : dbPath);
+            if (options.Json)
+            {
+                var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
+                Console.WriteLine(JsonSerializer.Serialize(
+                    new DbPruneJsonResult(
+                        "success",
+                        fullPath,
+                        options.PruneDryRun,
+                        result.OrphanSymbolReferences,
+                        result.OrphanReferenceLines,
+                        result.OrphanSymbols,
+                        result.Total),
+                    jsonContext.DbPruneJsonResult));
+            }
+            else
+            {
+                Console.WriteLine(options.PruneApply ? "Pruned database stale rows." : "Database prune dry run.");
+                Console.WriteLine($"  database                 : {fullPath}");
+                Console.WriteLine($"  orphan symbol_references : {result.OrphanSymbolReferences:N0}");
+                Console.WriteLine($"  orphan reference_lines   : {result.OrphanReferenceLines:N0}");
+                Console.WriteLine($"  orphan symbols           : {result.OrphanSymbols:N0}");
+                Console.WriteLine($"  total                    : {result.Total:N0}");
+            }
+
+            return CommandExitCodes.Success;
+        }
+        catch (Exception ex)
+        {
+            if (JsonOutputFailure.TryHandle(ex, out var exitCode))
+                return exitCode;
+
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                $"failed to prune database: {ex.Message}",
+                CommandExitCodes.DatabaseError,
+                "Ensure no other writer is holding the database lock, then retry `cdidx db prune --dry-run`.",
                 CommandErrorCodes.DbError);
         }
     }
@@ -278,86 +401,122 @@ public static class DbCommandRunner
         return rows.Count > 0 ? rows : new List<string> { "ok" };
     }
 
-    internal static DbCommandOptions ParseArgs(string[] args)
+    private static (int UserVersion, List<DbSchemaEntryJsonResult> Entries) ReadSchema(string dbPath)
     {
-        var dbPath = Path.Combine(".cdidx", "codeindex.db");
-        var json = false;
-        var mode = DbCommandMode.None;
-        string? name = null;
-        string? parseError = null;
+        using var connection = OpenConnection(dbPath, writable: false);
+        using var versionCmd = connection.CreateCommand();
+        versionCmd.CommandText = "PRAGMA user_version";
+        var rawVersion = versionCmd.ExecuteScalar();
+        var userVersion = rawVersion is long l ? (int)l : (rawVersion is int i ? i : 0);
 
-        for (var i = 0; i < args.Length; i++)
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT type, name, tbl_name, sql
+            FROM sqlite_master
+            WHERE type IN ('table', 'index', 'trigger', 'view')
+            ORDER BY type, name";
+        using var reader = cmd.ExecuteReader();
+        var entries = new List<DbSchemaEntryJsonResult>();
+        while (reader.Read())
         {
-            switch (args[i])
-            {
-                case "--db" when i + 1 < args.Length:
-                    dbPath = args[++i];
-                    break;
-                case "--db":
-                    parseError = "--db requires a value";
-                    break;
-                case "--json":
-                    json = true;
-                    break;
-                case "--integrity-check":
-                    mode = mode == DbCommandMode.None ? DbCommandMode.IntegrityCheck : mode;
-                    if (mode != DbCommandMode.IntegrityCheck)
-                        parseError = "db accepts only one mode";
-                    break;
-                case "checkpoint":
-                    mode = mode == DbCommandMode.None ? DbCommandMode.Checkpoint : mode;
-                    if (mode != DbCommandMode.Checkpoint)
-                    {
-                        parseError = "db accepts only one mode";
-                        break;
-                    }
-                    if (i + 1 < args.Length && !args[i + 1].StartsWith("-", StringComparison.Ordinal))
-                        name = args[++i];
-                    break;
-                case "checkpoints":
-                    mode = mode == DbCommandMode.None ? DbCommandMode.ListCheckpoints : mode;
-                    if (mode != DbCommandMode.ListCheckpoints)
-                        parseError = "db accepts only one mode";
-                    break;
-                case "restore":
-                    mode = mode == DbCommandMode.None ? DbCommandMode.Restore : mode;
-                    if (mode != DbCommandMode.Restore)
-                    {
-                        parseError = "db accepts only one mode";
-                        break;
-                    }
-                    if (i + 1 < args.Length && !args[i + 1].StartsWith("-", StringComparison.Ordinal))
-                        name = args[++i];
-                    else
-                        parseError = "restore requires a checkpoint name";
-                    break;
-                case "--list":
-                    if (mode == DbCommandMode.ListCheckpoints)
-                        break;
-                    parseError = "--list is only valid with `cdidx db checkpoints --list`";
-                    break;
-                case "--help" or "-h":
-                    return new DbCommandOptions { ShowHelp = true, DbPath = dbPath, Json = json };
-                default:
-                    if (args[i].StartsWith('-'))
-                        parseError = $"db does not support option: '{args[i]}'";
-                    else
-                        parseError = $"unknown db command or argument: '{args[i]}'";
-                    break;
-            }
-
-            if (parseError != null)
-                break;
+            entries.Add(new DbSchemaEntryJsonResult(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3)));
         }
 
-        return new DbCommandOptions
+        return (userVersion, entries);
+    }
+
+    private static (int OrphanSymbolReferences, int OrphanReferenceLines, int OrphanSymbols, int Total) PruneOrphans(string dbPath, bool apply)
+    {
+        using var connection = OpenConnection(dbPath, writable: apply);
+        using var transaction = apply ? connection.BeginTransaction() : null;
+
+        var orphanSymbolReferences = Count(connection, transaction, @"
+            SELECT COUNT(*)
+            FROM symbol_references sr
+            LEFT JOIN files f ON f.id = sr.file_id
+            LEFT JOIN reference_lines rl ON rl.id = sr.reference_line_id
+            LEFT JOIN files rlf ON rlf.id = rl.file_id
+            WHERE f.id IS NULL
+               OR (sr.reference_line_id IS NOT NULL AND (rl.id IS NULL OR rlf.id IS NULL))");
+        var orphanReferenceLines = Count(connection, transaction, @"
+            SELECT COUNT(*)
+            FROM reference_lines rl
+            LEFT JOIN files f ON f.id = rl.file_id
+            WHERE f.id IS NULL");
+        var orphanSymbols = Count(connection, transaction, @"
+            SELECT COUNT(*)
+            FROM symbols s
+            LEFT JOIN files f ON f.id = s.file_id
+            WHERE f.id IS NULL");
+
+        if (apply)
         {
-            DbPath = dbPath,
-            Json = json,
-            Mode = mode,
-            Name = name,
-            ParseError = parseError,
-        };
+            Execute(connection, transaction, @"
+                DELETE FROM symbol_references
+                WHERE file_id NOT IN (SELECT id FROM files)
+                   OR (reference_line_id IS NOT NULL AND reference_line_id NOT IN (
+                       SELECT rl.id
+                       FROM reference_lines rl
+                       INNER JOIN files f ON f.id = rl.file_id
+                   ))");
+            Execute(connection, transaction, "DELETE FROM reference_lines WHERE file_id NOT IN (SELECT id FROM files)");
+            Execute(connection, transaction, "DELETE FROM symbols WHERE file_id NOT IN (SELECT id FROM files)");
+            transaction!.Commit();
+            Execute(connection, null, "PRAGMA optimize");
+            RunWalCheckpointTruncate(connection);
+        }
+
+        var total = orphanSymbolReferences + orphanReferenceLines + orphanSymbols;
+        return (orphanSymbolReferences, orphanReferenceLines, orphanSymbols, total);
+    }
+
+    private static SqliteConnection OpenConnection(string dbPath, bool writable)
+    {
+        var connectionString = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+            ? $"Data Source={dbPath}"
+            : new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = writable ? SqliteOpenMode.ReadWrite : SqliteOpenMode.ReadOnly,
+            }.ConnectionString;
+        var connection = new SqliteConnection(connectionString);
+        connection.Open();
+        return connection;
+    }
+
+    private static int Count(SqliteConnection connection, SqliteTransaction? transaction, string sql)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = sql;
+        return Convert.ToInt32(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static void Execute(SqliteConnection connection, SqliteTransaction? transaction, string sql)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void RunWalCheckpointTruncate(SqliteConnection connection)
+    {
+        try
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+            DbContext.WalCheckpointTruncateExecutedForTesting?.Invoke(connection.DataSource);
+            cmd.ExecuteNonQuery();
+        }
+        catch (Exception)
+        {
+            // WAL truncation is opportunistic cleanup. Prune has already committed.
+        }
     }
 
     private static bool ValidateWritableFileDb(DbCommandOptions options, JsonSerializerOptions jsonOptions, string command, out string fullDbPath, out int exitCode)
@@ -497,6 +656,100 @@ public static class DbCommandRunner
             File.Move(LongPath.EnsureWindowsPrefix(source), LongPath.EnsureWindowsPrefix(destination));
     }
 
+    internal static DbCommandOptions ParseArgs(string[] args)
+    {
+        var dbPath = Path.Combine(".cdidx", "codeindex.db");
+        var json = false;
+        var integrityCheck = false;
+        var schema = false;
+        var prune = false;
+        var pruneDryRun = false;
+        var pruneApply = false;
+        var checkpoint = false;
+        var listCheckpoints = false;
+        var restore = false;
+        string? name = null;
+        string? parseError = null;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--db" when i + 1 < args.Length:
+                    dbPath = args[++i];
+                    break;
+                case "--db":
+                    parseError = "--db requires a value";
+                    break;
+                case "--json":
+                    json = true;
+                    break;
+                case "--integrity-check":
+                    integrityCheck = true;
+                    break;
+                case "schema":
+                    schema = true;
+                    break;
+                case "prune":
+                    prune = true;
+                    break;
+                case "checkpoint":
+                    checkpoint = true;
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("-", StringComparison.Ordinal))
+                        name = args[++i];
+                    break;
+                case "checkpoints":
+                    listCheckpoints = true;
+                    break;
+                case "restore":
+                    restore = true;
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("-", StringComparison.Ordinal))
+                        name = args[++i];
+                    else
+                        parseError = "restore requires a checkpoint name";
+                    break;
+                case "--dry-run":
+                    pruneDryRun = true;
+                    break;
+                case "--apply":
+                    pruneApply = true;
+                    break;
+                case "--list":
+                    if (listCheckpoints)
+                        break;
+                    parseError = "--list is only valid with `cdidx db checkpoints --list`";
+                    break;
+                case "--help" or "-h":
+                    return new DbCommandOptions { ShowHelp = true, DbPath = dbPath, Json = json };
+                default:
+                    if (args[i].StartsWith('-'))
+                        parseError = $"db does not support option: '{args[i]}'";
+                    else
+                        parseError = $"unknown db command or argument: '{args[i]}'";
+                    break;
+            }
+
+            if (parseError != null)
+                break;
+        }
+
+        return new DbCommandOptions
+        {
+            DbPath = dbPath,
+            Json = json,
+            IntegrityCheck = integrityCheck,
+            Schema = schema,
+            Prune = prune,
+            PruneDryRun = pruneDryRun,
+            PruneApply = pruneApply,
+            Checkpoint = checkpoint,
+            ListCheckpoints = listCheckpoints,
+            Restore = restore,
+            Name = name,
+            ParseError = parseError,
+        };
+    }
+
     private static int WriteCommandError(bool json, JsonSerializerOptions jsonOptions, string message, int exitCode, string? hint = null, string? errorCode = null)
     {
         if (json)
@@ -519,20 +772,16 @@ internal sealed class DbCommandOptions
     public string DbPath { get; init; } = string.Empty;
     public bool Json { get; init; }
     public bool ShowHelp { get; init; }
-    public DbCommandMode Mode { get; init; }
+    public bool IntegrityCheck { get; init; }
+    public bool Schema { get; init; }
+    public bool Prune { get; init; }
+    public bool PruneDryRun { get; init; }
+    public bool PruneApply { get; init; }
+    public bool Checkpoint { get; init; }
+    public bool ListCheckpoints { get; init; }
+    public bool Restore { get; init; }
     public string? Name { get; init; }
     public string? ParseError { get; init; }
-
-    public bool IntegrityCheck => Mode == DbCommandMode.IntegrityCheck;
-}
-
-internal enum DbCommandMode
-{
-    None,
-    IntegrityCheck,
-    Checkpoint,
-    ListCheckpoints,
-    Restore,
 }
 
 internal sealed record DbCheckpointOperationResult(string Name, string CheckpointPath, List<string> Files);

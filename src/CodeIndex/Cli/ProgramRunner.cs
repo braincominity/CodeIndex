@@ -14,6 +14,7 @@ namespace CodeIndex.Cli;
 internal static class ProgramRunner
 {
     internal const string QuietEnvironmentVariable = "CDIDX_QUIET";
+    internal static TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
     internal static int Run(
         string[] args,
@@ -87,7 +88,7 @@ internal static class ProgramRunner
         using var jsonAnsiScope = ConsoleUi.SuppressAnsiForJsonOutput(ContainsJsonOutputFlag(args));
 
         var commandStopwatch = Stopwatch.StartNew();
-        var commandStartTimestamp = DateTimeOffset.UtcNow;
+        var commandStartTimestamp = TimeProvider.GetUtcNow();
         var versionPinExit = CheckWorkspaceVersionPin(appVersion, configStartDirectory ?? Environment.CurrentDirectory, strictVersion);
         if (versionPinExit != CommandExitCodes.Success)
             return versionPinExit;
@@ -1141,7 +1142,7 @@ internal static class ProgramRunner
 
             var directory = GlobalToolLog.ResolveLogDirectoryForStatus();
             Directory.CreateDirectory(directory);
-            var path = Path.Combine(directory, $"query-trace-{DateTime.UtcNow:yyyyMMdd}.jsonl");
+            var path = Path.Combine(directory, $"query-trace-{TimeProvider.GetUtcNow().UtcDateTime:yyyyMMdd}.jsonl");
             File.AppendAllText(path, payload + Environment.NewLine);
         }
         catch
