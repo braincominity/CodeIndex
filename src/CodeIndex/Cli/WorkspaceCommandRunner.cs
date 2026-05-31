@@ -68,6 +68,9 @@ internal static class WorkspaceCommandRunner
         var member = manifest?.Members.FirstOrDefault(m =>
             string.Equals(Path.GetFileName(m.Path), name, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(name, "default", StringComparison.OrdinalIgnoreCase));
+        if (manifest != null && member == null && !string.Equals(name, "default", StringComparison.OrdinalIgnoreCase))
+            return CommandErrorWriter.Write("workspace member was not found.", CommandExitCodes.UsageError, "run `cdidx workspace list` and pass one of the listed member directory names.");
+
         var root = member?.Path ?? Environment.CurrentDirectory;
         var dbPath = member?.DbPath ?? DbPathResolver.ResolveForIndex(root, explicitDbPath: null);
         var state = new ActiveWorkspaceState(name, root, dbPath);

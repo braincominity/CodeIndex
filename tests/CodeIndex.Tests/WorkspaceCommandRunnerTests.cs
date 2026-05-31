@@ -79,4 +79,38 @@ public class WorkspaceCommandRunnerTests
             TestProjectHelper.DeleteDirectory(activeRoot);
         }
     }
+
+    [Fact]
+    public void WorkspaceUse_RejectsUnknownManifestMember()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_unknown");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_workspace_use_config");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "src", "A"));
+            File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """{ "members": ["src/A"] }""");
+            using var env = EnvironmentVariableScope.Capture("XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+
+            var previous = Environment.CurrentDirectory;
+            try
+            {
+                Environment.CurrentDirectory = root;
+                var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "typo"], _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Contains("workspace member was not found", stderr);
+                Assert.False(File.Exists(ActiveWorkspace.StatePath));
+            }
+            finally
+            {
+                Environment.CurrentDirectory = previous;
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
 }
