@@ -479,6 +479,43 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_StartupLogSanitizesDbPathByDefault_Issue1469()
+    {
+        using var error = new StringWriter();
+        var previousDebug = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, null);
+            await Task.Run(() =>
+            {
+                lock (TestConsoleLock.Gate)
+                {
+                    var previousError = Console.Error;
+                    try
+                    {
+                        Console.SetError(error);
+#pragma warning disable xUnit1031
+                        _server.RunAsync(new QueueMcpTransport(), CancellationToken.None).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+                    }
+                    finally
+                    {
+                        Console.SetError(previousError);
+                    }
+                }
+            });
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(McpServer.DebugEnvironmentVariable, previousDebug);
+        }
+
+        var log = error.ToString();
+        Assert.Contains("db: " + Path.GetFileName(_dbPath), log);
+        Assert.DoesNotContain(_dbPath, log);
+    }
+
+    [Fact]
     public void Initialize_AdvertisesResourcesAndPrompts()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""")!;

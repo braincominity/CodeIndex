@@ -157,6 +157,7 @@ public partial class McpServer : IDisposable
     internal const int DefaultMaxResponseBytes = 10 * 1024 * 1024;
     private const string MaxResponseBytesEnvVar = "CDIDX_MCP_RESPONSE_MAX_BYTES";
     private const string KeepAliveIntervalEnvironmentVariable = "CDIDX_MCP_KEEP_ALIVE_INTERVAL_S";
+    internal const string DebugEnvironmentVariable = "CDIDX_DEBUG";
     internal const int MaxJsonDepth = 32;
     internal const int MaxBatchRequestCount = 100;
     // Stdio buffer for the JSON-RPC loop. Sized to fit typical large MCP payloads (e.g. batch_query)
@@ -436,7 +437,7 @@ public partial class McpServer : IDisposable
 
         // Use stderr for logging so stdout stays clean for JSON-RPC
         // stdoutをJSON-RPC用にクリーンに保つため、ログはstderrに出力
-        ConsoleUi.TryWriteErrorLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {_dbPath}, transport: {transport.Name} @ {transport.Endpoint}, max in-flight: {MaxConcurrency})");
+        ConsoleUi.TryWriteErrorLine($"[cdidx-mcp] Starting MCP server v{_version} (db: {FormatDbPathForLog(_dbPath)}, transport: {transport.Name} @ {transport.Endpoint}, max in-flight: {MaxConcurrency})");
 
         if (transport is HttpMcpTransport httpTransport)
         {
@@ -2569,6 +2570,28 @@ public partial class McpServer : IDisposable
 
     internal static bool IsSupportedMcpLogLevel(string? level)
         => level is "debug" or "info" or "notice" or "warning" or "error" or "critical" or "alert" or "emergency";
+
+    internal static bool IsUnsafeDebugEnabled()
+        => string.Equals(Environment.GetEnvironmentVariable(DebugEnvironmentVariable), "unsafe", StringComparison.OrdinalIgnoreCase);
+
+    internal static string FormatDbPathForLog(string dbPath)
+    {
+        if (IsUnsafeDebugEnabled())
+            return dbPath;
+
+        try
+        {
+            var path = dbPath;
+            if (Uri.TryCreate(dbPath, UriKind.Absolute, out var uri) && uri.IsFile)
+                path = uri.LocalPath;
+            var fileName = Path.GetFileName(path);
+            return string.IsNullOrWhiteSpace(fileName) ? "(configured db)" : fileName;
+        }
+        catch
+        {
+            return "(configured db)";
+        }
+    }
 
     // Wire-safe error body for the tool catch-all. Mentions the tool and the
     // exception type so the client can branch (retry vs. surface to user)
