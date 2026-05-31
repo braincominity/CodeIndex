@@ -1524,7 +1524,7 @@ public static partial class ReferenceExtractor
                 else if (language == "elixir")
                     ElixirReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
                 else if (language == "lua")
-                    LuaReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
+                    LuaReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, references, seen, fileId, context, lineNumber, ResolveContainerForCall, definitionNames);
                 else if (language == "smalltalk")
                     SmalltalkReferenceExtractor.EmitAdditionalCallReferences(preparedLine, AddCallLikeReference, definitionNames);
                 else if (language == "vb")
