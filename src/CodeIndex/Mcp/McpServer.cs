@@ -89,6 +89,7 @@ public partial class McpServer : IDisposable
     // (ファイルハンドル / rotation) は ProgramRunner 側で所有する。
     private readonly AuditLogSink? _auditLog;
     private readonly TimeSpan _requestTimeout;
+    private readonly TimeSpan? _keepAliveInterval;
     private readonly DateTimeOffset _startedAt = DateTimeOffset.UtcNow;
     private DateTimeOffset _lastRequestAt = DateTimeOffset.UtcNow;
     private DateTimeOffset? _lastDbCheckAt;
@@ -154,6 +155,7 @@ public partial class McpServer : IDisposable
     internal const int MaxLineByteLength = 1_048_576;
     internal const int DefaultMaxResponseBytes = 10 * 1024 * 1024;
     private const string MaxResponseBytesEnvVar = "CDIDX_MCP_RESPONSE_MAX_BYTES";
+    private const string KeepAliveIntervalEnvironmentVariable = "CDIDX_MCP_KEEP_ALIVE_INTERVAL_S";
     internal const int MaxJsonDepth = 32;
     internal const int MaxBatchRequestCount = 100;
     // Stdio buffer for the JSON-RPC loop. Sized to fit typical large MCP payloads (e.g. batch_query)
@@ -252,6 +254,7 @@ public partial class McpServer : IDisposable
         _concurrencyGate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
         MaxConcurrency = maxConcurrency;
         _requestTimeout = DefaultRequestTimeout;
+        _keepAliveInterval = ReadKeepAliveIntervalFromEnvironment();
     }
 
     /// <summary>
@@ -430,6 +433,8 @@ public partial class McpServer : IDisposable
         {
             httpTransport.OutOfBandFrameHandler = ProcessFrame;
             httpTransport.HealthJsonProvider = BuildHealthJson;
+            httpTransport.KeepAliveInterval = _keepAliveInterval;
+            httpTransport.KeepAliveFrameProvider = BuildKeepAliveNotificationJson;
         }
 
         try
@@ -514,6 +519,8 @@ public partial class McpServer : IDisposable
             {
                 httpTransportToClear.OutOfBandFrameHandler = null;
                 httpTransportToClear.HealthJsonProvider = null;
+                httpTransportToClear.KeepAliveInterval = null;
+                httpTransportToClear.KeepAliveFrameProvider = null;
             }
         }
 
@@ -1139,6 +1146,33 @@ public partial class McpServer : IDisposable
 
     private string BuildHealthJson()
         => BuildHealthResult().ToJsonString(_jsonOptions);
+
+    private string BuildKeepAliveNotificationJson()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var notification = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["method"] = "notifications/keep_alive",
+            ["params"] = new JsonObject
+            {
+                ["server_time"] = now.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+                ["uptime_s"] = Math.Max(0, (long)Math.Floor((now - _startedAt).TotalSeconds)),
+            }
+        };
+        return notification.ToJsonString(_jsonOptions);
+    }
+
+    private static TimeSpan? ReadKeepAliveIntervalFromEnvironment()
+    {
+        var raw = Environment.GetEnvironmentVariable(KeepAliveIntervalEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+        if (!double.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var seconds)
+            || seconds <= 0)
+            return null;
+        return TimeSpan.FromSeconds(seconds);
+    }
 
     private JsonObject BuildHealthResult()
     {

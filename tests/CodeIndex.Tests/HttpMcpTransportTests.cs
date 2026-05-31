@@ -266,6 +266,26 @@ public class HttpMcpTransportTests : IDisposable
     }
 
     [Fact]
+    public async Task HttpTransport_EventsStream_EmitsOptInKeepAliveNotifications()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S");
+        env.Set("CDIDX_MCP_KEEP_ALIVE_INTERVAL_S", "0.05");
+        await using var harness = await McpHttpHarness.StartAsync(_dbPath);
+
+        using var client = new HttpClient();
+        using var events = await client.GetAsync(new Uri(new Uri(harness.Endpoint), "events"), HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+
+        await using var eventStream = await events.Content.ReadAsStreamAsync();
+        using var reader = new StreamReader(eventStream, Encoding.UTF8, leaveOpen: true);
+
+        var frame = await ReadUntilAsync(reader, "notifications/keep_alive").WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Contains("\"method\":\"notifications/keep_alive\"", frame, StringComparison.Ordinal);
+        Assert.Contains("\"uptime_s\":", frame, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task HttpTransport_IndexWithProgressToken_EmitsProgressOnEventsStreamAndReturnsResult()
     {
         var projectRoot = Path.Combine(Directory.GetCurrentDirectory(), $".tmp_mcp_http_progress_{Guid.NewGuid():N}");

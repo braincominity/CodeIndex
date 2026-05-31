@@ -308,6 +308,12 @@ The MCP JSON-RPC `ping` method returns a structured health object with `status`,
 
 `db_open` is a lightweight `SELECT 1` probe against the configured SQLite DB. A failed probe reports `status: "degraded"` and includes a sanitized `db_error` exception type instead of raw filesystem or SQLite details.
 
+### MCP keep-alive notifications
+
+HTTP MCP `/events` streams can emit opt-in server-initiated `notifications/keep_alive` JSON-RPC notifications. Set `CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` to a positive number of seconds to enable them; unset or non-positive values keep the default off behavior. Stdio sessions do not emit keep-alive notifications by default because the parent process owns liveness for that transport.
+
+Each keep-alive notification includes `server_time` and `uptime_s` under `params`. The notification is best-effort: disconnected SSE clients are removed from the stream registry, and keep-alive write failures must not terminate the MCP server.
+
 ### MCP リクエスト相関
 
 各 JSON-RPC MCP リクエストには、クライアント制御の JSON-RPC `id` とは別に、サーバー生成の `correlation_id` が割り当てられます。成功レスポンスでは `result._meta.correlation_id`、エラーレスポンスでは `error.data.correlation_id` またはツールエラーの `result.structuredContent.correlation_id` に含まれます。JSON-RPC id がある場合は、同じメタデータにシリアライズ済みの値を `request_id` として入れます。`batch_query` は親の値に `.1`、`.2` のような suffix を付けた子 correlation ID を各スロットに割り当てます。
@@ -319,6 +325,12 @@ MCP stderr 診断は、リクエストコンテキストがある場合に `[rid
 MCP JSON-RPC の `ping` method は、`status`、`uptime_s`、`last_request_at`、`db_open`、`last_db_check_at`、`transport_ready` を含む構造化 health object を返します。HTTP MCP transport では、既存 listener の `GET /healthz` で同じ object を返します。HTTP transport が bearer token で保護されている場合、`/healthz` も POST と `/events` と同じ `Authorization: Bearer <token>` を要求します。
 
 `db_open` は設定された SQLite DB に対する軽量な `SELECT 1` probe です。probe が失敗した場合は `status: "degraded"` を返し、生の filesystem / SQLite 詳細ではなくサニタイズした `db_error` 例外型だけを含めます。
+
+### MCP keep-alive notification
+
+HTTP MCP の `/events` stream は、opt-in の server-initiated `notifications/keep_alive` JSON-RPC notification を送信できます。`CDIDX_MCP_KEEP_ALIVE_INTERVAL_S` に正の秒数を設定すると有効になり、未設定または非正値では既定どおり無効です。stdio session は親プロセスが liveness を管理する transport なので、既定では keep-alive notification を出しません。
+
+各 keep-alive notification は `params` に `server_time` と `uptime_s` を含めます。この notification は best-effort であり、切断された SSE client は stream registry から除外され、keep-alive 書き込み失敗で MCP server 自体を終了させてはいけません。
 
 
 ## Database schema

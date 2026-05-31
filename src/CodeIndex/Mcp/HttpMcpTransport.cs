@@ -77,6 +77,10 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
 
     internal Func<string>? HealthJsonProvider { get; set; }
 
+    internal TimeSpan? KeepAliveInterval { get; set; }
+
+    internal Func<string>? KeepAliveFrameProvider { get; set; }
+
     /// <summary>
     /// Resolve a `host:port` listen spec into the corresponding HTTP prefix. Ephemeral ports
     /// (port `0`) are resolved up-front by binding a temporary <see cref="TcpListener"/> so the
@@ -491,14 +495,7 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             await context.Response.OutputStream.WriteAsync(prelude.AsMemory(), cancellationToken).ConfigureAwait(false);
             await context.Response.OutputStream.FlushAsync(cancellationToken).ConfigureAwait(false);
 
-            try
-            {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                // Normal server shutdown.
-            }
+            await RunKeepAliveLoopAsync(stream, cancellationToken).ConfigureAwait(false);
         }
         catch
         {
@@ -509,6 +506,37 @@ internal sealed class HttpMcpTransport : IMcpTransport, IOutOfBandMcpTransport
             _eventStreams.TryRemove(streamId, out _);
             LogRequest(request, (int)HttpStatusCode.OK);
             try { context.Response.Close(); } catch { /* ignore */ }
+        }
+    }
+
+    private async Task RunKeepAliveLoopAsync(EventStream stream, CancellationToken cancellationToken)
+    {
+        var interval = KeepAliveInterval;
+        if (interval is null || interval.Value <= TimeSpan.Zero || KeepAliveFrameProvider is null)
+        {
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Normal server shutdown.
+            }
+            return;
+        }
+
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                await Task.Delay(interval.Value, cancellationToken).ConfigureAwait(false);
+                var frame = KeepAliveFrameProvider();
+                await stream.WriteJsonRpcEventAsync(frame, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Normal server shutdown.
         }
     }
 
