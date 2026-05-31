@@ -32,8 +32,17 @@ internal static class RubyReferenceExtractor
         "has_many", "has_one", "belongs_to", "composed_of",
     };
 
+    private static readonly HashSet<string> SymbolLiteralFirstArgumentCommandNames = new(StringComparer.Ordinal)
+    {
+        "send", "public_send", "define_method",
+    };
+
     private static readonly Regex CommandTargetTokenRegex = new(
         @"(?<![\w$@])(?<token>:(?:""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|[A-Za-z_]\w*[?!]?)|[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*|""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*')",
+        RegexOptions.Compiled);
+
+    private static readonly Regex SymbolLiteralFirstArgumentRegex = new(
+        @"(?<![\w$@])(?<name>send|public_send|define_method)\s*\(\s*(?<token>:(?:""(?:[^""\\]|\\.)*""|'(?:[^'\\]|\\.)*'|[A-Za-z_]\w*[?!]?))",
         RegexOptions.Compiled);
 
     private static readonly Regex ClassNameOptionRegex = new(
@@ -100,6 +109,15 @@ internal static class RubyReferenceExtractor
                 resolveContainerForCall);
         }
 
+        EmitSymbolLiteralFirstArgumentReferences(
+            preparedLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForCall);
+
         foreach (Match match in BlockCallRegex.Matches(preparedLine))
         {
             var name = match.Groups["name"].Value;
@@ -119,7 +137,9 @@ internal static class RubyReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {
-        if (!CommandTargetReferenceNames.Contains(name))
+        var isKnownCommand = CommandTargetReferenceNames.Contains(name);
+        var onlyFirstSymbolLiteral = SymbolLiteralFirstArgumentCommandNames.Contains(name) || !isKnownCommand;
+        if (!isKnownCommand && !onlyFirstSymbolLiteral)
             return;
 
         var argsStart = callIndex + name.Length;
@@ -168,6 +188,9 @@ internal static class RubyReferenceExtractor
             if (IsHashOptionKey(tail, match, rawToken))
                 break;
 
+            if (onlyFirstSymbolLiteral && rawToken[0] != ':')
+                break;
+
             if (string.Equals(name, "raise", StringComparison.Ordinal))
             {
                 if (rawToken[0] == ':' || rawToken[0] == '\'' || rawToken[0] == '"')
@@ -212,6 +235,38 @@ internal static class RubyReferenceExtractor
 
             if (CommandTargetSingleTokenNames.Contains(name))
                 break;
+            if (onlyFirstSymbolLiteral)
+                break;
+        }
+    }
+
+    private static void EmitSymbolLiteralFirstArgumentReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        foreach (Match match in SymbolLiteralFirstArgumentRegex.Matches(preparedLine))
+        {
+            var rawToken = match.Groups["token"].Value;
+            var token = NormalizeCommandTargetToken(rawToken);
+            if (string.IsNullOrWhiteSpace(token))
+                continue;
+
+            var tokenIndex = match.Groups["token"].Index;
+            ReferenceExtractor.AddReference(
+                references,
+                seen,
+                fileId,
+                token,
+                tokenIndex,
+                "reference",
+                context,
+                lineNumber,
+                resolveContainerForCall(tokenIndex));
         }
     }
 

@@ -1,8 +1,9 @@
 # cdidx
 
-`cdidx` is a .NET global tool for local code indexing, CLI search, and MCP
-workflows. It builds a local SQLite index so humans and AI agents can query a
-repository without repeatedly rescanning the same tree.
+`cdidx` is a .NET global tool for local code indexing, CLI search, MCP
+workflows, and read-only LSP editor lookup. It builds a local SQLite index so
+humans, AI agents, and editors can query a repository without repeatedly
+rescanning the same tree.
 
 ## Install or update
 
@@ -19,6 +20,7 @@ cdidx status --check --json
 cdidx search "handleRequest"
 cdidx definition UserService
 cdidx mcp
+cdidx lsp --db .cdidx/codeindex.db
 ```
 
 ## Documentation
@@ -36,5 +38,6 @@ absolute GitHub URLs.
 | Security Policy | https://github.com/Widthdom/CodeIndex/blob/{{RELEASE_REF}}/SECURITY.md |
 | Changelog | https://github.com/Widthdom/CodeIndex/blob/{{RELEASE_REF}}/CHANGELOG.md |
 
-`cdidx` is distributed as a CLI and MCP server only. The NuGet package is a
-global tool package and does not provide a public library or SDK API.
+`cdidx` is distributed as a CLI, MCP server, and LSP shim only. The NuGet
+package is a global tool package and does not provide a public library or SDK
+API.

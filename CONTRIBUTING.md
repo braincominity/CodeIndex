@@ -80,13 +80,15 @@ Before opening a pull request, run the checks that match the change. For code
 changes, the default full validation is:
 
 ```bash
-dotnet restore CodeIndex.sln
-dotnet build CodeIndex.sln -c Release
-dotnet test CodeIndex.sln -c Release
+make lint
+make build
+make test
 ```
 
-Use narrower `dotnet test --filter ...` commands while iterating, then finish
-with the relevant broader validation before the PR.
+Set `FRAMEWORK=net9.0` when you need to match that CI lane, or call
+`./dev.sh <task>` directly on systems without `make`. Use narrower
+`dotnet test --filter ...` commands while iterating, then finish with the
+relevant broader validation before the PR.
 
 ## Changelog Fragments
 

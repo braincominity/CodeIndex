@@ -371,7 +371,10 @@ public class DbReaderTests : IDisposable
         const string authContent = "def authenticate(user, password):\n    if user == 'admin':\n        return True\n    return False";
         var pyId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/auth.py", Lang = "python", Size = 500, Lines = 30,
+            Path = "src/auth.py",
+            Lang = "python",
+            Size = 500,
+            Lines = 30,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.InsertChunks([new ChunkRecord
@@ -394,7 +397,10 @@ public class DbReaderTests : IDisposable
         const string apiContent = "export class ApiClient {\n  async fetchData(url) {\n    return fetch(url)\n  }\n}";
         var jsId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/api.js", Lang = "javascript", Size = 800, Lines = 50,
+            Path = "src/api.js",
+            Lang = "javascript",
+            Size = 800,
+            Lines = 50,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.InsertChunks([new ChunkRecord
@@ -1273,7 +1279,10 @@ public class DbReaderTests : IDisposable
     {
         var testFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "tests/auth_test.py", Lang = "python", Size = 300, Lines = 10,
+            Path = "tests/auth_test.py",
+            Lang = "python",
+            Size = 300,
+            Lines = 10,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.InsertChunks([new ChunkRecord
@@ -1296,7 +1305,10 @@ public class DbReaderTests : IDisposable
         // 同じファイル内で低順位のマッチが完全包含される2チャンクを作成。
         var overlapFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/overlap.py", Lang = "python", Size = 2000, Lines = 100,
+            Path = "src/overlap.py",
+            Lang = "python",
+            Size = 2000,
+            Lines = 100,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         var duplicateContent = "# overlap_marker\ndef func_a():\n    pass\n" + string.Concat(Enumerable.Repeat("# filler\n", 76));
@@ -1318,7 +1330,10 @@ public class DbReaderTests : IDisposable
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/tied_chunks.py", Lang = "python", Size = 3000, Lines = 260,
+            Path = "src/tied_chunks.py",
+            Lang = "python",
+            Size = 3000,
+            Lines = 260,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.InsertChunks([
@@ -1350,7 +1365,10 @@ public class DbReaderTests : IDisposable
     {
         var refFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/session.py", Lang = "python", Size = 300, Lines = 10,
+            Path = "src/session.py",
+            Lang = "python",
+            Size = 300,
+            Lines = 10,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.InsertChunks([new ChunkRecord
@@ -2406,6 +2424,35 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetDefinitions_CSharpAddsDefinitionDisambiguators()
+    {
+        InsertIndexedFile("src/disambiguators.cs", "csharp",
+            """
+            public partial class Widget
+            {
+                public void Convert(int value) { }
+                public void Convert(string value) { }
+                public static void Touch(this string value) { }
+            }
+
+            public partial class Widget
+            {
+            }
+            """);
+
+        var overloads = _reader.GetDefinitions("Convert", limit: 10, lang: "csharp", exact: true)
+            .OrderBy(result => result.Line)
+            .ToList();
+        Assert.Equal(["overload(int)", "overload(string)"], overloads.Select(result => result.Disambiguator).ToArray());
+
+        var partials = _reader.GetDefinitions("Widget", limit: 10, lang: "csharp", exact: true);
+        Assert.All(partials, result => Assert.Equal("partial-class", result.Disambiguator));
+
+        var extension = Assert.Single(_reader.GetDefinitions("Touch", limit: 10, lang: "csharp", exact: true));
+        Assert.Equal("extension-method-on(string)", extension.Disambiguator);
+    }
+
+    [Fact]
     public void SearchSymbols_MultipleNamesAreOrJoined()
     {
         var results = _reader.SearchSymbols(new[] { "authenticate", "fetchData" });
@@ -2437,7 +2484,10 @@ public class DbReaderTests : IDisposable
         // exact=false は substring なので `authenticate_v2` も引き当てるが、exact=true は名前一致のみ。
         var extraFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/auth_v2.py", Lang = "python", Size = 80, Lines = 4,
+            Path = "src/auth_v2.py",
+            Lang = "python",
+            Size = 80,
+            Lines = 4,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.InsertSymbols([
@@ -2470,7 +2520,10 @@ public class DbReaderTests : IDisposable
         // `--exact` で同一視できることを確認する。
         var extraFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/intl.py", Lang = "python", Size = 120, Lines = 6,
+            Path = "src/intl.py",
+            Lang = "python",
+            Size = 120,
+            Lines = 6,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.InsertSymbols([
@@ -2554,7 +2607,10 @@ public class DbReaderTests : IDisposable
             // writer 経由で入れた行は folded 付き。
             var fileId = writer.UpsertFile(new FileRecord
             {
-                Path = "src/a.py", Lang = "python", Size = 1, Lines = 1,
+                Path = "src/a.py",
+                Lang = "python",
+                Size = 1,
+                Lines = 1,
                 Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
             });
             writer.InsertSymbols([
@@ -2603,7 +2659,10 @@ public class DbReaderTests : IDisposable
             var writer = new DbWriter(db.Connection);
             var fileId = writer.UpsertFile(new FileRecord
             {
-                Path = "src/a.py", Lang = "python", Size = 1, Lines = 1,
+                Path = "src/a.py",
+                Lang = "python",
+                Size = 1,
+                Lines = 1,
                 Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
             });
             writer.InsertSymbols([
@@ -2642,7 +2701,10 @@ public class DbReaderTests : IDisposable
             var writer = new DbWriter(db.Connection);
             var fileId = writer.UpsertFile(new FileRecord
             {
-                Path = "src/a.py", Lang = "python", Size = 1, Lines = 1,
+                Path = "src/a.py",
+                Lang = "python",
+                Size = 1,
+                Lines = 1,
                 Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
             });
             writer.InsertSymbols([
@@ -2690,7 +2752,10 @@ public class DbReaderTests : IDisposable
             var writer = new DbWriter(db.Connection);
             var fileId = writer.UpsertFile(new FileRecord
             {
-                Path = "src/a.py", Lang = "python", Size = 1, Lines = 1,
+                Path = "src/a.py",
+                Lang = "python",
+                Size = 1,
+                Lines = 1,
                 Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
             });
             writer.InsertSymbols([
@@ -2756,7 +2821,10 @@ public class DbReaderTests : IDisposable
                 var writer = new DbWriter(db.Connection);
                 var fileId = writer.UpsertFile(new FileRecord
                 {
-                    Path = "src/worker.cs", Lang = "csharp", Size = 40, Lines = 4,
+                    Path = "src/worker.cs",
+                    Lang = "csharp",
+                    Size = 40,
+                    Lines = 4,
                     Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
                 });
                 writer.InsertSymbols([
@@ -2822,7 +2890,10 @@ public class DbReaderTests : IDisposable
             var writer = new DbWriter(db.Connection);
             var fileId = writer.UpsertFile(new FileRecord
             {
-                Path = "src/a.py", Lang = "python", Size = 1, Lines = 1,
+                Path = "src/a.py",
+                Lang = "python",
+                Size = 1,
+                Lines = 1,
                 Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
             });
             writer.InsertSymbols([
@@ -2866,7 +2937,10 @@ public class DbReaderTests : IDisposable
             var writer = new DbWriter(db.Connection);
             var fileId = writer.UpsertFile(new FileRecord
             {
-                Path = "src/a.py", Lang = "python", Size = 1, Lines = 1,
+                Path = "src/a.py",
+                Lang = "python",
+                Size = 1,
+                Lines = 1,
                 Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
             });
             writer.InsertSymbols([
@@ -2904,7 +2978,10 @@ public class DbReaderTests : IDisposable
             var writer = new DbWriter(legacyDb.Connection);
             var fileId = writer.UpsertFile(new FileRecord
             {
-                Path = "src/a.py", Lang = "python", Size = 1, Lines = 1,
+                Path = "src/a.py",
+                Lang = "python",
+                Size = 1,
+                Lines = 1,
                 Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
             });
             writer.InsertSymbols([
@@ -3015,7 +3092,10 @@ public class DbReaderTests : IDisposable
     {
         var testFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "tests/auth_test.py", Lang = "python", Size = 300, Lines = 10,
+            Path = "tests/auth_test.py",
+            Lang = "python",
+            Size = 300,
+            Lines = 10,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.InsertSymbols([
@@ -3066,7 +3146,10 @@ public class DbReaderTests : IDisposable
     {
         var testFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "tests/auth_test.py", Lang = "python", Size = 300, Lines = 10,
+            Path = "tests/auth_test.py",
+            Lang = "python",
+            Size = 300,
+            Lines = 10,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.InsertChunks([new ChunkRecord
@@ -4188,6 +4271,65 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetHotspotFamilySignal_CurrentStampWithPartialFamilyRowsIsDegraded()
+    {
+        InsertIndexedFile("src/Api.Part1.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run() { }
+            }
+            """);
+        InsertIndexedFile("src/Api.Part2.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """);
+
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = """
+                UPDATE symbols
+                SET family_key = NULL
+                WHERE file_id IN (
+                    SELECT id FROM files WHERE path = 'src/Api.Part2.cs'
+                )
+                """;
+            cmd.ExecuteNonQuery();
+        }
+
+        var reader = new DbReader(_db.Connection);
+        var signal = reader.GetHotspotFamilySignal("csharp");
+
+        Assert.True(signal.Relevant);
+        Assert.False(signal.Ready);
+        Assert.Contains("partial_family_key_population=csharp", signal.DegradedReason);
+    }
+
+    [Fact]
+    public void GetStatus_ExposesPerLanguageReadinessMap()
+    {
+        InsertIndexedFile("src/Api.Part1.cs", "csharp",
+            """
+            public partial class Api
+            {
+                public void Run() { }
+            }
+            """);
+
+        var reader = new DbReader(_db.Connection);
+        var status = reader.GetStatus();
+
+        Assert.NotNull(status.LanguageReadiness);
+        Assert.True(status.LanguageReadiness!.ContainsKey("csharp"));
+        Assert.True(status.LanguageReadiness["csharp"]["hotspot_family"].Ready);
+        Assert.True(status.LanguageReadiness["csharp"].ContainsKey("symbol_name"));
+        Assert.True(status.LanguageReadiness["csharp"].ContainsKey("metadata_target"));
+    }
+
+    [Fact]
     public void GetHotspotFamilySignal_MissingMarkerFingerprintIsStillDegraded()
     {
         InsertIndexedFile("src/Api.Part1.cs", "csharp",
@@ -4685,7 +4827,10 @@ public class DbReaderTests : IDisposable
     {
         var extraFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/auth_v2.py", Lang = "python", Size = 80, Lines = 4,
+            Path = "src/auth_v2.py",
+            Lang = "python",
+            Size = 80,
+            Lines = 4,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.InsertChunks([new ChunkRecord
@@ -5304,7 +5449,9 @@ public class DbReaderTests : IDisposable
         Assert.Empty(analysis.Callers);
         Assert.Empty(analysis.FileImpacts);
         Assert.Equal("none", analysis.ImpactMode);
-        Assert.Equal("depth_zero", analysis.ZeroResultReason);
+        Assert.Equal("depth_requested_zero", analysis.ZeroResultReason);
+        Assert.Equal(["depth_requested_zero"], analysis.ImpactFailureChain);
+        Assert.Equal("precondition", analysis.SuggestionType);
         Assert.Contains("--max-hops 1", analysis.Suggestion, StringComparison.Ordinal);
     }
 
@@ -9621,6 +9768,8 @@ public class DbReaderTests : IDisposable
         Assert.Equal("@missing", miss.ResolvedName);
         Assert.Equal(0, miss.DefinitionCount);
         Assert.Equal("no_matching_definition", miss.ZeroResultReason);
+        Assert.Equal(["definition_not_found"], miss.ImpactFailureChain);
+        Assert.Equal("resolution", miss.SuggestionType);
     }
 
     [Fact]
@@ -11405,7 +11554,9 @@ public class DbReaderTests : IDisposable
         Assert.False(analysis.Truncated);
         Assert.Null(analysis.TruncatedReason);
         Assert.Equal(ImpactTerminationReasons.Completed, analysis.TerminationReason);
-        Assert.Equal("depth_zero", analysis.ZeroResultReason);
+        Assert.Equal("depth_requested_zero", analysis.ZeroResultReason);
+        Assert.Equal(["depth_requested_zero"], analysis.ImpactFailureChain);
+        Assert.Equal("precondition", analysis.SuggestionType);
         Assert.False(analysis.CycleDetected);
         Assert.Null(analysis.Cycles);
     }
@@ -13466,7 +13617,10 @@ public class DbReaderTests : IDisposable
         // start_line/end_lineがNULLのシンボルを持つファイルを挿入（#46）
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/nullcol.cs", Lang = "csharp", Size = 100, Lines = 10,
+            Path = "src/nullcol.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 10,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.InsertChunks([new ChunkRecord
@@ -16592,7 +16746,10 @@ public class DbReaderTests : IDisposable
         // リグレッション: #49 — 古いインデックスは symbols 行の start_line/end_line が NULL になりうる。
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/unused_null.cs", Lang = "csharp", Size = 100, Lines = 10,
+            Path = "src/unused_null.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 10,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         using var cmd = _db.Connection.CreateCommand();

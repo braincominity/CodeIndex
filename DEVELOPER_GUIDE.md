@@ -7,9 +7,30 @@
 ```bash
 dotnet build
 dotnet test
+dotnet format CodeIndex.sln --verify-no-changes
 dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --settings tests/CodeIndex.Tests/CodeIndex.Tests.runsettings --blame-crash --blame-hang --blame-hang-timeout 5m
 dotnet run --project src/CodeIndex -- <command> [options]
 ```
+
+CI enforces repository formatting with `.editorconfig` and treats compiler
+warnings as errors through `Directory.Build.props`, so local changes should pass
+the format check before opening a PR. Existing trim-analysis warnings are
+explicitly listed in `WarningsNotAsErrors` until they are fixed without blocking
+ordinary compiler-warning enforcement, and ILLink keeps reporting trim warnings
+without failing trimmed publish smoke tests.
+
+Common local workflows are also available through the top-level task wrappers:
+
+```bash
+make build
+make test
+make lint
+make coverage
+make mcp-smoke
+```
+
+Use `FRAMEWORK=net9.0 make test` to match the net9 CI lane. On systems without
+`make`, run the same tasks as `./dev.sh build`, `./dev.sh test`, and so on.
 
 CLI help is intentionally layered: `cdidx --help` stays brief, `cdidx --help-all`
 prints the full command/flag/example reference, `cdidx --help-flags` prints only
@@ -119,6 +140,8 @@ in [DISTRIBUTION.md](DISTRIBUTION.md):
 The repository root `nuget.config` is part of this supply-chain boundary. It clears machine-wide package sources, allows only `https://api.nuget.org/v3/index.json`, maps every package ID to that source, and requires signed packages. Trusted signers are limited to the NuGet.org repository-signing certificates and the author-signing certificates needed by the currently locked package graph, so restore rejects unsigned packages, packages from unconfigured feeds, and packages signed by unknown authors. When NuGet.org or an approved package author rotates a signing certificate, update `nuget.config` in the same change as the restore validation.
 
 CI (`.github/workflows/dotnet.yml`, `release.yml`, `codeql.yml`) restores the solution with `--locked-mode`, so any drift between the committed lock files and the resolution graph fails the build instead of slipping into artifacts. Local development restores normally; the lock file is only enforced in CI.
+
+The `CodeIndex` package project opts into deterministic builds and publishes repository metadata for Source Link. On GitHub Actions it also sets `ContinuousIntegrationBuild=true` and embeds untracked source inputs so PDBs and `.snupkg` artifacts can map back to the repository without local machine paths. Build metadata uses the Git commit date when available instead of the wall-clock build date so repeated builds of the same commit do not drift by timestamp. `Microsoft.SourceLink.GitHub` is a build-only dependency (`PrivateAssets=All`), not a runtime dependency.
 
 The normal build/test workflow also runs `dotnet list src/CodeIndex/CodeIndex.csproj package --vulnerable --include-transitive --no-restore` after locked restore and fails on any High or Critical NuGet advisory in direct or transitive runtime packages. Dependabot is configured for weekly NuGet and GitHub Actions update PRs in `.github/dependabot.yml`, so security fixes and routine dependency/action bumps are proposed before they become release surprises.
 
@@ -362,6 +385,7 @@ Current stable codes and triggers:
 | `fold_ready=false` | aggregate fold readiness bit is degraded | `cdidx backfill-fold` or full rebuild |
 | `sql_graph_contract_ready=false` | SQL graph rows do not match the current call-column / qualified-name contract | `cdidx index <projectPath>` |
 | `hotspot_family_ready=false` | one or more hotspot-family languages lack current authoritative family stamps | `cdidx index <projectPath>` |
+| `partial_family_key_population` | hotspot-family metadata is stamped but some indexed symbols still have NULL `family_key` values | `cdidx index <projectPath>` |
 | `graph_table_available=false` | `symbol_references` is missing or not graph-ready | `cdidx index <projectPath>` |
 | `issues_table_available=false` | `file_issues` is missing or not issue-ready | `cdidx index <projectPath>` |
 | `csharp_symbol_name_ready=false` | C# canonical symbol-name stamps are stale | `cdidx index <projectPath>` |
@@ -613,7 +637,7 @@ Python extraction uses `function` for ordinary functions and methods, `class` fo
 
 ### Scala symbol taxonomy
 
-Scala extraction uses `class` for `class` / `case class` declarations and `object` for singleton `object`, `case object`, and sealed-object declarations. When a top-level `object X` appears in the same file as a top-level `class X`, `SubKind` records `companion_object` on the object and `has_companion_object` on the class so inspect/outline consumers can show the companion relationship without treating the singleton as an instantiable class (#1823, related taxonomy tracking in #1772).
+Scala extraction uses `class` for `class` / `case class` declarations and `object` for singleton `object`, `case object`, and sealed-object declarations. `implicit def` / `implicit val` / `implicit var` / `implicit class` declarations use `implicit`, and Scala 3 `given` declarations use `given`; their source, target, and evidence types are emitted as `type_reference` rows. `for`-comprehension generators also emit call edges for their generator sources. When a top-level `object X` appears in the same file as a top-level `class X`, `SubKind` records `companion_object` on the object and `has_companion_object` on the class so inspect/outline consumers can show the companion relationship without treating the singleton as an instantiable class (#1823, related taxonomy tracking in #1772).
 
 ### Extending reference extraction
 
@@ -847,7 +871,7 @@ Supported symbol kinds by language:
 | Perl | packages, subroutines, constants | `use`, `require`, `parent` / `base`, arrow method calls | yes |
 | C / C++ | functions, macros, structs, C++ classes, enums, enum classes | `#include`, type-position references | yes |
 | PHP | functions, constants, enum cases, classes, interfaces, traits, enums | `use`, `require`, `include` | yes |
-| Scala | `def`, classes, objects, traits, enums | imports, type aliases, block calls | yes |
+| Scala | `def`, `implicit` declarations, `given`, classes, objects, traits, enums | imports, type aliases, block calls, `for` generators, implicit conversion types, `given` / `using` evidence types | yes |
 | Elixir | `def`, `defp`, modules, protocols | `import`, `alias`, `use`, `require` | yes |
 | Common Lisp / Racket | packages/modules, functions/macros, classes, structs, variables | S-expression call heads, `#'name` function references, `make-instance` instantiation | yes |
 | SQL | procedures/functions/triggers, DDL objects, schemas, enum types, extensions | source/target dependencies, procedure calls, temp-object tracking | yes |
@@ -937,7 +961,7 @@ Adding `--json-envelope` to a query command (`search`, `definition`, `references
 
 Every top-level CLI/MCP JSON DTO (`StatusResult`, `RepoMapResult`, `SymbolAnalysisResult`, `ImpactAnalysisResult`, `OutlineResult`, `FileExcerptResult`, `CompactSearchResult`, `SymbolResult`, `DefinitionResult`, `UnusedSymbolResult`, `ReferenceResult`, `CallerResult`, `CalleeResult`, `FileResult`, `FileFindResult`) carries an `api_version` string field stamped from `JsonOutputContract.ApiVersion`. The same value is mirrored on the `--json-envelope` `metadata` block. This describes the JSON output contract, not the cdidx binary version (which is still surfaced via `version.json` and `cdidx --version`). Bump `JsonOutputContract.ApiVersion` only on **breaking** shape changes — renames, removals, or type changes of an existing field. Additive changes (new optional fields, new readiness flags, new enum values) keep the version stable so older consumers continue to parse the payload. Strict downstream consumers should pin against the major value and degrade gracefully when it changes. Issue #1555.
 
-The documented `status --json` trust contract spans `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`, `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`, `unknown_extension_file_count`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `stale_after_seconds`, `index_age_seconds`, the remediation fields `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, and MCP-only `mcp_session`. MCP `mcp_session` is session-scoped diagnostics, not persisted DB state, and contains `log_level`, `roots`, optional `client_info`, and optional `client_capabilities`. Keep this list synchronized with `README.md` and `AGENT_GUIDE.md`; `DocumentationStatusContractTests` fails when any required field is missing from one of those docs.
+The documented `status --json` trust contract spans `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`, `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`, `unknown_extension_file_count`, `path_case_sensitive`, `data_dir_mode`, `mac_profile`, `stale_after_seconds`, `index_age_seconds`, the remediation fields `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, and MCP-only `mcp_session`. MCP `mcp_session` is session-scoped diagnostics, not persisted DB state, and contains `log_level`, `roots`, optional `client_info`, and optional `client_capabilities`. Keep this list synchronized with `README.md` and `AGENT_GUIDE.md`; `DocumentationStatusContractTests` fails when any required field is missing from one of those docs.
 
 `references` already prefixes each human-readable row with `reference_kind`, and `callers` does the same for its grouped caller rows. When one grouped container mixes kinds (for example `call` and `subscribe` on the same event member), the human-readable label joins the distinct kinds with `+` (for example `call+subscribe`) instead of collapsing to a single preferred label, and the reference-kind column widens dynamically to fit the longest label in the batch so mixed rows do not overrun the neighbouring column. JSON output for `callers` and `callees` keeps the scalar `reference_kind` for back-compat (it reports the preferred summary kind `instantiate` > `subscribe` > `MIN(call)`) and adds a sorted `reference_kinds` array plus a `has_mixed_reference_kinds` bool so consumers can detect mixed containers without trusting a single collapsed label. This lets terminal users distinguish `call` / `instantiate` / `subscribe` / mixed without re-running the command with `--json` and lets AI clients answer mixed-kind questions without chasing a second `--exact` query.
 
@@ -1175,6 +1199,10 @@ Different graph entry points walk different `reference_kind` subsets by design. 
 | `deps --reverse` | target file → source file | same as forward `deps` (same SQL) | `DbReader.GetFileDependencies` |
 
 Practical consequence: `impact <ClassName>` on a class-like symbol returns the heuristic file-dependency-hint fallback (with metadata edges) when no member-level callers exist, whereas `callers <ClassName>` returns the call-graph subset (without metadata). Both are correct under their own contracts; counts will not match. To reconcile, run `references <ClassName> --kind attribute` (or `annotation`) to surface the metadata-only edges that the call-graph commands intentionally drop.
+
+`impact --json` and MCP `impact_analysis` expose zero-result diagnostics as structured routing fields. `zero_result_reason` remains the compact terminal reason; `impact_failure_chain` lists failed preconditions or traversal states in order, using values such as `definition_not_found`, `callable_filter_fails`, `multiple_definitions`, `multiple_definition_files`, `graph_unavailable`, `depth_requested_zero`, and `no_callers`. `suggestion_type` classifies the prose `suggestion` as `resolution`, `traversal`, or `precondition`. CLI `impact --strict` exits with `FeatureUnavailable` when the chain contains a resolution or precondition failure, but still treats a genuine `no_callers` traversal result as success.
+
+`definition --json` and MCP `definition` results may include `disambiguator` for C# definitions when existing symbol metadata can distinguish otherwise identical names. Current values include `overload(...)` for method signatures, `partial-class` / `partial-struct` / `partial-interface`, and `extension-method-on(<receiver>)`. Languages without overload or receiver metadata omit the field.
 
 ## Cloud Claude Code bootstrap (no .NET SDK)
 
@@ -2218,7 +2246,7 @@ TypeScript decorator は decorator 名を `annotation` 行として出力し、d
 
 ### Scala symbol taxonomy
 
-Scala 抽出は `class` / `case class` 宣言を `class`、singleton の `object` / `case object` / sealed object 宣言を `object` として記録する。同じファイルに top-level の `class X` と top-level の `object X` がある場合、`SubKind` は object 側に `companion_object`、class 側に `has_companion_object` を記録し、singleton をインスタンス化可能な class と扱わずに inspect / outline consumer が companion 関係を表示できるようにする (#1823、taxonomy tracking は #1772 に関連)。
+Scala 抽出は `class` / `case class` 宣言を `class`、singleton の `object` / `case object` / sealed object 宣言を `object` として記録する。`implicit def` / `implicit val` / `implicit var` / `implicit class` 宣言は `implicit`、Scala 3 の `given` 宣言は `given` とし、それらの source / target / evidence type は `type_reference` 行として出力する。`for` comprehension の generator も generator source への call edge を出力する。同じファイルに top-level の `class X` と top-level の `object X` がある場合、`SubKind` は object 側に `companion_object`、class 側に `has_companion_object` を記録し、singleton をインスタンス化可能な class と扱わずに inspect / outline consumer が companion 関係を表示できるようにする (#1823、taxonomy tracking は #1772 に関連)。
 
 ### TypeScript type-graph extraction
 
@@ -2777,12 +2805,14 @@ mock に頼らないリリース前検証として、`install.sh --reinstall-rea
 `XDG_CACHE_HOME/cdidx/logs/`、`XDG_RUNTIME_DIR/cdidx/logs/` の順に
 見つかった場所を使い、その後に platform default として Windows では
 `%LOCALAPPDATA%\cdidx\logs\`、macOS では `~/Library/Logs/cdidx/`、
-Linux では `~/.local/state/cdidx/logs/` を使う。ファイル名は `stderr-YYYYMMDD.log`。
+Linux では `~/.local/state/cdidx/logs/` を使う。ファイル名はプロセス ID と
+開始時刻を含む `stderr-YYYYMMDD-p<PID>-HHMMSS.log`。
 `CDIDX_LOG_FORMAT=json` または `--log-format json` で 1 行 1 JSON object
 （`ts`、`level`、`msg`）の JSONL に切り替えられる。`CDIDX_LOG_RETAIN` /
 `--log-retain-count` は保持ファイル数、`CDIDX_LOG_MAX_SIZE_MB` /
-`--log-max-size-mb` は日次ファイルのサイズローテーション上限を指定する。
-保持世代の既定は新しい 30 ファイルまで。通常の開発/テストサイクルで
+`--log-max-size-mb` または `CDIDX_GLOBAL_TOOL_LOG_MAX_BYTES` は日次ファイルの
+サイズローテーション上限を指定する。サイズ上限の既定は 50 MiB、保持世代の
+既定は新しい 30 ファイルまで。通常の開発/テストサイクルで
 ワークツリー直下に永続ログが増えないよう、`src/CodeIndex/bin/...`
 と `tests/.../bin/...` からのリポジトリ内開発実行は既定で対象外として
 いる。完全に無効化したい場合は `CDIDX_DISABLE_PERSISTENT_LOG=1`、

@@ -169,6 +169,8 @@ public class DefinitionResult : SymbolResult
     public string? Uri { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public LspRange? Range { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Disambiguator { get; set; }
     public string Content { get; set; } = string.Empty;
     public string? BodyContent { get; set; }
     public int? Complexity { get; set; }
@@ -419,6 +421,10 @@ public class ImpactAnalysisResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ZeroResultReason { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? ImpactFailureChain { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SuggestionType { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Suggestion { get; set; }
 }
 
@@ -634,6 +640,9 @@ public class StatusResult
     [JsonPropertyName("hotspot_family_degraded_reason")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? HotspotFamilyDegradedReason { get; set; }
+    [JsonPropertyName("language_readiness")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, Dictionary<string, LanguageReadinessSignal>>? LanguageReadiness { get; set; }
     /// <summary>
     /// True when C# canonical symbol-name upgrades (for operators, conversion operators,
     /// indexers) have been applied to all indexed C# rows in this DB. False means exact-name

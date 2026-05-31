@@ -191,65 +191,65 @@ public static partial class IndexCommandRunner
                         CommandErrorCodes.DbNotWritable);
                 }
 
-        // Capture prior readiness BEFORE we clear it. Update mode (--commits / --files) only
-        // touches a subset of files, so trust bits the DB did NOT previously carry must not
-        // be fabricated after a partial pass. But bits the DB DID carry should survive —
-        // independently, not as a single all-or-nothing gate. Codex #86 review flagged that
-        // gating all three bits on `user_version == CurrentSchemaVersion` regressed pre-#86
-        // DBs (user_version=3): a `--files` refresh on such a DB would silently drop Graph/
-        // Issues trust too, breaking references/callers/callees/impact for the whole repo.
-        // update モードは元々立っていた readiness bit のみを個別に復元する。pre-#86 DB
-        // (user_version=3) でも Graph/Issues を巻き込んで落とさないように、単一フラグではなく
-        // 事前 bit をそのまま保持する。Codex #86 第 2 pass レビュー対応。
-        var priorReadiness = db.GetUserVersion();
-        // Also snapshot the stored fold-key version BEFORE ClearReadyFlags wipes trust. When
-        // a future `NameFold.Version` bump lands, a partial update must NOT restamp
-        // FoldReady on a DB whose untouched rows still carry the old-version fold keys — we
-        // can't re-fold those rows without re-reading them, so the only safe state is to leave
-        // fold degraded until `--rebuild`. Snapshot both version and runtime fingerprint so
-        // partial update does not restamp FoldReady across either algorithm drift or runtime
-        // casing-table drift. Issue #97.
-        // fold metadata を事前 snapshot する。version だけでなく fingerprint のズレでも
-        // partial update で FoldReady を restamp しない。
-        var priorFoldVersion = db.GetMetaString("fold_key_version");
-        var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
-        var priorSymbolExtractorVersionsMatchCurrent = new DbWriter(db).SymbolExtractorVersionsMatchCurrent();
-        var priorCSharpSymbolNameContractVersion = db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey);
-        var priorMetadataTargetCsharp = db.GetMetaString(DbContext.GetMetadataTargetVersionMetaKey("csharp"));
-        var priorSqlGraphContractVersion = db.GetMetaString(DbContext.SqlGraphContractVersionMetaKey);
-        var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
-        var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
-        var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
-        var priorSymbolKindFilterSignature = db.GetMetaString(SymbolKindFilterMetaKey);
-        // Captured BEFORE `--rebuild` drops the DB so an incremental run can warn the user when
-        // the worktree's HEAD has moved since the previously indexed snapshot. The same value
-        // is read at `status` time (without `--check`) to surface a worktree branch / HEAD
-        // switch via `worktree_head_changed`. Issues #1508 and #1512.
-        // `--rebuild` が DB を消す前に取り出す。incremental 経路で HEAD 差分を検知し、`status`
-        // (no `--check`) でも worktree の HEAD 切替検出に利用する。
-        var priorIndexedHeadCommit = db.GetMetaString(DbContext.IndexedHeadCommitMetaKey);
-        var currentHeadCommit = GitHelper.TryGetHeadCommit(options.ProjectPath);
+                // Capture prior readiness BEFORE we clear it. Update mode (--commits / --files) only
+                // touches a subset of files, so trust bits the DB did NOT previously carry must not
+                // be fabricated after a partial pass. But bits the DB DID carry should survive —
+                // independently, not as a single all-or-nothing gate. Codex #86 review flagged that
+                // gating all three bits on `user_version == CurrentSchemaVersion` regressed pre-#86
+                // DBs (user_version=3): a `--files` refresh on such a DB would silently drop Graph/
+                // Issues trust too, breaking references/callers/callees/impact for the whole repo.
+                // update モードは元々立っていた readiness bit のみを個別に復元する。pre-#86 DB
+                // (user_version=3) でも Graph/Issues を巻き込んで落とさないように、単一フラグではなく
+                // 事前 bit をそのまま保持する。Codex #86 第 2 pass レビュー対応。
+                var priorReadiness = db.GetUserVersion();
+                // Also snapshot the stored fold-key version BEFORE ClearReadyFlags wipes trust. When
+                // a future `NameFold.Version` bump lands, a partial update must NOT restamp
+                // FoldReady on a DB whose untouched rows still carry the old-version fold keys — we
+                // can't re-fold those rows without re-reading them, so the only safe state is to leave
+                // fold degraded until `--rebuild`. Snapshot both version and runtime fingerprint so
+                // partial update does not restamp FoldReady across either algorithm drift or runtime
+                // casing-table drift. Issue #97.
+                // fold metadata を事前 snapshot する。version だけでなく fingerprint のズレでも
+                // partial update で FoldReady を restamp しない。
+                var priorFoldVersion = db.GetMetaString("fold_key_version");
+                var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
+                var priorSymbolExtractorVersionsMatchCurrent = new DbWriter(db).SymbolExtractorVersionsMatchCurrent();
+                var priorCSharpSymbolNameContractVersion = db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey);
+                var priorMetadataTargetCsharp = db.GetMetaString(DbContext.GetMetadataTargetVersionMetaKey("csharp"));
+                var priorSqlGraphContractVersion = db.GetMetaString(DbContext.SqlGraphContractVersionMetaKey);
+                var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
+                var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
+                var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
+                var priorSymbolKindFilterSignature = db.GetMetaString(SymbolKindFilterMetaKey);
+                // Captured BEFORE `--rebuild` drops the DB so an incremental run can warn the user when
+                // the worktree's HEAD has moved since the previously indexed snapshot. The same value
+                // is read at `status` time (without `--check`) to surface a worktree branch / HEAD
+                // switch via `worktree_head_changed`. Issues #1508 and #1512.
+                // `--rebuild` が DB を消す前に取り出す。incremental 経路で HEAD 差分を検知し、`status`
+                // (no `--check`) でも worktree の HEAD 切替検出に利用する。
+                var priorIndexedHeadCommit = db.GetMetaString(DbContext.IndexedHeadCommitMetaKey);
+                var currentHeadCommit = GitHelper.TryGetHeadCommit(options.ProjectPath);
 
-        // Don't demote readiness yet. A transient usage error in update-mode preflight
-        // (bad --commits hash, git unavailable, etc.) would permanently downgrade a healthy
-        // DB even though no data was touched. Clearing happens just before the first
-        // destructive / schema-changing operation, inside the mode-specific runner.
-        // まだ clear しない。update モードの preflight が失敗しただけで healthy な DB を
-        // 縮退状態に落とさないよう、clear は実際に書き込み直前で行う。
+                // Don't demote readiness yet. A transient usage error in update-mode preflight
+                // (bad --commits hash, git unavailable, etc.) would permanently downgrade a healthy
+                // DB even though no data was touched. Clearing happens just before the first
+                // destructive / schema-changing operation, inside the mode-specific runner.
+                // まだ clear しない。update モードの preflight が失敗しただけで healthy な DB を
+                // 縮退状態に落とさないよう、clear は実際に書き込み直前で行う。
 
-        db.InitializeSchema();
-        AddToGitExclude(options.ProjectPath, dbPath);
+                db.InitializeSchema();
+                AddToGitExclude(options.ProjectPath, dbPath);
 
-        var writer = new DbWriter(db);
-        var indexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot, options.MaxFileSizeBytes, directoryIgnoreCaseProbe: null, symlinkPolicy: options.SymlinkPolicy);
-        var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
-        var projectRoot = Path.GetFullPath(options.ProjectPath!);
+                var writer = new DbWriter(db);
+                var indexer = new FileIndexer(options.ProjectPath, ignoreCase, ignoreRuleRoot, options.MaxFileSizeBytes, directoryIgnoreCaseProbe: null, symlinkPolicy: options.SymlinkPolicy);
+                var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
+                var projectRoot = Path.GetFullPath(options.ProjectPath!);
 
-        initialExitCode = isUpdateMode
-            ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexCancellation.Token)
-            : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, showNextSteps: !databaseExistedBeforeIndex, indexCancellation.Token);
-        if (initialExitCode == CommandExitCodes.Success)
-            db.RunPlannerStatisticsMaintenance(forceAnalyze: !databaseExistedBeforeIndex);
+                initialExitCode = isUpdateMode
+                    ? RunUpdateMode(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexCancellation.Token)
+                    : RunFullScan(writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, showNextSteps: !databaseExistedBeforeIndex, indexCancellation.Token);
+                if (initialExitCode == CommandExitCodes.Success)
+                    db.RunPlannerStatisticsMaintenance(forceAnalyze: !databaseExistedBeforeIndex);
             }
         }
         catch (IndexInterruptedException ex)

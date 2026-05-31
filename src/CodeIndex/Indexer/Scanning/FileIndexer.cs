@@ -86,15 +86,17 @@ public class FileIndexer
 
     private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp", "msbuild"];
     private const int ConflictMarkerScanLimitBytes = 50 * 1024;
+    private const int MaxDirectoryTraversalDepth = 128;
+    private const int GitLfsPointerMaxBytes = 1024;
     private static readonly string[] IgnoreFileNames = [".gitignore", ".cdidxignore"];
     private const int MaxIgnorePatternLength = 512;
     private static readonly TimeSpan IgnoreRegexMatchTimeout = TimeSpan.FromMilliseconds(100);
     // Extension-to-language mapping / 拡張子→言語名マッピング
     private static readonly Dictionary<string, string> LangMap = new(StringComparer.OrdinalIgnoreCase)
     {
-        [".py"]     = "python",
-        [".pyi"]    = "python",  // Python type stub (PEP 561) / Python 型スタブ
-        [".pyw"]    = "python",  // Windowed Python script / Windows 用 Python スクリプト
+        [".py"] = "python",
+        [".pyi"] = "python",  // Python type stub (PEP 561) / Python 型スタブ
+        [".pyw"] = "python",  // Windowed Python script / Windows 用 Python スクリプト
         // Cython's `.pyx` / `.pxd` live in their own search-only bucket: they extend Python syntax
         // with `cdef class` / `cpdef` / `cdef` forms that the Python regex extractor cannot parse,
         // so mapping them to `python` would advertise `symbol_extraction=true` while emitting zero
@@ -103,191 +105,191 @@ public class FileIndexer
         // Cython の `.pyx` / `.pxd` は `cdef class` / `cpdef` / `cdef` を含み Python 用正規表現では
         // 拾えない。python にマップすると `symbol_extraction=true` と広告しつつ 0 件しか出ない
         // 齟齬になるため、`.sass` / `.styl` と同じく独立の search-only バケットに分ける。
-        [".pyx"]    = "cython",  // Cython source / Cython ソース
-        [".pxd"]    = "cython",  // Cython declaration / Cython 宣言
-        [".js"]     = "javascript",
-        [".cjs"]    = "javascript",
-        [".mjs"]    = "javascript",
-        [".ts"]     = "typescript",
-        [".cts"]    = "typescript",
-        [".mts"]    = "typescript",
-        [".jsx"]    = "javascript",
-        [".tsx"]    = "typescript",
-        [".rb"]     = "ruby",
-        [".rake"]   = "ruby",    // Rake tasks / Rake タスク
-        [".gemspec"]= "ruby",    // RubyGems spec / RubyGems スペック
-        [".podspec"]= "ruby",    // CocoaPods spec (Ruby DSL) / CocoaPods スペック
+        [".pyx"] = "cython",  // Cython source / Cython ソース
+        [".pxd"] = "cython",  // Cython declaration / Cython 宣言
+        [".js"] = "javascript",
+        [".cjs"] = "javascript",
+        [".mjs"] = "javascript",
+        [".ts"] = "typescript",
+        [".cts"] = "typescript",
+        [".mts"] = "typescript",
+        [".jsx"] = "javascript",
+        [".tsx"] = "typescript",
+        [".rb"] = "ruby",
+        [".rake"] = "ruby",    // Rake tasks / Rake タスク
+        [".gemspec"] = "ruby",    // RubyGems spec / RubyGems スペック
+        [".podspec"] = "ruby",    // CocoaPods spec (Ruby DSL) / CocoaPods スペック
         [".groovy"] = "groovy",
-        [".gvy"]    = "groovy",
-        [".gy"]     = "groovy",
-        [".gsh"]    = "groovy",
-        [".go"]     = "go",
-        [".rs"]     = "rust",
-        [".java"]   = "java",
-        [".kt"]     = "kotlin",
-        [".kts"]    = "kotlin",  // Kotlin Script / Kotlin スクリプト (Gradle Kotlin DSL など)
-        [".swift"]  = "swift",
-        [".cu"]     = "cuda",
-        [".cuh"]    = "cuda",
-        [".glsl"]   = "glsl",
-        [".vert"]   = "glsl",
-        [".frag"]   = "glsl",
-        [".hlsl"]   = "hlsl",
-        [".wgsl"]   = "wgsl",
-        [".metal"]  = "metal",
-        [".c"]      = "c",
-        [".cpp"]    = "cpp",
-        [".cc"]     = "cpp",
-        [".cxx"]    = "cpp",
-        [".h"]      = "c",       // Could be C or C++; defaults to C for symbol extraction
-        [".hh"]     = "cpp",
-        [".hpp"]    = "cpp",
-        [".hxx"]    = "cpp",
-        [".cs"]     = "csharp",
+        [".gvy"] = "groovy",
+        [".gy"] = "groovy",
+        [".gsh"] = "groovy",
+        [".go"] = "go",
+        [".rs"] = "rust",
+        [".java"] = "java",
+        [".kt"] = "kotlin",
+        [".kts"] = "kotlin",  // Kotlin Script / Kotlin スクリプト (Gradle Kotlin DSL など)
+        [".swift"] = "swift",
+        [".cu"] = "cuda",
+        [".cuh"] = "cuda",
+        [".glsl"] = "glsl",
+        [".vert"] = "glsl",
+        [".frag"] = "glsl",
+        [".hlsl"] = "hlsl",
+        [".wgsl"] = "wgsl",
+        [".metal"] = "metal",
+        [".c"] = "c",
+        [".cpp"] = "cpp",
+        [".cc"] = "cpp",
+        [".cxx"] = "cpp",
+        [".h"] = "c",       // Could be C or C++; defaults to C for symbol extraction
+        [".hh"] = "cpp",
+        [".hpp"] = "cpp",
+        [".hxx"] = "cpp",
+        [".cs"] = "csharp",
         [".cshtml"] = "csharp",  // Razor (ASP.NET MVC/Pages) / Razor テンプレート
-        [".razor"]  = "csharp",  // Blazor component / Blazor コンポーネント
-        [".m"]      = "objc",
-        [".mm"]     = "objc",
-        [".php"]    = "php",
-        [".s"]      = "assembly", // Also used by Scheme; assembly is the more common default.
-        [".S"]      = "assembly",
-        [".asm"]    = "assembly",
-        [".nasm"]   = "assembly",
-        [".sh"]     = "shell",
-        [".sql"]    = "sql",
-        [".pgsql"]  = "sql",     // PostgreSQL dialect / PostgreSQL 方言
-        [".tsql"]   = "sql",     // T-SQL (SQL Server) / T-SQL (SQL Server)
-        [".plsql"]  = "sql",     // PL/SQL (Oracle) / PL/SQL (Oracle)
-        [".pls"]    = "sql",     // PL/SQL script (Oracle) / PL/SQL スクリプト (Oracle)
-        [".pks"]    = "sql",     // PL/SQL package spec (Oracle) / PL/SQL パッケージ仕様 (Oracle)
-        [".pkb"]    = "sql",     // PL/SQL package body (Oracle) / PL/SQL パッケージ本体 (Oracle)
-        [".plb"]    = "sql",     // PL/SQL wrapped source (Oracle) / PL/SQL ラップ済みソース (Oracle)
-        [".psql"]   = "sql",     // psql scripts / psql スクリプト
-        [".md"]     = "markdown",
-        [".yaml"]   = "yaml",
-        [".yml"]    = "yaml",
-        [".json"]   = "json",
-        [".toml"]   = "toml",
-        [".xaml"]   = "xml",    // WPF/MAUI/Avalonia XAML / XAML テンプレート
-        [".axaml"]  = "xml",    // Avalonia XAML / Avalonia XAML
+        [".razor"] = "csharp",  // Blazor component / Blazor コンポーネント
+        [".m"] = "objc",
+        [".mm"] = "objc",
+        [".php"] = "php",
+        [".s"] = "assembly", // Also used by Scheme; assembly is the more common default.
+        [".S"] = "assembly",
+        [".asm"] = "assembly",
+        [".nasm"] = "assembly",
+        [".sh"] = "shell",
+        [".sql"] = "sql",
+        [".pgsql"] = "sql",     // PostgreSQL dialect / PostgreSQL 方言
+        [".tsql"] = "sql",     // T-SQL (SQL Server) / T-SQL (SQL Server)
+        [".plsql"] = "sql",     // PL/SQL (Oracle) / PL/SQL (Oracle)
+        [".pls"] = "sql",     // PL/SQL script (Oracle) / PL/SQL スクリプト (Oracle)
+        [".pks"] = "sql",     // PL/SQL package spec (Oracle) / PL/SQL パッケージ仕様 (Oracle)
+        [".pkb"] = "sql",     // PL/SQL package body (Oracle) / PL/SQL パッケージ本体 (Oracle)
+        [".plb"] = "sql",     // PL/SQL wrapped source (Oracle) / PL/SQL ラップ済みソース (Oracle)
+        [".psql"] = "sql",     // psql scripts / psql スクリプト
+        [".md"] = "markdown",
+        [".yaml"] = "yaml",
+        [".yml"] = "yaml",
+        [".json"] = "json",
+        [".toml"] = "toml",
+        [".xaml"] = "xml",    // WPF/MAUI/Avalonia XAML / XAML テンプレート
+        [".axaml"] = "xml",    // Avalonia XAML / Avalonia XAML
         [".csproj"] = "msbuild",// C# project file / C# プロジェクトファイル
         [".fsproj"] = "msbuild",// F# project file / F# プロジェクトファイル
         [".vbproj"] = "msbuild",// VB.NET project file / VB.NET プロジェクトファイル
-        [".props"]  = "msbuild",// MSBuild props / MSBuild プロパティ
-        [".targets"]= "msbuild",// MSBuild targets / MSBuild ターゲット
-        [".html"]   = "html",
-        [".htm"]    = "html",    // Legacy / Windows / IIS default / 旧来の Windows / IIS 既定拡張子
-        [".xhtml"]  = "html",    // XHTML / XHTML
-        [".shtml"]  = "html",    // Server-side includes / サーバサイドインクルード
-        [".css"]    = "css",
-        [".scss"]   = "css",
-        [".less"]   = "css",    // Less preprocessor / Less プリプロセッサ
-        [".pcss"]   = "css",    // PostCSS / PostCSS
+        [".props"] = "msbuild",// MSBuild props / MSBuild プロパティ
+        [".targets"] = "msbuild",// MSBuild targets / MSBuild ターゲット
+        [".html"] = "html",
+        [".htm"] = "html",    // Legacy / Windows / IIS default / 旧来の Windows / IIS 既定拡張子
+        [".xhtml"] = "html",    // XHTML / XHTML
+        [".shtml"] = "html",    // Server-side includes / サーバサイドインクルード
+        [".css"] = "css",
+        [".scss"] = "css",
+        [".less"] = "css",    // Less preprocessor / Less プリプロセッサ
+        [".pcss"] = "css",    // PostCSS / PostCSS
         // Sass indented syntax / Stylus use indentation instead of braces, so they live in
         // separate search-only buckets — the CSS symbol extractor's brace-based patterns do
         // not apply, but exact-name search still works.
         // Sass インデント構文と Stylus は波括弧ではなくインデントで構造化するため、
         // CSS のシンボル抽出（波括弧ベース）は使わず、検索用の別バケットに分ける。
-        [".sass"]   = "sass",
-        [".styl"]   = "stylus",
-        [".vue"]    = "vue",
+        [".sass"] = "sass",
+        [".styl"] = "stylus",
+        [".vue"] = "vue",
         [".svelte"] = "svelte",
-        [".tf"]     = "terraform",
-        [".v"]      = "verilog",  // Verilog defaults here; SystemVerilog has its own extensions.
-        [".sv"]     = "systemverilog",
-        [".svh"]    = "systemverilog",
-        [".vhd"]    = "vhdl",
-        [".vhdl"]   = "vhdl",
-        [".lisp"]   = "commonlisp",
-        [".lsp"]    = "commonlisp",
-        [".cl"]     = "commonlisp", // Common Lisp wins the default over OpenCL here.
-        [".rkt"]    = "racket",
-        [".pas"]    = "pascal",
-        [".pp"]     = "pascal",
-        [".dpr"]    = "pascal",
-        [".st"]     = "smalltalk",
+        [".tf"] = "terraform",
+        [".v"] = "verilog",  // Verilog defaults here; SystemVerilog has its own extensions.
+        [".sv"] = "systemverilog",
+        [".svh"] = "systemverilog",
+        [".vhd"] = "vhdl",
+        [".vhdl"] = "vhdl",
+        [".lisp"] = "commonlisp",
+        [".lsp"] = "commonlisp",
+        [".cl"] = "commonlisp", // Common Lisp wins the default over OpenCL here.
+        [".rkt"] = "racket",
+        [".pas"] = "pascal",
+        [".pp"] = "pascal",
+        [".dpr"] = "pascal",
+        [".st"] = "smalltalk",
         [".smalltalk"] = "smalltalk",
-        [".ada"]    = "ada",
-        [".adb"]    = "ada",
-        [".ads"]    = "ada",
-        [".f"]      = "fortran",
-        [".f77"]    = "fortran",
-        [".f90"]    = "fortran",
-        [".f95"]    = "fortran",
-        [".f03"]    = "fortran",
-        [".f08"]    = "fortran",
-        [".for"]    = "fortran",
-        [".ftn"]    = "fortran",
-        [".cbl"]    = "cobol",
-        [".cob"]    = "cobol",
-        [".cobol"]  = "cobol",
-        [".cpy"]    = "cobol",   // COBOL copybook / COBOL コピー句
-        [".raku"]   = "raku",
-        [".rakumod"]= "raku",
-        [".rakutest"]= "raku",
-        [".t"]      = "perl",    // Common Perl test scripts / Perl の test スクリプト
-        [".dart"]   = "dart",
-        [".scala"]  = "scala",
-        [".sc"]     = "scala",
-        [".r"]      = "r",
-        [".R"]      = "r",
-        [".ex"]     = "elixir",
-        [".exs"]    = "elixir",
-        [".lua"]    = "lua",
-        [".ml"]     = "ocaml",
-        [".mli"]    = "ocaml",
-        [".cr"]     = "crystal",
-        [".clj"]    = "clojure",
-        [".cljs"]   = "clojure",
-        [".cljc"]   = "clojure",
-        [".edn"]    = "clojure",
-        [".d"]      = "d",
-        [".erl"]    = "erlang",
-        [".hrl"]    = "erlang",
-        [".jl"]     = "julia",
-        [".nim"]    = "nim",
-        [".nims"]   = "nim",
-        [".pl"]     = "perl",
-        [".pm"]     = "perl",
-        [".pod"]    = "perl",
-        [".psgi"]   = "perl",
-        [".cgi"]    = "perl",
-        [".fcgi"]   = "perl",
-        [".t"]      = "perl",
-        [".sol"]    = "solidity",
-        [".tcl"]    = "tcl",
-        [".tk"]     = "tcl",
-        [".fs"]     = "fsharp",
-        [".fsx"]    = "fsharp",
-        [".fsi"]    = "fsharp",
-        [".bas"]    = "vb",
-        [".cls"]    = "vb",
-        [".ctl"]    = "vb",
-        [".dob"]    = "vb",
-        [".dsr"]    = "vb",
-        [".frm"]    = "vb",
-        [".pag"]    = "vb",
-        [".vba"]    = "vb",
-        [".vb"]     = "vb",
+        [".ada"] = "ada",
+        [".adb"] = "ada",
+        [".ads"] = "ada",
+        [".f"] = "fortran",
+        [".f77"] = "fortran",
+        [".f90"] = "fortran",
+        [".f95"] = "fortran",
+        [".f03"] = "fortran",
+        [".f08"] = "fortran",
+        [".for"] = "fortran",
+        [".ftn"] = "fortran",
+        [".cbl"] = "cobol",
+        [".cob"] = "cobol",
+        [".cobol"] = "cobol",
+        [".cpy"] = "cobol",   // COBOL copybook / COBOL コピー句
+        [".raku"] = "raku",
+        [".rakumod"] = "raku",
+        [".rakutest"] = "raku",
+        [".t"] = "perl",    // Common Perl test scripts / Perl の test スクリプト
+        [".dart"] = "dart",
+        [".scala"] = "scala",
+        [".sc"] = "scala",
+        [".r"] = "r",
+        [".R"] = "r",
+        [".ex"] = "elixir",
+        [".exs"] = "elixir",
+        [".lua"] = "lua",
+        [".ml"] = "ocaml",
+        [".mli"] = "ocaml",
+        [".cr"] = "crystal",
+        [".clj"] = "clojure",
+        [".cljs"] = "clojure",
+        [".cljc"] = "clojure",
+        [".edn"] = "clojure",
+        [".d"] = "d",
+        [".erl"] = "erlang",
+        [".hrl"] = "erlang",
+        [".jl"] = "julia",
+        [".nim"] = "nim",
+        [".nims"] = "nim",
+        [".pl"] = "perl",
+        [".pm"] = "perl",
+        [".pod"] = "perl",
+        [".psgi"] = "perl",
+        [".cgi"] = "perl",
+        [".fcgi"] = "perl",
+        [".t"] = "perl",
+        [".sol"] = "solidity",
+        [".tcl"] = "tcl",
+        [".tk"] = "tcl",
+        [".fs"] = "fsharp",
+        [".fsx"] = "fsharp",
+        [".fsi"] = "fsharp",
+        [".bas"] = "vb",
+        [".cls"] = "vb",
+        [".ctl"] = "vb",
+        [".dob"] = "vb",
+        [".dsr"] = "vb",
+        [".frm"] = "vb",
+        [".pag"] = "vb",
+        [".vba"] = "vb",
+        [".vb"] = "vb",
         [".vbhtml"] = "vb",
-        [".vbs"]    = "vb",
-        [".hs"]     = "haskell",
-        [".lhs"]    = "haskell",
-        [".zig"]    = "zig",
-        [".proto"]  = "protobuf",  // Protocol Buffers / Protocol Buffers 定義
-        [".graphql"]= "graphql",   // GraphQL schema/queries / GraphQL スキーマ・クエリ
-        [".gql"]    = "graphql",
+        [".vbs"] = "vb",
+        [".hs"] = "haskell",
+        [".lhs"] = "haskell",
+        [".zig"] = "zig",
+        [".proto"] = "protobuf",  // Protocol Buffers / Protocol Buffers 定義
+        [".graphql"] = "graphql",   // GraphQL schema/queries / GraphQL スキーマ・クエリ
+        [".gql"] = "graphql",
         [".gradle"] = "gradle",    // Gradle build scripts / Gradle ビルドスクリプト
-        [".cmake"]  = "cmake",     // CMake scripts / CMake スクリプト
-        [".mk"]     = "makefile",  // Makefile fragment / Makefile フラグメント
-        [".ps1"]    = "powershell",// PowerShell scripts / PowerShell スクリプト
-        [".psm1"]   = "powershell",// PowerShell modules / PowerShell モジュール
-        [".psd1"]   = "powershell",// PowerShell data files / PowerShell データファイル
-        [".bat"]    = "batch",     // Windows batch files / Windows バッチファイル
-        [".cmd"]    = "batch",
-        [".bash"]   = "shell",
-        [".zsh"]    = "shell",
-        [".fish"]   = "shell",
+        [".cmake"] = "cmake",     // CMake scripts / CMake スクリプト
+        [".mk"] = "makefile",  // Makefile fragment / Makefile フラグメント
+        [".ps1"] = "powershell",// PowerShell scripts / PowerShell スクリプト
+        [".psm1"] = "powershell",// PowerShell modules / PowerShell モジュール
+        [".psd1"] = "powershell",// PowerShell data files / PowerShell データファイル
+        [".bat"] = "batch",     // Windows batch files / Windows バッチファイル
+        [".cmd"] = "batch",
+        [".bash"] = "shell",
+        [".zsh"] = "shell",
+        [".fish"] = "shell",
         [".dockerfile"] = "dockerfile", // Suffix-style Dockerfile names such as app.Dockerfile / app.Dockerfile 形式
         [".containerfile"] = "dockerfile", // Suffix-style Containerfile names such as app.Containerfile / app.Containerfile 形式
     };
@@ -300,33 +302,33 @@ public class FileIndexer
     // Exact file names (case-insensitive) mapped to language / 完全一致ファイル名→言語マッピング
     private static readonly Dictionary<string, string> FileNameMap = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["Dockerfile"]    = "dockerfile",
-        [".dockerfile"]   = "dockerfile",
+        ["Dockerfile"] = "dockerfile",
+        [".dockerfile"] = "dockerfile",
         ["Containerfile"] = "dockerfile",   // Podman's Dockerfile alternative / Podman の Dockerfile 代替
-        [".containerfile"]= "dockerfile",
-        ["Makefile"]      = "makefile",
-        ["GNUmakefile"]   = "makefile",     // GNU Make explicit filename / GNU Make 明示ファイル名
-        ["Justfile"]      = "justfile",     // Just command runner / Just コマンドランナー
-        ["CMakeLists.txt"]= "cmake",
-        ["Vagrantfile"]   = "ruby",         // Vagrant uses Ruby DSL / Vagrant は Ruby DSL
-        ["Gemfile"]       = "ruby",         // Bundler dependency manifest / Bundler 依存マニフェスト
-        ["Rakefile"]      = "ruby",         // Rake task runner / Rake タスクランナー
-        ["Podfile"]       = "ruby",         // CocoaPods dependency manifest / CocoaPods 依存マニフェスト
-        ["Guardfile"]     = "ruby",         // Guard file-watcher / Guard ファイルウォッチャー
-        ["Capfile"]       = "ruby",         // Capistrano deployment / Capistrano デプロイ
-        ["NAMESPACE"]     = "r",            // R package namespace directives / R パッケージ namespace ディレクティブ
-        [".Rprofile"]     = "r",            // R startup profile / R 起動プロファイル
+        [".containerfile"] = "dockerfile",
+        ["Makefile"] = "makefile",
+        ["GNUmakefile"] = "makefile",     // GNU Make explicit filename / GNU Make 明示ファイル名
+        ["Justfile"] = "justfile",     // Just command runner / Just コマンドランナー
+        ["CMakeLists.txt"] = "cmake",
+        ["Vagrantfile"] = "ruby",         // Vagrant uses Ruby DSL / Vagrant は Ruby DSL
+        ["Gemfile"] = "ruby",         // Bundler dependency manifest / Bundler 依存マニフェスト
+        ["Rakefile"] = "ruby",         // Rake task runner / Rake タスクランナー
+        ["Podfile"] = "ruby",         // CocoaPods dependency manifest / CocoaPods 依存マニフェスト
+        ["Guardfile"] = "ruby",         // Guard file-watcher / Guard ファイルウォッチャー
+        ["Capfile"] = "ruby",         // Capistrano deployment / Capistrano デプロイ
+        ["NAMESPACE"] = "r",            // R package namespace directives / R パッケージ namespace ディレクティブ
+        [".Rprofile"] = "r",            // R startup profile / R 起動プロファイル
         ["Rprofile.site"] = "r",            // Site-wide R startup profile / サイト共通 R 起動プロファイル
-        ["BUILD"]         = "python",       // Bazel Starlark build file / Bazel Starlark ビルドファイル
-        ["BUILD.bazel"]   = "python",
-        ["WORKSPACE"]     = "python",       // Bazel workspace / Bazel ワークスペース
-        ["WORKSPACE.bazel"]= "python",
+        ["BUILD"] = "python",       // Bazel Starlark build file / Bazel Starlark ビルドファイル
+        ["BUILD.bazel"] = "python",
+        ["WORKSPACE"] = "python",       // Bazel workspace / Bazel ワークスペース
+        ["WORKSPACE.bazel"] = "python",
         ["pyproject.toml"] = "python",      // Python project manifest / Python プロジェクトマニフェスト
         ["requirements.txt"] = "python",    // Python dependencies manifest / Python 依存関係マニフェスト
-        ["go.mod"]        = "go",           // Go module manifest / Go モジュールマニフェスト
-        ["go.work"]       = "go",           // Go workspace manifest / Go ワークスペースマニフェスト
+        ["go.mod"] = "go",           // Go module manifest / Go モジュールマニフェスト
+        ["go.work"] = "go",           // Go workspace manifest / Go ワークスペースマニフェスト
         [".editorconfig"] = "editorconfig",
-        [".gitignore"]    = "gitignore",
+        [".gitignore"] = "gitignore",
         [".dockerignore"] = "dockerignore",
     };
 
@@ -1848,7 +1850,7 @@ public class FileIndexer
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         if (preloadResult.IgnoreRulesAvailable)
         {
-            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeCheckpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, preloadResult.Rules, isProjectRoot: true, continueOnError, cancellationToken);
+            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeCheckpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, preloadResult.Rules, isProjectRoot: true, continueOnError, cancellationToken, depth: 0);
         }
         return new ScanFilesResult(
             files,
@@ -1883,10 +1885,20 @@ public class FileIndexer
         IgnoreRuleSet activeIgnoreRules,
         bool isProjectRoot = false,
         bool continueOnError = true,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int depth = 0)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var relativeDir = ToRelativePath(dir);
+
+        if (depth > MaxDirectoryTraversalDepth)
+        {
+            errors.Add(new ScanError(
+                relativeDir,
+                $"Skipped directory because traversal depth exceeded {MaxDirectoryTraversalDepth}. Check for symlink loops or unexpectedly deep generated trees.",
+                ScanIssueSeverity.Warning));
+            return true;
+        }
 
         if (checkpointedDirectories.Contains(relativeDir))
             return true;
@@ -1899,7 +1911,7 @@ public class FileIndexer
             return true;
         }
 
-        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, activeIgnoreRules, continueOnError, cancellationToken);
+        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, activeIgnoreRules, continueOnError, cancellationToken, depth);
     }
 
     private bool IsNestedGitRepository(string dir)
@@ -1928,7 +1940,8 @@ public class FileIndexer
         HashSet<string> visitedDirectories,
         IgnoreRuleSet inheritedIgnoreRules,
         bool continueOnError,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int depth = 0)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var fullyScanned = true;
@@ -2150,7 +2163,7 @@ public class FileIndexer
                     continue;
                 }
 
-                var childFullyScanned = ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, activeIgnoreRules, continueOnError: continueOnError, cancellationToken: cancellationToken);
+                var childFullyScanned = ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, activeIgnoreRules, continueOnError: continueOnError, cancellationToken: cancellationToken, depth: depth + 1);
                 fullyScanned &= childFullyScanned;
                 if (!continueOnError && !childFullyScanned)
                     break;
@@ -2829,23 +2842,6 @@ public class FileIndexer
                 break;
         }
 
-        // Compute the checksum on the byte stream after collapsing CRLF / CR to LF so
-        // a Windows clone (core.autocrlf=true) and a Linux/macOS clone of the same logical
-        // file produce identical checksums. Hashing the unnormalized raw bytes used to
-        // mark every file as "changed" the first time a developer indexed a cross-OS clone
-        // or a shared NAS workspace. BOM bytes are preserved verbatim so BOM addition /
-        // removal still flips the checksum and triggers incremental re-index. The streaming
-        // helper avoids re-encoding the UTF-8 string (~10 MB saved for large files).
-        // Closes #1544.
-        // CRLF / CR を LF に潰した上で SHA256 を取り、Windows (core.autocrlf=true) clone と
-        // Linux/macOS clone の同じ論理内容で checksum を一致させる。生バイトをそのまま
-        // ハッシュしていた以前は、cross-OS の clone や共有 NAS で全ファイルが「変更あり」
-        // 扱いとなり毎回フル再索引が走っていた。BOM はそのままハッシュ対象に残すので
-        // BOM の追加 / 削除はインクリメンタル再索引で引き続き検知できる。streaming
-        // ヘルパは UTF-8 文字列を再エンコードせずに済み、大ファイルで約 10 MB 節約する。
-        // Closes #1544.
-        var checksum = ComputeChecksum(bytes);
-
         var isUtf16Encoded = TryDetectUtf16Encoding(bytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
 
         if (!isUtf16Encoded && ContainsIndexBlockingNullByte(bytes))
@@ -2880,8 +2876,6 @@ public class FileIndexer
                 warning = $"{relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)";
             }
         }
-        var lineCount = CountPhysicalLines(content);
-
         // Normalize line endings to LF in one pass / 改行を1パスでLFに正規化
         content = NormalizeLineEndings(content);
         // Strip every line-leading UTF-8 BOM (U+FEFF): the leading BOM at offset 0
@@ -2893,10 +2887,8 @@ public class FileIndexer
         // output. Non-line-leading U+FEFF (Unicode 3.2+ ZWNBSP inside a string
         // literal, identifier, or comment — e.g. `const s = "A\uFEFFB"`) is kept
         // verbatim: stripping it would corrupt content fidelity for intentional
-        // mid-line ZWNBSP use. The checksum computed above keeps BOM bytes in the
-        // hash input (only CRLF / CR are collapsed to LF) so incremental re-index
-        // still detects BOM add / removal. Closes #183. Cross-OS CRLF / LF parity
-        // is handled by ComputeChecksum itself; see #1544.
+        // mid-line ZWNBSP use. The checksum is computed after this canonicalization
+        // so freshness decisions match stored chunk/symbol line metadata. Closes #183/#1467.
         // 行頭の UTF-8 BOM (U+FEFF) だけを剥がす — オフセット 0 の先頭 BOM と、
         // `\n` の直後にある BOM (ファイル連結やツール挿入で発生) が対象。先頭 BOM
         // だけでも行指向の `^\s*` 固定正規表現で BOM 付き Windows 作成ソースの
@@ -2905,11 +2897,13 @@ public class FileIndexer
         // (Unicode 3.2+ の ZWNBSP を文字列リテラル・識別子・コメントで意図的に
         // 使用しているケース、例: `const s = "A\uFEFFB"`) はそのまま保持する:
         // これを剥がすと mid-line ZWNBSP の意図的利用に対して内容が壊れる。
-        // checksum は上で算出済みで、ハッシュ入力に BOM をそのまま含めたまま
-        // CRLF / CR のみを LF に潰すため、BOM の追加 / 削除はインクリメンタル
-        // 再索引で引き続き検知される。Closes #183。OS をまたいだ CRLF / LF の
-        // 同一性は ComputeChecksum 自体で担保する。#1544 参照。
+        // checksum はこの canonicalization 後に算出し、freshness 判定と保存される
+        // chunk / symbol 行メタデータを一致させる。Closes #183/#1467。
         content = StripLineLeadingInvisibles(content);
+        if (IsGitLfsPointer(bytes))
+            content = string.Empty;
+        var lineCount = CountPhysicalLines(content);
+        var checksum = ComputeChecksum(Encoding.UTF8.GetBytes(content));
         var record = new FileRecord
         {
             Path = normalizedRelativePath,
@@ -3204,6 +3198,69 @@ public class FileIndexer
 
     private static bool IsLineLeadingInvisible(char c) => c is '\uFEFF' or '\u200B';
 
+    internal static bool IsGitLfsPointer(byte[] rawBytes)
+    {
+        if (rawBytes.Length == 0 || rawBytes.Length >= GitLfsPointerMaxBytes)
+            return false;
+
+        var pointerText = Encoding.UTF8.GetString(rawBytes).Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        var lines = pointerText.Split('\n');
+        if (lines.Length > 0 && lines[^1].Length == 0)
+            lines = lines[..^1];
+        if (lines.Length < 3)
+            return false;
+        if (!string.Equals(lines[0], "version https://git-lfs.github.com/spec/v1", StringComparison.Ordinal))
+            return false;
+
+        var lineIndex = 1;
+        while (lineIndex < lines.Length && lines[lineIndex].StartsWith("ext-", StringComparison.Ordinal))
+            lineIndex++;
+
+        if (lineIndex + 1 >= lines.Length)
+            return false;
+        if (!IsGitLfsSha256OidLine(lines[lineIndex]))
+            return false;
+        lineIndex++;
+        if (!IsGitLfsSizeLine(lines[lineIndex]))
+            return false;
+
+        return lineIndex == lines.Length - 1;
+    }
+
+    private static bool IsGitLfsSha256OidLine(string line)
+    {
+        const string prefix = "oid sha256:";
+        if (!line.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+
+        var hash = line.AsSpan(prefix.Length);
+        if (hash.Length != 64)
+            return false;
+        foreach (var c in hash)
+        {
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+                return false;
+        }
+        return true;
+    }
+
+    private static bool IsGitLfsSizeLine(string line)
+    {
+        const string prefix = "size ";
+        if (!line.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+
+        var size = line.AsSpan(prefix.Length);
+        if (size.Length == 0)
+            return false;
+        foreach (var c in size)
+        {
+            if (c < '0' || c > '9')
+                return false;
+        }
+        return true;
+    }
+
     /// <summary>
     /// Validate file content for encoding issues.
     /// ファイル内容のエンコーディング問題を検証する。
@@ -3211,6 +3268,17 @@ public class FileIndexer
     public static List<FileIssue> ValidateContent(string relativePath, byte[] rawBytes, string content)
     {
         var issues = new List<FileIssue>();
+
+        if (IsGitLfsPointer(rawBytes))
+        {
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "lfs_pointer_skipped",
+                Line = 1,
+                Message = "Git LFS pointer file skipped; fetch LFS objects to index real file content",
+            });
+        }
 
         // UTF-16 BOM-detected files are decoded as UTF-16 in BuildRecordWithRawBytes, so the
         // raw-byte heuristics for `bom` / `null_byte` / `mixed_line_endings` would all misfire

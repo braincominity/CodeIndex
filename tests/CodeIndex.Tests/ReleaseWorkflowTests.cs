@@ -89,6 +89,29 @@ public class ReleaseWorkflowTests
         Assert.DoesNotContain("--skip-duplicate", workflow);
     }
 
+    [Fact]
+    public void ReleaseWorkflow_PublishesOfficialContainerImage()
+    {
+        var root = GetRepositoryRoot();
+        var workflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", "release.yml"));
+        var dockerfile = File.ReadAllText(Path.Combine(root, "Dockerfile"));
+
+        Assert.Contains("publish-container:", workflow);
+        Assert.Contains("needs: create-release", workflow);
+        Assert.Contains("packages: write", workflow);
+        Assert.Contains("docker/login-action@v3", workflow);
+        Assert.Contains("docker/build-push-action@v6", workflow);
+        Assert.Contains("platforms: linux/amd64,linux/arm64", workflow);
+        Assert.Contains("ghcr.io/widthdom/codeindex:${version}", workflow);
+        Assert.Contains("ghcr.io/widthdom/codeindex:latest", workflow);
+        Assert.Contains("tags: ${{ steps.image-tags.outputs.tags }}", workflow);
+        Assert.Contains("*-*) ;;", workflow);
+        Assert.Contains("ARG TARGETARCH=amd64", dockerfile);
+        Assert.Contains("linux-musl-x64", dockerfile);
+        Assert.Contains("linux-musl-arm64", dockerfile);
+        Assert.Contains("ENTRYPOINT [\"cdidx\"]", dockerfile);
+    }
+
     private static string GetRepositoryRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
