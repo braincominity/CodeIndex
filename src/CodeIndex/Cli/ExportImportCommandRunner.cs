@@ -169,11 +169,12 @@ internal static class ExportImportCommandRunner
 
             CreateDatabaseSnapshot(normalizedDbPath, snapshotPath);
             ExportManifest manifest;
-            using (var snapshotConnection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = snapshotPath }.ConnectionString))
+            using (var snapshotConnection = new SqliteConnection(CreateUnpooledConnectionString(snapshotPath)))
             {
                 snapshotConnection.Open();
                 manifest = BuildManifest(snapshotConnection, appVersion);
             }
+            SqliteConnection.ClearAllPools();
             manifest = manifest with { DatabaseSha256 = ComputeSha256(snapshotPath) };
             if (File.Exists(outputPath))
                 File.Delete(outputPath);
@@ -316,12 +317,15 @@ internal static class ExportImportCommandRunner
 
     private static void CreateDatabaseSnapshot(string sourceDbPath, string snapshotPath)
     {
-        using var source = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = sourceDbPath }.ConnectionString);
-        using var destination = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = snapshotPath }.ConnectionString);
+        using var source = new SqliteConnection(CreateUnpooledConnectionString(sourceDbPath));
+        using var destination = new SqliteConnection(CreateUnpooledConnectionString(snapshotPath));
         source.Open();
         destination.Open();
         source.BackupDatabase(destination);
     }
+
+    private static string CreateUnpooledConnectionString(string dbPath)
+        => new SqliteConnectionStringBuilder { DataSource = dbPath, Pooling = false }.ConnectionString;
 
     private static void DeleteSqliteSidecars(string dbPath)
     {
