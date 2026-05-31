@@ -326,6 +326,33 @@ public class FileIndexerTests
         Assert.Equal(expected, FileIndexer.DetectLanguage(filename));
     }
 
+    [Fact]
+    public void DetectLanguage_WorkspaceLangMapYaml_AliasesExtension()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_{Guid.NewGuid():N}");
+            var originalDirectory = Environment.CurrentDirectory;
+            try
+            {
+                Directory.CreateDirectory(tempDir);
+                File.WriteAllText(
+                    Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName),
+                    "entries:\n  - extension: \".kts.in\"\n    language: \"kotlin\"\n");
+                Environment.CurrentDirectory = tempDir;
+
+                Assert.Equal("kotlin", FileIndexer.DetectLanguage(Path.Combine(tempDir, "build.kts.in")));
+                Assert.Equal("kotlin", FileIndexer.GetLanguageExtensions()[".kts.in"]);
+            }
+            finally
+            {
+                Environment.CurrentDirectory = originalDirectory;
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
     [Theory]
     [InlineData("App.csproj")]
     [InlineData("Directory.Build.props")]
