@@ -307,6 +307,31 @@ public class ProgramCliTests
     }
 
     [Fact]
+    public void Doctor_PrintsRedactedEnvironmentSummary()
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(
+            ["doctor"],
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_DATA_DIR"] = Path.Combine(Path.GetTempPath(), "cdidx-doctor-data"),
+                ["CDIDX_GITHUB_TOKEN"] = "secret-token-value",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("cdidx doctor", stdout);
+        Assert.Contains("version", stdout);
+        Assert.Contains("rid", stdout);
+        Assert.Contains("terminal:", stdout);
+        Assert.Contains("paths:", stdout);
+        Assert.Contains("cdidx_env:", stdout);
+        Assert.Contains("CDIDX_DATA_DIR", stdout);
+        Assert.Contains("CDIDX_GITHUB_TOKEN", stdout);
+        Assert.Contains("<redacted>", stdout);
+        Assert.DoesNotContain("secret-token-value", stdout);
+    }
+
+    [Fact]
     public void TopLevelHelp_DefaultIsBriefAndExtendedHelpKeepsFullReference()
     {
         var (briefExit, briefStdout, briefStderr) = RunCliInSubprocess(["--help"]);

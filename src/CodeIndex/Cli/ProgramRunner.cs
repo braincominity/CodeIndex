@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -147,6 +148,14 @@ internal static class ProgramRunner
             GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} license_only=true");
             EmitCommandMetric("license", args, commandStartTimestamp, commandStopwatch, CommandExitCodes.Success);
             return CommandExitCodes.Success;
+        }
+
+        if (args[0] == "doctor")
+        {
+            var doctorExitCode = RunDoctor(args[1..], appVersion);
+            GlobalToolLog.Info($"command_complete exit_code={doctorExitCode} command=doctor");
+            EmitCommandMetric("doctor", args, commandStartTimestamp, commandStopwatch, doctorExitCode);
+            return doctorExitCode;
         }
 
         if (args[0] is "--completions" or "completions")
@@ -402,6 +411,77 @@ internal static class ProgramRunner
         using var actualDoc = JsonDocument.Parse(actual);
         return JsonSerializer.Serialize(expectedDoc.RootElement) == JsonSerializer.Serialize(actualDoc.RootElement);
     }
+
+    private static int RunDoctor(string[] args, string appVersion)
+    {
+        if (args.Length > 0)
+            return CommandErrorWriter.Write($"Unknown doctor argument: {args[0]}", CommandExitCodes.InvalidArgument, "use `cdidx doctor`.");
+
+        var dbResolution = DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, explicitDbPath: null, explicitDataDir: null);
+        Console.WriteLine("cdidx doctor");
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("version", appVersion));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("commit", ConsoleUi.LoadBuildMetadata().Commit));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("rid", RuntimeInformation.RuntimeIdentifier));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("os", RuntimeInformation.OSDescription));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("kernel", Environment.OSVersion.VersionString));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("dotnet", RuntimeInformation.FrameworkDescription));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("process", Environment.ProcessPath ?? "<unknown>"));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("base_dir", AppContext.BaseDirectory));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("cwd", Environment.CurrentDirectory));
+        Console.WriteLine();
+        Console.WriteLine("terminal:");
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("stdout_tty", !Console.IsOutputRedirected, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("stderr_tty", !Console.IsErrorRedirected, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("columns", Environment.GetEnvironmentVariable("COLUMNS") ?? "<unset>", indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("no_color", Environment.GetEnvironmentVariable("NO_COLOR") ?? "<unset>", indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("term", Environment.GetEnvironmentVariable("TERM") ?? "<unset>", indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("locale", CultureInfo.CurrentCulture.Name, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("ui_locale", CultureInfo.CurrentUICulture.Name, indent: "  "));
+        Console.WriteLine();
+        Console.WriteLine("paths:");
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("db", dbResolution.DbPath, indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("data_dir", dbResolution.DataDir ?? "<explicit-db>", indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("data_source", dbResolution.DataDirSource ?? "explicit-db", indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine("log_dir", GlobalToolLog.ResolveLogDirectoryForStatus(), indent: "  "));
+        Console.WriteLine();
+        Console.WriteLine("config:");
+        Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.FileName, File.Exists(Path.Combine(Environment.CurrentDirectory, CdidxConfigFile.FileName)) ? "present" : "not found", indent: "  "));
+        Console.WriteLine(ConsoleUi.FormatSummaryLine(CdidxConfigFile.DisableEnvVar, Environment.GetEnvironmentVariable(CdidxConfigFile.DisableEnvVar) ?? "<unset>", indent: "  "));
+        Console.WriteLine();
+        Console.WriteLine("cdidx_env:");
+        foreach (var (key, value) in EnumerateCdidxEnvironment())
+            Console.WriteLine(ConsoleUi.FormatSummaryLine(key, value, indent: "  "));
+        return CommandExitCodes.Success;
+    }
+
+    private static IEnumerable<(string Key, string Value)> EnumerateCdidxEnvironment()
+    {
+        var rows = Environment.GetEnvironmentVariables()
+            .Cast<System.Collections.DictionaryEntry>()
+            .Select(e => (Key: e.Key?.ToString() ?? string.Empty, Value: e.Value?.ToString() ?? string.Empty))
+            .Where(e => e.Key.StartsWith("CDIDX_", StringComparison.Ordinal))
+            .OrderBy(e => e.Key, StringComparer.Ordinal);
+        var any = false;
+        foreach (var row in rows)
+        {
+            any = true;
+            yield return (row.Key, IsSensitiveEnvironmentName(row.Key) ? "<redacted>" : string.IsNullOrEmpty(row.Value) ? "<empty>" : row.Value);
+        }
+
+        if (!any)
+            yield return ("<none>", "");
+    }
+
+    private static bool IsSensitiveEnvironmentName(string name) =>
+        name.Contains("TOKEN", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("PASSWORD", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("PASSWD", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("PWD", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("SECRET", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("AUTH", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("APIKEY", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("API_KEY", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("CREDENTIAL", StringComparison.OrdinalIgnoreCase);
 
     internal static void EnsureRedirectedStdoutUsesUtf8()
     {
