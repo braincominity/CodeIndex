@@ -32,7 +32,7 @@ public class ConcurrencyTests : IDisposable
         var fileId = writer.UpsertFile(new FileRecord
         {
             Path = "src/app.cs", Lang = "csharp", Size = 100, Lines = 10,
-            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
             Checksum = "abc",
         });
         writer.InsertChunks([new ChunkRecord { FileId = fileId, ChunkIndex = 0, StartLine = 1, EndLine = 10, Content = "public class App { }" }]);
@@ -126,7 +126,7 @@ public class ConcurrencyTests : IDisposable
             var fileId = writer.UpsertFile(new FileRecord
             {
                 Path = $"src/seed{seedIndex}.cs", Lang = "csharp", Size = 100, Lines = 10,
-                Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
                 Checksum = $"seed{seedIndex}",
             });
             writer.InsertReferences(BuildReferenceBatch(fileId, $"seed{seedIndex}", refsPerFile));
@@ -155,7 +155,7 @@ public class ConcurrencyTests : IDisposable
                 var fileId = w.UpsertFile(new FileRecord
                 {
                     Path = $"src/added{extra}.cs", Lang = "csharp", Size = 100, Lines = 10,
-                    Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
                     Checksum = $"added{extra}",
                 });
                 w.InsertReferences(BuildReferenceBatch(fileId, $"added{extra}", refsPerFile));
@@ -217,8 +217,8 @@ public class ConcurrencyTests : IDisposable
         //      file A のみで freshness = T0、2 refs なら file B も存在し modified = T1 > T0
         //      なので freshness = T1。`SearchReferences` / `GetCallers` と
         //      `GetWorkspaceFreshness` の間で writer が commit すると食い違う。
-        var fileAModified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var fileBModified = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+        var fileAModified = ManualTimeProvider.FixtureUtcNow.UtcDateTime;
+        var fileBModified = ManualTimeProvider.FixtureUtcNow.AddDays(1).UtcDateTime;
         var writer = new DbWriter(_db.Connection);
         var fileAId = writer.UpsertFile(new FileRecord
         {
@@ -362,7 +362,7 @@ public class ConcurrencyTests : IDisposable
         //   2. `src/Program.cs`（`Main()` 関数を持つ）の存在は freshness と整合する。
         //      `getFreshness` と `GetEntrypoints` の torn read で破れる。
         var writer = new DbWriter(_db.Connection);
-        var baselineModified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var baselineModified = ManualTimeProvider.FixtureUtcNow.UtcDateTime;
         for (var seedIndex = 0; seedIndex < 3; seedIndex++)
         {
             writer.UpsertFile(new FileRecord
@@ -543,7 +543,7 @@ public class ConcurrencyTests : IDisposable
                         Lang = "csharp",
                         Size = 10,
                         Lines = 1,
-                        Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                        Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
                         Checksum = $"{worker}_{i}",
                     });
                     txn.Commit();
