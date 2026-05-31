@@ -5537,6 +5537,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonFString_KeepsReferencesAfterNestedExpressionStringBrace()
+    {
+        const string content = """"
+            def run():
+                return 42
+
+            def use(format_value):
+                value = f"""{format_value("}") + run()}"""
+                return value
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "run"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "use");
+    }
+
+    [Fact]
     public void Extract_CsharpInterpolatedVerbatimString_WithEscapedBraces_DoesNotLeakPhantomReference()
     {
         const string content = """

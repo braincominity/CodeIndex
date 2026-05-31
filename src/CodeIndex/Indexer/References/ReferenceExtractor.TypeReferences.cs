@@ -3247,7 +3247,10 @@ public static partial class ReferenceExtractor
         var lineIndex = startLineIndex;
         var column = startColumn;
         var inExpression = false;
+        var inExpressionString = false;
         var expressionDepth = 0;
+        var expressionStringQuote = '\0';
+        var expressionStringTripleQuoted = false;
 
         endLineIndex = startLineIndex;
         endColumn = startColumn;
@@ -3312,6 +3315,52 @@ public static partial class ReferenceExtractor
                     }
 
                     chars[column++] = ' ';
+                    continue;
+                }
+
+                if (inExpressionString)
+                {
+                    if (line[column] == '\\' && column + 1 < line.Length)
+                    {
+                        column += 2;
+                        continue;
+                    }
+
+                    if (expressionStringTripleQuoted)
+                    {
+                        if (column + 2 < line.Length
+                            && line[column] == expressionStringQuote
+                            && line[column + 1] == expressionStringQuote
+                            && line[column + 2] == expressionStringQuote)
+                        {
+                            column += 3;
+                            inExpressionString = false;
+                            continue;
+                        }
+
+                        column++;
+                        continue;
+                    }
+
+                    if (line[column] == expressionStringQuote)
+                    {
+                        column++;
+                        inExpressionString = false;
+                        continue;
+                    }
+
+                    column++;
+                    continue;
+                }
+
+                if (line[column] == '\'' || line[column] == '"')
+                {
+                    expressionStringQuote = line[column];
+                    expressionStringTripleQuoted = column + 2 < line.Length
+                        && line[column + 1] == expressionStringQuote
+                        && line[column + 2] == expressionStringQuote;
+                    column += expressionStringTripleQuoted ? 3 : 1;
+                    inExpressionString = true;
                     continue;
                 }
 
