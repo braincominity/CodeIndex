@@ -272,7 +272,7 @@ internal static class ProgramRunner
                             CommandExitCodes.UsageError,
                             "use `cdidx config show`."),
                     "workspace" => WorkspaceCommandRunner.Run(subArgs, jsonOptions),
-                    "db" => DbCommandRunner.RunIntegrityCheck(subArgs, jsonOptions),
+                    "db" => DbCommandRunner.Run(subArgs, jsonOptions),
                     "report" => ReportCommandRunner.Run(subArgs, jsonOptions, appVersion),
                     "test-extractor" => RunTestExtractor(subArgs, jsonOptions),
                     _ when IsProjectPathArg(commandName)

@@ -71,7 +71,7 @@ public class DbWriter
         : this(
             (context ?? throw new ArgumentNullException(nameof(context))).Connection,
             context.IsReadOnly ? null : context.PreparedCommands,
-            context.MarkWriteWork)
+            () => context.MarkWriteWork())
     {
     }
 
