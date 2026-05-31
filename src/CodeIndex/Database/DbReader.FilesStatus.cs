@@ -450,6 +450,10 @@ public partial class DbReader
         // #1546: case-sensitivity stamp も同 snapshot で読む。stamp 無し旧 DB は null。
         var pathCaseSensitive = ParseMetaBool(TryGetMetaStringInternal(DbContext.WorkspacePathCaseSensitiveMetaKey));
         var dbPragmaSettings = GetDbPragmaSettings();
+        var batchInProgress = string.Equals(
+            TryGetMetaStringInternal(DbContext.BatchInProgressMetaKey),
+            "true",
+            StringComparison.OrdinalIgnoreCase);
 
         var result = new StatusResult
         {
@@ -465,7 +469,9 @@ public partial class DbReader
             IndexedHeadTimestamp = indexedHeadTimestamp,
             Languages = langs,
             GraphTableAvailable = _hasReferencesTable,
-            IssuesTableAvailable = _hasIssuesTable,
+            IssuesTableAvailable = _hasIssuesPhysicalTable,
+            FileIssuesDataCurrent = _hasIssuesTable,
+            MigrationInProgress = batchInProgress,
             HotspotFamilyReady = hotspotFamilySignal.Ready,
             HotspotFamilyDegradedReason = hotspotFamilySignal.DegradedReason,
             CSharpSymbolNameReady = csharpSymbolNameReady,
@@ -480,6 +486,9 @@ public partial class DbReader
             IndexNewerThanReaderReason = _indexNewerThanReaderReason,
             PathCaseSensitive = pathCaseSensitive,
             DbPragmaSettings = dbPragmaSettings,
+            ReadOnlyFallback = _readOnlyFallback,
+            WalCheckpointAttempted = _walCheckpointAttempted,
+            WalCheckpointSucceeded = _walCheckpointSucceeded,
         };
         // Commit the read-only snapshot explicitly so the SHARED lock is released promptly.
         // read-only なので rollback でも同じだが、明示 commit して SHARED lock を早期解放する。
