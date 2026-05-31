@@ -3265,7 +3265,6 @@ public partial class McpServer
             Description = description,
             Context = context,
             Hash = hash,
-            CreatedAt = GetUtcNow(),
             CreatedByAgent = ResolveSuggestionAgent(),
             SessionId = _sessionId,
             ClientVersion = _version,

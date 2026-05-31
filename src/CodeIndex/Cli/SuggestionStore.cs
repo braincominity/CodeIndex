@@ -125,6 +125,7 @@ public class SuggestionStore
             if (FindDuplicate(existing, record, ResolveDedupThreshold()).Record != null)
                 return false;
 
+            StampCreatedAt(record);
             existing.Add(record);
             SaveUnlocked(existing);
             return true;
@@ -198,6 +199,7 @@ public class SuggestionStore
 
             if (isNew)
             {
+                StampCreatedAt(record);
                 existing.Add(record);
                 SaveUnlocked(existing);
                 found = record;
@@ -737,6 +739,8 @@ public class SuggestionStore
 
         return record.NextRetryAt.Value <= GetUtcNow();
     }
+
+    private void StampCreatedAt(SuggestionRecord record) => record.CreatedAt = GetUtcNow();
 
     private DateTime GetUtcNow() => _timeProvider.GetUtcNow().UtcDateTime;
 
