@@ -2933,6 +2933,18 @@ public class ReferenceExtractorTests
             output "instance_ids" {
               value = aws_instance.web[*].id
             }
+
+            resource "aws:s3_bucket" "data" {
+              bucket = "example-data"
+            }
+
+            output "endpoint" {
+              value = module.network.outputs.endpoint
+            }
+
+            output "bucket" {
+              value = aws:s3_bucket.data.id
+            }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "terraform", content);
@@ -2950,7 +2962,7 @@ public class ReferenceExtractorTests
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "ubuntu"
             && reference.ReferenceKind == "reference"));
-        Assert.Equal(2, references.Count(reference =>
+        Assert.Equal(3, references.Count(reference =>
             reference.SymbolName == "network"
             && reference.ReferenceKind == "reference"));
         Assert.Single(references.Where(reference =>
@@ -2959,9 +2971,15 @@ public class ReferenceExtractorTests
         Assert.Single(references.Where(reference =>
             reference.SymbolName == "foo"
             && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "endpoint"
+            && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == "data"
+            && reference.ReferenceKind == "reference"));
         Assert.DoesNotContain(references, reference =>
             reference.ReferenceKind == "call"
-            && reference.SymbolName is "region" or "instance_count" or "common_tags" or "ubuntu" or "network" or "web" or "foo");
+            && reference.SymbolName is "region" or "instance_count" or "common_tags" or "ubuntu" or "network" or "web" or "foo" or "endpoint" or "data");
     }
 
     [Fact]
@@ -5752,6 +5770,175 @@ public class ReferenceExtractorTests
             reference.SymbolName == "Record"
             && reference.ReferenceKind == "type_reference"
             && reference.Context == "type Dict<K = DefaultKey, V = DefaultValue> = Record<K, V>;");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptTypeAliasHeritage_EmitsUnderlyingTypeReference()
+    {
+        const string content = """
+            class SomeType {}
+            type MyAlias = SomeType;
+            class Derived extends MyAlias {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "MyAlias"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "SomeType"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived"
+            && reference.Context == "class Derived extends MyAlias {}");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptTypeAliasMixedValueUse_OnlyExpandsTypePositionOccurrence()
+    {
+        const string content = """
+            class SomeType {}
+            type MyAlias = SomeType;
+            function get(value: unknown) { return value; }
+            const x: MyAlias = get(MyAlias);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        var expanded = references
+            .Where(reference =>
+                reference.SymbolName == "SomeType"
+                && reference.ReferenceKind == "type_reference"
+                && reference.Context == "const x: MyAlias = get(MyAlias);")
+            .ToList();
+
+        Assert.Single(expanded);
+        Assert.Equal(10, expanded[0].Column);
+    }
+
+    [Fact]
+    public void Extract_TypeScriptTypeAliasWithGenericDefault_EmitsUnderlyingTypeReference()
+    {
+        const string content = """
+            class DefaultKey {}
+            class SomeType {}
+            class Arg {}
+            type MyAlias<T = DefaultKey> = SomeType & Box<T>;
+            class Derived extends MyAlias<Arg> {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "DefaultKey"
+            && reference.ReferenceKind == "type_reference"
+            && reference.Context == "type MyAlias<T = DefaultKey> = SomeType & Box<T>;");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "SomeType"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived"
+            && reference.Context == "class Derived extends MyAlias<Arg> {}");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "T"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived"
+            && reference.Context == "class Derived extends MyAlias<Arg> {}");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptFunctionTypeAlias_DoesNotEmitTypeParameterAsTarget()
+    {
+        const string content = """
+            class SomeType {}
+            class Arg {}
+            type MyAlias<T> = (value: T) => SomeType;
+            class Derived extends MyAlias<Arg> {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "SomeType"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived"
+            && reference.Context == "class Derived extends MyAlias<Arg> {}");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "T"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived"
+            && reference.Context == "class Derived extends MyAlias<Arg> {}");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptTypeAliasShadowedByScope_UsesActiveAliasBinding()
+    {
+        const string content = """
+            class One {}
+            class Two {}
+            type MyAlias = One;
+            namespace Inner {
+                type MyAlias = Two;
+                export class B extends MyAlias {}
+            }
+            class A extends MyAlias {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "One"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "A"
+            && reference.Context == "class A extends MyAlias {}");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Two"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "A"
+            && reference.Context == "class A extends MyAlias {}");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Two"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "B"
+            && reference.Context == "export class B extends MyAlias {}");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "One"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "B"
+            && reference.Context == "export class B extends MyAlias {}");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptTypeAliasShadowedByTypeDeclaration_DoesNotExpandOuterAlias()
+    {
+        const string content = """
+            class One {}
+            type MyAlias = One;
+            namespace Inner {
+                class MyAlias {}
+                export class B extends MyAlias {}
+            }
+            class Box<MyAlias> extends MyAlias {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "One"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "B"
+            && reference.Context == "export class B extends MyAlias {}");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "One"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Box"
+            && reference.Context == "class Box<MyAlias> extends MyAlias {}");
     }
 
     [Fact]
@@ -13398,6 +13585,11 @@ public class ReferenceExtractorTests
     public void Extract_DartDetailedReferences_CapturesTypePositionsAnnotationsAndConstructors()
     {
         const string content = """
+            sealed class Shape {}
+            sealed class Circle extends Shape with Paintable, Serializable {}
+            extension ShapeFormatting on Shape {
+              String label() => Shape.label();
+            }
             class Screen extends BaseScreen with Trackable implements RouteAware {
               @override
               Widget build(BuildContext context) {
@@ -13419,11 +13611,19 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "BaseScreen" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Trackable" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "RouteAware" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "sealed_subtype");
+        Assert.DoesNotContain(references, r => r.SymbolName == "BaseScreen" && r.ReferenceKind == "sealed_subtype");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "extension_of");
+        Assert.Contains(references, r => r.SymbolName == "Paintable" && r.ReferenceKind == "mixin_in");
+        Assert.Contains(references, r => r.SymbolName == "Serializable" && r.ReferenceKind == "mixin_in");
+        Assert.Contains(references, r => r.SymbolName == "Trackable" && r.ReferenceKind == "mixin_in");
+        Assert.Contains(references, r => r.SymbolName == "Shape.label" && r.ReferenceKind == "named_ctor_call");
         Assert.Contains(references, r => r.SymbolName == "BuildContext" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "override" && r.ReferenceKind == "annotation");
         Assert.Contains(references, r => r.SymbolName == "UserCard" && r.ReferenceKind == "instantiate");
         Assert.Contains(references, r => r.SymbolName == "User.fromJson" && r.ReferenceKind == "instantiate");
+        Assert.Contains(references, r => r.SymbolName == "User.fromJson" && r.ReferenceKind == "named_ctor_call");
         Assert.Contains(references, r => r.SymbolName == "afterRaw" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Phantom");
         Assert.DoesNotContain(references, r => r.SymbolName == "fromJson" && r.ReferenceKind == "instantiate");
@@ -14768,6 +14968,44 @@ public class ReferenceExtractorTests
             && r.ReferenceKind == "call"
             && r.ContainerKind == "object"
             && r.ContainerName == "Main");
+    }
+
+    [Fact]
+    public void Extract_ScalaForImplicitGivenUsingReferences_AreIndexed()
+    {
+        const string content = """
+            trait Encoder[T]
+            class User
+            class UserDto
+
+            object Main {
+              implicit def userToDto(user: User): UserDto = UserDto()
+              implicit class UserOps(user: User) {
+                def active: Boolean = true
+              }
+              given userEncoder: Encoder[User] = Encoder.instance
+              def render(value: User)(using encoder: Encoder[User]): String =
+                for {
+                  raw <- users
+                  user <- loadUsers()
+                  dto <- convert(user)
+                  if dto.active
+                } yield dto.toString
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.Contains(symbols, symbol => symbol.Name == "userToDto" && symbol.Kind == "implicit");
+        Assert.Contains(symbols, symbol => symbol.Name == "UserOps" && symbol.Kind == "implicit");
+        Assert.Contains(symbols, symbol => symbol.Name == "userEncoder" && symbol.Kind == "given");
+        Assert.Contains(references, reference => reference.SymbolName == "users" && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference => reference.SymbolName == "loadUsers" && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference => reference.SymbolName == "convert" && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference => reference.SymbolName == "User" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "UserDto" && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference => reference.SymbolName == "Encoder[User]" && reference.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -18310,6 +18548,38 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r =>
             r.SymbolName == "[.indexed"
             && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_R_DetectsS4DispatchReferences()
+    {
+        const string content = """
+            setClass("ExpressionSet", slots = c(assayData = "AssayData"))
+            setGeneric("exprs", function(object) standardGeneric("exprs"))
+            setMethod("exprs", signature(object = "ExpressionSet"), function(object) object@assayData)
+            methods::setMethod("show", signature("ExpressionSet"), function(object) show(object))
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "r", content);
+        var references = ReferenceExtractor.Extract(1, "r", content, symbols);
+
+        Assert.Contains(symbols, symbol => symbol.Name == "ExpressionSet" && symbol.Kind == "class");
+        Assert.Contains(symbols, symbol => symbol.Name == "exprs" && symbol.Kind == "function");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ExpressionSet"
+            && reference.ReferenceKind == "type_reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "exprs"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "exprs.ExpressionSet"
+            && reference.ReferenceKind == "reference");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "show.ExpressionSet"
+            && reference.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName is "function" or "exprs.function" or "show.function"
+            && reference.ReferenceKind is "type_reference" or "reference");
     }
 
     [Fact]
@@ -26209,6 +26479,146 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference =>
             reference.SymbolName == "NetworkLoader"
             && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_SwiftTypealiasHeritage_EmitsUnderlyingTypeReference()
+    {
+        const string content = """
+            class SomeType {}
+            typealias MyAlias = SomeType
+            class Derived: MyAlias {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "MyAlias"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "SomeType"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived"
+            && reference.Context == "class Derived: MyAlias {}");
+    }
+
+    [Fact]
+    public void Extract_SwiftTypealiasMixedValueUse_OnlyExpandsTypePositionOccurrence()
+    {
+        const string content = """
+            class SomeType {}
+            typealias MyAlias = SomeType
+            func get(_ value: Any) -> Any { value }
+            let x: MyAlias = get("MyAlias")
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        var expanded = references
+            .Where(reference =>
+                reference.SymbolName == "SomeType"
+                && reference.ReferenceKind == "type_reference"
+                && reference.Context == "let x: MyAlias = get(\"MyAlias\")")
+            .ToList();
+
+        Assert.Single(expanded);
+        Assert.Equal(8, expanded[0].Column);
+    }
+
+    [Fact]
+    public void Extract_SwiftGenericTypealiasHeritage_DoesNotEmitTypeParameterAsTarget()
+    {
+        const string content = """
+            class SomeType {}
+            class Box<T> {}
+            class Arg {}
+            typealias MyAlias<T> = SomeType & Box<T>
+            class Derived: MyAlias<Arg> {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "SomeType"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived"
+            && reference.Context == "class Derived: MyAlias<Arg> {}");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "T"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Derived"
+            && reference.Context == "class Derived: MyAlias<Arg> {}");
+    }
+
+    [Fact]
+    public void Extract_SwiftTypealiasShadowedByScope_UsesActiveAliasBinding()
+    {
+        const string content = """
+            class One {}
+            class Two {}
+            typealias MyAlias = One
+            enum Inner {
+                typealias MyAlias = Two
+                class B: MyAlias {}
+            }
+            class A: MyAlias {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "One"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "A"
+            && reference.Context == "class A: MyAlias {}");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Two"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "A"
+            && reference.Context == "class A: MyAlias {}");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Two"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "B"
+            && reference.Context == "class B: MyAlias {}");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "One"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "B"
+            && reference.Context == "class B: MyAlias {}");
+    }
+
+    [Fact]
+    public void Extract_SwiftTypealiasShadowedByTypeDeclaration_DoesNotExpandOuterAlias()
+    {
+        const string content = """
+            class One {}
+            typealias MyAlias = One
+            enum Inner {
+                class MyAlias {}
+                class B: MyAlias {}
+            }
+            class Box<MyAlias>: MyAlias {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "One"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "B"
+            && reference.Context == "class B: MyAlias {}");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "One"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Box"
+            && reference.Context == "class Box<MyAlias>: MyAlias {}");
     }
 
     [Fact]

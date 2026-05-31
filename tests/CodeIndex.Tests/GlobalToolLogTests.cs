@@ -104,7 +104,10 @@ public class GlobalToolLogTests
 
             Assert.Equal(CommandExitCodes.UnhandledException, exitCode);
             Assert.Contains("Run `cdidx report`", stderr);
-            var logPath = Path.Combine(logRoot, $"stderr-{DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}.log");
+            var logPath = Assert.Single(Directory.GetFiles(logRoot, "stderr-*.log"));
+            Assert.Matches(
+                $@"^stderr-{DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}-p\d+-\d{{6}}\.log$",
+                Path.GetFileName(logPath));
             var log = File.ReadAllText(logPath);
             Assert.Matches(new Regex(@"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z \[INFO\] session_start", RegexOptions.Multiline), log);
             Assert.Contains("unhandled_exception", log);

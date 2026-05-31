@@ -21,18 +21,23 @@ internal static class TerraformReferenceExtractor
         @"(?<![\w.])module\.(?<name>[A-Za-z_]\w*)",
         RegexOptions.Compiled);
 
+    private static readonly Regex ModuleOutputReferenceRegex = new(
+        @"(?<![\w.])module\.[A-Za-z_]\w*\.outputs\.(?<name>[A-Za-z_]\w*)",
+        RegexOptions.Compiled);
+
     private static readonly Regex DataReferenceRegex = new(
         @"(?<![\w.])data\.[A-Za-z_]\w*\.(?<name>[A-Za-z_]\w*)",
         RegexOptions.Compiled);
 
     private static readonly Regex ResourceReferenceRegex = new(
-        @"(?<![\w.])(?<type>[A-Za-z_]\w*_[A-Za-z_]\w*)\.(?<name>[A-Za-z_]\w*)",
+        @"(?<![\w.])(?<type>[A-Za-z_][\w:]*_[A-Za-z_]\w*)\.(?<name>[A-Za-z_]\w*)",
         RegexOptions.Compiled);
 
     private static readonly ReferencePattern[] ReferencePatterns =
     [
         new(VarReferenceRegex),
         new(LocalReferenceRegex),
+        new(ModuleOutputReferenceRegex),
         new(ModuleReferenceRegex),
         new(DataReferenceRegex),
         new(ResourceReferenceRegex, SkipSpecialReferencePrefix: true),

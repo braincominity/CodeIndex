@@ -5,6 +5,16 @@ namespace CodeIndex.Indexer;
 
 internal static class SwiftReferenceExtractor
 {
+    internal readonly record struct LineRange(int StartLine, int EndLine);
+    internal readonly record struct TypeAliasBinding(
+        string Alias,
+        string Target,
+        int BindingLine,
+        int? EndLine,
+        int BraceDepth,
+        IReadOnlyList<LineRange> ShadowRanges,
+        IReadOnlySet<string> TypeParameters);
+
     private static readonly string[] DeclarationKeywords = ["let", "var"];
     private static readonly string[] TypeOperatorKeywords = ["is", "as"];
     private static readonly Regex PropertyWrapperDeclarationRegex = new(
@@ -12,6 +22,12 @@ internal static class SwiftReferenceExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex PropertyWrapperAttributeRegex = new(
         @"@(?<name>[A-Z]\w*(?:\.[A-Z]\w*)?)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex TypeAliasRegex = new(
+        @"^\s*(?:(?:public|private|internal|open|fileprivate|package)\s+)?typealias\s+(?<alias>`[^`]+`|\w+)(?<params>\s*<[^=]+>)?\s*=\s*(?<target>.+)$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex TypeDeclarationShadowRegex = new(
+        @"^\s*(?:(?:public|private|internal|open|fileprivate|package)\s+)?(?:final\s+)?(?:class|struct|enum|protocol)\s+(?<name>`[^`]+`|\w+)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly HashSet<string> NonWrapperPropertyAttributes = new(StringComparer.Ordinal)
     {
@@ -76,6 +92,268 @@ internal static class SwiftReferenceExtractor
             lineNumber,
             resolveContainerForColumn);
     }
+
+    public static IReadOnlyList<TypeAliasBinding> BuildTypeAliasTargets(IReadOnlyList<string> preparedLines)
+    {
+        var aliases = new List<TypeAliasBinding>();
+        var braceDepths = BuildBraceDepthsBeforeLine(preparedLines);
+        for (var index = 0; index < preparedLines.Count; index++)
+        {
+            var line = preparedLines[index];
+            var match = TypeAliasRegex.Match(line);
+            if (!match.Success)
+                continue;
+
+            var target = match.Groups["target"].Value.Trim();
+            if (target.Length > 0)
+                aliases.Add(new TypeAliasBinding(
+                    TrimSwiftBackticks(match.Groups["alias"].Value),
+                    target,
+                    index + 1,
+                    FindScopedAliasEndLine(preparedLines, braceDepths, index),
+                    braceDepths[index],
+                    BuildTypeAliasShadowRanges(preparedLines, braceDepths, TrimSwiftBackticks(match.Groups["alias"].Value)),
+                    ExtractGenericTypeParameters(match.Groups["params"].Value)));
+        }
+
+        return aliases;
+    }
+
+    public static void EmitAliasTargetReferences(
+        string preparedLine,
+        IReadOnlyList<TypeAliasBinding> aliases,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        if (aliases.Count == 0 || TypeAliasRegex.IsMatch(preparedLine))
+            return;
+
+        foreach (var alias in aliases.Select(binding => binding.Alias).Distinct(StringComparer.Ordinal))
+        {
+            var searchStart = 0;
+            while (searchStart < preparedLine.Length)
+            {
+                var index = preparedLine.IndexOf(alias, searchStart, StringComparison.Ordinal);
+                if (index < 0)
+                    break;
+
+                searchStart = index + alias.Length;
+                if (!HasIdentifierBoundaries(preparedLine, index, alias.Length))
+                    continue;
+                var column = index + 1;
+                if (!references.Any(reference =>
+                        reference.FileId == fileId
+                        && reference.Line == lineNumber
+                        && reference.Column == column
+                        && reference.ReferenceKind == "type_reference"
+                        && string.Equals(reference.SymbolName, alias, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                var binding = FindActiveTypeAliasBinding(aliases, alias, lineNumber);
+                if (binding is null)
+                    continue;
+
+                TypedLanguageReferenceExtractor.EmitTypeExpressionReferences(
+                    binding.Value.Target,
+                    index,
+                    "swift",
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(index),
+                    binding.Value.TypeParameters);
+            }
+        }
+    }
+
+    private static TypeAliasBinding? FindActiveTypeAliasBinding(
+        IReadOnlyList<TypeAliasBinding> aliases,
+        string alias,
+        int lineNumber)
+    {
+        TypeAliasBinding? best = null;
+        foreach (var binding in aliases)
+        {
+            if (!string.Equals(binding.Alias, alias, StringComparison.Ordinal)
+                || lineNumber <= binding.BindingLine
+                || (binding.EndLine is int endLine && lineNumber > endLine)
+                || IsInsideScopedShadow(binding.ShadowRanges, lineNumber))
+            {
+                continue;
+            }
+
+            if (best is null
+                || binding.BraceDepth > best.Value.BraceDepth
+                || (binding.BraceDepth == best.Value.BraceDepth && binding.BindingLine > best.Value.BindingLine))
+            {
+                best = binding;
+            }
+        }
+
+        return best;
+    }
+
+    private static IReadOnlyList<LineRange> BuildTypeAliasShadowRanges(
+        IReadOnlyList<string> preparedLines,
+        IReadOnlyList<int> braceDepths,
+        string alias)
+    {
+        var ranges = new List<LineRange>();
+        for (var index = 0; index < preparedLines.Count; index++)
+        {
+            var line = preparedLines[index];
+            var typeDeclaration = TypeDeclarationShadowRegex.Match(line);
+            if (typeDeclaration.Success && string.Equals(TrimSwiftBackticks(typeDeclaration.Groups["name"].Value), alias, StringComparison.Ordinal))
+            {
+                ranges.Add(new LineRange(index + 1, FindScopedAliasEndLine(preparedLines, braceDepths, index) ?? preparedLines.Count));
+                continue;
+            }
+
+            if (DeclaresGenericTypeParameter(line, alias))
+                ranges.Add(new LineRange(index + 1, FindScopedAliasEndLine(preparedLines, braceDepths, index) ?? index + 1));
+        }
+
+        return ranges;
+    }
+
+    private static bool DeclaresGenericTypeParameter(string line, string alias)
+    {
+        var openAngle = line.IndexOf('<');
+        if (openAngle < 0)
+            return false;
+
+        var closeAngle = line.IndexOf('>', openAngle + 1);
+        if (closeAngle <= openAngle)
+            return false;
+
+        var prefix = line[..openAngle];
+        if (!ContainsKeyword(prefix, "class")
+            && !ContainsKeyword(prefix, "struct")
+            && !ContainsKeyword(prefix, "enum")
+            && !ContainsKeyword(prefix, "protocol")
+            && !ContainsKeyword(prefix, "func")
+            && !ContainsKeyword(prefix, "typealias"))
+        {
+            return false;
+        }
+
+        foreach (var parameter in line.Substring(openAngle + 1, closeAngle - openAngle - 1).Split(','))
+        {
+            var name = parameter.Trim().Split([' ', ':', '='], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            if (string.Equals(TrimSwiftBackticks(name ?? string.Empty), alias, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static IReadOnlySet<string> ExtractGenericTypeParameters(string parameters)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var openAngle = parameters.IndexOf('<');
+        var closeAngle = parameters.LastIndexOf('>');
+        if (openAngle < 0 || closeAngle <= openAngle)
+            return names;
+
+        foreach (var parameter in parameters.Substring(openAngle + 1, closeAngle - openAngle - 1).Split(','))
+        {
+            var name = parameter.Trim().Split([' ', ':', '='], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(name))
+                names.Add(TrimSwiftBackticks(name));
+        }
+
+        return names;
+    }
+
+    private static bool ContainsKeyword(string text, string keyword)
+    {
+        var searchStart = 0;
+        while (searchStart < text.Length)
+        {
+            var index = text.IndexOf(keyword, searchStart, StringComparison.Ordinal);
+            if (index < 0)
+                return false;
+
+            if (HasIdentifierBoundaries(text, index, keyword.Length))
+                return true;
+
+            searchStart = index + keyword.Length;
+        }
+
+        return false;
+    }
+
+    private static bool IsInsideScopedShadow(IReadOnlyList<LineRange> ranges, int lineNumber)
+    {
+        foreach (var range in ranges)
+        {
+            if (lineNumber >= range.StartLine && lineNumber <= range.EndLine)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static int? FindScopedAliasEndLine(
+        IReadOnlyList<string> preparedLines,
+        IReadOnlyList<int> braceDepths,
+        int bindingLineIndex)
+    {
+        var bindingDepth = braceDepths[bindingLineIndex];
+        if (bindingDepth <= 0)
+            return null;
+
+        for (var index = bindingLineIndex + 1; index < preparedLines.Count; index++)
+        {
+            if (braceDepths[index] < bindingDepth)
+                return index;
+        }
+
+        return preparedLines.Count;
+    }
+
+    private static int[] BuildBraceDepthsBeforeLine(IReadOnlyList<string> preparedLines)
+    {
+        var depths = new int[preparedLines.Count];
+        var depth = 0;
+        for (var index = 0; index < preparedLines.Count; index++)
+        {
+            depths[index] = depth;
+            foreach (var ch in preparedLines[index])
+            {
+                if (ch == '{')
+                    depth++;
+                else if (ch == '}' && depth > 0)
+                    depth--;
+            }
+        }
+
+        return depths;
+    }
+
+    private static string TrimSwiftBackticks(string value) =>
+        value.Length >= 2 && value[0] == '`' && value[^1] == '`'
+            ? value[1..^1]
+            : value;
+
+    private static bool HasIdentifierBoundaries(string line, int start, int length)
+    {
+        var before = start == 0 ? '\0' : line[start - 1];
+        var afterIndex = start + length;
+        var after = afterIndex >= line.Length ? '\0' : line[afterIndex];
+        return !IsIdentifierPart(before) && !IsIdentifierPart(after);
+    }
+
+    private static bool IsIdentifierPart(char c) =>
+        c == '_' || char.IsLetterOrDigit(c);
 
     private static void EmitPropertyWrapperTypeReferences(
         string preparedLine,
