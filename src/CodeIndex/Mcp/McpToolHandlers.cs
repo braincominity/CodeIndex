@@ -2638,7 +2638,7 @@ public partial class McpServer
         var payload = new JsonObject
         {
             ["version"] = _version,
-            ["timestamp"] = DateTime.UtcNow.ToString("O"),
+            ["timestamp"] = GetUtcNow().ToString("O"),
             ["db_path"] = _dbPath,
             ["db_exists"] = File.Exists(LongPath.EnsureWindowsPrefix(_dbPath)),
         };
@@ -3035,7 +3035,7 @@ public partial class McpServer
             {
                 var headBranch = GitHelper.TryGetHeadBranch(projectPath);
                 var timestamp = currentHeadCommit != null
-                    ? DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture)
+                    ? GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture)
                     : null;
                 writer.SetMeta(DbContext.IndexedHeadShaMetaKey, currentHeadCommit);
                 writer.SetMeta(DbContext.IndexedHeadBranchMetaKey, headBranch);
@@ -3257,7 +3257,7 @@ public partial class McpServer
         // Derive DB identity for scoped suggestion storage.
         // スコープ付き提案蓄積のため DB identity を導出。
         var dbName = Path.GetFileNameWithoutExtension(_dbPath);
-        var store = new SuggestionStore(cdidxDir, dbName);
+        var store = new SuggestionStore(cdidxDir, dbName, _timeProvider);
         var record = new SuggestionRecord
         {
             Category = category,
@@ -3265,7 +3265,7 @@ public partial class McpServer
             Description = description,
             Context = context,
             Hash = hash,
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = GetUtcNow(),
             CreatedByAgent = ResolveSuggestionAgent(),
             SessionId = _sessionId,
             ClientVersion = _version,

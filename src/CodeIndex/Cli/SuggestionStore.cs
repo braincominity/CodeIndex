@@ -21,6 +21,7 @@ public class SuggestionStore
 {
     private readonly string _filePath;
     private readonly string _lockPath;
+    private readonly TimeProvider _timeProvider;
     private static readonly TimeSpan s_inFlightSubmitRetryDelay = TimeSpan.FromMinutes(1);
     internal const FileShare StreamingReadFileShare = FileShare.ReadWrite | FileShare.Delete;
     internal const string DedupThresholdEnvironmentVariable = "CDIDX_SUGGESTION_DEDUP_THRESHOLD";
@@ -81,13 +82,14 @@ public class SuggestionStore
     /// Database filename without extension (optional, defaults to "codeindex").
     /// 拡張子なしのデータベースファイル名（任意、デフォルトは "codeindex"）。
     /// </param>
-    public SuggestionStore(string cdidxDir, string? dbName = null)
+    public SuggestionStore(string cdidxDir, string? dbName = null, TimeProvider? timeProvider = null)
     {
         // Derive a safe store filename from the DB identity.
         // DB固有の安全なストアファイル名を導出する。
         var safeName = string.IsNullOrWhiteSpace(dbName) ? "codeindex" : dbName;
         _filePath = Path.Combine(cdidxDir, $"suggestions-{safeName}.json");
         _lockPath = Path.Combine(cdidxDir, $"suggestions-{safeName}.lock");
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>
@@ -204,7 +206,7 @@ public class SuggestionStore
             var current = found!;
             if (!alreadySubmitted && submitToGitHub != null && ShouldAttemptSubmit(current))
             {
-                var attemptedAt = DateTime.UtcNow;
+                var attemptedAt = GetUtcNow();
                 StampSubmitAttempt(current, attemptedAt, null, attemptedAt.Add(s_inFlightSubmitRetryDelay));
                 SaveUnlocked(existing);
                 return new SubmitReservation(
@@ -375,7 +377,7 @@ public class SuggestionStore
             if (record == null)
                 return;
 
-            MarkSubmitted(record, issueUrl, DateTime.UtcNow);
+            MarkSubmitted(record, issueUrl, GetUtcNow());
             SaveUnlocked(all);
         });
     }
@@ -728,13 +730,15 @@ public class SuggestionStore
         record.GitHubIssueUrl = null;
     }
 
-    private static bool ShouldAttemptSubmit(SuggestionRecord record)
+    private bool ShouldAttemptSubmit(SuggestionRecord record)
     {
         if (record.NextRetryAt == null)
             return true;
 
-        return record.NextRetryAt.Value <= DateTime.UtcNow;
+        return record.NextRetryAt.Value <= GetUtcNow();
     }
+
+    private DateTime GetUtcNow() => _timeProvider.GetUtcNow().UtcDateTime;
 
     private static void StampSubmitAttempt(SuggestionRecord record, DateTime timestamp, string? error, DateTime? nextRetryAt)
     {

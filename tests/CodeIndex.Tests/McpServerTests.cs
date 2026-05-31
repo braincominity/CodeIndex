@@ -5951,14 +5951,16 @@ public class McpServerTests : IDisposable
     [Fact]
     public void ToolsCall_Ping_ReturnsVersionAndTimestamp()
     {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2032, 4, 5, 6, 7, 8, TimeSpan.Zero));
+        using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false, null, null, null, null, McpServer.DefaultMaxConcurrency, clock);
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ping","arguments":{}}}""")!;
-        var response = _server.HandleMessage(request)!;
+        var response = server.HandleMessage(request)!;
 
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
         Assert.Contains("cdidx v", text);
         Assert.Contains("is ready", text);
         Assert.NotNull(response["result"]!["structuredContent"]!["version"]);
-        Assert.NotNull(response["result"]!["structuredContent"]!["timestamp"]);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime.ToString("O"), response["result"]!["structuredContent"]!["timestamp"]!.GetValue<string>());
         Assert.NotNull(response["result"]!["structuredContent"]!["db_exists"]);
     }
 
