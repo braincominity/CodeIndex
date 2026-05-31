@@ -21068,7 +21068,7 @@ public class SymbolExtractorTests
               roles: [Role!]!
             }
 
-            union SearchResult = User | Organization | Team
+            union SearchResult = User | Organization | Team @deprecated # returned by search
 
             enum Role {
               ADMIN
@@ -21094,6 +21094,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "User" && s.ContainerName == "SearchResult");
         Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "Organization" && s.ContainerName == "SearchResult");
         Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "Team" && s.ContainerName == "SearchResult");
+        Assert.DoesNotContain(symbols, s => s.Kind == "reference" && s.Name is "deprecated" or "returned" or "search");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Role");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetUser");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreateUser");
@@ -21146,8 +21147,9 @@ public class SymbolExtractorTests
 
             extend union SearchResult =
               | User
+              # organization result
               | Organization
-              | Team
+              | Team @deprecated(reason: "legacy")
 
             extend scalar DateTime
 
@@ -21177,6 +21179,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "User" && s.ContainerName == "SearchResult");
         Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "Organization" && s.ContainerName == "SearchResult");
         Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "Team" && s.ContainerName == "SearchResult");
+        Assert.DoesNotContain(symbols, s => s.Kind == "reference" && s.Name is "organization" or "result" or "deprecated" or "reason" or "legacy");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DateTime");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetUser");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreateUser");

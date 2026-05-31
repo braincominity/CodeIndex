@@ -4237,6 +4237,10 @@ public static partial class SymbolExtractor
         string unionName,
         List<SymbolRecord> symbols)
     {
+        variantText = StripGraphQLUnionVariantTrivia(variantText);
+        if (string.IsNullOrWhiteSpace(variantText))
+            return;
+
         foreach (Match variantMatch in GraphQLUnionVariantRegex.Matches(variantText))
         {
             var variantName = variantMatch.Groups["name"].Value;
@@ -4262,6 +4266,19 @@ public static partial class SymbolExtractor
                 },
                 lines[lineIndex]);
         }
+    }
+
+    private static string StripGraphQLUnionVariantTrivia(string text)
+    {
+        var commentIndex = text.IndexOf('#', StringComparison.Ordinal);
+        if (commentIndex >= 0)
+            text = text[..commentIndex];
+
+        var directiveIndex = text.IndexOf('@', StringComparison.Ordinal);
+        if (directiveIndex >= 0)
+            text = text[..directiveIndex];
+
+        return text;
     }
 
     private static void ExtractSectionHeadingSymbols(long fileId, string lang, string[] lines, List<SymbolRecord> symbols)
