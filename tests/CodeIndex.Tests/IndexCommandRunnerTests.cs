@@ -4313,9 +4313,9 @@ public class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
-            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("updated").GetInt32());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("skipped").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("skipped").GetInt32());
             Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
             Assert.True(json.GetProperty("graph_table_available").GetBoolean());
