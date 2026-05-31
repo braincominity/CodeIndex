@@ -2920,6 +2920,7 @@ public partial class McpServer
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
             csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
         int processed = 0, skipped = 0, errors = 0;
+        var failures = new List<IndexFileFailure>();
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var filePath in files)
@@ -2991,9 +2992,10 @@ public partial class McpServer
                         txn.Commit();
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
                     errors++;
+                    failures.Add(BuildIndexFileFailure(projectPath, filePath, ex, "delete_skipped_binary"));
                 }
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
@@ -3012,9 +3014,10 @@ public partial class McpServer
                         txn.Commit();
                     }
                 }
-                catch
+                catch (Exception cleanupEx)
                 {
                     errors++;
+                    failures.Add(BuildIndexFileFailure(projectPath, filePath, cleanupEx, "delete_missing_file"));
                 }
             }
             catch (OperationCanceledException) when (requestToken.IsCancellationRequested)
@@ -3023,11 +3026,12 @@ public partial class McpServer
                     writer.ClearBatchInProgress();
                 throw;
             }
-            catch
+            catch (Exception ex)
             {
                 if (fileBatchMarked)
                     writer.ClearBatchInProgress();
                 errors++;
+                failures.Add(BuildIndexFileFailure(projectPath, filePath, ex, "index_file"));
             }
             processed++;
             EmitProgressNotification(progressToken, processed, files.Count);
@@ -3190,7 +3194,8 @@ public partial class McpServer
                 ["skipped"] = skipped,
                 ["purged"] = purged,
                 ["unknown_extension_file_count"] = scanResult.UnknownExtensionFiles.Count,
-                ["errors"] = errors
+                ["errors"] = errors,
+                ["failed_count"] = failures.Count
             },
             ["sql_graph_contract_ready"] = sqlGraphContractReadyAfter,
             ["csharp_symbol_name_ready"] = csharpSymbolNameReadyAfter,
@@ -3200,9 +3205,28 @@ public partial class McpServer
             ["fold_ready"] = foldReadyAfter,
             ["fold_ready_reason"] = foldReadyReason
         };
+        if (failures.Count > 0)
+        {
+            var failureArray = new JsonArray();
+            foreach (var failure in failures.Take(50))
+            {
+                failureArray.Add(new JsonObject
+                {
+                    ["path"] = failure.Path,
+                    ["stage"] = failure.Stage,
+                    ["exception_type"] = failure.ExceptionType,
+                    ["message"] = failure.Message,
+                });
+            }
+            structured["failed_count"] = failures.Count;
+            structured["failures"] = failureArray;
+            if (failures.Count > 50)
+                structured["failures_truncated"] = failures.Count - 50;
+            GlobalToolLog.Error($"mcp_index_file_failures count={failures.Count} first_path='{failures[0].Path}' first_error='{failures[0].ExceptionType}: {failures[0].Message}'");
+        }
         if (!sqlGraphContractReadyAfter)
         {
-            var signalReader = new DbReader(writer.Connection);
+            using var signalReader = new DbReader(writer.Connection);
             AddSqlGraphContractSignal(structured, signalReader.GetSqlGraphContractSignal());
         }
         return CreateToolResult(id,
@@ -3217,6 +3241,14 @@ public partial class McpServer
                 : "Indexing complete.",
             structured);
     }
+
+    private static IndexFileFailure BuildIndexFileFailure(string projectPath, string filePath, Exception ex, string stage)
+    {
+        var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, filePath));
+        return new IndexFileFailure(relativePath, stage, ex.GetType().Name, ex.Message);
+    }
+
+    private sealed record IndexFileFailure(string Path, string Stage, string ExceptionType, string Message);
 
     private JsonNode ExecuteBackfillFold(JsonNode? id, JsonNode? progressToken = null)
     {

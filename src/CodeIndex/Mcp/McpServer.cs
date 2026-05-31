@@ -2615,7 +2615,7 @@ public partial class McpServer : IDisposable
         {
             using var isolatedDb = new DbContext(_dbPath);
             isolatedDb.TryMigrateForRead();
-            var isolatedReader = new DbReader(isolatedDb, requestToken);
+            using var isolatedReader = new DbReader(isolatedDb, requestToken);
             isolatedReader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
             return isolatedReader.RunWithGeneratedScope(() => action(isolatedReader));
         }
@@ -2636,7 +2636,7 @@ public partial class McpServer : IDisposable
         // MCP ツール呼び出しごとの schema 再走査を排除し (issue #1565)、
         // per-request cancellation token を reader に渡して SQLite 作業が
         // shutdown / 切断を観測できるようにする (#1567)。
-        var reader = new DbReader(db, requestToken);
+        using var reader = new DbReader(db, requestToken);
         reader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
         return reader.RunWithGeneratedScope(() => action(reader));
     }
