@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
 
@@ -26,6 +27,14 @@ public class SuggestionStore
     internal const string DedupThresholdEnvironmentVariable = "CDIDX_SUGGESTION_DEDUP_THRESHOLD";
     internal const double DefaultDedupThreshold = 0.85;
     private const int FuzzyDedupRecentLimit = 100;
+    private const string RedactedAwsAccessKey = "[REDACTED:aws_access_key]";
+    private const string RedactedBearerToken = "[REDACTED:bearer_token]";
+    private const string RedactedCredential = "[REDACTED:credential]";
+    private const string RedactedHighEntropyToken = "[REDACTED:high_entropy_token]";
+    private static readonly Regex s_awsAccessKeyRegex = new(@"\bAKIA[0-9A-Z]{16}\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex s_bearerTokenRegex = new(@"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex s_namedSecretRegex = new(@"(?i)\b(password|secret)=([^&\s]{1,200})", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex s_highEntropyTokenRegex = new(@"\b(?=[A-Za-z0-9._~+/=-]{32,}\b)(?=.*[A-Z])(?=.*[a-z])(?=.*\d)[A-Za-z0-9._~+/=-]+\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly HashSet<string> s_dedupStopWords = new(StringComparer.Ordinal)
     {
@@ -117,6 +126,7 @@ public class SuggestionStore
     /// </summary>
     public bool TryAdd(SuggestionRecord record)
     {
+        record = RedactRecordForPersistence(record);
         return WithFileLock(() =>
         {
             var existing = ReadUnlocked();
@@ -185,6 +195,7 @@ public class SuggestionStore
         SuggestionRecord record,
         Func<SuggestionRecord, Task<SubmitAttemptResult>>? submitToGitHub)
     {
+        record = RedactRecordForPersistence(record);
         var reservation = WithFileLock(() =>
         {
             var existing = ReadUnlocked();
@@ -779,6 +790,77 @@ public class SuggestionStore
         SubmittedToGitHub = record.SubmittedToGitHub,
         GitHubIssueUrl = record.GitHubIssueUrl,
     };
+
+    internal static string RedactSensitiveText(string text, out IReadOnlyCollection<string> redactedTypes)
+    {
+        var types = new SortedSet<string>(StringComparer.Ordinal);
+        var redacted = s_awsAccessKeyRegex.Replace(text, match =>
+        {
+            types.Add("aws_access_key");
+            return RedactedAwsAccessKey;
+        });
+        redacted = s_bearerTokenRegex.Replace(redacted, match =>
+        {
+            types.Add("bearer_token");
+            return RedactedBearerToken;
+        });
+        redacted = s_namedSecretRegex.Replace(redacted, match =>
+        {
+            types.Add("credential");
+            return $"{match.Groups[1].Value}={RedactedCredential}";
+        });
+        redacted = s_highEntropyTokenRegex.Replace(redacted, match =>
+        {
+            if (match.Value.StartsWith("[REDACTED:", StringComparison.Ordinal))
+                return match.Value;
+            types.Add("high_entropy_token");
+            return RedactedHighEntropyToken;
+        });
+
+        redactedTypes = types;
+        return redacted;
+    }
+
+    private static SuggestionRecord RedactRecordForPersistence(SuggestionRecord record)
+    {
+        var redactedDescription = RedactNullable(record.Description, out var descriptionTypes) ?? string.Empty;
+        var redactedContext = RedactNullable(record.Context, out var contextTypes);
+        var redactedToolInvocationContext = RedactNullable(record.ToolInvocationContext, out var toolInvocationTypes);
+        var allTypes = descriptionTypes.Concat(contextTypes).Concat(toolInvocationTypes).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+
+        if (allTypes.Length == 0)
+            return record;
+
+        WriteRedactionWarning(allTypes);
+        var copy = CloneForSubmit(record);
+        copy.Description = redactedDescription;
+        copy.Context = redactedContext;
+        copy.ToolInvocationContext = redactedToolInvocationContext;
+        copy.Hash = ComputeHash(copy.Category, copy.Language, copy.Description);
+        return copy;
+    }
+
+    private static string? RedactNullable(string? value, out IReadOnlyCollection<string> redactedTypes)
+    {
+        if (value == null)
+        {
+            redactedTypes = Array.Empty<string>();
+            return null;
+        }
+
+        return RedactSensitiveText(value, out redactedTypes);
+    }
+
+    private static void WriteRedactionWarning(IReadOnlyCollection<string> redactedTypes)
+    {
+        try
+        {
+            Console.Error.WriteLine($"[cdidx] Redacted sensitive suggestion text before local persistence/GitHub submission: {string.Join(", ", redactedTypes)}.");
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
 
     private sealed record SubmitReservation(
         bool IsNew,
