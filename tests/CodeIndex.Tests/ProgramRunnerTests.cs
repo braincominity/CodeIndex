@@ -142,7 +142,7 @@ public class ProgramRunnerTests
             appVersion: "1.10.0",
             beforeDispatchForTesting: () => throw new InvalidOperationException("boom")));
 
-        Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+        Assert.Equal(CommandExitCodes.UnhandledException, exitCode);
         Assert.Equal(string.Empty, stdout);
 
         var trimmed = stderr.TrimEnd();
@@ -516,7 +516,7 @@ public class ProgramRunnerTests
                 appVersion: "1.10.0",
                 beforeDispatchForTesting: () => throw outer));
 
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(CommandExitCodes.UnhandledException, exitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.StartsWith("Error: command failed before it could complete.", stderr.TrimEnd());
             Assert.DoesNotContain("root cause", stderr);
