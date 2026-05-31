@@ -384,6 +384,7 @@ public partial class McpServer
                     ["unknown_argument"] = property.Key,
                 };
             }
+
         }
 
         if (ValidateToolArgumentTypes(toolName, obj) is JsonObject typeError)
@@ -416,7 +417,7 @@ public partial class McpServer
 
     private static bool TryGetExpectedJsonType(string toolName, string argumentName, out string expected)
     {
-        if (argumentName is "path" or "project" or "excludePaths" or "names")
+        if (argumentName is "path" or "project" or "excludePaths" or "names" or "files" or "commits" or "changedBetween")
         {
             expected = string.Empty;
             return false;
@@ -426,7 +427,7 @@ public partial class McpServer
         {
             "limit" or "offset" or "snippetLines" or "maxLineWidth" or "before" or "after" or
                 "focusLine" or "focusColumn" or "focusLength" or "startLine" or "endLine" or
-                "maxHops" or "maxDepth" or "depth" or "parallelism" => "integer",
+                "maxHops" or "maxDepth" or "depth" or "parallelism" or "maxFileBytes" => "integer",
             "excludeTests" or "includeGenerated" or "rawQuery" or "noDedup" or "exactSubstring" or
                 "exactName" or "exact" or "prefix" or "countOnly" or "includeBody" or "lsp_compatible" or
                 "regex" or "withPaths" or "rebuild" or "dryRun" or "dry_run" or "force" or "optimize" => "boolean",
@@ -2145,9 +2146,11 @@ public partial class McpServer
         var totalStopwatch = Stopwatch.StartNew();
         int successCount = 0;
         int failureCount = 0;
+        int? cascadeStartedAtIndex = null;
         var truncated = false;
         var responseByteLimit = GetBatchQueryResponseByteLimit();
         var estimatedResponseBytes = EstimateBatchResponseBytes(id, "Executed 0 queries.", queries.Count, successCount, failureCount,
+            GetBatchFailureScope(queries.Count, successCount, failureCount, cascadeStartedAtIndex), cascadeStartedAtIndex,
             responseByteLimit, resultsArray, truncated: false, truncatedQueries);
 
         bool TryAppendResult(JsonObject entry, string? toolName, JsonNode? toolArgs, int requestIndex, bool successfulSlot = false, bool failedSlot = false)
@@ -2161,10 +2164,12 @@ public partial class McpServer
                 ? $"Executed {candidateExecutedCount} of {queries.Count} queries in 0 ms (all succeeded)."
                 : $"Executed {candidateExecutedCount} of {queries.Count} queries in 0 ms ({candidateSuccessCount} succeeded, {candidateFailureCount} failed).";
             var candidateBytes = EstimateBatchResponseBytes(id, candidateSummary, queries.Count, candidateSuccessCount, candidateFailureCount,
+                GetBatchFailureScope(queries.Count, candidateSuccessCount, candidateFailureCount, cascadeStartedAtIndex), cascadeStartedAtIndex,
                 responseByteLimit, candidateResults, truncated: false, truncatedQueries);
             if (candidateBytes > responseByteLimit)
             {
                 truncated = true;
+                cascadeStartedAtIndex ??= requestIndex;
                 truncatedQueries.Add(new JsonObject
                 {
                     ["request_index"] = requestIndex,
@@ -2264,6 +2269,7 @@ public partial class McpServer
             if (truncated)
             {
                 slotStopwatch.Stop();
+                cascadeStartedAtIndex ??= requestIndex;
                 truncatedQueries.Add(new JsonObject
                 {
                     ["request_index"] = requestIndex,
@@ -2467,6 +2473,12 @@ public partial class McpServer
         JsonObject BuildPayload() => new()
         {
             ["count"] = resultsArray.Count,
+            ["total_count"] = queries.Count,
+            ["success_count"] = successCount,
+            ["failure_count"] = failureCount,
+            ["partial_failure"] = failureCount > 0 || cascadeStartedAtIndex.HasValue,
+            ["failure_scope"] = GetBatchFailureScope(queries.Count, successCount, failureCount, cascadeStartedAtIndex),
+            ["cascade_started_at_index"] = cascadeStartedAtIndex,
             ["metadata"] = new JsonObject
             {
                 ["submitted"] = queries.Count,
@@ -2543,11 +2555,17 @@ public partial class McpServer
         Encoding.UTF8.GetByteCount(node.ToJsonString(_jsonOptions));
 
     private int EstimateBatchResponseBytes(JsonNode? id, string summary, int submittedCount, int successCount, int failureCount,
-        int responseByteLimit, JsonArray resultsArray, bool truncated, JsonArray truncatedQueries)
+        string failureScope, int? cascadeStartedAtIndex, int responseByteLimit, JsonArray resultsArray, bool truncated, JsonArray truncatedQueries)
     {
         var payload = new JsonObject
         {
             ["count"] = resultsArray.Count,
+            ["total_count"] = submittedCount,
+            ["success_count"] = successCount,
+            ["failure_count"] = failureCount,
+            ["partial_failure"] = failureCount > 0 || cascadeStartedAtIndex.HasValue,
+            ["failure_scope"] = failureScope,
+            ["cascade_started_at_index"] = cascadeStartedAtIndex,
             ["metadata"] = new JsonObject
             {
                 ["submitted"] = submittedCount,
@@ -2568,6 +2586,13 @@ public partial class McpServer
         }
 
         return EstimateJsonUtf8Bytes(CreateToolResult(id, summary, payload));
+    }
+
+    private static string GetBatchFailureScope(int submittedCount, int successCount, int failureCount, int? cascadeStartedAtIndex)
+    {
+        if (cascadeStartedAtIndex.HasValue && cascadeStartedAtIndex.Value < submittedCount)
+            return "cascading";
+        return failureCount == 0 ? "none" : "isolated";
     }
 
     private static JsonArray CloneJsonArray(JsonArray source)

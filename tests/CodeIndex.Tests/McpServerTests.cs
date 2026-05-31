@@ -6381,6 +6381,12 @@ public class McpServerTests : IDisposable
         Assert.Equal(2, metadata["submitted"]!.GetValue<int>());
         Assert.Equal(2, metadata["executed"]!.GetValue<int>());
         Assert.Equal(0, metadata["errors"]!.GetValue<int>());
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(2, structured["total_count"]!.GetValue<int>());
+        Assert.Equal(2, structured["success_count"]!.GetValue<int>());
+        Assert.Equal(0, structured["failure_count"]!.GetValue<int>());
+        Assert.False(structured["partial_failure"]!.GetValue<bool>());
+        Assert.Equal("none", structured["failure_scope"]!.GetValue<string>());
     }
 
     [Fact]
@@ -6458,6 +6464,11 @@ public class McpServerTests : IDisposable
         Assert.Equal(3, metadata["submitted"]!.GetValue<int>());
         Assert.Equal(3, metadata["executed"]!.GetValue<int>());
         Assert.Equal(2, metadata["errors"]!.GetValue<int>());
+        Assert.Equal(3, structured["total_count"]!.GetValue<int>());
+        Assert.Equal(1, structured["success_count"]!.GetValue<int>());
+        Assert.Equal(2, structured["failure_count"]!.GetValue<int>());
+        Assert.True(structured["partial_failure"]!.GetValue<bool>());
+        Assert.Equal("isolated", structured["failure_scope"]!.GetValue<string>());
 
         var results = structured["results"]!.AsArray();
         Assert.Equal(3, results.Count);
@@ -6475,6 +6486,29 @@ public class McpServerTests : IDisposable
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
         Assert.Contains("Executed 3 of 3 queries", text);
         Assert.Contains("1 succeeded, 2 failed", text);
+    }
+
+    [Fact]
+    public void ToolsCall_BatchQuery_RejectsTypeMismatchedInnerArguments_Issue1615()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_query","arguments":{"queries":[{"tool":"search","arguments":{"query":"App","limit":"twenty"}},{"tool":"search","arguments":{"query":"App","format":false}},{"tool":"ping"}]}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(3, structured["total_count"]!.GetValue<int>());
+        Assert.Equal(1, structured["success_count"]!.GetValue<int>());
+        Assert.Equal(2, structured["failure_count"]!.GetValue<int>());
+        Assert.True(structured["partial_failure"]!.GetValue<bool>());
+        Assert.Equal("isolated", structured["failure_scope"]!.GetValue<string>());
+
+        var results = structured["results"]!.AsArray();
+        Assert.Equal(3, results.Count);
+        Assert.False(results[0]!["ok"]!.GetValue<bool>());
+        Assert.Contains("Invalid type for argument 'limit'", results[0]!["error"]!.GetValue<string>());
+        Assert.Equal(McpErrorEnvelope.CategoryInvalidArgument, results[0]!["category"]!.GetValue<string>());
+        Assert.False(results[1]!["ok"]!.GetValue<bool>());
+        Assert.Contains("Invalid type for argument 'format'", results[1]!["error"]!.GetValue<string>());
+        Assert.True(results[2]!["ok"]!.GetValue<bool>());
     }
 
     [Fact]
@@ -6557,6 +6591,9 @@ public class McpServerTests : IDisposable
             Assert.Equal(2, structured["metadata"]!["submitted"]!.GetValue<int>());
             Assert.Equal(2, structured["metadata"]!["executed"]!.GetValue<int>());
             Assert.Equal(0, structured["metadata"]!["errors"]!.GetValue<int>());
+            Assert.Equal("cascading", structured["failure_scope"]!.GetValue<string>());
+            Assert.NotNull(structured["cascade_started_at_index"]);
+            Assert.True(structured["partial_failure"]!.GetValue<bool>());
 
             var truncatedQueries = structured["truncated_queries"]!.AsArray();
             Assert.NotEmpty(truncatedQueries);
