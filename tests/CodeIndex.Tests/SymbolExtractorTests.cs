@@ -20776,6 +20776,10 @@ public class SymbolExtractorTests
               return arg
             end
 
+            function M.deep.table_key(arg, ...)
+              return arg
+            end
+
             local function top_local(x)
               return x
             end
@@ -20791,6 +20795,7 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M.named");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M:method_form");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M.dot_form");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M.deep.table_key");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "top_local");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "plain_function");
     }

@@ -1873,8 +1873,8 @@ public class DbWriter
     // end-of-run commit. Fold is only stamped after a full scan because a partial update
     // leaves legacy rows without folded values.
     // CLI / MCP 共に full-scan で graph + fold を立てる。fold は部分更新では立てない。
-    public void MarkGraphReady()    => SetReadyBit(DbContext.GraphReadyFlag);
-    public void MarkIssuesReady()   => SetReadyBit(DbContext.IssuesReadyFlag);
+    public void MarkGraphReady() => SetReadyBit(DbContext.GraphReadyFlag);
+    public void MarkIssuesReady() => SetReadyBit(DbContext.IssuesReadyFlag);
 
     /// <summary>
     /// Stamp FoldReadyFlag AND write the current <see cref="NameFold.Version"/> plus the
@@ -3080,7 +3080,7 @@ public class DbWriter
         cmd.Parameters.AddWithValue("@key", key);
         return cmd.ExecuteScalar() as string;
     }
-    public void ClearReadyFlags()   => Execute("PRAGMA user_version = 0");
+    public void ClearReadyFlags() => Execute("PRAGMA user_version = 0");
 
     public bool HasMetaTable() => TableExists("codeindex_meta");
 

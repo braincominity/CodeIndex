@@ -135,7 +135,7 @@ jobs:
           }
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
+        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0
         with:
           dotnet-version: |
             8.0.x
@@ -178,6 +178,13 @@ jobs:
             throw "High or critical NuGet vulnerability detected."
           }
 
+      - name: Verify formatting
+        run: dotnet format CodeIndex.sln --verify-no-changes --no-restore --verbosity minimal
+
+      - name: Verify developer task wrapper
+        if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'
+        run: make lint
+
       - name: Build
         run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework ${{ matrix.test-framework }} --no-restore
 
@@ -192,6 +199,7 @@ jobs:
             "--no-build",
             "--nologo",
             "--settings", "tests/CodeIndex.Tests/CodeIndex.Tests.runsettings",
+            "--collect", "XPlat Code Coverage",
             "--blame-crash",
             "--blame-hang",
             "--blame-hang-timeout", "5m",
@@ -236,6 +244,14 @@ jobs:
             TestResults/**/*.dump
             TestResults/**/*Sequence*.xml
             TestResults/**/*.hangdump
+
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Coverage-${{ matrix.os }}-${{ matrix.test-framework }}
+          if-no-files-found: warn
+          path: TestResults/**/coverage.cobertura.xml
 
       - name: Publish
         if: matrix.os == 'ubuntu-latest' && matrix.test-framework == 'net8.0'

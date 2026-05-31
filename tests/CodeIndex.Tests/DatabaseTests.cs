@@ -1286,12 +1286,18 @@ public class DatabaseTests : IDisposable
         // 同一パスは置換される（重複しない）
         var file1 = new FileRecord
         {
-            Path = "src/app.py", Lang = "python", Size = 100, Lines = 10,
+            Path = "src/app.py",
+            Lang = "python",
+            Size = 100,
+            Lines = 10,
             Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
         };
         var file2 = new FileRecord
         {
-            Path = "src/app.py", Lang = "python", Size = 200, Lines = 20,
+            Path = "src/app.py",
+            Lang = "python",
+            Size = 200,
+            Lines = 20,
             Modified = new DateTime(2025, 2, 1, 0, 0, 0, DateTimeKind.Utc),
         };
 
@@ -1308,7 +1314,10 @@ public class DatabaseTests : IDisposable
         var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var file = new FileRecord
         {
-            Path = "src/lib.py", Lang = "python", Size = 50, Lines = 5,
+            Path = "src/lib.py",
+            Lang = "python",
+            Size = 50,
+            Lines = 5,
             Modified = modified,
         };
         _writer.UpsertFile(file);
@@ -1330,7 +1339,10 @@ public class DatabaseTests : IDisposable
         var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var file = new FileRecord
         {
-            Path = "src/size.py", Lang = "python", Size = 50, Lines = 5,
+            Path = "src/size.py",
+            Lang = "python",
+            Size = 50,
+            Lines = 5,
             Modified = modified,
         };
         _writer.UpsertFile(file);
@@ -1348,7 +1360,10 @@ public class DatabaseTests : IDisposable
         var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var file = new FileRecord
         {
-            Path = "src/lib.py", Lang = "python", Size = 50, Lines = 5,
+            Path = "src/lib.py",
+            Lang = "python",
+            Size = 50,
+            Lines = 5,
             Modified = modified,
         };
         _writer.UpsertFile(file);
@@ -1366,8 +1381,12 @@ public class DatabaseTests : IDisposable
         var checksum = "abc123def456";
         var file = new FileRecord
         {
-            Path = "src/checksum.py", Lang = "python", Size = 50, Lines = 5,
-            Modified = modified, Checksum = checksum,
+            Path = "src/checksum.py",
+            Lang = "python",
+            Size = 50,
+            Lines = 5,
+            Modified = modified,
+            Checksum = checksum,
         };
         _writer.UpsertFile(file);
 
@@ -1413,8 +1432,12 @@ public class DatabaseTests : IDisposable
         var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var file = new FileRecord
         {
-            Path = "src/coarse-time.py", Lang = "python", Size = 50, Lines = 5,
-            Modified = modified, Checksum = "first_checksum",
+            Path = "src/coarse-time.py",
+            Lang = "python",
+            Size = 50,
+            Lines = 5,
+            Modified = modified,
+            Checksum = "first_checksum",
         };
         _writer.UpsertFile(file);
 
@@ -1436,18 +1459,30 @@ public class DatabaseTests : IDisposable
             var modified = new DateTime(2026, 5, 18, 0, 0, 0, DateTimeKind.Utc);
             var currentId = _writer.UpsertFile(new FileRecord
             {
-                Path = "src/current.py", Lang = "python", Size = 14, Lines = 1,
-                Checksum = "same_checksum", Modified = modified,
+                Path = "src/current.py",
+                Lang = "python",
+                Size = 14,
+                Lines = 1,
+                Checksum = "same_checksum",
+                Modified = modified,
             });
             var staleId = _writer.UpsertFile(new FileRecord
             {
-                Path = "src/renamed-away.py", Lang = "python", Size = 14, Lines = 1,
-                Checksum = "same_checksum", Modified = modified,
+                Path = "src/renamed-away.py",
+                Lang = "python",
+                Size = 14,
+                Lines = 1,
+                Checksum = "same_checksum",
+                Modified = modified,
             });
             var duplicateId = _writer.UpsertFile(new FileRecord
             {
-                Path = "src/duplicate.py", Lang = "python", Size = 14, Lines = 1,
-                Checksum = "same_checksum", Modified = modified,
+                Path = "src/duplicate.py",
+                Lang = "python",
+                Size = 14,
+                Lines = 1,
+                Checksum = "same_checksum",
+                Modified = modified,
             });
             _writer.InsertChunks([
                 new() { FileId = currentId, ChunkIndex = 0, StartLine = 1, EndLine = 1, Content = "current" },
@@ -1477,7 +1512,10 @@ public class DatabaseTests : IDisposable
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/test.py", Lang = "python", Size = 100, Lines = 10,
+            Path = "src/test.py",
+            Lang = "python",
+            Size = 100,
+            Lines = 10,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
@@ -1500,7 +1538,10 @@ public class DatabaseTests : IDisposable
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/multi.py", Lang = "python", Size = 300, Lines = 300,
+            Path = "src/multi.py",
+            Lang = "python",
+            Size = 300,
+            Lines = 300,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
@@ -1527,7 +1568,10 @@ public class DatabaseTests : IDisposable
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/svc.py", Lang = "python", Size = 50, Lines = 5,
+            Path = "src/svc.py",
+            Lang = "python",
+            Size = 50,
+            Lines = 5,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
@@ -1547,7 +1591,10 @@ public class DatabaseTests : IDisposable
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/symbols.py", Lang = "python", Size = 1000, Lines = 1000,
+            Path = "src/symbols.py",
+            Lang = "python",
+            Size = 1000,
+            Lines = 1000,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         var symbols = Enumerable.Range(0, 120)
@@ -1573,7 +1620,10 @@ public class DatabaseTests : IDisposable
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/symbols_with_bad_row.py", Lang = "python", Size = 1000, Lines = 1000,
+            Path = "src/symbols_with_bad_row.py",
+            Lang = "python",
+            Size = 1000,
+            Lines = 1000,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         var warnings = new List<string>();
@@ -1612,7 +1662,10 @@ public class DatabaseTests : IDisposable
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/del.py", Lang = "python", Size = 50, Lines = 5,
+            Path = "src/del.py",
+            Lang = "python",
+            Size = 50,
+            Lines = 5,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
@@ -1632,7 +1685,10 @@ public class DatabaseTests : IDisposable
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/ref.py", Lang = "python", Size = 50, Lines = 5,
+            Path = "src/ref.py",
+            Lang = "python",
+            Size = 50,
+            Lines = 5,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
@@ -1649,7 +1705,10 @@ public class DatabaseTests : IDisposable
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/refs.py", Lang = "python", Size = 1000, Lines = 1000,
+            Path = "src/refs.py",
+            Lang = "python",
+            Size = 1000,
+            Lines = 1000,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         var references = Enumerable.Range(0, 120)
@@ -1687,52 +1746,82 @@ public class DatabaseTests : IDisposable
 
         var firstFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/a.ts", Lang = "typescript", Size = 80, Lines = 4,
+            Path = "src/a.ts",
+            Lang = "typescript",
+            Size = 80,
+            Lines = 4,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         var secondFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/b.ts", Lang = "typescript", Size = 80, Lines = 4,
+            Path = "src/b.ts",
+            Lang = "typescript",
+            Size = 80,
+            Lines = 4,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         var thirdFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/c.ts", Lang = "typescript", Size = 80, Lines = 4,
+            Path = "src/c.ts",
+            Lang = "typescript",
+            Size = 80,
+            Lines = 4,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         var moduleOneFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/module-a.ts", Lang = "typescript", Size = 80, Lines = 4,
+            Path = "src/module-a.ts",
+            Lang = "typescript",
+            Size = 80,
+            Lines = 4,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         var moduleTwoFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/module-b.ts", Lang = "typescript", Size = 80, Lines = 4,
+            Path = "src/module-b.ts",
+            Lang = "typescript",
+            Size = 80,
+            Lines = 4,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         var moduleMarkerFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/module-c.ts", Lang = "typescript", Size = 80, Lines = 2,
+            Path = "src/module-c.ts",
+            Lang = "typescript",
+            Size = 80,
+            Lines = 2,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         var sideEffectImportFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/module-d.ts", Lang = "typescript", Size = 80, Lines = 2,
+            Path = "src/module-d.ts",
+            Lang = "typescript",
+            Size = 80,
+            Lines = 2,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         var ambientGlobalFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/ambient-global.ts", Lang = "typescript", Size = 80, Lines = 1,
+            Path = "src/ambient-global.ts",
+            Lang = "typescript",
+            Size = 80,
+            Lines = 1,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         var ambientModuleFirstFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/express-a.ts", Lang = "typescript", Size = 80, Lines = 1,
+            Path = "src/express-a.ts",
+            Lang = "typescript",
+            Size = 80,
+            Lines = 1,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         var ambientModuleSecondFileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/express-b.ts", Lang = "typescript", Size = 80, Lines = 1,
+            Path = "src/express-b.ts",
+            Lang = "typescript",
+            Size = 80,
+            Lines = 1,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
@@ -1810,7 +1899,10 @@ public class DatabaseTests : IDisposable
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/ref_lines.py", Lang = "python", Size = 50, Lines = 5,
+            Path = "src/ref_lines.py",
+            Lang = "python",
+            Size = 50,
+            Lines = 5,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
@@ -1844,7 +1936,10 @@ public class DatabaseTests : IDisposable
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/concurrent_ref_lines.py", Lang = "python", Size = 80, Lines = 5,
+            Path = "src/concurrent_ref_lines.py",
+            Lang = "python",
+            Size = 80,
+            Lines = 5,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
@@ -1994,7 +2089,10 @@ public class DatabaseTests : IDisposable
         // 同じチャンク内で挿入済みの reference_lines が孤児として残ってはならない。
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/partial.py", Lang = "python", Size = 50, Lines = 5,
+            Path = "src/partial.py",
+            Lang = "python",
+            Size = 50,
+            Lines = 5,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
@@ -2051,7 +2149,10 @@ public class DatabaseTests : IDisposable
         // Insert a file with chunks (populates FTS) / ファイルとチャンク（FTS含む）を挿入
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/orphan.py", Lang = "python", Size = 50, Lines = 5,
+            Path = "src/orphan.py",
+            Lang = "python",
+            Size = 50,
+            Lines = 5,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.InsertChunks([new() { FileId = fileId, ChunkIndex = 0, StartLine = 1, EndLine = 5, Content = "def hello_orphan_test(): pass" }]);
@@ -2067,7 +2168,10 @@ public class DatabaseTests : IDisposable
         _writer.CleanExistingFileData("src/orphan.py");
         var newId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/orphan.py", Lang = "python", Size = 60, Lines = 6,
+            Path = "src/orphan.py",
+            Lang = "python",
+            Size = 60,
+            Lines = 6,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc).AddMinutes(1),
         });
         _writer.InsertChunks([new() { FileId = newId, ChunkIndex = 0, StartLine = 1, EndLine = 6, Content = "def world_replacement(): pass" }]);
@@ -2105,12 +2209,18 @@ public class DatabaseTests : IDisposable
 
             _writer.UpsertFile(new FileRecord
             {
-                Path = "real.py", Lang = "python", Size = 5, Lines = 1,
+                Path = "real.py",
+                Lang = "python",
+                Size = 5,
+                Lines = 1,
                 Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
             });
             _writer.UpsertFile(new FileRecord
             {
-                Path = "ghost.py", Lang = "python", Size = 10, Lines = 2,
+                Path = "ghost.py",
+                Lang = "python",
+                Size = 10,
+                Lines = 2,
                 Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
             });
 
@@ -2182,7 +2292,10 @@ public class DatabaseTests : IDisposable
         // データを挿入してから全削除
         _writer.UpsertFile(new FileRecord
         {
-            Path = "src/x.py", Lang = "python", Size = 10, Lines = 1,
+            Path = "src/x.py",
+            Lang = "python",
+            Size = 10,
+            Lines = 1,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
@@ -2203,7 +2316,10 @@ public class DatabaseTests : IDisposable
         // ファイルとチャンク・シンボルを挿入し、パスで削除
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/remove_me.py", Lang = "python", Size = 50, Lines = 5,
+            Path = "src/remove_me.py",
+            Lang = "python",
+            Size = 50,
+            Lines = 5,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
@@ -2236,12 +2352,18 @@ public class DatabaseTests : IDisposable
         // 1ファイルの削除は他のファイルに影響しない
         _writer.UpsertFile(new FileRecord
         {
-            Path = "src/keep.py", Lang = "python", Size = 50, Lines = 5,
+            Path = "src/keep.py",
+            Lang = "python",
+            Size = 50,
+            Lines = 5,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.UpsertFile(new FileRecord
         {
-            Path = "src/delete.py", Lang = "python", Size = 30, Lines = 3,
+            Path = "src/delete.py",
+            Lang = "python",
+            Size = 30,
+            Lines = 3,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
@@ -2256,7 +2378,10 @@ public class DatabaseTests : IDisposable
     {
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/fold_ok.py", Lang = "python", Size = 30, Lines = 3,
+            Path = "src/fold_ok.py",
+            Lang = "python",
+            Size = 30,
+            Lines = 3,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.InsertSymbols([
@@ -2280,7 +2405,10 @@ public class DatabaseTests : IDisposable
         // 修正後の MarkFoldReady は再検証で stamp を取りやめ、reader を NOCASE に保つ。
         var fileId = _writer.UpsertFile(new FileRecord
         {
-            Path = "src/fold_partial.py", Lang = "python", Size = 30, Lines = 3,
+            Path = "src/fold_partial.py",
+            Lang = "python",
+            Size = 30,
+            Lines = 3,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         _writer.InsertSymbols([
@@ -2343,7 +2471,10 @@ public class DatabaseTests : IDisposable
         var scope = _writer.BeginTransaction();
         _writer.UpsertFile(new FileRecord
         {
-            Path = "src/rolled_back.py", Lang = "python", Size = 10, Lines = 1,
+            Path = "src/rolled_back.py",
+            Lang = "python",
+            Size = 10,
+            Lines = 1,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
 
@@ -2359,7 +2490,10 @@ public class DatabaseTests : IDisposable
         using var nextScope = _writer.BeginTransaction();
         _writer.UpsertFile(new FileRecord
         {
-            Path = "src/next.py", Lang = "python", Size = 10, Lines = 1,
+            Path = "src/next.py",
+            Lang = "python",
+            Size = 10,
+            Lines = 1,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         nextScope.Commit();
@@ -2376,7 +2510,10 @@ public class DatabaseTests : IDisposable
             var scope = _writer.BeginTransaction();
             _writer.UpsertFile(new FileRecord
             {
-                Path = $"src/race_{i}.py", Lang = "python", Size = 10, Lines = 1,
+                Path = $"src/race_{i}.py",
+                Lang = "python",
+                Size = 10,
+                Lines = 1,
                 Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
             });
 
@@ -2408,7 +2545,10 @@ public class DatabaseTests : IDisposable
         using var nextScope = _writer.BeginTransaction();
         _writer.UpsertFile(new FileRecord
         {
-            Path = "src/after_race.py", Lang = "python", Size = 10, Lines = 1,
+            Path = "src/after_race.py",
+            Lang = "python",
+            Size = 10,
+            Lines = 1,
             Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         });
         nextScope.Commit();

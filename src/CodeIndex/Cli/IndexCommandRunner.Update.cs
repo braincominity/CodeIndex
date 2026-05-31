@@ -188,7 +188,7 @@ public static partial class IndexCommandRunner
         if (!options.Json && !options.Quiet)
             Console.WriteLine($"Updating {ConsoleUi.Counted(targetPaths.Count, "file")}...");
         CancellationTokenSource? updateCts = null;
-          var interactiveUpdateSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
+        var interactiveUpdateSpinner = !options.Json && !options.Quiet && ConsoleUi.ShouldUseInteractiveConsole();
         int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
         var errorList = new List<CliJsonMessage>();
         var warningList = new List<CliJsonMessage>();
@@ -486,77 +486,33 @@ public static partial class IndexCommandRunner
                     }
 
                     var pathFilter = indexer.EvaluatePathFilter(absPath);
-                RecordScanErrors(pathFilter.Errors);
-                if (pathFilter.ShouldSkip)
-                {
-                    if (!pathFilter.ShouldDeleteExisting)
+                    RecordScanErrors(pathFilter.Errors);
+                    if (pathFilter.ShouldSkip)
                     {
-                        skipped++;
-                        if (options.Verbose && !options.Json && !options.Quiet)
+                        if (!pathFilter.ShouldDeleteExisting)
                         {
-                            PauseUpdateSpinnerForConsoleWrite();
-                            Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
-                            ResumeUpdateSpinnerAfterConsoleWrite();
+                            skipped++;
+                            if (options.Verbose && !options.Json && !options.Quiet)
+                            {
+                                PauseUpdateSpinnerForConsoleWrite();
+                                Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
+                                ResumeUpdateSpinnerAfterConsoleWrite();
+                            }
+                            continue;
                         }
-                        continue;
-                    }
 
-                    if (!writer.HasFileAtPath(dbPath))
-                    {
-                        skipped++;
-                        if (options.Verbose && !options.Json && !options.Quiet)
+                        if (!writer.HasFileAtPath(dbPath))
                         {
-                            PauseUpdateSpinnerForConsoleWrite();
-                            Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
-                            ResumeUpdateSpinnerAfterConsoleWrite();
+                            skipped++;
+                            if (options.Verbose && !options.Json && !options.Quiet)
+                            {
+                                PauseUpdateSpinnerForConsoleWrite();
+                                Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
+                                ResumeUpdateSpinnerAfterConsoleWrite();
+                            }
+                            continue;
                         }
-                        continue;
-                    }
 
-                    DemoteReadinessOnce();
-                    using var deleteTxn = writer.BeginTransaction();
-                    if (writer.DeleteFileByPath(dbPath))
-                    {
-                        WriteProjectRootOnce();
-                        deleteTxn.Commit();
-                        removed++;
-                        ftsMutated = true;
-                        if (options.Verbose && !options.Json && !options.Quiet)
-                        {
-                            PauseUpdateSpinnerForConsoleWrite();
-                            Console.WriteLine($"  [DEL ] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
-                            ResumeUpdateSpinnerAfterConsoleWrite();
-                        }
-                    }
-                    else
-                    {
-                        skipped++;
-                        if (options.Verbose && !options.Json)
-                        {
-                            PauseUpdateSpinnerForConsoleWrite();
-                            Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
-                            ResumeUpdateSpinnerAfterConsoleWrite();
-                        }
-                    }
-                    continue;
-                }
-
-                var indexability = FileIndexer.GetFileIndexability(absPath);
-                var detection = FileIndexer.TryDetectLanguage(absPath);
-                if (indexability == FileIndexer.FileProbeStatus.Missing || detection.Status == FileIndexer.FileProbeStatus.Missing)
-                {
-                    var message = $"{relPath}: skipped because it was deleted during indexing.";
-                    warnings++;
-                    warningList.Add(new CliJsonMessage(relPath, message));
-                    if (!options.Json && !options.Quiet)
-                    {
-                        PauseUpdateSpinnerForConsoleWrite();
-                        ConsoleUi.PrintWarning(message);
-                        ResumeUpdateSpinnerAfterConsoleWrite();
-                    }
-
-                    if (writer.HasFileAtPath(dbPath))
-                    {
                         DemoteReadinessOnce();
                         using var deleteTxn = writer.BeginTransaction();
                         if (writer.DeleteFileByPath(dbPath))
@@ -565,59 +521,131 @@ public static partial class IndexCommandRunner
                             deleteTxn.Commit();
                             removed++;
                             ftsMutated = true;
-                        }
-                    }
-                    else
-                    {
-                        skipped++;
-                    }
-                    continue;
-                }
-
-                if (indexability == FileIndexer.FileProbeStatus.ProbeFailed || detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
-                {
-                    DemoteReadinessOnce();
-
-                    errors++;
-                    errorList.Add(new CliJsonMessage(relPath, "Could not probe file for indexability/language."));
-                    if (!options.Json)
-                    {
-                        PauseUpdateSpinnerForConsoleWrite();
-                        if (options.Verbose)
-                            Console.Error.WriteLine($"  [ERR ] {relPath}: Could not probe file for indexability/language.");
-                        else
-                            Console.Error.WriteLine($"  [ERR ] {relPath}: Could not probe file for indexability/language.");
-                        ResumeUpdateSpinnerAfterConsoleWrite();
-                    }
-                    continue;
-                }
-
-                if (indexability != FileIndexer.FileProbeStatus.Supported || detection.Status != FileIndexer.FileProbeStatus.Supported)
-                {
-                    if (!writer.HasFileAtPath(dbPath))
-                    {
-                        using var purgeTxn = writer.BeginTransaction();
-                        var purged = projectRootWritten
-                            ? writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, dbPath)
-                            : 0;
-                        if (purged > 0)
-                        {
-                            DemoteReadinessOnce();
-                            WriteProjectRootOnce();
-                            purgeTxn.Commit();
-                            removed += purged;
-                            ftsMutated = true;
                             if (options.Verbose && !options.Json && !options.Quiet)
                             {
                                 PauseUpdateSpinnerForConsoleWrite();
-                                Console.WriteLine($"  [DEL ] {relPath} (unsupported renamed target)");
+                                Console.WriteLine($"  [DEL ] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
                                 ResumeUpdateSpinnerAfterConsoleWrite();
                             }
                         }
                         else
                         {
                             skipped++;
+                            if (options.Verbose && !options.Json)
+                            {
+                                PauseUpdateSpinnerForConsoleWrite();
+                                Console.WriteLine($"  [SKIP] {relPath} ({DescribePathFilter(pathFilter.FilterKind)})");
+                                ResumeUpdateSpinnerAfterConsoleWrite();
+                            }
+                        }
+                        continue;
+                    }
+
+                    var indexability = FileIndexer.GetFileIndexability(absPath);
+                    var detection = FileIndexer.TryDetectLanguage(absPath);
+                    if (indexability == FileIndexer.FileProbeStatus.Missing || detection.Status == FileIndexer.FileProbeStatus.Missing)
+                    {
+                        var message = $"{relPath}: skipped because it was deleted during indexing.";
+                        warnings++;
+                        warningList.Add(new CliJsonMessage(relPath, message));
+                        if (!options.Json && !options.Quiet)
+                        {
+                            PauseUpdateSpinnerForConsoleWrite();
+                            ConsoleUi.PrintWarning(message);
+                            ResumeUpdateSpinnerAfterConsoleWrite();
+                        }
+
+                        if (writer.HasFileAtPath(dbPath))
+                        {
+                            DemoteReadinessOnce();
+                            using var deleteTxn = writer.BeginTransaction();
+                            if (writer.DeleteFileByPath(dbPath))
+                            {
+                                WriteProjectRootOnce();
+                                deleteTxn.Commit();
+                                removed++;
+                                ftsMutated = true;
+                            }
+                        }
+                        else
+                        {
+                            skipped++;
+                        }
+                        continue;
+                    }
+
+                    if (indexability == FileIndexer.FileProbeStatus.ProbeFailed || detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
+                    {
+                        DemoteReadinessOnce();
+
+                        errors++;
+                        errorList.Add(new CliJsonMessage(relPath, "Could not probe file for indexability/language."));
+                        if (!options.Json)
+                        {
+                            PauseUpdateSpinnerForConsoleWrite();
+                            if (options.Verbose)
+                                Console.Error.WriteLine($"  [ERR ] {relPath}: Could not probe file for indexability/language.");
+                            else
+                                Console.Error.WriteLine($"  [ERR ] {relPath}: Could not probe file for indexability/language.");
+                            ResumeUpdateSpinnerAfterConsoleWrite();
+                        }
+                        continue;
+                    }
+
+                    if (indexability != FileIndexer.FileProbeStatus.Supported || detection.Status != FileIndexer.FileProbeStatus.Supported)
+                    {
+                        if (!writer.HasFileAtPath(dbPath))
+                        {
+                            using var purgeTxn = writer.BeginTransaction();
+                            var purged = projectRootWritten
+                                ? writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, dbPath)
+                                : 0;
+                            if (purged > 0)
+                            {
+                                DemoteReadinessOnce();
+                                WriteProjectRootOnce();
+                                purgeTxn.Commit();
+                                removed += purged;
+                                ftsMutated = true;
+                                if (options.Verbose && !options.Json && !options.Quiet)
+                                {
+                                    PauseUpdateSpinnerForConsoleWrite();
+                                    Console.WriteLine($"  [DEL ] {relPath} (unsupported renamed target)");
+                                    ResumeUpdateSpinnerAfterConsoleWrite();
+                                }
+                            }
+                            else
+                            {
+                                skipped++;
+                                if (options.Verbose && !options.Json && !options.Quiet)
+                                {
+                                    PauseUpdateSpinnerForConsoleWrite();
+                                    Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
+                                    ResumeUpdateSpinnerAfterConsoleWrite();
+                                }
+                            }
+                            continue;
+                        }
+
+                        DemoteReadinessOnce();
+                        using var deleteTxn = writer.BeginTransaction();
+                        if (writer.DeleteFileByPath(dbPath))
+                        {
+                            WriteProjectRootOnce();
+                            deleteTxn.Commit();
+                            removed++;
+                            ftsMutated = true;
                             if (options.Verbose && !options.Json && !options.Quiet)
+                            {
+                                PauseUpdateSpinnerForConsoleWrite();
+                                Console.WriteLine($"  [DEL ] {relPath} (no longer indexable)");
+                                ResumeUpdateSpinnerAfterConsoleWrite();
+                            }
+                        }
+                        else
+                        {
+                            skipped++;
+                            if (options.Verbose && !options.Json)
                             {
                                 PauseUpdateSpinnerForConsoleWrite();
                                 Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
@@ -626,34 +654,6 @@ public static partial class IndexCommandRunner
                         }
                         continue;
                     }
-
-                    DemoteReadinessOnce();
-                    using var deleteTxn = writer.BeginTransaction();
-                    if (writer.DeleteFileByPath(dbPath))
-                    {
-                        WriteProjectRootOnce();
-                        deleteTxn.Commit();
-                        removed++;
-                        ftsMutated = true;
-                        if (options.Verbose && !options.Json && !options.Quiet)
-                        {
-                            PauseUpdateSpinnerForConsoleWrite();
-                            Console.WriteLine($"  [DEL ] {relPath} (no longer indexable)");
-                            ResumeUpdateSpinnerAfterConsoleWrite();
-                        }
-                    }
-                    else
-                    {
-                        skipped++;
-                        if (options.Verbose && !options.Json)
-                        {
-                            PauseUpdateSpinnerForConsoleWrite();
-                            Console.WriteLine($"  [SKIP] {relPath} (unsupported type)");
-                            ResumeUpdateSpinnerAfterConsoleWrite();
-                        }
-                    }
-                    continue;
-                }
 
                 if (FileIndexer.TryGetFileIdentity(absPath, out var identity) && !visitedFileIdentities.Add(identity))
                 {
@@ -875,43 +875,43 @@ public static partial class IndexCommandRunner
 
                     if (writer.HasFileAtPath(dbPath))
                     {
-                        DemoteReadinessOnce();
-                        using var deleteTxn = writer.BeginTransaction();
-                        if (writer.DeleteFileByPath(dbPath))
-                        {
-                            WriteProjectRootOnce();
-                            deleteTxn.Commit();
-                            removed++;
-                            ftsMutated = true;
+                            DemoteReadinessOnce();
+                            using var deleteTxn = writer.BeginTransaction();
+                            if (writer.DeleteFileByPath(dbPath))
+                            {
+                                WriteProjectRootOnce();
+                                deleteTxn.Commit();
+                                removed++;
+                                ftsMutated = true;
+                            }
                         }
+                        else
+                        {
+                            skipped++;
+                        }
+                        continue;
                     }
-                    else
+
+                    if (ex is FileIndexer.FileTooLargeSkippedException fileTooLarge)
                     {
-                        skipped++;
-                    }
-                    continue;
-                }
+                        if (fileBatchMarked)
+                            writer.ClearBatchInProgress();
 
-                if (ex is FileIndexer.FileTooLargeSkippedException fileTooLarge)
-                {
-                    if (fileBatchMarked)
-                        writer.ClearBatchInProgress();
-
-                    DemoteReadinessOnce();
-                    writer.MarkBatchInProgress();
-                    using var txn = writer.BeginTransaction();
-                    var skippedRecord = indexer.BuildSkippedFileRecord(absPath);
-                    writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
-                    if (projectRootWritten)
-                        writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
-                    WriteProjectRootOnce();
-                    var fileId = writer.UpsertFile(skippedRecord);
-                    writer.InsertChunks([]);
-                    writer.InsertSymbols([]);
-                    writer.InsertReferences([]);
-                    writer.InsertIssues(fileId,
-                    [
-                        new FileIssue
+                        DemoteReadinessOnce();
+                        writer.MarkBatchInProgress();
+                        using var txn = writer.BeginTransaction();
+                        var skippedRecord = indexer.BuildSkippedFileRecord(absPath);
+                        writer.PurgeStaleFilesSharingChecksum(projectRoot, skippedRecord.Path, skippedRecord.Checksum);
+                        if (projectRootWritten)
+                            writer.PurgeStaleFilesSharingDirectoryAndStem(projectRoot, skippedRecord.Path);
+                        WriteProjectRootOnce();
+                        var fileId = writer.UpsertFile(skippedRecord);
+                        writer.InsertChunks([]);
+                        writer.InsertSymbols([]);
+                        writer.InsertReferences([]);
+                        writer.InsertIssues(fileId,
+                        [
+                            new FileIssue
                         {
                             Path = fileTooLarge.RelativePath,
                             Kind = "file_too_large",
@@ -919,64 +919,64 @@ public static partial class IndexCommandRunner
                             Message = fileTooLarge.Message,
                         },
                     ]);
-                    writer.ClearBatchInProgress();
-                    txn.Commit();
+                        writer.ClearBatchInProgress();
+                        txn.Commit();
 
-                    updated++;
-                    ftsMutated = true;
-                    continue;
-                }
+                        updated++;
+                        ftsMutated = true;
+                        continue;
+                    }
 
-                if (ex is FileNotFoundException or DirectoryNotFoundException)
-                {
+                    if (ex is FileNotFoundException or DirectoryNotFoundException)
+                    {
+                        if (fileBatchMarked)
+                            writer.ClearBatchInProgress();
+
+                        var message = $"{relPath}: skipped because it was deleted during indexing.";
+                        warnings++;
+                        warningList.Add(new CliJsonMessage(relPath, message));
+                        if (!options.Json && !options.Quiet)
+                        {
+                            PauseUpdateSpinnerForConsoleWrite();
+                            ConsoleUi.PrintWarning(message);
+                            ResumeUpdateSpinnerAfterConsoleWrite();
+                        }
+
+                        if (writer.HasFileAtPath(dbPath))
+                        {
+                            DemoteReadinessOnce();
+                            using var deleteTxn = writer.BeginTransaction();
+                            if (writer.DeleteFileByPath(dbPath))
+                            {
+                                WriteProjectRootOnce();
+                                deleteTxn.Commit();
+                                removed++;
+                                ftsMutated = true;
+                            }
+                        }
+                        else
+                        {
+                            skipped++;
+                        }
+                        continue;
+                    }
+
+                    DemoteReadinessOnce();
                     if (fileBatchMarked)
                         writer.ClearBatchInProgress();
+                    GlobalToolLog.Error($"index_update_file_failed path={CollapseLineBreaks(relPath)}\n{GlobalToolLog.FormatExceptionChain(ex)}");
 
-                    var message = $"{relPath}: skipped because it was deleted during indexing.";
-                    warnings++;
-                    warningList.Add(new CliJsonMessage(relPath, message));
-                    if (!options.Json && !options.Quiet)
+                    errors++;
+                    var errorMessage = FormatIndexFileException(ex);
+                    errorList.Add(new CliJsonMessage(relPath, errorMessage));
+                    if (!options.Json)
                     {
                         PauseUpdateSpinnerForConsoleWrite();
-                        ConsoleUi.PrintWarning(message);
+                        Console.Error.WriteLine(FormatPerFileErrorLine("ERR ", relPath, ex, errorMessage));
                         ResumeUpdateSpinnerAfterConsoleWrite();
                     }
-
-                    if (writer.HasFileAtPath(dbPath))
-                    {
-                        DemoteReadinessOnce();
-                        using var deleteTxn = writer.BeginTransaction();
-                        if (writer.DeleteFileByPath(dbPath))
-                        {
-                            WriteProjectRootOnce();
-                            deleteTxn.Commit();
-                            removed++;
-                            ftsMutated = true;
-                        }
-                    }
-                    else
-                    {
-                        skipped++;
-                    }
-                    continue;
-                }
-
-                DemoteReadinessOnce();
-                if (fileBatchMarked)
-                    writer.ClearBatchInProgress();
-                GlobalToolLog.Error($"index_update_file_failed path={CollapseLineBreaks(relPath)}\n{GlobalToolLog.FormatExceptionChain(ex)}");
-
-                errors++;
-                var errorMessage = FormatIndexFileException(ex);
-                errorList.Add(new CliJsonMessage(relPath, errorMessage));
-                if (!options.Json)
-                {
-                    PauseUpdateSpinnerForConsoleWrite();
-                    Console.Error.WriteLine(FormatPerFileErrorLine("ERR ", relPath, ex, errorMessage));
-                    ResumeUpdateSpinnerAfterConsoleWrite();
                 }
             }
-        }
         }
         finally
         {

@@ -1,0 +1,9 @@
+.cdidx/
+.github/
+.vs/
+.vscode/
+TestResults/
+**/bin/
+**/obj/
+**/.DS_Store
+*.user

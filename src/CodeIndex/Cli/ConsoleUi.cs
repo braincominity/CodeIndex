@@ -321,55 +321,55 @@ public static class ConsoleUi
 
         return easterEgg switch
         {
-        "--sushi" =>
-        [
-            "\U0001f363 Slicing       ", "\U0001f363 Slicing.      ", "\U0001f363 Slicing..     ", "\U0001f363 Slicing...    ",
+            "--sushi" =>
+            [
+                "\U0001f363 Slicing       ", "\U0001f363 Slicing.      ", "\U0001f363 Slicing..     ", "\U0001f363 Slicing...    ",
             "\U0001f363 Shaping       ", "\U0001f363 Shaping.      ", "\U0001f363 Shaping..     ", "\U0001f363 Shaping...    ",
             "\U0001f363 Pressing      ", "\U0001f363 Pressing.     ", "\U0001f363 Pressing..    ", "\U0001f363 Pressing...   ",
             "\U0001f363 Itadakimasu!  ",
         ],
-        "--coffee" =>
-        [
-            "\u2615 Grinding      ", "\u2615 Grinding.     ", "\u2615 Grinding..    ", "\u2615 Grinding...   ",
+            "--coffee" =>
+            [
+                "\u2615 Grinding      ", "\u2615 Grinding.     ", "\u2615 Grinding..    ", "\u2615 Grinding...   ",
             "\u2615 Heating       ", "\u2615 Heating.      ", "\u2615 Heating..     ", "\u2615 Heating...    ",
             "\u2615 Brewing       ", "\u2615 Brewing.      ", "\u2615 Brewing..     ", "\u2615 Brewing...    ",
         ],
-        "--ramen" =>
-        [
-            "\U0001f35c Boiling       ", "\U0001f35c Boiling.      ", "\U0001f35c Boiling..     ", "\U0001f35c Boiling...    ",
+            "--ramen" =>
+            [
+                "\U0001f35c Boiling       ", "\U0001f35c Boiling.      ", "\U0001f35c Boiling..     ", "\U0001f35c Boiling...    ",
             "\U0001f35c Steaming      ", "\U0001f35c Steaming.     ", "\U0001f35c Steaming..    ", "\U0001f35c Steaming...   ",
             "\U0001f35c Slurping      ", "\U0001f35c Slurping.     ", "\U0001f35c Slurping..    ", "\U0001f35c Slurping...   ",
             "\U0001f35c Itadakimasu!  ",
         ],
-        "--wine" =>
-        [
-            "\U0001f377 Crushing      ", "\U0001f377 Crushing.     ", "\U0001f377 Crushing..    ", "\U0001f377 Crushing...   ",
+            "--wine" =>
+            [
+                "\U0001f377 Crushing      ", "\U0001f377 Crushing.     ", "\U0001f377 Crushing..    ", "\U0001f377 Crushing...   ",
             "\U0001f377 Aging         ", "\U0001f377 Aging.        ", "\U0001f377 Aging..       ", "\U0001f377 Aging...      ",
             "\U0001f377 Pouring       ", "\U0001f377 Pouring.      ", "\U0001f377 Pouring..     ", "\U0001f377 Pouring...    ",
             "\U0001f377 Sant\u00e9!        ",
         ],
-        "--beer" =>
-        [
-            "\U0001f37a Tapping       ", "\U0001f37a Tapping.      ", "\U0001f37a Tapping..     ", "\U0001f37a Tapping...    ",
+            "--beer" =>
+            [
+                "\U0001f37a Tapping       ", "\U0001f37a Tapping.      ", "\U0001f37a Tapping..     ", "\U0001f37a Tapping...    ",
             "\U0001f37a Pouring       ", "\U0001f37a Pouring.      ", "\U0001f37a Pouring..     ", "\U0001f37a Pouring...    ",
             "\U0001f37a Foaming       ", "\U0001f37a Foaming.      ", "\U0001f37a Foaming..     ", "\U0001f37a Foaming...    ",
             "\U0001f37a Cheers!       ",
         ],
-        "--matcha" =>
-        [
-            "\U0001f375 Sifting       ", "\U0001f375 Sifting.      ", "\U0001f375 Sifting..     ", "\U0001f375 Sifting...    ",
+            "--matcha" =>
+            [
+                "\U0001f375 Sifting       ", "\U0001f375 Sifting.      ", "\U0001f375 Sifting..     ", "\U0001f375 Sifting...    ",
             "\U0001f375 Pouring       ", "\U0001f375 Pouring.      ", "\U0001f375 Pouring..     ", "\U0001f375 Pouring...    ",
             "\U0001f375 Whisking      ", "\U0001f375 Whisking.     ", "\U0001f375 Whisking..    ", "\U0001f375 Whisking...   ",
             "\U0001f375 Douzo!        ",
         ],
-        "--whisky" =>
-        [
-            "\U0001f943 Mashing       ", "\U0001f943 Mashing.      ", "\U0001f943 Mashing..     ", "\U0001f943 Mashing...    ",
+            "--whisky" =>
+            [
+                "\U0001f943 Mashing       ", "\U0001f943 Mashing.      ", "\U0001f943 Mashing..     ", "\U0001f943 Mashing...    ",
             "\U0001f943 Distilling    ", "\U0001f943 Distilling.   ", "\U0001f943 Distilling..  ", "\U0001f943 Distilling... ",
             "\U0001f943 Aging         ", "\U0001f943 Aging.        ", "\U0001f943 Aging..       ", "\U0001f943 Aging...      ",
             "\U0001f943 Slainte!      ",
         ],
-        // Default: Braille spinner / デフォルト: ブレイルスピナー
+            // Default: Braille spinner / デフォルト: ブレイルスピナー
             _ => DefaultBrailleSpinnerFrames,
         };
     }
@@ -595,11 +595,11 @@ public static class ConsoleUi
     {
         var pair = flag switch
         {
-            "--sushi"  => UiMessages.EasterEggSushi,
+            "--sushi" => UiMessages.EasterEggSushi,
             "--coffee" => UiMessages.EasterEggCoffee,
-            "--ramen"  => UiMessages.EasterEggRamen,
-            "--wine"   => UiMessages.EasterEggWine,
-            "--beer"   => UiMessages.EasterEggBeer,
+            "--ramen" => UiMessages.EasterEggRamen,
+            "--wine" => UiMessages.EasterEggWine,
+            "--beer" => UiMessages.EasterEggBeer,
             "--matcha" => UiMessages.EasterEggMatcha,
             "--whisky" => UiMessages.EasterEggWhisky,
             _ => null,

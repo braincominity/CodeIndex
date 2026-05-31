@@ -7,6 +7,14 @@
     <RootNamespace>CodeIndex</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <IsTrimmable>true</IsTrimmable>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+    <Deterministic>true</Deterministic>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    <EmbedUntrackedSources Condition="'$(GITHUB_ACTIONS)' == 'true'">true</EmbedUntrackedSources>
 
     <!--
       Embed a Windows app manifest declaring `longPathAware=true` so the OS
@@ -52,6 +60,8 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.5" />
+    <PackageReference Include="Microsoft.NET.ILLink.Tasks" Version="8.0.27" PrivateAssets="All" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
   </ItemGroup>
 
   <ItemGroup>
@@ -88,6 +98,16 @@
       <Output TaskParameter="ConsoleOutput" PropertyName="CdidxGitShaRaw" />
       <Output TaskParameter="ExitCode" PropertyName="CdidxGitShaExitCode" />
     </Exec>
+    <Exec Command="git show -s --format=%cd --date=format:%Y-%m-%d HEAD"
+          ConsoleToMSBuild="true"
+          ContinueOnError="true"
+          IgnoreExitCode="true"
+          EchoOff="true"
+          StandardOutputImportance="low"
+          StandardErrorImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="CdidxGitDateRaw" />
+      <Output TaskParameter="ExitCode" PropertyName="CdidxGitDateExitCode" />
+    </Exec>
     <Exec Command="git diff-index --quiet HEAD -- &quot;:/&quot; &quot;:(top,exclude,glob)**/packages.lock.json&quot;"
           ContinueOnError="true"
           IgnoreExitCode="true"
@@ -97,7 +117,8 @@
       <Output TaskParameter="ExitCode" PropertyName="CdidxGitDirtyExitCode" />
     </Exec>
     <PropertyGroup>
-      <CdidxBuildDate>$([System.DateTime]::UtcNow.ToString('yyyy-MM-dd'))</CdidxBuildDate>
+      <CdidxBuildDate Condition="'$(CdidxGitDateExitCode)' == '0' and '$(CdidxGitDateRaw)' != ''">$(CdidxGitDateRaw)</CdidxBuildDate>
+      <CdidxBuildDate Condition="'$(CdidxBuildDate)' == ''">$([System.DateTime]::UtcNow.ToString('yyyy-MM-dd'))</CdidxBuildDate>
       <CdidxBuildCommit Condition="'$(CdidxGitShaExitCode)' == '0' and '$(CdidxGitShaRaw)' != ''">$(CdidxGitShaRaw)</CdidxBuildCommit>
       <CdidxBuildCommit Condition="'$(CdidxBuildCommit)' == ''">unknown</CdidxBuildCommit>
       <CdidxBuildDirty Condition="'$(CdidxGitShaExitCode)' == '0' and '$(CdidxGitDirtyExitCode)' == '0'">clean</CdidxBuildDirty>
