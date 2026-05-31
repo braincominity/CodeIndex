@@ -170,6 +170,7 @@ For boundary tests, use the smallest fixture that still crosses the boundary. If
 
 - Never assume global git identity exists.
 - Configure repo-local `user.name` and `user.email` inside the test setup.
+- Disable repo-local commit/tag signing for fixture repositories so global signing settings cannot prompt or fail non-interactively.
 - Use helper methods or `ProcessStartInfo.ArgumentList`; do not depend on shell-specific quoting behavior.
 
 ### Database tests
@@ -366,6 +367,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 
 - global の git identity がある前提にしない。
 - テストセットアップ内で repo-local の `user.name` と `user.email` を設定する。
+- fixture リポジトリでは repo-local の commit/tag signing を無効化し、global signing 設定が非対話実行でプロンプトや失敗を起こさないようにする。
 - shell 依存の quoting ではなく、ヘルパーや `ProcessStartInfo.ArgumentList` を使う。
 
 ### DB 系テスト
