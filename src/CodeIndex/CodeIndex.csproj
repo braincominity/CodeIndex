@@ -10,6 +10,8 @@
     <IsTrimmable>true</IsTrimmable>
     <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
     <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <EnableTrimAnalyzer Condition="'$(DesignTimeBuild)' == 'true'">false</EnableTrimAnalyzer>
+    <EnableAotAnalyzer Condition="'$(DesignTimeBuild)' == 'true'">false</EnableAotAnalyzer>
     <TrimmerSingleWarn>false</TrimmerSingleWarn>
     <Deterministic>true</Deterministic>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
