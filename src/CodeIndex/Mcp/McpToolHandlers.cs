@@ -163,6 +163,59 @@ public partial class McpServer
             payload["exact_zero_hint"]!["relaxed_count"] = exactZeroHint.RelaxedCount.Value;
     }
 
+    private static void AddRecoveryHint(JsonObject payload, string reason, string suggestedAction, string? tool = null, JsonObject? args = null)
+    {
+        var hint = new JsonObject
+        {
+            ["reason"] = reason,
+            ["suggested_action"] = suggestedAction,
+        };
+        if (tool != null)
+            hint["tool"] = tool;
+        if (args != null)
+            hint["args"] = args;
+        payload["recovery_hint"] = hint;
+    }
+
+    private static void AddSymbolRecoveryHint(JsonObject payload, string query, string toolName, string? lang, string? kind, JsonNode? path)
+    {
+        var args = new JsonObject
+        {
+            ["query"] = query,
+            ["limit"] = 5,
+        };
+        if (lang != null)
+            args["lang"] = lang;
+        if (kind != null)
+            args["kind"] = kind;
+        if (path != null)
+            args["path"] = path.DeepClone();
+
+        AddRecoveryHint(
+            payload,
+            "no_results",
+            $"{toolName} returned no rows; check whether the symbol is indexed, whether filters are too narrow, or whether a broader symbol lookup finds a nearby name.",
+            "symbols",
+            args);
+    }
+
+    private static void AddNextStepSuggestion(JsonObject payload, string tool, JsonObject args)
+    {
+        payload["next_step_suggestion"] = new JsonObject
+        {
+            ["tool"] = tool,
+            ["args"] = args,
+        };
+    }
+
+    private static JsonObject BuildExcerptArgs(string path, int startLine, int endLine)
+        => new()
+        {
+            ["path"] = path,
+            ["startLine"] = startLine,
+            ["endLine"] = endLine,
+        };
+
     /// <summary>
     /// Clamp limit to a safe range to prevent resource exhaustion.
     /// リソース枯渇を防ぐためlimitを安全な範囲にクランプ。
@@ -783,6 +836,12 @@ public partial class McpServer
                     ["results"] = new JsonArray()
                 };
                 AddResultEnvelope(payload, 0, 0, truncated: false);
+                AddRecoveryHint(
+                    payload,
+                    "no_results",
+                    "search returned no rows; try removing lang/path filters, using prefix for token-prefix matches, or using exactSubstring for literal punctuation or emoji.",
+                    "search",
+                    new JsonObject { ["query"] = query, ["limit"] = 5 });
                 AddFreshnessHint(payload, reader);
                 return CreateToolResult(id, "No results found.", payload);
             }
@@ -798,6 +857,11 @@ public partial class McpServer
                 ["results"] = ToJsonArray(SearchSnippetFormatter.ToCompactResults(results, query, snippetLines, exact, maxLineWidth))
             };
             AddResultEnvelope(structured, results.Count, truncated ? null : results.Count, truncated);
+            var topResult = results[0];
+            AddNextStepSuggestion(
+                structured,
+                "excerpt",
+                BuildExcerptArgs(topResult.Path, topResult.StartLine, topResult.EndLine));
             // Include top file paths in summary for quick AI orientation
             // AIが素早く位置把握できるよう、サマリにトップファイルパスを含める
             var topPaths = results.Select(r => r.Path).Distinct().Take(3);
@@ -970,6 +1034,7 @@ public partial class McpServer
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
+                AddSymbolRecoveryHint(payload, query, "definition", lang, kind, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
@@ -1059,7 +1124,16 @@ public partial class McpServer
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
+                AddSymbolRecoveryHint(payload, query, "references", lang, kind, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
+            }
+            else
+            {
+                var topReference = results[0];
+                AddNextStepSuggestion(
+                    payload,
+                    "excerpt",
+                    BuildExcerptArgs(topReference.Path, topReference.Line, topReference.Line));
             }
             return CreateToolResult(id,
                 BuildGraphSummary("reference", "references", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason),
@@ -1147,6 +1221,7 @@ public partial class McpServer
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
+                AddSymbolRecoveryHint(payload, query, "callers", lang, kind, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
@@ -1235,6 +1310,7 @@ public partial class McpServer
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
+                AddSymbolRecoveryHint(payload, query, "callees", lang, kind, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
@@ -1777,6 +1853,12 @@ public partial class McpServer
                     ["path"] = path,
                     ["count"] = 0
                 };
+                AddRecoveryHint(
+                    emptyPayload,
+                    "file_or_range_not_indexed",
+                    "excerpt found no indexed content for the requested range; verify the path with files or outline, then retry with an indexed line range.",
+                    "outline",
+                    new JsonObject { ["path"] = path });
                 AddFreshnessHint(emptyPayload, reader);
                 return CreateToolResult(id, "No excerpt found.", emptyPayload);
             }
@@ -1788,6 +1870,10 @@ public partial class McpServer
             if (focusColumn.HasValue)
                 payload["focusColumn"] = focusColumn.Value;
             payload["focusLength"] = focusLength;
+            AddNextStepSuggestion(
+                payload,
+                "outline",
+                new JsonObject { ["path"] = excerpt.Path });
             return CreateToolResult(id, "Excerpt returned.", payload);
         });
     }
@@ -2518,6 +2604,7 @@ public partial class McpServer
 
             if (count == 0)
             {
+                AddSymbolRecoveryHint(payload, query, "impact_analysis", lang, null, PathEcho(pathPatterns));
                 AddFreshnessHint(payload, reader);
                 var graphReason = ReferenceExtractor.BuildGraphSupportReason(lang, lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null);
                 if (graphReason != null)
@@ -2650,7 +2737,15 @@ public partial class McpServer
                 summary += " Warning: cross-file hotspot family grouping is degraded, so results may be conservative until the next successful reindex.";
             }
             if (visibleCount == 0)
+            {
+                AddRecoveryHint(
+                    payload,
+                    "no_results",
+                    "symbol_hotspots returned no rows; verify that graph references are indexed and loosen kind/lang/path filters.",
+                    "status",
+                    new JsonObject());
                 AddFreshnessHint(payload, reader);
+            }
             return CreateToolResult(id, summary, payload);
         });
     }
@@ -2707,7 +2802,15 @@ public partial class McpServer
                 summary += " Warning: symbol_references table is missing in this index; zero-result unused output is degraded, not authoritative.";
             }
             if (results.Count == 0)
+            {
+                AddRecoveryHint(
+                    payload,
+                    "no_results",
+                    "unused_symbols returned no rows; verify graph readiness and loosen kind/lang/path filters before treating this as authoritative.",
+                    "status",
+                    new JsonObject());
                 AddFreshnessHint(payload, reader);
+            }
             return CreateToolResult(id, summary, payload);
         });
     }

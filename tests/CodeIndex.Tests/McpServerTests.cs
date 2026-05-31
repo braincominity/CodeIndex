@@ -228,6 +228,74 @@ public class McpServerTests : IDisposable
         Assert.Contains("Gamma", allNames);
     }
 
+    [Fact]
+    public void ToolsCall_Search_WithResultsIncludesNextStepSuggestion()
+    {
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"public class App","limit":1}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var suggestion = structured["next_step_suggestion"]!;
+
+        Assert.Equal("excerpt", suggestion["tool"]!.GetValue<string>());
+        Assert.Equal("src/app.cs", suggestion["args"]!["path"]!.GetValue<string>());
+        Assert.True(suggestion["args"]!["startLine"]!.GetValue<int>() >= 1);
+        Assert.True(suggestion["args"]!["endLine"]!.GetValue<int>() >= suggestion["args"]!["startLine"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_References_WithResultsIncludesNextStepSuggestion()
+    {
+        InsertIndexedFile(
+            "src/reference-hint.cs",
+            "csharp",
+            """
+            class ReferenceHint {
+                void Caller() { Target(); }
+                void Target() { }
+            }
+            """);
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Target","lang":"csharp","exactName":true,"limit":1}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var suggestion = structured["next_step_suggestion"]!;
+
+        Assert.Equal("excerpt", suggestion["tool"]!.GetValue<string>());
+        Assert.Equal("src/reference-hint.cs", suggestion["args"]!["path"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Excerpt_WithResultIncludesNextStepSuggestion()
+    {
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"src/app.cs","startLine":1,"endLine":1}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var suggestion = structured["next_step_suggestion"]!;
+
+        Assert.Equal("outline", suggestion["tool"]!.GetValue<string>());
+        Assert.Equal("src/app.cs", suggestion["args"]!["path"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Callers_EmptyResultIncludesRecoveryHint()
+    {
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"MissingSymbol","lang":"csharp","exactName":true}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var hint = structured["recovery_hint"]!;
+
+        Assert.Equal("no_results", hint["reason"]!.GetValue<string>());
+        Assert.Equal("symbols", hint["tool"]!.GetValue<string>());
+        Assert.Equal("MissingSymbol", hint["args"]!["query"]!.GetValue<string>());
+    }
+
     // --- Protocol tests / プロトコルテスト ---
 
     [Fact]
