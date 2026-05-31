@@ -6480,6 +6480,10 @@ public class McpServerTests : IDisposable
         Assert.Equal(2, structured["symbols"]!.GetValue<int>());
         Assert.Equal(0, structured["symbol_references"]!.GetValue<int>());
         Assert.True(structured["rewrite_all"]!.GetValue<bool>());
+        Assert.False(structured["dry_run"]!.GetValue<bool>());
+        Assert.False(structured["was_already_complete"]!.GetValue<bool>());
+        Assert.False(structured["fold_ready_before"]!.GetValue<bool>());
+        Assert.True(structured["fold_ready_after"]!.GetValue<bool>());
         Assert.True(structured["verified"]!.GetValue<bool>());
         Assert.Equal(3, structured["user_version_before"]!.GetValue<int>());
         Assert.Equal(7, structured["user_version_after"]!.GetValue<int>());
@@ -6489,6 +6493,63 @@ public class McpServerTests : IDisposable
         verifyDb.TryMigrateForRead();
         var reader = new DbReader(verifyDb.Connection);
         Assert.True(reader._foldReady);
+    }
+
+    [Fact]
+    public void ToolsCall_BackfillFold_DryRunDoesNotWrite()
+    {
+        var writer = new DbWriter(_db.Connection);
+        writer.SetMeta("fold_key_fingerprint", "DEADBEEFDEADBEEF");
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{"dry_run":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.True(structured["dry_run"]!.GetValue<bool>());
+        Assert.Equal(2, structured["symbols"]!.GetValue<int>());
+        Assert.False(structured["verified"]!.GetValue<bool>());
+        Assert.False(structured["fold_ready_after"]!.GetValue<bool>());
+
+        Assert.Equal("DEADBEEFDEADBEEF", _db.GetMetaString("fold_key_fingerprint"));
+        Assert.Equal(3, _db.GetUserVersion());
+    }
+
+    [Fact]
+    public void ToolsCall_BackfillFold_SecondRunSignalsAlreadyComplete()
+    {
+        var first = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
+        Assert.False(_server.HandleMessage(first)!["result"]!["isError"]?.GetValue<bool>() ?? false);
+
+        var second = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
+        var response = _server.HandleMessage(second)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(0, structured["symbols"]!.GetValue<int>());
+        Assert.Equal(0, structured["symbol_references"]!.GetValue<int>());
+        Assert.False(structured["rewrite_all"]!.GetValue<bool>());
+        Assert.True(structured["was_already_complete"]!.GetValue<bool>());
+        Assert.True(structured["fold_ready_before"]!.GetValue<bool>());
+        Assert.True(structured["fold_ready_after"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void ToolsCall_BackfillFold_ForceRewritesAlreadyCompleteRows()
+    {
+        var first = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
+        Assert.False(_server.HandleMessage(first)!["result"]!["isError"]?.GetValue<bool>() ?? false);
+
+        var forced = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"backfill_fold","arguments":{"force":true}}}""")!;
+        var response = _server.HandleMessage(forced)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.True(structured["force"]!.GetValue<bool>());
+        Assert.True(structured["rewrite_all"]!.GetValue<bool>());
+        Assert.Equal(2, structured["symbols"]!.GetValue<int>());
+        Assert.False(structured["was_already_complete"]!.GetValue<bool>());
+        Assert.True(structured["fold_ready_after"]!.GetValue<bool>());
     }
 
     [Fact]

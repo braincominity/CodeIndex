@@ -9,7 +9,7 @@ public static partial class IndexCommandRunner
 {
     private static readonly string[] AcceptedBackfillFoldFlags =
     [
-        "--db", "--json", "--help",
+        "--db", "--json", "--dry-run", "--help",
     ];
 
     public static int RunBackfillFold(string[] cmdArgs, JsonSerializerOptions jsonOptions) =>
@@ -167,6 +167,7 @@ public static partial class IndexCommandRunner
             var writer = new DbWriter(db);
 
             var userVersionBefore = db.GetUserVersion();
+            var foldReadyBefore = (userVersionBefore & DbContext.FoldReadyFlag) != 0;
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var currentFoldFingerprint = NameFold.Fingerprint();
             var storedFoldVersion = db.GetMetaString("fold_key_version");
@@ -177,26 +178,41 @@ public static partial class IndexCommandRunner
             var rewriteAll = storedFoldVersion != currentFoldVersion
                 || storedFoldFingerprint != currentFoldFingerprint;
 
-            var (symbols, symbolReferences) = writer.BackfillFoldedColumns(
-                rewriteAll,
-                backfillCancellation.Token);
-            // MarkFoldReady re-verifies inside a BEGIN IMMEDIATE so a concurrent writer cannot
-            // insert NULL-folded rows between the verify and the stamp. Issue #1535.
-            // MarkFoldReady は BEGIN IMMEDIATE 内で再検証するため、concurrent writer による
-            // NULL 行差し込みで fold_ready が嘘になるのを防ぐ。Issue #1535。
-            var verified = writer.MarkFoldReady();
-            if (!verified)
-            {
-                return WriteCommandError(
-                    options.Json,
-                    jsonOptions,
-                    "folded-name backfill verification failed: some rows still have NULL folded values",
-                    CommandExitCodes.DatabaseError,
-                    "Retry `cdidx backfill-fold`. If the DB still does not verify, rebuild it with `cdidx index <projectPath> --rebuild`.",
-                    CommandErrorCodes.DbError);
-            }
+            var symbols = 0;
+            var symbolReferences = 0;
+            var verified = false;
+            var userVersionAfter = userVersionBefore;
 
-            var userVersionAfter = db.GetUserVersion();
+            if (options.DryRun)
+            {
+                (symbols, symbolReferences) = writer.CountBackfillFoldedColumns(rewriteAll);
+            }
+            else
+            {
+                using var transaction = writer.BeginTransaction();
+                (symbols, symbolReferences) = writer.BackfillFoldedColumns(
+                    rewriteAll,
+                    backfillCancellation.Token);
+                // MarkFoldReady re-verifies in the same transaction so rows, metadata, and
+                // FoldReady stamp commit or roll back together.
+                // 同一 transaction 内で再検証し、行・metadata・FoldReady stamp を原子的に扱う。
+                verified = writer.MarkFoldReady();
+                if (!verified)
+                {
+                    return WriteCommandError(
+                        options.Json,
+                        jsonOptions,
+                        "folded-name backfill verification failed: some rows still have NULL folded values",
+                        CommandExitCodes.DatabaseError,
+                        "Retry `cdidx backfill-fold`. If the DB still does not verify, rebuild it with `cdidx index <projectPath> --rebuild`.",
+                        CommandErrorCodes.DbError);
+                }
+
+                transaction.Commit();
+                userVersionAfter = db.GetUserVersion();
+            }
+            var foldReadyAfter = (userVersionAfter & DbContext.FoldReadyFlag) != 0;
+            var wasAlreadyComplete = foldReadyBefore && !rewriteAll && symbols == 0 && symbolReferences == 0;
 
             if (options.Json)
             {
@@ -204,20 +220,32 @@ public static partial class IndexCommandRunner
                     symbols,
                     symbolReferences,
                     rewriteAll,
+                    options.DryRun,
+                    wasAlreadyComplete,
+                    foldReadyBefore,
+                    foldReadyAfter,
                     verified,
                     userVersionBefore,
                     userVersionAfter,
-                    true), jsonContext.BackfillFoldJsonResult));
+                    foldReadyAfter), jsonContext.BackfillFoldJsonResult));
             }
             else
             {
-                Console.WriteLine("Backfilling folded-name columns ...");
-                Console.WriteLine($"  symbols:            {ConsoleUi.Counted(symbols, "row", format: "N0")} rewritten");
-                Console.WriteLine($"  symbol_references:  {ConsoleUi.Counted(symbolReferences, "row", format: "N0")} rewritten");
+                Console.WriteLine(options.DryRun
+                    ? "Previewing folded-name column backfill ..."
+                    : "Backfilling folded-name columns ...");
+                var verb = options.DryRun ? "would be rewritten" : "rewritten";
+                Console.WriteLine($"  symbols:            {ConsoleUi.Counted(symbols, "row", format: "N0")} {verb}");
+                Console.WriteLine($"  symbol_references:  {ConsoleUi.Counted(symbolReferences, "row", format: "N0")} {verb}");
                 if (rewriteAll)
                     Console.WriteLine("  mode:               full folded-key refresh (fold metadata missing or mismatched)");
-                Console.WriteLine($"  verified:           {(verified ? "yes" : "no")}");
-                Console.WriteLine($"  stamp:              FoldReady bit set (user_version: {userVersionBefore} -> {userVersionAfter})");
+                Console.WriteLine($"  already complete:   {(wasAlreadyComplete ? "yes" : "no")}");
+                Console.WriteLine($"  fold_ready:         {foldReadyBefore} -> {foldReadyAfter}");
+                if (!options.DryRun)
+                {
+                    Console.WriteLine($"  verified:           {(verified ? "yes" : "no")}");
+                    Console.WriteLine($"  stamp:              FoldReady bit set (user_version: {userVersionBefore} -> {userVersionAfter})");
+                }
             }
 
             return CommandExitCodes.Success;
@@ -286,6 +314,7 @@ public static partial class IndexCommandRunner
     {
         var dbPath = Path.Combine(".cdidx", "codeindex.db");
         var json = false;
+        var dryRun = false;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -297,8 +326,11 @@ public static partial class IndexCommandRunner
                 case "--json":
                     json = true;
                     break;
+                case "--dry-run":
+                    dryRun = true;
+                    break;
                 case "--help" or "-h":
-                    return new BackfillFoldCommandOptions { ShowHelp = true, DbPath = dbPath, Json = json };
+                    return new BackfillFoldCommandOptions { ShowHelp = true, DbPath = dbPath, Json = json, DryRun = dryRun };
                 default:
                     if (args[i].StartsWith('-'))
                     {
@@ -310,6 +342,7 @@ public static partial class IndexCommandRunner
                         {
                             DbPath = dbPath,
                             Json = json,
+                            DryRun = dryRun,
                             ParseError = $"backfill-fold does not accept positional arguments: '{args[i]}'"
                         };
                     break;
@@ -320,6 +353,7 @@ public static partial class IndexCommandRunner
         {
             DbPath = dbPath,
             Json = json,
+            DryRun = dryRun,
         };
     }
 
