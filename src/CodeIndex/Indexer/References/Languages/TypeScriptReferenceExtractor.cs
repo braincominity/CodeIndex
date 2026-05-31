@@ -6,7 +6,13 @@ namespace CodeIndex.Indexer;
 internal static class TypeScriptReferenceExtractor
 {
     internal readonly record struct LineRange(int StartLine, int EndLine);
-    internal readonly record struct TypeAliasBinding(string Alias, string Target, int BindingLine, int? EndLine, int BraceDepth);
+    internal readonly record struct TypeAliasBinding(
+        string Alias,
+        string Target,
+        int BindingLine,
+        int? EndLine,
+        int BraceDepth,
+        IReadOnlyList<LineRange> ShadowRanges);
     internal sealed record NamespaceAliasBinding(
         string Alias,
         string ModuleSpecifier,
@@ -29,6 +35,9 @@ internal static class TypeScriptReferenceExtractor
     private static readonly Regex LocalDeclarationRegex = new(
         @"^\s*(?:(?:const|let|var)\s+|(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+|(?:export\s+)?(?:abstract\s+)?class\s+|(?:export\s+)?interface\s+|(?:export\s+)?type\s+)(?<name>[A-Za-z_$][\w$]*)\b",
         RegexOptions.Compiled);
+    private static readonly Regex TypeDeclarationShadowRegex = new(
+        @"^\s*(?:export\s+)?(?:abstract\s+)?(?:class|interface|enum)\s+(?<name>[A-Za-z_$][\w$]*)\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly HashSet<string> MappedTypeClauseIgnoredSegments = new(StringComparer.Ordinal)
     {
         "as",
@@ -248,7 +257,8 @@ internal static class TypeScriptReferenceExtractor
                     target,
                     index + 1,
                     FindScopedAliasEndLine(preparedLines, braceDepths, index),
-                    braceDepths[index]));
+                    braceDepths[index],
+                    BuildTypeAliasShadowRanges(preparedLines, braceDepths, match.Groups["alias"].Value)));
         }
 
         return aliases;
@@ -318,7 +328,8 @@ internal static class TypeScriptReferenceExtractor
         {
             if (!string.Equals(binding.Alias, alias, StringComparison.Ordinal)
                 || lineNumber <= binding.BindingLine
-                || (binding.EndLine is int endLine && lineNumber > endLine))
+                || (binding.EndLine is int endLine && lineNumber > endLine)
+                || IsInsideScopedShadow(binding.ShadowRanges, lineNumber))
             {
                 continue;
             }
@@ -332,6 +343,76 @@ internal static class TypeScriptReferenceExtractor
         }
 
         return best;
+    }
+
+    private static IReadOnlyList<LineRange> BuildTypeAliasShadowRanges(
+        IReadOnlyList<string> preparedLines,
+        IReadOnlyList<int> braceDepths,
+        string alias)
+    {
+        var ranges = new List<LineRange>();
+        for (var index = 0; index < preparedLines.Count; index++)
+        {
+            var line = preparedLines[index];
+            var typeDeclaration = TypeDeclarationShadowRegex.Match(line);
+            if (typeDeclaration.Success && string.Equals(typeDeclaration.Groups["name"].Value, alias, StringComparison.Ordinal))
+            {
+                ranges.Add(new LineRange(index + 1, FindScopedAliasEndLine(preparedLines, braceDepths, index) ?? preparedLines.Count));
+                continue;
+            }
+
+            if (DeclaresGenericTypeParameter(line, alias))
+                ranges.Add(new LineRange(index + 1, FindScopedAliasEndLine(preparedLines, braceDepths, index) ?? index + 1));
+        }
+
+        return ranges;
+    }
+
+    private static bool DeclaresGenericTypeParameter(string line, string alias)
+    {
+        var openAngle = line.IndexOf('<');
+        if (openAngle < 0)
+            return false;
+
+        var closeAngle = line.IndexOf('>', openAngle + 1);
+        if (closeAngle <= openAngle)
+            return false;
+
+        var prefix = line[..openAngle];
+        if (!ContainsKeyword(prefix, "class")
+            && !ContainsKeyword(prefix, "interface")
+            && !ContainsKeyword(prefix, "function")
+            && !ContainsKeyword(prefix, "type"))
+        {
+            return false;
+        }
+
+        foreach (var parameter in line.Substring(openAngle + 1, closeAngle - openAngle - 1).Split(','))
+        {
+            var name = parameter.Trim().Split([' ', '='], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            if (string.Equals(name, alias, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsKeyword(string text, string keyword)
+    {
+        var searchStart = 0;
+        while (searchStart < text.Length)
+        {
+            var index = text.IndexOf(keyword, searchStart, StringComparison.Ordinal);
+            if (index < 0)
+                return false;
+
+            if (HasIdentifierBoundaries(text, index, keyword.Length))
+                return true;
+
+            searchStart = index + keyword.Length;
+        }
+
+        return false;
     }
 
     private static int? FindScopedAliasEndLine(

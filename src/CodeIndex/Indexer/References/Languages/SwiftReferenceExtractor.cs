@@ -5,7 +5,14 @@ namespace CodeIndex.Indexer;
 
 internal static class SwiftReferenceExtractor
 {
-    internal readonly record struct TypeAliasBinding(string Alias, string Target, int BindingLine, int? EndLine, int BraceDepth);
+    internal readonly record struct LineRange(int StartLine, int EndLine);
+    internal readonly record struct TypeAliasBinding(
+        string Alias,
+        string Target,
+        int BindingLine,
+        int? EndLine,
+        int BraceDepth,
+        IReadOnlyList<LineRange> ShadowRanges);
 
     private static readonly string[] DeclarationKeywords = ["let", "var"];
     private static readonly string[] TypeOperatorKeywords = ["is", "as"];
@@ -17,6 +24,9 @@ internal static class SwiftReferenceExtractor
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex TypeAliasRegex = new(
         @"^\s*(?:(?:public|private|internal|open|fileprivate|package)\s+)?typealias\s+(?<alias>`[^`]+`|\w+)(?:\s*<[^=]+>)?\s*=\s*(?<target>.+)$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex TypeDeclarationShadowRegex = new(
+        @"^\s*(?:(?:public|private|internal|open|fileprivate|package)\s+)?(?:final\s+)?(?:class|struct|enum|protocol)\s+(?<name>`[^`]+`|\w+)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly HashSet<string> NonWrapperPropertyAttributes = new(StringComparer.Ordinal)
     {
@@ -100,7 +110,8 @@ internal static class SwiftReferenceExtractor
                     target,
                     index + 1,
                     FindScopedAliasEndLine(preparedLines, braceDepths, index),
-                    braceDepths[index]));
+                    braceDepths[index],
+                    BuildTypeAliasShadowRanges(preparedLines, braceDepths, TrimSwiftBackticks(match.Groups["alias"].Value))));
         }
 
         return aliases;
@@ -170,7 +181,8 @@ internal static class SwiftReferenceExtractor
         {
             if (!string.Equals(binding.Alias, alias, StringComparison.Ordinal)
                 || lineNumber <= binding.BindingLine
-                || (binding.EndLine is int endLine && lineNumber > endLine))
+                || (binding.EndLine is int endLine && lineNumber > endLine)
+                || IsInsideScopedShadow(binding.ShadowRanges, lineNumber))
             {
                 continue;
             }
@@ -184,6 +196,89 @@ internal static class SwiftReferenceExtractor
         }
 
         return best;
+    }
+
+    private static IReadOnlyList<LineRange> BuildTypeAliasShadowRanges(
+        IReadOnlyList<string> preparedLines,
+        IReadOnlyList<int> braceDepths,
+        string alias)
+    {
+        var ranges = new List<LineRange>();
+        for (var index = 0; index < preparedLines.Count; index++)
+        {
+            var line = preparedLines[index];
+            var typeDeclaration = TypeDeclarationShadowRegex.Match(line);
+            if (typeDeclaration.Success && string.Equals(TrimSwiftBackticks(typeDeclaration.Groups["name"].Value), alias, StringComparison.Ordinal))
+            {
+                ranges.Add(new LineRange(index + 1, FindScopedAliasEndLine(preparedLines, braceDepths, index) ?? preparedLines.Count));
+                continue;
+            }
+
+            if (DeclaresGenericTypeParameter(line, alias))
+                ranges.Add(new LineRange(index + 1, FindScopedAliasEndLine(preparedLines, braceDepths, index) ?? index + 1));
+        }
+
+        return ranges;
+    }
+
+    private static bool DeclaresGenericTypeParameter(string line, string alias)
+    {
+        var openAngle = line.IndexOf('<');
+        if (openAngle < 0)
+            return false;
+
+        var closeAngle = line.IndexOf('>', openAngle + 1);
+        if (closeAngle <= openAngle)
+            return false;
+
+        var prefix = line[..openAngle];
+        if (!ContainsKeyword(prefix, "class")
+            && !ContainsKeyword(prefix, "struct")
+            && !ContainsKeyword(prefix, "enum")
+            && !ContainsKeyword(prefix, "protocol")
+            && !ContainsKeyword(prefix, "func")
+            && !ContainsKeyword(prefix, "typealias"))
+        {
+            return false;
+        }
+
+        foreach (var parameter in line.Substring(openAngle + 1, closeAngle - openAngle - 1).Split(','))
+        {
+            var name = parameter.Trim().Split([' ', ':', '='], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            if (string.Equals(TrimSwiftBackticks(name ?? string.Empty), alias, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsKeyword(string text, string keyword)
+    {
+        var searchStart = 0;
+        while (searchStart < text.Length)
+        {
+            var index = text.IndexOf(keyword, searchStart, StringComparison.Ordinal);
+            if (index < 0)
+                return false;
+
+            if (HasIdentifierBoundaries(text, index, keyword.Length))
+                return true;
+
+            searchStart = index + keyword.Length;
+        }
+
+        return false;
+    }
+
+    private static bool IsInsideScopedShadow(IReadOnlyList<LineRange> ranges, int lineNumber)
+    {
+        foreach (var range in ranges)
+        {
+            if (lineNumber >= range.StartLine && lineNumber <= range.EndLine)
+                return true;
+        }
+
+        return false;
     }
 
     private static int? FindScopedAliasEndLine(

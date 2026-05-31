@@ -5841,6 +5841,34 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptTypeAliasShadowedByTypeDeclaration_DoesNotExpandOuterAlias()
+    {
+        const string content = """
+            class One {}
+            type MyAlias = One;
+            namespace Inner {
+                class MyAlias {}
+                export class B extends MyAlias {}
+            }
+            class Box<MyAlias> extends MyAlias {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "One"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "B"
+            && reference.Context == "export class B extends MyAlias {}");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "One"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Box"
+            && reference.Context == "class Box<MyAlias> extends MyAlias {}");
+    }
+
+    [Fact]
     public void Extract_CsharpIndentedRawStringBeforeBlockComment_DoesNotLeakXmlDocReferences()
     {
         // Regression: BuildCSharpBlockCommentLines must recognize the closing delimiter of an
@@ -26381,6 +26409,34 @@ public class ReferenceExtractorTests
             && reference.ReferenceKind == "type_reference"
             && reference.ContainerName == "B"
             && reference.Context == "class B: MyAlias {}");
+    }
+
+    [Fact]
+    public void Extract_SwiftTypealiasShadowedByTypeDeclaration_DoesNotExpandOuterAlias()
+    {
+        const string content = """
+            class One {}
+            typealias MyAlias = One
+            enum Inner {
+                class MyAlias {}
+                class B: MyAlias {}
+            }
+            class Box<MyAlias>: MyAlias {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "One"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "B"
+            && reference.Context == "class B: MyAlias {}");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "One"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerName == "Box"
+            && reference.Context == "class Box<MyAlias>: MyAlias {}");
     }
 
     [Fact]
