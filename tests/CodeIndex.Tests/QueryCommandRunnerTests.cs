@@ -29515,6 +29515,18 @@ jobs:
     }
 
     [Fact]
+    public void RunExcerpt_AcceptsMcpStyleStartAndEndLineAliases()
+    {
+        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+            ["src/app.cs", "--start-line", "5", "--end-line", "3"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("--start (5) must be less than or equal to --end (3)", stderr);
+        Assert.DoesNotContain("unsupported option", stderr, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void RunInspect_BlankQueryReturnsDistinctUsageError()
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
