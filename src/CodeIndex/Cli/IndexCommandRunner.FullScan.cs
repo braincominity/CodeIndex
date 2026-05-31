@@ -200,7 +200,7 @@ public static partial class IndexCommandRunner
             jsonOptions,
             $"Index extraction made no progress for {ConsoleUi.FormatDuration(ex.Timeout)} ({ex.FilesProcessed:N0}{totalSuffix} files processed).{pathSuffix}",
             CommandExitCodes.CancelledBySignal,
-            "Rerun with `--verbose` to inspect progress, lower `--parallelism`, or file a bug with the reported active phase.",
+            "Rerun with `--verbose` to inspect progress, lower `--parallelism`, exclude the reported file, or lower `--max-symbols-per-file` to skip pathological symbol output.",
             CommandErrorCodes.IndexExtractionStalled);
     }
 
