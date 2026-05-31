@@ -1520,7 +1520,10 @@ internal static class ProgramRunner
                 continue;
             }
 
-            Console.Error.WriteLine($"Error: {residualArgs[i]} is not supported for mcp.");
+            if (residualArgs[i] == "--json")
+                Console.Error.WriteLine("Error: --json is not supported for mcp; MCP already speaks JSON-RPC over the selected transport.");
+            else
+                Console.Error.WriteLine($"Error: {residualArgs[i]} is not supported for mcp.");
             Console.Error.WriteLine("Hint: use `--db <path>` to point at a specific index, `--transport stdio|http` to pick a transport, `--http-listen host:port` for HTTP, or `--audit-log <path>` to enable per-call auditing.");
             PrintMcpUsage();
             return CommandExitCodes.UsageError;
@@ -1715,6 +1718,7 @@ internal static class ProgramRunner
     private static void PrintMcpUsage()
     {
         Console.Error.WriteLine("Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]");
+        Console.Error.WriteLine("Note: --json is not supported; MCP requests and responses are JSON-RPC over the selected transport.");
     }
 
     internal static bool TryConsumeSuggestionDedupThresholdFlag(ref string[] args, out string error)
@@ -2176,6 +2180,13 @@ internal static class ProgramRunner
                 $"{commandName} requires a shell value.",
                 CommandExitCodes.UsageError,
                 "rerun with one of `bash`, `zsh`, `fish`, or `powershell`.",
+                usage);
+
+        if (cmdArgs[0] == "--json")
+            return CommandErrorWriter.Write(
+                "--json is not supported for completions.",
+                CommandExitCodes.UsageError,
+                "rerun with one of `bash`, `zsh`, `fish`, or `powershell`; completions output is already a shell script.",
                 usage);
 
         if (cmdArgs[0].StartsWith("-", StringComparison.Ordinal))

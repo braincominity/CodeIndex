@@ -291,6 +291,7 @@ public class ProgramCliTests
     [InlineData("map", "cdidx map")]
     [InlineData("status", "cdidx status")]
     [InlineData("doctor", "cdidx doctor")]
+    [InlineData("mcp", "cdidx mcp")]
     [InlineData("completions", "cdidx completions <shell>")]
     [InlineData("license", "cdidx license")]
     public void SubcommandHelp_PrintsCommandSpecificUsage(string command, string expectedUsage)
@@ -302,6 +303,15 @@ public class ProgramCliTests
         Assert.Contains("Usage:", stdout);
         Assert.Contains(expectedUsage, stdout);
         Assert.Contains("Run `cdidx --help`", stdout);
+        if (command is "mcp" or "completions")
+        {
+            Assert.Contains("Notes:", stdout);
+            Assert.Contains("--json is not supported", stdout);
+        }
+        else
+        {
+            Assert.DoesNotContain("Notes:", stdout);
+        }
         Assert.DoesNotContain("Commands:", stdout);
         Assert.DoesNotContain("Index and update options:", stdout);
         Assert.DoesNotContain("██████╗", stdout);
@@ -379,6 +389,20 @@ public class ProgramCliTests
         Assert.Equal(string.Empty, stdout);
         Assert.Contains("Usage: cdidx completions <shell>", stderr);
         Assert.DoesNotContain("Usage: cdidx --completions <shell>", stderr);
+        if (args is ["completions", "--json"])
+            Assert.Contains("--json is not supported for completions", stderr);
+    }
+
+    [Fact]
+    public void Mcp_JsonFlagReturnsExplicitUnsupportedError()
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess(["mcp", "--json"]);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("--json is not supported for mcp", stderr);
+        Assert.Contains("Usage: cdidx mcp", stderr);
+        Assert.Contains("Note: --json is not supported", stderr);
     }
 
     [Fact]
