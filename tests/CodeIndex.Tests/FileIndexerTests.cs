@@ -107,6 +107,37 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_PerDirectoryCdidxIgnore_AppliesChildRulesWithoutLeakingToSiblings()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-per-dir-ignore-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, "left"));
+            Directory.CreateDirectory(Path.Combine(tempDir, "right"));
+            File.WriteAllText(Path.Combine(tempDir, ".cdidxignore"), "*.generated.py\n");
+            File.WriteAllText(Path.Combine(tempDir, "root.generated.py"), "print('ignored root')\n");
+            File.WriteAllText(Path.Combine(tempDir, "left", ".cdidxignore"), "!keep.generated.py\nlocal.py\n");
+            File.WriteAllText(Path.Combine(tempDir, "left", "keep.generated.py"), "print('kept child')\n");
+            File.WriteAllText(Path.Combine(tempDir, "left", "local.py"), "print('ignored child')\n");
+            File.WriteAllText(Path.Combine(tempDir, "right", "keep.generated.py"), "print('ignored sibling')\n");
+            File.WriteAllText(Path.Combine(tempDir, "right", "plain.py"), "print('kept sibling')\n");
+
+            var files = new FileIndexer(tempDir)
+                .ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["left/keep.generated.py", "right/plain.py"], files);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFilesDetailed_HardlinkedFiles_SkipsDuplicatePathWithWarning()
     {
         if (OperatingSystem.IsWindows())

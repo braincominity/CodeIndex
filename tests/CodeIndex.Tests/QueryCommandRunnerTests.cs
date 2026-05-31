@@ -30253,9 +30253,9 @@ jobs:
             Assert.Equal(string.Empty, stderr);
             Assert.Contains("Readiness:", stdout);
             Assert.Contains("Reference graph table", stdout);
+            Assert.Contains("Validation issues data", stdout);
             Assert.Contains("Unicode exact-name fold contract", stdout);
             Assert.Contains("C# metadata target contract", stdout);
-            Assert.Contains("validate output is degraded to empty", stdout);
             Assert.Contains("cdidx backfill-fold", stdout);
         }
         finally
@@ -30471,6 +30471,48 @@ jobs:
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Contains("index stale", json.GetProperty("summary").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_Json_ReportsStructuredGuidanceForMultipleReadinessDegradations()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_multi_degraded");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkBatchInProgress();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var degradations = json.GetProperty("readiness_degradations");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("Last batch did not complete", stderr);
+            Assert.True(json.GetProperty("migration_in_progress").GetBoolean());
+            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.False(json.GetProperty("file_issues_data_current").GetBoolean());
+            Assert.Equal("migration_in_progress", json.GetProperty("degraded_root_cause").GetString());
+            Assert.Contains("DEGRADED", json.GetProperty("summary").GetString());
+            Assert.Contains(degradations.EnumerateArray(), item =>
+                item.GetProperty("field").GetString() == "migration_in_progress"
+                && item.GetProperty("root_cause").GetString() == "migration_in_progress");
+            Assert.Contains(degradations.EnumerateArray(), item =>
+                item.GetProperty("field").GetString() == "file_issues_data_current"
+                && item.GetProperty("root_cause").GetString() == "file_issues_data_current=false");
         }
         finally
         {
@@ -30906,7 +30948,7 @@ jobs:
 
     [Theory]
     [InlineData("graph", "graph_table_available")]
-    [InlineData("issues", "issues_table_available")]
+    [InlineData("issues", "file_issues_data_current")]
     [InlineData("hotspot", "hotspot_family_ready")]
     [InlineData("csharp", "csharp_symbol_name_ready")]
     [InlineData("sql", "sql_graph_contract_ready")]
