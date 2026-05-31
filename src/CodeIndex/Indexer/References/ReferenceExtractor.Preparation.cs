@@ -89,6 +89,9 @@ public static partial class ReferenceExtractor
                 : UsesCStyleBlockComments(language)
                     ? MaskCStyleBlockCommentLines(language, structuralLines)
                     : structuralLines;
+        if (language == "python")
+            referenceStructuralLines = MaskPythonFStrings(referenceStructuralLines);
+
         var preparedLines = new string[lines.Length];
         for (var pi = 0; pi < lines.Length; pi++)
             preparedLines[pi] = PrepareLine(language, referenceStructuralLines[pi]);
