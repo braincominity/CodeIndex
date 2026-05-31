@@ -545,6 +545,23 @@ public class DbWriter
         return cmd.ExecuteScalar() != null;
     }
 
+    public int CountSymbolsForFile(long fileId)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM symbols WHERE file_id = @file_id";
+        cmd.Parameters.AddWithValue("@file_id", fileId);
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    public bool HasIssueForFile(long fileId, string kind)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM file_issues WHERE file_id = @file_id AND kind = @kind LIMIT 1";
+        cmd.Parameters.AddWithValue("@file_id", fileId);
+        cmd.Parameters.AddWithValue("@kind", kind);
+        return cmd.ExecuteScalar() != null;
+    }
+
     public IReadOnlyList<string> GetIndexedLanguages()
     {
         var languages = new List<string>();
