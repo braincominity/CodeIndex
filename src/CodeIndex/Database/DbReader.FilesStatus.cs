@@ -477,6 +477,10 @@ public partial class DbReader
         var dbSizeBytes = TryGetDatabaseFileSize();
         var walSizeBytes = TryGetWalFileSize();
         var lastIndexRun = GetLastIndexRun();
+        var batchInProgress = string.Equals(
+            TryGetMetaStringInternal(DbContext.BatchInProgressMetaKey),
+            "true",
+            StringComparison.OrdinalIgnoreCase);
 
         var result = new StatusResult
         {
@@ -493,7 +497,9 @@ public partial class DbReader
             Languages = langs,
             SymbolsByLanguage = symbolsByLanguage.Count > 0 ? symbolsByLanguage : null,
             GraphTableAvailable = _hasReferencesTable,
-            IssuesTableAvailable = _hasIssuesTable,
+            IssuesTableAvailable = _hasIssuesPhysicalTable,
+            FileIssuesDataCurrent = _hasIssuesTable,
+            MigrationInProgress = batchInProgress,
             HotspotFamilyReady = hotspotFamilySignal.Ready,
             HotspotFamilyDegradedReason = hotspotFamilySignal.DegradedReason,
             CSharpSymbolNameReady = csharpSymbolNameReady,
@@ -512,6 +518,9 @@ public partial class DbReader
             WalSizeBytes = walSizeBytes,
             Process = StatusProcessMetrics.Capture(),
             LastIndexRun = lastIndexRun,
+            ReadOnlyFallback = _readOnlyFallback,
+            WalCheckpointAttempted = _walCheckpointAttempted,
+            WalCheckpointSucceeded = _walCheckpointSucceeded,
         };
         // Commit the read-only snapshot explicitly so the SHARED lock is released promptly.
         // read-only なので rollback でも同じだが、明示 commit して SHARED lock を早期解放する。

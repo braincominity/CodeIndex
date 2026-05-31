@@ -57,6 +57,7 @@ internal static class JsonOutputSnapshotHelper
     private static readonly HashSet<string> PlatformOptionalKeys = new(StringComparer.Ordinal)
     {
         "data_dir_mode",
+        "db_file_mode",
     };
 
     private static readonly HashSet<string> VolatileCountKeys = new(StringComparer.Ordinal)

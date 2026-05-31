@@ -370,6 +370,7 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(SearchTermOccurrence))]
 [JsonSerializable(typeof(SearchTruncationContext))]
 [JsonSerializable(typeof(StatusResult))]
+[JsonSerializable(typeof(StatusReadinessDegradation))]
 [JsonSerializable(typeof(StatusDbPragmaSettings))]
 [JsonSerializable(typeof(StatusLastIndexRun))]
 [JsonSerializable(typeof(StatusProcessMetrics))]

@@ -17,6 +17,7 @@ public static partial class IndexCommandRunner
         "--parallelism", "--memory-trace",
         "--commits", "--changed-between", "--files", "--solution", "--project",
         "--include-symbol-kind", "--exclude-symbol-kind", "--optimize", "--help",
+        "--read-only", "--immutable",
     ];
 
     internal const string IndexParallelismEnvironmentVariable = "CDIDX_INDEX_PARALLELISM";
@@ -32,6 +33,7 @@ public static partial class IndexCommandRunner
         bool quiet = false;
         bool dryRun = false;
         bool force = false;
+        bool readOnly = false;
         bool yes = false;
         bool watch = false;
         bool optimizeOnly = false;
@@ -98,6 +100,11 @@ public static partial class IndexCommandRunner
                     break;
                 case "--force":
                     force = true;
+                    break;
+                case "--read-only":
+                case "--immutable":
+                    readOnly = true;
+                    parseError ??= $"{args[i]} is only supported by query commands; index mutates the database and cannot run read-only";
                     break;
                 case "--yes":
                     yes = true;
@@ -278,6 +285,7 @@ public static partial class IndexCommandRunner
             EasterEgg = easterEgg,
             DryRun = dryRun,
             Force = force,
+            ReadOnly = readOnly,
             Yes = yes,
             Watch = watch,
             OptimizeOnly = optimizeOnly,

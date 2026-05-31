@@ -28,8 +28,11 @@ public class DbContext : IDisposable
         "symbols",
     ];
 
-    private readonly SqliteConnection _connection;
-    private readonly bool _isReadOnly;
+    private SqliteConnection _connection = null!;
+    private bool _isReadOnly;
+    private bool _readOnlyFallback;
+    private bool _walCheckpointAttempted;
+    private bool _walCheckpointSucceeded;
     private readonly string? _schemaCacheKey;
     private SqliteTransaction? _activeMigrationTransaction;
     private bool _readMigrationInsideExternalTransaction;
@@ -44,6 +47,9 @@ public class DbContext : IDisposable
 
     public SqliteConnection Connection => _connection;
     public bool IsReadOnly => _isReadOnly;
+    public bool ReadOnlyFallback => _readOnlyFallback;
+    public bool WalCheckpointAttempted => _walCheckpointAttempted;
+    public bool WalCheckpointSucceeded => _walCheckpointSucceeded;
 
     public static string GetSymbolExtractorVersionMetaKey(string lang)
         => SymbolExtractorVersionMetaPrefix + lang;
@@ -232,6 +238,7 @@ public class DbContext : IDisposable
             EnsureWritableUserVersionSupported(dbPath);
             ConfigureAutoVacuumForEmptyDatabase();
             Execute($"PRAGMA application_id={ApplicationId}");
+            ApplyPrivateDatabaseFileModes(dbPath);
 
             // Enable WAL mode and verify it was applied / WALモードを有効にし適用を確認
             var journalMode = ExecuteScalar("PRAGMA journal_mode=WAL");
@@ -239,6 +246,7 @@ public class DbContext : IDisposable
                 Console.Error.WriteLine($"Warning: WAL mode not enabled (got '{journalMode}')");
             ExecuteSynchronousPragmaWithFallback(Execute);
             Execute($"PRAGMA wal_autocheckpoint={DefaultWalAutocheckpointPages}");
+            ApplyPrivateDatabaseFileModes(dbPath);
             Execute("PRAGMA optimize=0x10002");
             WarnIfBatchInProgress();
         }
@@ -253,14 +261,50 @@ public class DbContext : IDisposable
             // read-only FS / サンドボックスでも縮退 read path を動かせるようフォールバック。
             // immutable=1 を付けないと SQLite は -shm/-wal を触ろうとして CANTOPEN で落ちることがある。
             _connection?.Dispose();
+            _walCheckpointAttempted = true;
+            _walCheckpointSucceeded = TryCheckpointWalBeforeReadOnlyFallback(dbPath);
+            if (_walCheckpointSucceeded)
+            {
+                try
+                {
+                    _connection = OpenSqliteConnectionWithRetry(
+                        () => new SqliteConnection(builder.ConnectionString),
+                        static connection => connection.Open(),
+                        static milliseconds => System.Threading.Thread.Sleep(milliseconds),
+                        dbPath: dbPath);
+                    Execute("PRAGMA busy_timeout=5000");
+                    ApplyConnectionPerformancePragmas();
+                    RegisterConnectionFunctionsWithRetry(_connection);
+                    EnsureWritableUserVersionSupported(dbPath);
+                    ConfigureAutoVacuumForEmptyDatabase();
+                    Execute($"PRAGMA application_id={ApplicationId}");
+                    ApplyPrivateDatabaseFileModes(dbPath);
+                    var journalMode = ExecuteScalar("PRAGMA journal_mode=WAL");
+                    if (!string.Equals(journalMode, "wal", StringComparison.OrdinalIgnoreCase))
+                        Console.Error.WriteLine($"Warning: WAL mode not enabled (got '{journalMode}')");
+                    ExecuteSynchronousPragmaWithFallback(Execute);
+                    Execute($"PRAGMA wal_autocheckpoint={DefaultWalAutocheckpointPages}");
+                    ApplyPrivateDatabaseFileModes(dbPath);
+                    Execute("PRAGMA optimize=0x10002");
+                    WarnIfBatchInProgress();
+                }
+                catch (SqliteException retryEx) when (IsReadOnlyOpenError(retryEx))
+                {
+                    _connection?.Dispose();
+                    _readOnlyFallback = true;
+                    OpenReadOnlyFallback(dbPath);
+                }
+
+                if (!_isReadOnly)
+                    EnsureForeignKeysEnabled();
+                _suppressWriteWorkTracking = false;
+                return;
+            }
+
             try
             {
-                _connection = OpenReadOnly(dbPath);
-                Execute("PRAGMA busy_timeout=5000");
-                ApplyConnectionPerformancePragmas();
-                RegisterConnectionFunctionsWithRetry(_connection);
-                _isReadOnly = true;
-                WarnIfBatchInProgress();
+                _readOnlyFallback = true;
+                OpenReadOnlyFallback(dbPath);
             }
             catch
             {
@@ -280,6 +324,103 @@ public class DbContext : IDisposable
         }
 
         _suppressWriteWorkTracking = false;
+    }
+
+    private void OpenReadOnlyFallback(string dbPath)
+    {
+        _connection = OpenReadOnly(dbPath);
+        Execute("PRAGMA busy_timeout=5000");
+        ApplyConnectionPerformancePragmas();
+        RegisterConnectionFunctionsWithRetry(_connection);
+        _isReadOnly = true;
+        WarnIfBatchInProgress();
+    }
+
+    private static bool TryCheckpointWalBeforeReadOnlyFallback(string dbPath)
+    {
+        try
+        {
+            var builder = new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = SqliteOpenMode.ReadWrite,
+            };
+            using var connection = OpenSqliteConnectionWithRetry(
+                () => new SqliteConnection(builder.ConnectionString),
+                static connection => connection.Open(),
+                static milliseconds => System.Threading.Thread.Sleep(milliseconds),
+                maxOpenAttempts: 1,
+                dbPath: dbPath);
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+            cmd.ExecuteNonQuery();
+            return true;
+        }
+        catch (Exception ex) when (ex is SqliteException or CodeIndexException)
+        {
+            return false;
+        }
+    }
+
+    public static string ToReadOnlyUri(string dbPath)
+    {
+        if (dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return AppendReadOnlyQuery(dbPath);
+
+        var fileUri = new Uri(Path.GetFullPath(dbPath)).AbsoluteUri;
+        return $"{fileUri}?immutable=1&mode=ro";
+    }
+
+    private static string AppendReadOnlyQuery(string uriText)
+    {
+        var separator = uriText.Contains('?', StringComparison.Ordinal) ? "&" : "?";
+        var result = uriText;
+        if (!uriText.Contains("immutable=1", StringComparison.OrdinalIgnoreCase))
+        {
+            result += $"{separator}immutable=1";
+            separator = "&";
+        }
+        if (!uriText.Contains("mode=ro", StringComparison.OrdinalIgnoreCase))
+            result += $"{separator}mode=ro";
+        return result;
+    }
+
+    private static void ApplyPrivateDatabaseFileModes(string dbPath)
+    {
+        if (OperatingSystem.IsWindows() || dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        ApplyPrivateFileModeIfExists(dbPath);
+        ApplyPrivateFileModeIfExists(dbPath + "-wal");
+        ApplyPrivateFileModeIfExists(dbPath + "-shm");
+    }
+
+    private static void ApplyPrivateFileModeIfExists(string path)
+    {
+        var normalizedPath = LongPath.EnsureWindowsPrefix(path);
+        if (!File.Exists(normalizedPath))
+            return;
+
+#pragma warning disable CA1416
+        File.SetUnixFileMode(normalizedPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+#pragma warning restore CA1416
+    }
+
+    public static string? GetUnixFileModeString(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) ||
+            OperatingSystem.IsWindows() ||
+            path.StartsWith("file:", StringComparison.OrdinalIgnoreCase) ||
+            !File.Exists(path))
+        {
+            return null;
+        }
+
+        var mode = File.GetUnixFileMode(path) &
+            (UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+             UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
+             UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+        return Convert.ToString((int)mode, 8).PadLeft(4, '0');
     }
 
     private static string? TryCreateSchemaCacheKey(string dbPath)

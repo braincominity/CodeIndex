@@ -164,6 +164,13 @@ internal static class CliFlagSchema
         "validate", "deps", "impact", "unused", "hotspots", "batch",
     ];
 
+    private static readonly string[] ReadOnlyDbCommands =
+    [
+        "search", "definition", "goto", "references", "callers", "callees",
+        "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
+        "validate", "deps", "impact", "unused", "hotspots",
+    ];
+
     private static readonly string[] JsonCommands =
     [
         "index", "backfill-fold", "optimize", "vacuum", "search", "definition", "goto", "references", "callers", "callees",
@@ -193,6 +200,8 @@ internal static class CliFlagSchema
         return new List<CliFlag>
         {
             new() { Name = "--db", ValuePlaceholder = "<path>", Description = "Database path", Commands = Set(DbPathCommands) },
+            new() { Name = "--read-only", Description = "Open the query database as immutable read-only storage", Commands = Set(ReadOnlyDbCommands) },
+            new() { Name = "--immutable", Description = "Alias for --read-only", Commands = Set(ReadOnlyDbCommands) },
             new() { Name = "--workspace-db", ValuePlaceholder = "<path>", Description = "Additional workspace member database path for dependency aggregation", Commands = Set(WorkspaceDbCommands) },
             new() { Name = "--data-dir", ValuePlaceholder = "<dir>", Description = "Directory containing codeindex.db; overrides CDIDX_DATA_DIR/XDG/workspace defaults", Commands = Set(DataDirCommands) },
             new() { Name = "--json", Description = "JSON output; search also accepts --json=array for a single JSON array", Commands = Set(JsonCommands) },
