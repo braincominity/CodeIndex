@@ -1848,6 +1848,8 @@ The MCP `tools/list` response includes an `examples` array for every registered 
 | `backfill_fold` | Upgrade folded-name keys in an existing DB without reparsing source files |
 | `suggest_improvement` | Submit structured improvement suggestions or error reports |
 
+`suggest_improvement` always stores accepted suggestions locally. Its response includes `submitted_to_github` and `github_submission_reason` so clients can distinguish `submitted`, `token_not_configured`, `repo_not_configured`, `network_error`, and `api_error`; failed GitHub attempts also include `github_submission_error`.
+
 For `callers`, `impact_analysis`, and `deps`, the [`reference_kind` filtering matrix](DEVELOPER_GUIDE.md#reference-kind-filtering-matrix) explains which edge kinds each command walks and how to reconcile count differences with `references <Name> --kind attribute` or `--kind annotation`.
 
 No CLAUDE.md hacks or SQL templates needed — the AI interacts with cdidx natively.
@@ -3879,6 +3881,8 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `index` | プロジェクトのインデックス作成・更新 |
 | `backfill_fold` | 既存 DB の folded-name key をソース再解析なしで更新 |
 | `suggest_improvement` | 構造化された改善提案またはエラー報告を送信 |
+
+`suggest_improvement` は受理した提案を常にローカル保存します。応答には `submitted_to_github` と `github_submission_reason` が含まれ、クライアントは `submitted`、`token_not_configured`、`repo_not_configured`、`network_error`、`api_error` を区別できます。GitHub 送信に失敗した場合は `github_submission_error` も含まれます。
 
 `callers`、`impact_analysis`、`deps` については、[`reference_kind` フィルタの対応表](DEVELOPER_GUIDE.md#reference-kind-filtering-matrix)で各コマンドが辿る edge kind と、`references <Name> --kind attribute` または `--kind annotation` による件数差の照合方法を確認できます。
 

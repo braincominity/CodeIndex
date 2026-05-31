@@ -9193,6 +9193,8 @@ public class McpServerTests : IDisposable
     [Fact]
     public void SuggestImprovement_ValidInput_ReturnsSuccess()
     {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_GITHUB_TOKEN");
+        env.Set("CDIDX_GITHUB_TOKEN", null);
         // Use unique description to avoid dedup collision with other test runs
         // 他テスト実行との重複排除衝突を避けるため一意な description を使用
         var uniqueDesc = $"Arrow functions are not detected as symbols {Guid.NewGuid():N}";
@@ -9214,6 +9216,8 @@ public class McpServerTests : IDisposable
         Assert.Equal("draft", structured["lifecycle_status"]!.GetValue<string>());
         Assert.NotNull(structured["hash"]);
         Assert.True(structured["stored_locally"]!.GetValue<bool>());
+        Assert.False(structured["submitted_to_github"]!.GetValue<bool>());
+        Assert.Equal("token_not_configured", structured["github_submission_reason"]!.GetValue<string>());
         Assert.Equal(Path.GetFullPath(Path.GetDirectoryName(_dbPath)!), structured["cdidx_dir"]!.GetValue<string>());
     }
 
