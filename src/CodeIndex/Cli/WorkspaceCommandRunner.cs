@@ -17,7 +17,7 @@ internal static class WorkspaceCommandRunner
             "status" => List(json, jsonOptions),
             "current" => Current(json, jsonOptions),
             "use" => Use(args[1..], json, jsonOptions),
-            _ => CommandErrorWriter.Write("Unknown workspace command.", CommandExitCodes.UsageError, "use `cdidx workspace list`, `cdidx workspace use <name>`, or `cdidx workspace current`.")
+            _ => CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "Unknown workspace command.", CommandExitCodes.UsageError, "use `cdidx workspace list`, `cdidx workspace use <name>`, or `cdidx workspace current`.")
         };
     }
 
@@ -61,7 +61,7 @@ internal static class WorkspaceCommandRunner
     private static int Use(string[] args, bool json, JsonSerializerOptions jsonOptions)
     {
         if (args.Length != 1)
-            return CommandErrorWriter.Write("workspace use requires a name.", CommandExitCodes.UsageError, "run `cdidx workspace use <name>` from a manifest member or pass `default`.");
+            return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace use requires a name.", CommandExitCodes.UsageError, "run `cdidx workspace use <name>` from a manifest member or pass `default`.");
 
         var name = args[0];
         var manifest = WorkspaceManifestLoader.Find(Environment.CurrentDirectory);
@@ -70,7 +70,7 @@ internal static class WorkspaceCommandRunner
             ? null
             : manifest?.Members.FirstOrDefault(m => string.Equals(Path.GetFileName(m.Path), name, StringComparison.OrdinalIgnoreCase));
         if (manifest != null && member == null && !useDefault)
-            return CommandErrorWriter.Write("workspace member was not found.", CommandExitCodes.UsageError, "run `cdidx workspace list` and pass one of the listed member directory names.");
+            return CommandErrorWriter.WriteJsonOrHuman(json, jsonOptions, "workspace member was not found.", CommandExitCodes.UsageError, "run `cdidx workspace list` and pass one of the listed member directory names.");
 
         var root = member?.Path ?? Environment.CurrentDirectory;
         var dbPath = member?.DbPath ?? DbPathResolver.ResolveForIndex(root, explicitDbPath: null);

@@ -45,6 +45,40 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void WorkspaceErrors_HonorJsonFlag()
+    {
+        var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["nope", "--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Contains("\"status\":\"error\"", stdout);
+        Assert.Contains("Unknown workspace command", stdout);
+        Assert.DoesNotContain("Unknown workspace command", stderr);
+    }
+
+    [Fact]
+    public void ConfigErrors_HonorJsonFlag()
+    {
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_config_error_config");
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(ActiveWorkspace.EnvironmentVariable, "XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable(ActiveWorkspace.EnvironmentVariable, null);
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(["config", "nope", "--json"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("\"status\":\"error\"", stdout);
+            Assert.Contains("Unknown config command", stdout);
+            Assert.DoesNotContain("Unknown config command", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
     public void ConfigShow_PrintsPrecedence()
     {
         var configHome = TestProjectHelper.CreateTempProject("cdidx_config_show_config");

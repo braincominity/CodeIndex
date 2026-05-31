@@ -254,7 +254,12 @@ internal static class ProgramRunner
                     "validate-config" => CdidxConfigFile.RunValidate(subArgs, jsonOptions),
                     "config" => subArgs.Length > 0 && subArgs[0] == "show"
                         ? CdidxConfigFile.RunShow(subArgs[1..], jsonOptions)
-                        : ShowError(args, "Unknown config command: use `cdidx config show`."),
+                        : CommandErrorWriter.WriteJsonOrHuman(
+                            ContainsJsonOutputFlag(subArgs),
+                            jsonOptions,
+                            "Unknown config command: use `cdidx config show`.",
+                            CommandExitCodes.UsageError,
+                            "use `cdidx config show`."),
                     "workspace" => WorkspaceCommandRunner.Run(subArgs, jsonOptions),
                     "db" => DbCommandRunner.RunIntegrityCheck(subArgs, jsonOptions),
                     "report" => ReportCommandRunner.Run(subArgs, jsonOptions, appVersion),
