@@ -11,6 +11,11 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class DbCommandRunner
 {
+    private const string CheckpointsDirectorySuffix = ".checkpoints";
+    private const string AutoCheckpointPrefix = "auto-";
+    private static readonly char[] InvalidCheckpointNameChars = Path.GetInvalidFileNameChars();
+    internal static Action? RestoreFailureAfterBackupForTesting { get; set; }
+
     public static int Run(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var options = ParseArgs(cmdArgs);
@@ -29,22 +34,27 @@ public static class DbCommandRunner
                 "Run `cdidx db --integrity-check --help` to see the supported command shape.",
                 CommandErrorCodes.UsageError);
 
-        if (!options.IntegrityCheck && !options.Schema && !options.Prune)
+        if (!options.IntegrityCheck && !options.Schema && !options.Prune && !options.Checkpoint && !options.ListCheckpoints && !options.Restore)
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
                 "db requires a mode flag",
                 CommandExitCodes.UsageError,
-                "Pass `--integrity-check`, `schema`, or `prune --dry-run|--apply`.",
+                "Pass `--integrity-check`, `schema`, `prune --dry-run|--apply`, `checkpoint [name]`, `checkpoints --list`, or `restore <name>`.",
                 CommandErrorCodes.UsageError);
 
-        if ((options.IntegrityCheck ? 1 : 0) + (options.Schema ? 1 : 0) + (options.Prune ? 1 : 0) > 1)
+        if ((options.IntegrityCheck ? 1 : 0)
+            + (options.Schema ? 1 : 0)
+            + (options.Prune ? 1 : 0)
+            + (options.Checkpoint ? 1 : 0)
+            + (options.ListCheckpoints ? 1 : 0)
+            + (options.Restore ? 1 : 0) > 1)
             return WriteCommandError(
                 options.Json,
                 jsonOptions,
                 "db accepts exactly one mode",
                 CommandExitCodes.UsageError,
-                "Run one of `cdidx db --integrity-check`, `cdidx db schema`, or `cdidx db prune --dry-run|--apply`.",
+                "Run one of `cdidx db --integrity-check`, `cdidx db schema`, `cdidx db prune --dry-run|--apply`, `cdidx db checkpoint [name]`, `cdidx db checkpoints --list`, or `cdidx db restore <name>`.",
                 CommandErrorCodes.UsageError);
 
         var dbPath = options.DbPath;
@@ -64,10 +74,26 @@ public static class DbCommandRunner
         if (options.Prune)
             return RunPrune(options, jsonOptions, dbPath, isUri);
 
+        if (options.Checkpoint)
+            return RunCheckpoint(options, jsonOptions);
+
+        if (options.ListCheckpoints)
+            return RunListCheckpoints(options, jsonOptions);
+
+        if (options.Restore)
+            return RunRestore(options, jsonOptions);
+
         return RunIntegrityCheck(options, jsonOptions, dbPath, isUri);
     }
 
     public static int RunIntegrityCheck(string[] cmdArgs, JsonSerializerOptions jsonOptions) => Run(cmdArgs, jsonOptions);
+
+    internal static string CreateAutomaticCheckpoint(string dbPath)
+    {
+        var fullDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(dbPath));
+        var name = AutoCheckpointPrefix + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
+        return CreateCheckpoint(fullDbPath, name).CheckpointPath;
+    }
 
     private static int RunIntegrityCheck(DbCommandOptions options, JsonSerializerOptions jsonOptions, string dbPath, bool isUri)
     {
@@ -237,6 +263,115 @@ public static class DbCommandRunner
         }
     }
 
+    private static int RunCheckpoint(DbCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        if (!ValidateWritableFileDb(options, jsonOptions, "checkpoint", out var fullDbPath, out var validationExitCode))
+            return validationExitCode;
+
+        try
+        {
+            var result = CreateCheckpoint(fullDbPath, options.Name ?? MakeTimestampCheckpointName());
+            if (options.Json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(
+                    new DbCheckpointJsonResult("success", fullDbPath, result.Name, result.CheckpointPath, result.Files),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).DbCheckpointJsonResult));
+            }
+            else
+            {
+                Console.WriteLine("Created database checkpoint.");
+                Console.WriteLine($"  database  : {fullDbPath}");
+                Console.WriteLine($"  name      : {result.Name}");
+                Console.WriteLine($"  checkpoint: {result.CheckpointPath}");
+                Console.WriteLine($"  files     : {ConsoleUi.Counted(result.Files.Count, "file")}");
+            }
+
+            return CommandExitCodes.Success;
+        }
+        catch (Exception ex)
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                $"failed to create database checkpoint: {ex.Message}",
+                CommandExitCodes.DatabaseError,
+                "Ensure the database and checkpoint directory are writable, then retry `cdidx db checkpoint`.",
+                CommandErrorCodes.DbError);
+        }
+    }
+
+    private static int RunListCheckpoints(DbCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        if (!TryResolveFileDb(options.DbPath, out var fullDbPath, out var error))
+            return WriteCommandError(options.Json, jsonOptions, error, CommandExitCodes.DatabaseError, "Use a filesystem database path, not a SQLite URI.", CommandErrorCodes.DbError);
+
+        var entries = ListCheckpoints(fullDbPath);
+        if (options.Json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                new DbCheckpointListJsonResult(fullDbPath, entries),
+                CliJsonSerializerContextFactory.Create(jsonOptions).DbCheckpointListJsonResult));
+        }
+        else
+        {
+            Console.WriteLine("Database checkpoints");
+            Console.WriteLine($"  database: {fullDbPath}");
+            if (entries.Count == 0)
+            {
+                Console.WriteLine("  checkpoints: none");
+            }
+            else
+            {
+                foreach (var entry in entries)
+                    Console.WriteLine($"  {entry.Name}  {entry.CreatedAtUtc}  {entry.Bytes:N0} bytes");
+            }
+        }
+
+        return CommandExitCodes.Success;
+    }
+
+    private static int RunRestore(DbCommandOptions options, JsonSerializerOptions jsonOptions)
+    {
+        if (string.IsNullOrWhiteSpace(options.Name))
+            return WriteCommandError(options.Json, jsonOptions, "restore requires a checkpoint name", CommandExitCodes.UsageError, "Use `cdidx db restore <name> --db <path>`.", CommandErrorCodes.UsageError);
+        if (!ValidateWritableFileDb(options, jsonOptions, "restore", out var fullDbPath, out var validationExitCode))
+            return validationExitCode;
+
+        try
+        {
+            var checkpointPath = GetCheckpointPath(fullDbPath, options.Name);
+            if (!Directory.Exists(checkpointPath))
+                return WriteCommandError(options.Json, jsonOptions, $"checkpoint not found: {options.Name}", CommandExitCodes.NotFound, "Run `cdidx db checkpoints --list` to see available checkpoints.", CommandErrorCodes.DbNotFound);
+
+            var backupPath = RestoreCheckpoint(fullDbPath, options.Name, checkpointPath);
+            if (options.Json)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(
+                    new DbRestoreJsonResult("success", fullDbPath, options.Name, checkpointPath, backupPath),
+                    CliJsonSerializerContextFactory.Create(jsonOptions).DbRestoreJsonResult));
+            }
+            else
+            {
+                Console.WriteLine("Restored database checkpoint.");
+                Console.WriteLine($"  database  : {fullDbPath}");
+                Console.WriteLine($"  checkpoint: {options.Name}");
+                Console.WriteLine($"  backup    : {backupPath}");
+            }
+
+            return CommandExitCodes.Success;
+        }
+        catch (Exception ex)
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                $"failed to restore database checkpoint: {ex.Message}",
+                CommandExitCodes.DatabaseError,
+                "Ensure no cdidx writer is running, then retry `cdidx db restore <name>`.",
+                CommandErrorCodes.DbError);
+        }
+    }
+
     // PRAGMA integrity_check returns a single row `"ok"` when the file passes every consistency
     // probe, otherwise it returns up to N rows of corruption findings. The pragma itself only
     // reads the database, so a read-only connection is sufficient and avoids the WAL-mode
@@ -385,6 +520,206 @@ public static class DbCommandRunner
         }
     }
 
+    private static bool ValidateWritableFileDb(DbCommandOptions options, JsonSerializerOptions jsonOptions, string command, out string fullDbPath, out int exitCode)
+    {
+        exitCode = CommandExitCodes.Success;
+        if (!TryResolveFileDb(options.DbPath, out fullDbPath, out var error))
+        {
+            WriteCommandError(options.Json, jsonOptions, error, CommandExitCodes.DatabaseError, "Use a filesystem database path, not a SQLite URI.", CommandErrorCodes.DbError);
+            exitCode = CommandExitCodes.DatabaseError;
+            return false;
+        }
+
+        if (!File.Exists(LongPath.EnsureWindowsPrefix(fullDbPath)))
+        {
+            WriteCommandError(
+                options.Json,
+                jsonOptions,
+                $"database not found: {fullDbPath}",
+                CommandExitCodes.NotFound,
+                "Point `--db` at an existing `codeindex.db`, or run `cdidx index <projectPath>` first to create one.",
+                CommandErrorCodes.DbNotFound);
+            exitCode = CommandExitCodes.NotFound;
+            return false;
+        }
+
+        if (DbPathResolver.UriRequestsReadOnly(options.DbPath))
+        {
+            WriteCommandError(
+                options.Json,
+                jsonOptions,
+                $"database must be writable for {command}: {options.DbPath}",
+                CommandExitCodes.DatabaseError,
+                "Point `--db` at a writable filesystem path.",
+                CommandErrorCodes.DbNotWritable);
+            exitCode = CommandExitCodes.DatabaseError;
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryResolveFileDb(string dbPath, out string fullDbPath, out string error)
+    {
+        fullDbPath = string.Empty;
+        error = string.Empty;
+        if (dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        {
+            error = $"database command requires a filesystem path: {dbPath}";
+            return false;
+        }
+
+        fullDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(dbPath));
+        return true;
+    }
+
+    private static DbCheckpointOperationResult CreateCheckpoint(string fullDbPath, string name)
+    {
+        ValidateCheckpointName(name);
+        var root = GetCheckpointRoot(fullDbPath);
+        var checkpointPath = GetCheckpointPath(fullDbPath, name);
+        if (Directory.Exists(checkpointPath))
+            throw new InvalidOperationException($"checkpoint already exists: {name}");
+
+        Directory.CreateDirectory(root);
+        var tempPath = Path.Combine(root, ".tmp-" + name + "-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempPath);
+        try
+        {
+            CopyIfExists(fullDbPath, Path.Combine(tempPath, Path.GetFileName(fullDbPath)));
+            CopyIfExists(fullDbPath + "-wal", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-wal"));
+            CopyIfExists(fullDbPath + "-shm", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-shm"));
+            File.WriteAllText(Path.Combine(tempPath, "manifest.txt"), $"name={name}{Environment.NewLine}created_at_utc={DateTimeOffset.UtcNow:O}{Environment.NewLine}db={fullDbPath}{Environment.NewLine}");
+            Directory.Move(tempPath, checkpointPath);
+        }
+        catch
+        {
+            if (Directory.Exists(tempPath))
+                Directory.Delete(tempPath, recursive: true);
+            throw;
+        }
+
+        var files = Directory.GetFiles(checkpointPath).Select(Path.GetFileName).Where(f => f is not null).Select(f => f!).OrderBy(f => f, StringComparer.Ordinal).ToList();
+        return new DbCheckpointOperationResult(name, checkpointPath, files);
+    }
+
+    private static List<DbCheckpointListEntryJsonResult> ListCheckpoints(string fullDbPath)
+    {
+        var root = GetCheckpointRoot(fullDbPath);
+        if (!Directory.Exists(root))
+            return [];
+
+        var dbFileName = Path.GetFileName(fullDbPath);
+        return Directory.GetDirectories(root)
+            .Where(path => !Path.GetFileName(path).StartsWith(".tmp-", StringComparison.Ordinal))
+            .Where(path => File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(path, dbFileName))))
+            .Select(path =>
+            {
+                var info = new DirectoryInfo(path);
+                var bytes = Directory.GetFiles(path).Sum(file => new FileInfo(file).Length);
+                return new DbCheckpointListEntryJsonResult(info.Name, path, info.CreationTimeUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture), bytes);
+            })
+            .OrderBy(entry => entry.Name, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static string RestoreCheckpoint(string fullDbPath, string name, string checkpointPath)
+    {
+        ValidateCheckpointName(name);
+        SqliteConnection.ClearAllPools();
+        var checkpointDbPath = Path.Combine(checkpointPath, Path.GetFileName(fullDbPath));
+        if (!File.Exists(LongPath.EnsureWindowsPrefix(checkpointDbPath)))
+            throw new InvalidOperationException($"checkpoint is incomplete: {name}");
+
+        var restoreTempPath = fullDbPath + ".restore-tmp-" + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
+        var backupPath = fullDbPath + ".restore-backup-" + DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
+        Directory.CreateDirectory(restoreTempPath);
+        try
+        {
+            CopyIfExists(checkpointDbPath, Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath)));
+            CopyIfExists(Path.Combine(checkpointPath, Path.GetFileName(fullDbPath) + "-wal"), Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-wal"));
+            CopyIfExists(Path.Combine(checkpointPath, Path.GetFileName(fullDbPath) + "-shm"), Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-shm"));
+            if (!File.Exists(LongPath.EnsureWindowsPrefix(Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath)))))
+                throw new InvalidOperationException($"checkpoint staging failed: {name}");
+
+            Directory.CreateDirectory(backupPath);
+            MoveIfExists(fullDbPath, Path.Combine(backupPath, Path.GetFileName(fullDbPath)));
+            MoveIfExists(fullDbPath + "-wal", Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-wal"));
+            MoveIfExists(fullDbPath + "-shm", Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-shm"));
+
+            RestoreFailureAfterBackupForTesting?.Invoke();
+
+            MoveIfExists(Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath)), fullDbPath);
+            MoveIfExists(Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-wal"), fullDbPath + "-wal");
+            MoveIfExists(Path.Combine(restoreTempPath, Path.GetFileName(fullDbPath) + "-shm"), fullDbPath + "-shm");
+        }
+        catch
+        {
+            RestoreBackedUpFiles(fullDbPath, backupPath);
+            throw;
+        }
+        finally
+        {
+            if (Directory.Exists(restoreTempPath))
+                Directory.Delete(restoreTempPath, recursive: true);
+        }
+
+        return backupPath;
+    }
+
+    private static void ValidateCheckpointName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)
+            || name is "." or ".."
+            || name.IndexOfAny(InvalidCheckpointNameChars) >= 0
+            || name.Contains(Path.DirectorySeparatorChar)
+            || (Path.AltDirectorySeparatorChar != '\0' && name.Contains(Path.AltDirectorySeparatorChar)))
+            throw new ArgumentException($"invalid checkpoint name: {name}");
+    }
+
+    private static string MakeTimestampCheckpointName()
+        => DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static string GetCheckpointRoot(string fullDbPath)
+        => fullDbPath + CheckpointsDirectorySuffix;
+
+    private static string GetCheckpointPath(string fullDbPath, string name)
+    {
+        ValidateCheckpointName(name);
+        return Path.Combine(GetCheckpointRoot(fullDbPath), name);
+    }
+
+    private static void CopyIfExists(string source, string destination)
+    {
+        if (File.Exists(LongPath.EnsureWindowsPrefix(source)))
+            File.Copy(LongPath.EnsureWindowsPrefix(source), LongPath.EnsureWindowsPrefix(destination), overwrite: false);
+    }
+
+    private static void MoveIfExists(string source, string destination)
+    {
+        if (File.Exists(LongPath.EnsureWindowsPrefix(source)))
+            File.Move(LongPath.EnsureWindowsPrefix(source), LongPath.EnsureWindowsPrefix(destination));
+    }
+
+    private static void RestoreBackedUpFiles(string fullDbPath, string backupPath)
+    {
+        if (!Directory.Exists(backupPath))
+            return;
+
+        DeleteIfExists(fullDbPath);
+        DeleteIfExists(fullDbPath + "-wal");
+        DeleteIfExists(fullDbPath + "-shm");
+        MoveIfExists(Path.Combine(backupPath, Path.GetFileName(fullDbPath)), fullDbPath);
+        MoveIfExists(Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-wal"), fullDbPath + "-wal");
+        MoveIfExists(Path.Combine(backupPath, Path.GetFileName(fullDbPath) + "-shm"), fullDbPath + "-shm");
+    }
+
+    private static void DeleteIfExists(string path)
+    {
+        if (File.Exists(LongPath.EnsureWindowsPrefix(path)))
+            File.Delete(LongPath.EnsureWindowsPrefix(path));
+    }
+
     internal static DbCommandOptions ParseArgs(string[] args)
     {
         var dbPath = Path.Combine(".cdidx", "codeindex.db");
@@ -394,6 +729,10 @@ public static class DbCommandRunner
         var prune = false;
         var pruneDryRun = false;
         var pruneApply = false;
+        var checkpoint = false;
+        var listCheckpoints = false;
+        var restore = false;
+        string? name = null;
         string? parseError = null;
 
         for (var i = 0; i < args.Length; i++)
@@ -418,11 +757,31 @@ public static class DbCommandRunner
                 case "prune":
                     prune = true;
                     break;
+                case "checkpoint":
+                    checkpoint = true;
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("-", StringComparison.Ordinal))
+                        name = args[++i];
+                    break;
+                case "checkpoints":
+                    listCheckpoints = true;
+                    break;
+                case "restore":
+                    restore = true;
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("-", StringComparison.Ordinal))
+                        name = args[++i];
+                    else
+                        parseError = "restore requires a checkpoint name";
+                    break;
                 case "--dry-run":
                     pruneDryRun = true;
                     break;
                 case "--apply":
                     pruneApply = true;
+                    break;
+                case "--list":
+                    if (listCheckpoints)
+                        break;
+                    parseError = "--list is only valid with `cdidx db checkpoints --list`";
                     break;
                 case "--help" or "-h":
                     return new DbCommandOptions { ShowHelp = true, DbPath = dbPath, Json = json };
@@ -430,7 +789,7 @@ public static class DbCommandRunner
                     if (args[i].StartsWith('-'))
                         parseError = $"db does not support option: '{args[i]}'";
                     else
-                        parseError = $"db does not accept positional arguments: '{args[i]}'";
+                        parseError = $"unknown db command or argument: '{args[i]}'";
                     break;
             }
 
@@ -447,6 +806,10 @@ public static class DbCommandRunner
             Prune = prune,
             PruneDryRun = pruneDryRun,
             PruneApply = pruneApply,
+            Checkpoint = checkpoint,
+            ListCheckpoints = listCheckpoints,
+            Restore = restore,
+            Name = name,
             ParseError = parseError,
         };
     }
@@ -478,5 +841,11 @@ internal sealed class DbCommandOptions
     public bool Prune { get; init; }
     public bool PruneDryRun { get; init; }
     public bool PruneApply { get; init; }
+    public bool Checkpoint { get; init; }
+    public bool ListCheckpoints { get; init; }
+    public bool Restore { get; init; }
+    public string? Name { get; init; }
     public string? ParseError { get; init; }
 }
+
+internal sealed record DbCheckpointOperationResult(string Name, string CheckpointPath, List<string> Files);

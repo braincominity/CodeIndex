@@ -43,6 +43,30 @@ internal sealed record DbIntegrityCheckJsonResult(
     [property: JsonPropertyName("ok")] bool Ok,
     [property: JsonPropertyName("issues")] List<string> Issues);
 
+internal sealed record DbCheckpointJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("db_path")] string DbPath,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("checkpoint_path")] string CheckpointPath,
+    [property: JsonPropertyName("files")] List<string> Files);
+
+internal sealed record DbCheckpointListJsonResult(
+    [property: JsonPropertyName("db_path")] string DbPath,
+    [property: JsonPropertyName("checkpoints")] List<DbCheckpointListEntryJsonResult> Checkpoints);
+
+internal sealed record DbCheckpointListEntryJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("checkpoint_path")] string CheckpointPath,
+    [property: JsonPropertyName("created_at_utc")] string CreatedAtUtc,
+    [property: JsonPropertyName("bytes")] long Bytes);
+
+internal sealed record DbRestoreJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("db_path")] string DbPath,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("checkpoint_path")] string CheckpointPath,
+    [property: JsonPropertyName("backup_path")] string BackupPath);
+
 internal sealed record DbSchemaEntryJsonResult(
     [property: JsonPropertyName("type")] string Type,
     [property: JsonPropertyName("name")] string Name,
@@ -326,8 +350,12 @@ internal sealed record VersionInfoJsonResult(
 [JsonSerializable(typeof(CompactSearchResult[]))]
 [JsonSerializable(typeof(CommandErrorJsonResult))]
 [JsonSerializable(typeof(ConfigShowJsonResult))]
+[JsonSerializable(typeof(DbCheckpointJsonResult))]
+[JsonSerializable(typeof(DbCheckpointListEntryJsonResult))]
+[JsonSerializable(typeof(DbCheckpointListJsonResult))]
 [JsonSerializable(typeof(DbIntegrityCheckJsonResult))]
 [JsonSerializable(typeof(DbPruneJsonResult))]
+[JsonSerializable(typeof(DbRestoreJsonResult))]
 [JsonSerializable(typeof(DbSchemaEntryJsonResult))]
 [JsonSerializable(typeof(DbSchemaJsonResult))]
 [JsonSerializable(typeof(DefinitionResult))]
