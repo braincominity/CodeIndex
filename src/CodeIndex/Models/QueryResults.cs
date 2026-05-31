@@ -22,6 +22,14 @@ public class SearchResult
 
 public readonly record struct QueryCountResult(int Count, int FileCount, bool IncludesSql = false);
 
+public sealed record FtsQueryDiagnostics(
+    [property: JsonPropertyName("query_degraded_reason")] string? QueryDegradedReason,
+    [property: JsonPropertyName("tokens_dropped")] IReadOnlyList<string> TokensDropped)
+{
+    public static FtsQueryDiagnostics None { get; } = new(null, []);
+    public bool HasDegradation => QueryDegradedReason != null;
+}
+
 public enum ReferenceRankMode
 {
     Weighted,

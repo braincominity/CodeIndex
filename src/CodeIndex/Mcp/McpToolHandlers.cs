@@ -147,6 +147,18 @@ public partial class McpServer
             payload["freshness_degraded_reason"] = freshness.FreshnessDegradedReason;
     }
 
+    private static void AddFtsQueryDiagnostics(JsonObject payload, FtsQueryDiagnostics diagnostics)
+    {
+        if (!diagnostics.HasDegradation)
+            return;
+
+        payload["query_degraded_reason"] = diagnostics.QueryDegradedReason;
+        var dropped = new JsonArray();
+        foreach (var token in diagnostics.TokensDropped)
+            dropped.Add(token);
+        payload["tokens_dropped"] = dropped;
+    }
+
     private static void AddExactZeroHint(JsonObject payload, ExactZeroHintResult? exactZeroHint)
     {
         if (exactZeroHint == null)
@@ -936,10 +948,13 @@ public partial class McpServer
                 payload["rawQuery"] = rawQuery;
                 payload["path"] = PathEcho(pathPatterns);
                 payload["excludeTests"] = excludeTests;
+                if (countResults.Count == 0)
+                    AddFtsQueryDiagnostics(payload, DbReader.AnalyzeFtsQuery(query, rawQuery, prefix, lang));
                 return CreateToolResult(id, $"Counted {countResults.Count} search result(s).", payload);
             }
 
             var results = reader.Search(query, FetchLimitForEnvelope(limit), lang, rawQuery, pathPatterns, excludePaths, excludeTests, deduplicate, since, exact, prefix);
+            var ftsDiagnostics = DbReader.AnalyzeFtsQuery(query, rawQuery, prefix, lang);
             var truncated = TrimToRequestedLimit(results, limit);
             if (results.Count == 0)
             {
@@ -953,6 +968,7 @@ public partial class McpServer
                     ["excludeTests"] = excludeTests,
                     ["results"] = new JsonArray()
                 };
+                AddFtsQueryDiagnostics(payload, ftsDiagnostics);
                 AddResultEnvelope(payload, 0, 0, truncated: false);
                 AddRecoveryHint(
                     payload,
