@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -1852,7 +1853,7 @@ public partial class McpServer
             {
                 results = reader.FindInFiles(query, limit, lang, pathPatterns, excludePaths, excludeTests, before, after, exact, maxLineWidth, focusLine, focusColumn, regex);
             }
-            catch (ArgumentException ex) when (regex)
+            catch (Exception ex) when (regex && (ex is ArgumentException || ex is RegexMatchTimeoutException))
             {
                 return CreateToolErrorResponse(id, $"invalid regular expression: {ex.Message}");
             }

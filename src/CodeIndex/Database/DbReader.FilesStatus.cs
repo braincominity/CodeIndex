@@ -54,7 +54,7 @@ public partial class DbReader
                     continue;
 
                 int[]? rawIndexMap = null;
-                var searchLine = exact
+                var searchLine = exact && !regex
                     ? ExactSourceSearchNormalizer.Normalize(lineText, fileLang, out rawIndexMap)
                     : lineText;
                 var snippetStart = Math.Max(1, lineNumber - before);
@@ -142,12 +142,15 @@ public partial class DbReader
         return Convert.ToInt32(fileCmd.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
-    public QueryCountResult CountFindInFiles(string query, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
+    public QueryCountResult CountFindInFiles(string query, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int? focusLine = null, int? focusColumn = null, bool regex = false)
     {
         if (string.IsNullOrWhiteSpace(query) || pathPatterns == null || pathPatterns.Count == 0)
             return new QueryCountResult(0, 0);
 
         var comparison = exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var regexMatcher = regex
+            ? new Regex(query, exact ? RegexOptions.None : RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(500))
+            : null;
         using var fileCmd = _conn.CreateCommand();
         var sql = "SELECT f.path, f.lang, f.lines FROM files f WHERE 1=1";
         if (lang != null)
@@ -170,22 +173,54 @@ public partial class DbReader
             if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap) || lineMap.Count == 0)
                 continue;
 
-            var searchQuery = exact ? ExactSourceSearchNormalizer.Normalize(query, fileLang) : query;
+            var searchQuery = exact && !regex ? ExactSourceSearchNormalizer.Normalize(query, fileLang) : query;
             var fileMatches = 0;
             for (int lineNumber = 1; lineNumber <= totalLines; lineNumber++)
             {
+                if (focusLine.HasValue && lineNumber != focusLine.Value)
+                    continue;
                 if (!lineMap.TryGetValue(lineNumber, out var lineText))
                     continue;
 
-                var searchLine = exact ? ExactSourceSearchNormalizer.Normalize(lineText, fileLang) : lineText;
+                int[]? rawIndexMap = null;
+                var searchLine = exact && !regex
+                    ? ExactSourceSearchNormalizer.Normalize(lineText, fileLang, out rawIndexMap)
+                    : lineText;
+                if (regexMatcher != null)
+                {
+                    foreach (Match match in regexMatcher.Matches(searchLine))
+                    {
+                        if (!match.Success)
+                            continue;
+                        if (IsFocusedMatch(match.Index, Math.Max(1, match.Length)))
+                            fileMatches++;
+                    }
+                    continue;
+                }
+
                 for (int searchStart = 0; searchStart < searchLine.Length;)
                 {
                     var matchColumn = searchLine.IndexOf(searchQuery, searchStart, comparison);
                     if (matchColumn < 0)
                         break;
 
-                    fileMatches++;
+                    if (IsFocusedMatch(matchColumn, searchQuery.Length))
+                        fileMatches++;
                     searchStart = matchColumn + 1;
+                }
+
+                bool IsFocusedMatch(int matchColumn, int matchLength)
+                {
+                    if (!focusColumn.HasValue)
+                        return true;
+                    var rawMatchColumn = rawIndexMap == null ? matchColumn : rawIndexMap[matchColumn];
+                    var rawMatchLength = matchLength;
+                    if (rawIndexMap != null && matchLength > 0)
+                    {
+                        var rawMatchEndIndex = rawIndexMap[matchColumn + matchLength - 1];
+                        rawMatchLength = rawMatchEndIndex - rawMatchColumn + 1;
+                    }
+                    return focusColumn.Value >= rawMatchColumn + 1 && focusColumn.Value <= rawMatchColumn + rawMatchLength;
                 }
             }
 

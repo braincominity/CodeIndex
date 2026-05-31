@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
@@ -1932,7 +1933,16 @@ public static class QueryCommandRunner
         {
             if (options.CountOnly)
             {
-                var counts = reader.CountFindInFiles(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact);
+                QueryCountResult counts;
+                try
+                {
+                    counts = reader.CountFindInFiles(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Exact, options.FocusLine, options.FocusColumn, options.Regex);
+                }
+                catch (Exception ex) when (options.Regex && (ex is ArgumentException || ex is RegexMatchTimeoutException))
+                {
+                    Console.Error.WriteLine($"Error: invalid regular expression: {ex.Message}");
+                    return CommandExitCodes.UsageError;
+                }
                 if (counts.Count == 0)
                 {
                     if (options.Json)
@@ -1963,6 +1973,11 @@ public static class QueryCommandRunner
                 results = reader.FindInFiles(options.Query, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, contextBefore, contextAfter, options.Exact, options.MaxLineWidth, options.FocusLine, options.FocusColumn, options.Regex);
             }
             catch (ArgumentException ex) when (options.Regex)
+            {
+                Console.Error.WriteLine($"Error: invalid regular expression: {ex.Message}");
+                return CommandExitCodes.UsageError;
+            }
+            catch (RegexMatchTimeoutException ex) when (options.Regex)
             {
                 Console.Error.WriteLine($"Error: invalid regular expression: {ex.Message}");
                 return CommandExitCodes.UsageError;
