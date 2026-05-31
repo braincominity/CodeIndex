@@ -21065,7 +21065,10 @@ public class SymbolExtractorTests
             input CreateUserInput {
               name: String!
               email: String!
+              roles: [Role!]!
             }
+
+            union SearchResult = User | Organization | Team
 
             enum Role {
               ADMIN
@@ -21084,6 +21087,13 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "User");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "CreateUserInput");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.ContainerName == "CreateUserInput");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "email" && s.ContainerName == "CreateUserInput");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "roles" && s.ContainerName == "CreateUserInput");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "SearchResult");
+        Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "User" && s.ContainerName == "SearchResult");
+        Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "Organization" && s.ContainerName == "SearchResult");
+        Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "Team" && s.ContainerName == "SearchResult");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Role");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetUser");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreateUser");
@@ -21127,13 +21137,17 @@ public class SymbolExtractorTests
 
             extend input ExtendedCreateUserInput {
               email: String
+              phone: String
             }
 
             extend enum ExtendedRole {
               GUEST
             }
 
-            extend union SearchResult = User | Organization
+            extend union SearchResult =
+              | User
+              | Organization
+              | Team
 
             extend scalar DateTime
 
@@ -21156,8 +21170,13 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ExtendedUser");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ExtendedNode");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ExtendedCreateUserInput");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "email" && s.ContainerName == "ExtendedCreateUserInput");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "phone" && s.ContainerName == "ExtendedCreateUserInput");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ExtendedRole");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "SearchResult");
+        Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "User" && s.ContainerName == "SearchResult");
+        Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "Organization" && s.ContainerName == "SearchResult");
+        Assert.Contains(symbols, s => s.Kind == "reference" && s.Name == "Team" && s.ContainerName == "SearchResult");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DateTime");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetUser");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreateUser");
