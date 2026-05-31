@@ -10,12 +10,51 @@ dotnet test
 dotnet run --project src/CodeIndex -- <command> [options]
 ```
 
+CLI help is intentionally layered: `cdidx --help` stays brief, `cdidx --help-all`
+prints the full command/flag/example reference, `cdidx --help-flags` prints only
+shared flag tables, and `cdidx <command> --help` prints one command's usage
+line. Keep new commands visible in the brief summary only when they are a
+primary user workflow; every command must remain present in the full help and
+command-specific usage table.
+
+`cdidx validate` is the user-facing integrity scan for indexed content issues
+such as replacement characters, BOMs, NUL bytes, mixed line endings, UTF-16 BOMs,
+and likely non-UTF8 content. Keep its CLI usage, README entry, and help summary
+in sync when adding validation issue kinds or filters.
+
+Generated shell completion scripts include a comment with the `cdidx` version
+that produced them. When command or flag schema changes, update completion
+tests and keep the README guidance that installed completions should be
+regenerated after upgrades.
+
 The production CLI and NuGet tool packaging target `net8.0`. The test project
 multi-targets `net8.0;net9.0`, and CI runs the test suite on both frameworks
 across Linux, Windows, and macOS. Use a .NET SDK that can restore and run both
 target frameworks when validating the full CI-equivalent test matrix.
 
 For test suite structure, shared helpers, and test-writing conventions, see [TESTING_GUIDE.md](TESTING_GUIDE.md).
+
+## CI / Artifact Distribution
+
+Query commands accept `--read-only` (alias `--immutable`) to open an existing
+CodeIndex database through SQLite's immutable read-only URI mode. Use this for
+CI artifacts, mounted caches, and sandboxes where creating or updating
+`codeindex.db-wal` / `codeindex.db-shm` sidecars is not allowed:
+
+```bash
+cdidx status --db /artifacts/codeindex.db --read-only --json
+cdidx search AuthService --db /artifacts/codeindex.db --immutable
+```
+
+Mutating commands such as `index`, `backfill-fold`, `optimize`, and `vacuum`
+require writable storage and reject read-only database opens.
+
+## Filesystem Permissions
+
+On POSIX filesystems, cdidx creates `.cdidx/` with mode `0700` and applies mode
+`0600` to `codeindex.db` plus WAL/SHM sidecars when they exist. `status --json`
+reports `data_dir_mode` and `db_file_mode` when the platform exposes Unix file
+modes.
 
 ## Release Distribution Checklist
 

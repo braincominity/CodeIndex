@@ -54,6 +54,7 @@ cdidx status --check --json
 cdidx search "handleRequest"
 cdidx definition UserService
 cdidx search "Handle" --project MyApp
+cdidx validate
 cdidx mcp
 ```
 
@@ -81,6 +82,15 @@ Output controls:
 Use `cdidx` when a repository will be searched repeatedly from terminals,
 scripts, CI, or AI tools. Use `rg` when you only need a one-off text scan.
 
+Help discovery:
+
+| Need | Command |
+|---|---|
+| Concise command overview | `cdidx --help` |
+| Full command, flag, and example reference | `cdidx --help-all` or `cdidx --help-extended` |
+| Shared flag reference only | `cdidx --help-flags` |
+| One command's usage line | `cdidx <command> --help` |
+
 Install choice and network notes:
 
 | Need | Use |
@@ -93,13 +103,24 @@ Install choice and network notes:
 See [DISTRIBUTION.md](DISTRIBUTION.md) for the full channel matrix and
 [isolated network install notes](USER_GUIDE.md#isolated-networks-and-proxies).
 
+### Validate
+
+Run `cdidx validate [--db <path>] [--json] [--verbose] [--kind <kind>] [--path <glob>]`
+to report indexed file issues such as replacement characters (`U+FFFD`), BOMs,
+NUL bytes, mixed line endings, UTF-16 BOMs, and likely non-UTF8 content.
+Validation findings are reported in the output and do not by themselves make
+the command fail; the command exits non-zero when the DB cannot be read or the
+command arguments are invalid. Use `--json` for machine-readable issue rows.
+
 ### Shell Completion
 
 Generate completion scripts with `cdidx --completions <bash|zsh|fish|powershell>`.
 The generated scripts complete subcommands, flags, and common flag values:
 `--lang` suggests supported languages, `--kind` suggests symbol/reference
 kinds, and path-like options such as `--db`, `--path`, and `--output` use shell
-file completion.
+file completion. Each generated script includes the `cdidx` version that
+produced it; regenerate installed completion scripts after upgrading or
+downgrading `cdidx`.
 
 ## Highlights
 
@@ -271,6 +292,7 @@ cdidx status --check --json
 cdidx search "handleRequest"
 cdidx definition UserService
 cdidx search "Handle" --project MyApp
+cdidx validate
 cdidx mcp
 ```
 
@@ -298,12 +320,31 @@ cdidx mcp
 ターミナル、スクリプト、CI、AI ツールから同じリポジトリを繰り返し検索する
 場合は `cdidx` が向いています。1回限りのテキスト検索には `rg` が向いています。
 
+help の探し方:
+
+| 目的 | コマンド |
+|---|---|
+| 短いコマンド概要 | `cdidx --help` |
+| 全コマンド、flag、例の完全版 | `cdidx --help-all` または `cdidx --help-extended` |
+| 共有 flag だけの一覧 | `cdidx --help-flags` |
+| 1 コマンドの usage 行 | `cdidx <command> --help` |
+
+### Validate
+
+`cdidx validate [--db <path>] [--json] [--verbose] [--kind <kind>] [--path <glob>]`
+は、index 済みファイルの replacement character (`U+FFFD`)、BOM、NUL byte、
+混在改行、UTF-16 BOM、非 UTF-8 らしい内容などを報告します。validation finding は
+出力で報告され、それ自体では command failure になりません。DB を読めない場合や
+引数が不正な場合は non-zero で終了します。機械処理には `--json` を使えます。
+
 ### シェル補完
 
 `cdidx --completions <bash|zsh|fish|powershell>` で補完スクリプトを生成できます。
 生成されたスクリプトは subcommand、flag、よく使う flag 値を補完します。
 `--lang` は対応言語、`--kind` は symbol / reference kind を提示し、`--db`、
 `--path`、`--output` など path 系 option は shell の file completion を使います。
+生成された script には生成元の `cdidx` version が含まれるため、`cdidx` の
+upgrade / downgrade 後はインストール済み補完 script を再生成してください。
 
 ## 特長
 
