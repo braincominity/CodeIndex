@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
@@ -303,6 +305,85 @@ public class ProgramRunnerTests
             if (File.Exists(cachePath))
                 File.Delete(cachePath);
         }
+    }
+
+    [Theory]
+    [InlineData("v1.26.0", "https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.26.0/install.sh")]
+    [InlineData(" release/test ", "https://raw.githubusercontent.com/Widthdom/CodeIndex/release%2Ftest/install.sh")]
+    public void BuildInstallerScriptUrl_UsesResolvedReleaseTag(string releaseTag, string expected)
+    {
+        Assert.Equal(expected, ProgramRunner.BuildInstallerScriptUrl(releaseTag));
+    }
+
+    [Fact]
+    public async Task DownloadInstallerScriptAsync_CancelsStalledBody()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cdidx-install-timeout-{Guid.NewGuid():N}.sh");
+        using var client = new HttpClient(new StaticResponseHandler(new StalledContent()))
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                ProgramRunner.DownloadInstallerScriptAsync(
+                    client,
+                    "v1.27.0",
+                    path,
+                    TimeSpan.FromMilliseconds(25),
+                    CancellationToken.None));
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateChecker_ReadLatestReleaseTagAsync_ParsesTagName()
+    {
+        using var content = new ByteArrayContent(Encoding.UTF8.GetBytes("""{"tag_name":"v1.27.0"}"""));
+
+        var tag = await UpdateChecker.ReadLatestReleaseTagAsync(content, CancellationToken.None);
+
+        Assert.Equal("v1.27.0", tag);
+    }
+
+    [Fact]
+    public async Task UpdateChecker_ReadLatestReleaseTagAsync_RejectsOverLimitResponse()
+    {
+        using var content = new ByteArrayContent(new byte[(int)UpdateChecker.MaxLatestReleaseResponseBytes + 1]);
+
+        var ex = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            UpdateChecker.ReadLatestReleaseTagAsync(content, CancellationToken.None));
+
+        Assert.Contains($"{UpdateChecker.MaxLatestReleaseResponseBytes} byte limit", ex.Message);
+    }
+
+    [Fact]
+    public async Task UpdateChecker_ReadLatestReleaseTagAsync_RejectsDeepJson()
+    {
+        var depth = UpdateChecker.MaxLatestReleaseJsonDepth + 8;
+        using var content = new ByteArrayContent(Encoding.UTF8.GetBytes(new string('[', depth) + new string(']', depth)));
+
+        await Assert.ThrowsAnyAsync<JsonException>(() =>
+            UpdateChecker.ReadLatestReleaseTagAsync(content, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task UpdateChecker_FetchLatestReleaseTagAsync_CancelsStalledBody()
+    {
+        using var client = new HttpClient(new StaticResponseHandler(new StalledContent()))
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            UpdateChecker.FetchLatestReleaseTagAsync(
+                client,
+                TimeSpan.FromMilliseconds(25),
+                CancellationToken.None));
     }
 
     [Theory]
@@ -1512,5 +1593,68 @@ public class ProgramRunnerTests
         Assert.True(ok, $"expected success but got error: {error}");
         Assert.Null(options.Path);
         Assert.Equal(new[] { "--db", "--audit-log" }, args);
+    }
+
+    private sealed class StaticResponseHandler : HttpMessageHandler
+    {
+        private readonly HttpContent _content;
+
+        internal StaticResponseHandler(HttpContent content)
+        {
+            _content = content;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = _content });
+    }
+
+    private sealed class StalledContent : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+            => Task.CompletedTask;
+
+        protected override Task<Stream> CreateContentReadStreamAsync()
+            => Task.FromResult<Stream>(new StalledStream());
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
+    private sealed class StalledStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+            => throw new NotSupportedException();
+
+        public override void SetLength(long value)
+            => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
     }
 }
