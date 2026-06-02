@@ -581,6 +581,10 @@ internal static class ProgramRunner
         error = string.Empty;
         var kept = new List<string>(args.Length);
         var passthrough = false;
+        var searchCommandSeen = false;
+        var searchQuerySeen = false;
+        var pendingSearchOptionValue = false;
+        var pendingSearchOptionValueIsQuery = false;
         for (var i = 0; i < args.Length; i++)
         {
             var arg = args[i];
@@ -590,9 +594,26 @@ internal static class ProgramRunner
                 continue;
             }
 
+            if (searchCommandSeen && pendingSearchOptionValue)
+            {
+                if (pendingSearchOptionValueIsQuery)
+                    searchQuerySeen = true;
+                pendingSearchOptionValue = false;
+                pendingSearchOptionValueIsQuery = false;
+                kept.Add(arg);
+                continue;
+            }
+
             if (arg == "--")
             {
                 passthrough = true;
+                kept.Add(arg);
+                continue;
+            }
+
+            if (searchCommandSeen && !searchQuerySeen && IsSearchGlobalLogFlagLiteral(args, i, arg))
+            {
+                searchQuerySeen = true;
                 kept.Add(arg);
                 continue;
             }
@@ -630,12 +651,124 @@ internal static class ProgramRunner
                 continue;
             }
 
+            if (arg == "search")
+            {
+                searchCommandSeen = true;
+                kept.Add(arg);
+                continue;
+            }
             kept.Add(arg);
+            if (searchCommandSeen && !searchQuerySeen)
+                TrackSearchQueryState(args, i, arg, ref searchQuerySeen, ref pendingSearchOptionValue, ref pendingSearchOptionValueIsQuery);
         }
 
         args = kept.ToArray();
         return true;
     }
+
+    private static bool IsSearchGlobalLogFlagLiteral(string[] args, int index, string arg)
+    {
+        static bool NextTokenLooksLikeSearchOption(string[] args, int index)
+            => index + 1 >= args.Length || args[index + 1].StartsWith("-", StringComparison.Ordinal);
+
+        if (arg is "--log-format" or "--log-retain-count" or "--log-max-size-mb")
+            return NextTokenLooksLikeSearchOption(args, index);
+
+        return (arg.StartsWith("--log-format=", StringComparison.Ordinal) ||
+                arg.StartsWith("--log-retain-count=", StringComparison.Ordinal) ||
+                arg.StartsWith("--log-max-size-mb=", StringComparison.Ordinal)) &&
+               NextTokenLooksLikeSearchOption(args, index);
+    }
+
+    private static void TrackSearchQueryState(
+        string[] args,
+        int index,
+        string arg,
+        ref bool searchQuerySeen,
+        ref bool pendingSearchOptionValue,
+        ref bool pendingSearchOptionValueIsQuery)
+    {
+        if (TryClassifySearchValueTakingOption(arg, out var hasInlineValue, out var valueIsQuery))
+        {
+            if (hasInlineValue)
+            {
+                if (valueIsQuery)
+                    searchQuerySeen = true;
+            }
+            else if (index + 1 < args.Length)
+            {
+                pendingSearchOptionValue = true;
+                pendingSearchOptionValueIsQuery = valueIsQuery;
+            }
+            return;
+        }
+
+        if (!arg.StartsWith("-", StringComparison.Ordinal))
+            searchQuerySeen = true;
+    }
+
+    private static bool TryClassifySearchValueTakingOption(string arg, out bool hasInlineValue, out bool valueIsQuery)
+    {
+        hasInlineValue = false;
+        valueIsQuery = false;
+
+        var separator = arg.IndexOf('=');
+        var optionName = separator > 0 ? arg[..separator] : arg;
+        if (!SearchValueTakingOptions.Contains(optionName))
+            return false;
+
+        hasInlineValue = separator > 0;
+        valueIsQuery = optionName == "--query";
+        return true;
+    }
+
+    private static readonly HashSet<string> SearchValueTakingOptions =
+    [
+        "--db",
+        "--color",
+        "--data-dir",
+        "--metrics",
+        "--palette",
+        "--trace",
+        "--limit",
+        "--top",
+        "--lang",
+        "--kind",
+        "--visibility",
+        "--exclude-visibility",
+        "--since",
+        "--start",
+        "--end",
+        "--before",
+        "--after",
+        "--name",
+        "--snippet-lines",
+        "--snippet-focus",
+        "--path",
+        "--require-before",
+        "--require-after",
+        "--reject-before",
+        "--reject-after",
+        "--guard-window",
+        "--project",
+        "--solution",
+        "--exclude-path",
+        "--max-hops",
+        "--depth",
+        "--query",
+        "--group-by",
+        "--focus-line",
+        "--focus-column",
+        "--focus-length",
+        "--max-line-width",
+        "--stale-after",
+        "--explain",
+        "--rank-by",
+        "--slow-query-ms",
+        "--format",
+        "--min-entrypoint-confidence",
+        "--sections",
+    ];
 
     private static bool TryConsumeValueFlag(string[] args, ref int index, string arg, string flag, out string value)
     {
