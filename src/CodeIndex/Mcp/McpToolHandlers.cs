@@ -500,7 +500,7 @@ public partial class McpServer
             "query" or "lang" or "kind" or "format" or "rankBy" or "since" or "path" or "project" or
                 "solution" or "symbol" or "direction" or "groupBy" or "category" or "language" or
                 "description" or "context" or "toolInvocationContext" or "db" => "string",
-            "queries" => "array",
+            "queries" or "evidencePaths" or "evidence_paths" => "array",
             _ => string.Empty,
         };
 
@@ -566,7 +566,7 @@ public partial class McpServer
         "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
         "index" => new HashSet<string>(StringComparer.Ordinal) { "path", "db", "rebuild", "parallelism", "maxFileBytes", "files", "commits", "changedBetween", "dryRun", "optimize" },
         "backfill_fold" => new HashSet<string>(StringComparer.Ordinal) { "dry_run", "dryRun", "force" },
-        "suggest_improvement" => new HashSet<string>(StringComparer.Ordinal) { "category", "language", "description", "context", "toolInvocationContext" },
+        "suggest_improvement" => new HashSet<string>(StringComparer.Ordinal) { "category", "language", "description", "context", "toolInvocationContext", "evidencePaths", "evidence_paths" },
         _ => new HashSet<string>(StringComparer.Ordinal),
     };
 
@@ -4035,6 +4035,9 @@ public partial class McpServer
         var language = args?["language"]?.GetValue<string>();
         var context = args?["context"]?.GetValue<string>();
         var toolInvocationContext = args?["toolInvocationContext"]?.GetValue<string>();
+        var evidencePaths = ReadEvidencePaths(args?["evidencePaths"] ?? args?["evidence_paths"], out var evidencePathsError);
+        if (evidencePathsError != null)
+            return CreateToolErrorResponse(id, evidencePathsError);
 
         if (context != null && context.Length > MaxContextLength)
             return CreateToolErrorResponse(id, $"Context too long ({context.Length} chars, max {MaxContextLength})");
@@ -4093,6 +4096,7 @@ public partial class McpServer
             ToolInvocationContext = toolInvocationContext,
             SampledTitle = sampling?.Title,
             SampledTags = sampling?.Tags,
+            EvidencePaths = evidencePaths,
         };
 
         // Build GitHub submission callback (null if no token configured).
@@ -4162,7 +4166,53 @@ public partial class McpServer
             payload["sampled_title"] = sampling.Title;
         if (sampling?.Tags is { Length: > 0 })
             payload["sampled_tags"] = new JsonArray(sampling.Tags.Select(tag => JsonValue.Create(tag)).ToArray<JsonNode?>());
+        if (evidencePaths is { Length: > 0 })
+            payload["evidence_paths"] = new JsonArray(evidencePaths.Select(path => JsonValue.Create(path)).ToArray<JsonNode?>());
         return CreateToolResult(id, "Suggestion recorded. Thank you for the feedback.", payload);
+    }
+
+    private static string[]? ReadEvidencePaths(JsonNode? node, out string? error)
+    {
+        error = null;
+        if (node == null)
+            return null;
+        if (node is not JsonArray array)
+        {
+            error = "evidencePaths must be an array of path strings.";
+            return null;
+        }
+        if (array.Count > SuggestionEvidencePaths.MaxCount)
+        {
+            error = $"evidencePaths has too many entries ({array.Count}, max {SuggestionEvidencePaths.MaxCount}).";
+            return null;
+        }
+
+        var paths = new List<string>();
+        foreach (var item in array)
+        {
+            string? path;
+            try
+            {
+                path = item?.GetValue<string>();
+            }
+            catch (InvalidOperationException)
+            {
+                error = "evidencePaths must contain only path strings.";
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(path))
+                continue;
+            if (!SuggestionEvidencePaths.TryNormalize(path, out var normalizedPath, out var pathError))
+            {
+                error = pathError;
+                return null;
+            }
+            if (normalizedPath.Length > 0 && !paths.Contains(normalizedPath, StringComparer.Ordinal))
+                paths.Add(normalizedPath);
+        }
+
+        return paths.Count == 0 ? null : paths.ToArray();
     }
 
     private static string ResolveGitHubSubmissionReason(SuggestionStore.AddAndSubmitResult result, bool githubTokenConfigured)

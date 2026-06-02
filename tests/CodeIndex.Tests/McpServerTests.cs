@@ -9488,7 +9488,8 @@ public class McpServerTests : IDisposable
                 {
                     ["category"] = "other",
                     ["description"] = uniqueDesc,
-                    ["toolInvocationContext"] = "Investigating suggestion triage"
+                    ["toolInvocationContext"] = "Investigating suggestion triage",
+                    ["evidencePaths"] = new JsonArray { "src/CodeIndex/Mcp/McpToolHandlers.cs" }
                 }
             }
         };
@@ -9505,6 +9506,35 @@ public class McpServerTests : IDisposable
         Assert.Equal("codex", stored.McpClientName);
         Assert.Equal("5.0", stored.McpClientVersion);
         Assert.Equal("Investigating suggestion triage", stored.ToolInvocationContext);
+        Assert.Equal(["src/CodeIndex/Mcp/McpToolHandlers.cs"], stored.EvidencePaths);
+    }
+
+    [Fact]
+    public void SuggestImprovement_RejectsNonRelativeEvidencePath()
+    {
+        var uniqueDesc = $"Evidence path validation regression {Guid.NewGuid():N}";
+        var json = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "suggest_improvement",
+                ["arguments"] = new JsonObject
+                {
+                    ["category"] = "other",
+                    ["description"] = uniqueDesc,
+                    ["evidencePaths"] = new JsonArray { "/Users/example/project/src/File.cs" }
+                }
+            }
+        };
+
+        var response = _server.HandleMessage((JsonNode)json)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        var message = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("repository-relative", message);
     }
 
     [Fact]
