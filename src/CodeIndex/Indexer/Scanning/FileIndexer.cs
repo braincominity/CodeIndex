@@ -493,6 +493,21 @@ public class FileIndexer
         IgnoreRuleSet Rules,
         bool IgnoreRulesAvailable);
 
+    private sealed record DirectoryScanState(
+        List<string> Results,
+        List<ScanError> Errors,
+        HashSet<string> NonIndexablePaths,
+        HashSet<string> UnknownExtensionFiles,
+        HashSet<string> ProbeFailedFilePaths,
+        HashSet<string> ListedDirectories,
+        HashSet<string> FullyScannedDirectories,
+        HashSet<string> CheckpointedDirectories,
+        HashSet<string> AttributePrunedDirectories,
+        HashSet<string> NestedRepositories,
+        HashSet<string> DanglingSymlinks,
+        HashSet<FileIdentity> VisitedFileIdentities,
+        HashSet<string> VisitedDirectories);
+
     private sealed class IgnoreRule
     {
         private readonly record struct PatternToken(char Value, bool Escaped);
@@ -1880,6 +1895,40 @@ public class FileIndexer
     internal PathFilterResult EvaluatePathFilter(string absolutePath, bool isDirectory = false)
     {
         var errors = new List<ScanError>();
+        if (TryEvaluatePathFilterPrefix(absolutePath, errors, out var fullPath, out var relativePath) is { } prefixResult)
+            return prefixResult;
+        if (TryLoadRootPathFilterRules(errors, isDirectory, out var activeIgnoreRules) is { } rootResult)
+            return rootResult;
+
+        if (relativePath.Length == 0 || relativePath == ".")
+            return new PathFilterResult(PathFilterKind.None, errors);
+
+        var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var directorySegmentCount = isDirectory ? segments.Length : Math.Max(segments.Length - 1, 0);
+        var directoryResult = EvaluatePathFilterDirectorySegments(
+            segments,
+            directorySegmentCount,
+            errors,
+            activeIgnoreRules,
+            out var leafIgnoreRules,
+            out var inSubmodulePassthrough);
+        if (directoryResult != null)
+            return directoryResult.Value;
+
+        if (isDirectory)
+            return new PathFilterResult(PathFilterKind.None, errors);
+
+        return EvaluatePathFilterLeafFile(fullPath, errors, leafIgnoreRules, inSubmodulePassthrough);
+    }
+
+    private PathFilterResult? TryEvaluatePathFilterPrefix(
+        string absolutePath,
+        List<ScanError> errors,
+        out string fullPath,
+        out string relativePath)
+    {
+        fullPath = string.Empty;
+        relativePath = string.Empty;
         if (!IsFilePathSyntaxIndexable(absolutePath))
         {
             errors.Add(new ScanError(
@@ -1889,35 +1938,50 @@ public class FileIndexer
             return new PathFilterResult(PathFilterKind.ExcludedByDefaultFile, errors);
         }
 
-        var fullPath = Path.GetFullPath(absolutePath);
+        fullPath = Path.GetFullPath(absolutePath);
         if (!IsPathEqualOrParent(_projectRoot, fullPath))
             return new PathFilterResult(PathFilterKind.OutsideProjectRoot, errors);
 
-        var relativePath = NormalizeIgnorePath(Path.GetRelativePath(_projectRoot, fullPath));
+        relativePath = NormalizeIgnorePath(Path.GetRelativePath(_projectRoot, fullPath));
         if (relativePath.StartsWith("../", StringComparison.Ordinal))
             return new PathFilterResult(PathFilterKind.None, errors);
 
+        return null;
+    }
+
+    private PathFilterResult? TryLoadRootPathFilterRules(
+        List<ScanError> errors,
+        bool isDirectory,
+        out IgnoreRuleSet activeIgnoreRules)
+    {
         var fullyScanned = true;
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
-        var activeIgnoreRules = preloadResult.Rules;
+        activeIgnoreRules = preloadResult.Rules;
         if (!preloadResult.IgnoreRulesAvailable)
             return new PathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
 
         var projectRootFilterKind = GetDirectoryFilterKind(_projectRoot, activeIgnoreRules, isProjectRoot: true);
-        if (projectRootFilterKind != PathFilterKind.None)
-            return new PathFilterResult(projectRootFilterKind, errors);
+        return projectRootFilterKind != PathFilterKind.None
+            ? new PathFilterResult(projectRootFilterKind, errors)
+            : null;
+    }
 
-        if (relativePath.Length == 0 || relativePath == ".")
-            return new PathFilterResult(PathFilterKind.None, errors);
-
-        var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+    private PathFilterResult? EvaluatePathFilterDirectorySegments(
+        string[] segments,
+        int directorySegmentCount,
+        List<ScanError> errors,
+        IgnoreRuleSet activeIgnoreRules,
+        out IgnoreRuleSet leafIgnoreRules,
+        out bool inSubmodulePassthrough)
+    {
         var currentDirectory = _projectRoot;
+        var fullyScanned = true;
         var loadResult = LoadIgnoreRulesForDirectory(currentDirectory, activeIgnoreRules, errors, ref fullyScanned);
-        activeIgnoreRules = loadResult.Rules;
+        leafIgnoreRules = loadResult.Rules;
+        inSubmodulePassthrough = false;
         if (!loadResult.IgnoreRulesAvailable)
             return new PathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
 
-        var directorySegmentCount = isDirectory ? segments.Length : Math.Max(segments.Length - 1, 0);
         // Mirror EnumerateDirectory's passthrough behavior so update-mode filters (--files /
         // --commits) match a fresh full scan: when SkipDirs is overridden because we're
         // routing toward a declared submodule, files/subdirs that do not themselves lead
@@ -1926,7 +1990,6 @@ public class FileIndexer
         // 更新モードのフィルタがフルスキャンと食い違わないようにする。submodule への通過のため
         // SkipDirs を上書きした場合でも、submodule に到達しないファイル・サブディレクトリは
         // 引き続き除外する。
-        var inSubmodulePassthrough = false;
         for (var i = 0; i < directorySegmentCount; i++)
         {
             var directoryName = segments[i];
@@ -1953,20 +2016,26 @@ public class FileIndexer
             else if (isSubmoduleAncestor)
                 inSubmodulePassthrough = true;
 
-            if (activeIgnoreRules.IsIgnored(childDirectory, isDirectory: true))
+            if (leafIgnoreRules.IsIgnored(childDirectory, isDirectory: true))
                 return new PathFilterResult(PathFilterKind.IgnoredByRules, errors);
 
             currentDirectory = childDirectory;
             fullyScanned = true;
-            loadResult = LoadIgnoreRulesForDirectory(currentDirectory, activeIgnoreRules, errors, ref fullyScanned);
-            activeIgnoreRules = loadResult.Rules;
+            loadResult = LoadIgnoreRulesForDirectory(currentDirectory, leafIgnoreRules, errors, ref fullyScanned);
+            leafIgnoreRules = loadResult.Rules;
             if (!loadResult.IgnoreRulesAvailable)
                 return new PathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
         }
 
-        if (isDirectory)
-            return new PathFilterResult(PathFilterKind.None, errors);
+        return null;
+    }
 
+    private PathFilterResult EvaluatePathFilterLeafFile(
+        string fullPath,
+        List<ScanError> errors,
+        IgnoreRuleSet activeIgnoreRules,
+        bool inSubmodulePassthrough)
+    {
         // File directly inside a submodule-ancestor passthrough directory: walker would not
         // index it, so neither should this filter.
         // submodule 祖先（passthrough）に直接置かれているファイルは walker も索引しないため
@@ -2004,43 +2073,45 @@ public class FileIndexer
         var danglingSymlinks = new HashSet<string>(StringComparer.Ordinal);
         var visitedFileIdentities = new HashSet<FileIdentity>();
         var visitedDirectories = new HashSet<string>(StringComparer.Ordinal) { NormalizePathForComparison(_projectRoot) };
+        var scanState = new DirectoryScanState(
+            files,
+            errors,
+            nonIndexablePaths,
+            unknownExtensionFiles,
+            probeFailedFilePaths,
+            listedDirectories,
+            fullyScannedDirectories,
+            activeCheckpointedDirectories,
+            attributePrunedDirectories,
+            nestedRepositories,
+            danglingSymlinks,
+            visitedFileIdentities,
+            visitedDirectories);
         errors.AddRange(_submoduleLoadWarnings);
         var fullyScanned = true;
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         if (preloadResult.IgnoreRulesAvailable)
         {
-            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeCheckpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, preloadResult.Rules, isProjectRoot: true, continueOnError, cancellationToken, depth: 0);
+            ScanDirectory(_projectRoot, scanState, preloadResult.Rules, isProjectRoot: true, continueOnError, cancellationToken, depth: 0);
         }
         return new ScanFilesResult(
-            files,
-            errors,
-            nonIndexablePaths.ToList(),
-            unknownExtensionFiles.OrderBy(path => path, StringComparer.Ordinal).ToList(),
-            probeFailedFilePaths.ToList(),
-            listedDirectories.ToList(),
-            fullyScannedDirectories.ToList(),
-            activeCheckpointedDirectories.Concat(fullyScannedDirectories).ToHashSet(StringComparer.Ordinal),
+            scanState.Results,
+            scanState.Errors,
+            scanState.NonIndexablePaths.ToList(),
+            scanState.UnknownExtensionFiles.OrderBy(path => path, StringComparer.Ordinal).ToList(),
+            scanState.ProbeFailedFilePaths.ToList(),
+            scanState.ListedDirectories.ToList(),
+            scanState.FullyScannedDirectories.ToList(),
+            scanState.CheckpointedDirectories.Concat(scanState.FullyScannedDirectories).ToHashSet(StringComparer.Ordinal),
             _ancestorIgnoreDirectories.ToList(),
-            attributePrunedDirectories.ToList(),
-            nestedRepositories.OrderBy(path => path, StringComparer.Ordinal).ToList(),
-            danglingSymlinks.OrderBy(path => path, StringComparer.Ordinal).ToList());
+            scanState.AttributePrunedDirectories.ToList(),
+            scanState.NestedRepositories.OrderBy(path => path, StringComparer.Ordinal).ToList(),
+            scanState.DanglingSymlinks.OrderBy(path => path, StringComparer.Ordinal).ToList());
     }
 
     private bool ScanDirectory(
         string dir,
-        List<string> results,
-        List<ScanError> errors,
-        HashSet<string> nonIndexablePaths,
-        HashSet<string> unknownExtensionFiles,
-        HashSet<string> probeFailedFilePaths,
-        HashSet<string> listedDirectories,
-        HashSet<string> fullyScannedDirectories,
-        HashSet<string> checkpointedDirectories,
-        HashSet<string> attributePrunedDirectories,
-        HashSet<string> nestedRepositories,
-        HashSet<string> danglingSymlinks,
-        HashSet<FileIdentity> visitedFileIdentities,
-        HashSet<string> visitedDirectories,
+        DirectoryScanState scanState,
         IgnoreRuleSet activeIgnoreRules,
         bool isProjectRoot = false,
         bool continueOnError = true,
@@ -2052,25 +2123,25 @@ public class FileIndexer
 
         if (depth > MaxDirectoryTraversalDepth)
         {
-            errors.Add(new ScanError(
+            scanState.Errors.Add(new ScanError(
                 relativeDir,
                 $"Skipped directory because traversal depth exceeded {MaxDirectoryTraversalDepth}. Check for symlink loops or unexpectedly deep generated trees.",
                 ScanIssueSeverity.Warning));
             return true;
         }
 
-        if (checkpointedDirectories.Contains(relativeDir))
+        if (scanState.CheckpointedDirectories.Contains(relativeDir))
             return true;
 
         var filterKind = GetDirectoryFilterKind(dir, activeIgnoreRules, isProjectRoot);
         if (filterKind != PathFilterKind.None)
         {
-            listedDirectories.Add(relativeDir);
-            fullyScannedDirectories.Add(relativeDir);
+            scanState.ListedDirectories.Add(relativeDir);
+            scanState.FullyScannedDirectories.Add(relativeDir);
             return true;
         }
 
-        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, activeIgnoreRules, continueOnError, cancellationToken, depth);
+        return EnumerateDirectory(dir, scanState, activeIgnoreRules, continueOnError, cancellationToken, depth);
     }
 
     private bool IsNestedGitRepository(string dir)
@@ -2084,19 +2155,7 @@ public class FileIndexer
 
     private bool EnumerateDirectory(
         string dir,
-        List<string> results,
-        List<ScanError> errors,
-        HashSet<string> nonIndexablePaths,
-        HashSet<string> unknownExtensionFiles,
-        HashSet<string> probeFailedFilePaths,
-        HashSet<string> listedDirectories,
-        HashSet<string> fullyScannedDirectories,
-        HashSet<string> checkpointedDirectories,
-        HashSet<string> attributePrunedDirectories,
-        HashSet<string> nestedRepositories,
-        HashSet<string> danglingSymlinks,
-        HashSet<FileIdentity> visitedFileIdentities,
-        HashSet<string> visitedDirectories,
+        DirectoryScanState scanState,
         IgnoreRuleSet inheritedIgnoreRules,
         bool continueOnError,
         CancellationToken cancellationToken = default,
@@ -2106,7 +2165,7 @@ public class FileIndexer
         var fullyScanned = true;
         try
         {
-            var loadResult = LoadIgnoreRulesForDirectory(dir, inheritedIgnoreRules, errors, ref fullyScanned);
+            var loadResult = LoadIgnoreRulesForDirectory(dir, inheritedIgnoreRules, scanState.Errors, ref fullyScanned);
             var activeIgnoreRules = loadResult.Rules;
             if (!loadResult.IgnoreRulesAvailable)
                 return false;
@@ -2121,230 +2180,288 @@ public class FileIndexer
             var directoryIgnoreCase = DirectoryUsesIgnoreCase(dir);
             if (directoryIgnoreCase != _ignoreCase)
             {
-                errors.Add(new ScanError(
+                scanState.Errors.Add(new ScanError(
                     ToRelativePath(dir),
                     "Filesystem case-sensitivity differs from the project root; deduplicating file paths for this directory.",
                     ScanIssueSeverity.Warning));
             }
 
             if (!passthrough)
-            {
-                var seenFilePaths = directoryIgnoreCase
-                    ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                    : null;
-                foreach (var enumeratedFile in _enumerateFiles(dir))
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    // Strip any \\?\ prefix returned by EnumerateFiles when we passed a long-path
-                    // directory, so downstream relative-path math (which compares against the
-                    // un-prefixed _projectRoot) still produces the canonical project-relative key.
-                    // \\?\ 接頭辞付きの long-path ディレクトリを渡したとき EnumerateFiles も接頭辞付きで
-                    // 返すため、_projectRoot（接頭辞なし）と突き合わせる相対パス計算が崩れないよう剥がす。
-                    var file = LongPath.RemoveWindowsPrefix(enumeratedFile);
-                    if (!IsFilePathSyntaxIndexable(file))
-                    {
-                        errors.Add(new ScanError(
-                            FormatPathForScanIssue(file),
-                            "Skipped file because its path contains NUL or control characters.",
-                            ScanIssueSeverity.Warning));
-                        nonIndexablePaths.Add(FormatPathForScanIssue(file));
-                        continue;
-                    }
-
-                    if (seenFilePaths is not null && !seenFilePaths.Add(Path.GetFullPath(file)))
-                    {
-                        var relativePath = ToRelativePath(file);
-                        errors.Add(new ScanError(
-                            relativePath,
-                            "Skipped duplicate file path that differs only by case on a case-insensitive directory.",
-                            ScanIssueSeverity.Warning));
-                        nonIndexablePaths.Add(relativePath);
-                        continue;
-                    }
-
-                    var fileName = Path.GetFileName(file);
-
-                    // Skip excluded file names / 除外ファイル名をスキップ
-                    if (IsDefaultExcludedFileName(fileName))
-                        continue;
-
-                    if (activeIgnoreRules.IsIgnored(file, isDirectory: false))
-                        continue;
-
-                    // GetFileIndexability also rejects file symlinks/reparse points so the update-mode
-                    // (--files / --commits) path gets the same skip behavior without a second probe here.
-                    // GetFileIndexability もファイル symlink / reparse point を拒否するため、
-                    // update モード (--files / --commits) でも同じ skip 挙動が二重プローブ無しで効く。
-                    var indexability = GetFileIndexability(file);
-                    if (indexability == FileProbeStatus.Missing)
-                    {
-                        var relativePath = ToRelativePath(file);
-                        errors.Add(new ScanError(
-                            relativePath,
-                            "Skipped file because it was deleted during scanning.",
-                            ScanIssueSeverity.Warning));
-                        nonIndexablePaths.Add(relativePath);
-                        continue;
-                    }
-
-                    if (indexability == FileProbeStatus.ProbeFailed)
-                    {
-                        var relativePath = ToRelativePath(file);
-                        errors.Add(new ScanError(relativePath, "Could not probe file for indexability/language."));
-                        probeFailedFilePaths.Add(relativePath);
-                        continue;
-                    }
-
-                    if (indexability != FileProbeStatus.Supported)
-                    {
-                        nonIndexablePaths.Add(ToRelativePath(file));
-                        continue;
-                    }
-
-                    var relativeFile = ToRelativePath(file);
-                    // Include files with a known extension/filename or an extensionless recognized shebang
-                    // 既知の拡張子・既知ファイル名、または拡張子なしで shebang を認識できるファイルを含める
-                    var language = TryDetectLanguage(file);
-                    if (language.Status == FileProbeStatus.Missing)
-                    {
-                        errors.Add(new ScanError(
-                            relativeFile,
-                            "Skipped file because it was deleted during scanning.",
-                            ScanIssueSeverity.Warning));
-                        nonIndexablePaths.Add(relativeFile);
-                        continue;
-                    }
-
-                    if (language.Status == FileProbeStatus.ProbeFailed)
-                    {
-                        errors.Add(new ScanError(relativeFile, "Could not probe file for indexability/language."));
-                        probeFailedFilePaths.Add(relativeFile);
-                        continue;
-                    }
-
-                    if (language.Status != FileProbeStatus.Supported)
-                    {
-                        nonIndexablePaths.Add(relativeFile);
-                        if (HasUnknownExtension(file) && !IsInternalIndexArtifactPath(relativeFile))
-                            unknownExtensionFiles.Add(relativeFile);
-                        continue;
-                    }
-
-                    if (TryGetFileIdentity(file, out var identity) && !visitedFileIdentities.Add(identity))
-                    {
-                        errors.Add(new ScanError(
-                            relativeFile,
-                            "Skipped hardlinked file because the same file content was already indexed from another path.",
-                            ScanIssueSeverity.Warning));
-                        nonIndexablePaths.Add(relativeFile);
-                        continue;
-                    }
-
-                    results.Add(file);
-                }
-            }
+                EnumerateIndexableFilesInDirectory(dir, scanState, activeIgnoreRules, directoryIgnoreCase, cancellationToken);
 
             // A successful file listing proves the direct children of this directory.
             // Child subtree failures must not revoke that authority for sibling-file purge.
             // ファイル列挙が成功した時点で、このディレクトリ直下の子要素については authoritative とみなせる。
             // 子サブツリー失敗が sibling file purge の authority を奪ってはいけない。
-            listedDirectories.Add(ToRelativePath(dir));
-
-            foreach (var enumeratedEntry in Directory.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(dir)))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var entry = LongPath.RemoveWindowsPrefix(enumeratedEntry);
-                if (!IsReparsePoint(entry) || Directory.Exists(LongPath.EnsureWindowsPrefix(entry)))
-                    continue;
-
-                var relativeEntry = ToRelativePath(entry);
-                danglingSymlinks.Add(relativeEntry);
-                errors.Add(new ScanError(relativeEntry, "Skipped dangling symlink because its target could not be resolved.", ScanIssueSeverity.Warning));
-                listedDirectories.Add(relativeEntry);
-                fullyScannedDirectories.Add(relativeEntry);
-                attributePrunedDirectories.Add(relativeEntry);
-            }
-
-            foreach (var enumeratedSubDir in Directory.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir)))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
-                if (IsNestedGitRepository(subDir) && !IsSubmoduleOrAncestor(subDir))
-                {
-                    var subRelative = ToRelativePath(subDir);
-                    listedDirectories.Add(subRelative);
-                    fullyScannedDirectories.Add(subRelative);
-                    nestedRepositories.Add(subRelative);
-                    continue;
-                }
-
-                // In passthrough mode, only descend into subdirectories that are themselves
-                // submodules or submodule ancestors. Treat siblings the same way SkipDirs
-                // would have treated them at this point.
-                // passthrough 中は、submodule 自体または submodule の祖先に該当する
-                // サブディレクトリのみ降りる。その他は本来 SkipDirs で止まっていた扱いに戻す。
-                if (passthrough && !IsSubmoduleOrAncestor(subDir))
-                {
-                    var subRelative = ToRelativePath(subDir);
-                    listedDirectories.Add(subRelative);
-                    fullyScannedDirectories.Add(subRelative);
-                    continue;
-                }
-
-                // Skip directory symlinks/reparse points to prevent infinite recursion on ancestor loops
-                // and duplicate indexing when a symlink points inside the same tree. On Windows, also
-                // skip Hidden/System directories so drive-root scans do not descend into OS-owned caches.
-                // Record the skipped directory itself as listed (for the immediate-parent purge path) AND
-                // as a prune prefix so the purge walker can authoritatively drop deep descendants that
-                // earlier runs left behind.
-                // ディレクトリ symlink / reparse point は親方向ループでの無限再帰や、
-                // ツリー内を指す symlink での二重 index を防ぐためスキップする。Windows では
-                // drive root 走査で OS 管理 cache に降りないよう Hidden/System ディレクトリもスキップする。
-                // skip したディレクトリ自身を listed 扱い（immediate parent purge 用）かつ prune prefix として
-                // 記録することで、以前の実行でできた深い子孫エントリも purge walker が確実に削除できる。
-                if (ShouldSkipDirectoryLink(subDir, errors, danglingSymlinks))
-                {
-                    var subRelative = ToRelativePath(subDir);
-                    listedDirectories.Add(subRelative);
-                    fullyScannedDirectories.Add(subRelative);
-                    attributePrunedDirectories.Add(subRelative);
-                    continue;
-                }
-
-                var resolvedSubDir = NormalizePathForComparison(GetDirectoryTraversalIdentity(subDir));
-                if (!visitedDirectories.Add(resolvedSubDir))
-                {
-                    var subRelative = ToRelativePath(subDir);
-                    errors.Add(new ScanError(subRelative, "Skipped symlinked directory because its resolved target was already scanned.", ScanIssueSeverity.Warning));
-                    listedDirectories.Add(subRelative);
-                    fullyScannedDirectories.Add(subRelative);
-                    attributePrunedDirectories.Add(subRelative);
-                    continue;
-                }
-
-                var childFullyScanned = ScanDirectory(subDir, results, errors, nonIndexablePaths, unknownExtensionFiles, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, checkpointedDirectories, attributePrunedDirectories, nestedRepositories, danglingSymlinks, visitedFileIdentities, visitedDirectories, activeIgnoreRules, continueOnError: continueOnError, cancellationToken: cancellationToken, depth: depth + 1);
-                fullyScanned &= childFullyScanned;
-                if (!continueOnError && !childFullyScanned)
-                    break;
-            }
+            scanState.ListedDirectories.Add(ToRelativePath(dir));
+            RecordDanglingFileSystemEntries(dir, scanState, cancellationToken);
+            fullyScanned &= EnumerateSubdirectories(dir, scanState, activeIgnoreRules, passthrough, continueOnError, cancellationToken, depth);
         }
         catch (UnauthorizedAccessException)
         {
             // Skip inaccessible directories / アクセス不可ディレクトリはスキップ
-            errors.Add(new ScanError(ToRelativePath(dir), "Could not scan directory due to permissions."));
+            scanState.Errors.Add(new ScanError(ToRelativePath(dir), "Could not scan directory due to permissions."));
             fullyScanned = false;
         }
         catch (IOException)
         {
             // Skip on I/O errors / I/Oエラー時はスキップ
-            errors.Add(new ScanError(ToRelativePath(dir), "Could not scan directory due to an I/O error."));
+            scanState.Errors.Add(new ScanError(ToRelativePath(dir), "Could not scan directory due to an I/O error."));
             fullyScanned = false;
         }
 
         if (fullyScanned)
-            fullyScannedDirectories.Add(ToRelativePath(dir));
+            scanState.FullyScannedDirectories.Add(ToRelativePath(dir));
 
         return fullyScanned;
+    }
+
+    private void EnumerateIndexableFilesInDirectory(
+        string dir,
+        DirectoryScanState scanState,
+        IgnoreRuleSet activeIgnoreRules,
+        bool directoryIgnoreCase,
+        CancellationToken cancellationToken)
+    {
+        var seenFilePaths = directoryIgnoreCase
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : null;
+        foreach (var enumeratedFile in _enumerateFiles(dir))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            // Strip any \\?\ prefix returned by EnumerateFiles when we passed a long-path
+            // directory, so downstream relative-path math (which compares against the
+            // un-prefixed _projectRoot) still produces the canonical project-relative key.
+            // \\?\ 接頭辞付きの long-path ディレクトリを渡したとき EnumerateFiles も接頭辞付きで
+            // 返すため、_projectRoot（接頭辞なし）と突き合わせる相対パス計算が崩れないよう剥がす。
+            var file = LongPath.RemoveWindowsPrefix(enumeratedFile);
+            if (!TryAcceptScannedFile(file, scanState, activeIgnoreRules, seenFilePaths))
+                continue;
+
+            scanState.Results.Add(file);
+        }
+    }
+
+    private bool TryAcceptScannedFile(
+        string file,
+        DirectoryScanState scanState,
+        IgnoreRuleSet activeIgnoreRules,
+        HashSet<string>? seenFilePaths)
+    {
+        if (!IsFilePathSyntaxIndexable(file))
+        {
+            var issuePath = FormatPathForScanIssue(file);
+            scanState.Errors.Add(new ScanError(
+                issuePath,
+                "Skipped file because its path contains NUL or control characters.",
+                ScanIssueSeverity.Warning));
+            scanState.NonIndexablePaths.Add(issuePath);
+            return false;
+        }
+
+        if (seenFilePaths is not null && !seenFilePaths.Add(Path.GetFullPath(file)))
+        {
+            var relativePath = ToRelativePath(file);
+            scanState.Errors.Add(new ScanError(
+                relativePath,
+                "Skipped duplicate file path that differs only by case on a case-insensitive directory.",
+                ScanIssueSeverity.Warning));
+            scanState.NonIndexablePaths.Add(relativePath);
+            return false;
+        }
+
+        var fileName = Path.GetFileName(file);
+
+        // Skip excluded file names / 除外ファイル名をスキップ
+        if (IsDefaultExcludedFileName(fileName))
+            return false;
+
+        if (activeIgnoreRules.IsIgnored(file, isDirectory: false))
+            return false;
+
+        return TryAcceptSupportedScannedFile(file, scanState);
+    }
+
+    private bool TryAcceptSupportedScannedFile(string file, DirectoryScanState scanState)
+    {
+        // GetFileIndexability also rejects file symlinks/reparse points so the update-mode
+        // (--files / --commits) path gets the same skip behavior without a second probe here.
+        // GetFileIndexability もファイル symlink / reparse point を拒否するため、
+        // update モード (--files / --commits) でも同じ skip 挙動が二重プローブ無しで効く。
+        var indexability = GetFileIndexability(file);
+        if (indexability == FileProbeStatus.Missing)
+        {
+            var relativePath = ToRelativePath(file);
+            scanState.Errors.Add(new ScanError(
+                relativePath,
+                "Skipped file because it was deleted during scanning.",
+                ScanIssueSeverity.Warning));
+            scanState.NonIndexablePaths.Add(relativePath);
+            return false;
+        }
+
+        if (indexability == FileProbeStatus.ProbeFailed)
+        {
+            var relativePath = ToRelativePath(file);
+            scanState.Errors.Add(new ScanError(relativePath, "Could not probe file for indexability/language."));
+            scanState.ProbeFailedFilePaths.Add(relativePath);
+            return false;
+        }
+
+        if (indexability != FileProbeStatus.Supported)
+        {
+            scanState.NonIndexablePaths.Add(ToRelativePath(file));
+            return false;
+        }
+
+        var relativeFile = ToRelativePath(file);
+        // Include files with a known extension/filename or an extensionless recognized shebang
+        // 既知の拡張子・既知ファイル名、または拡張子なしで shebang を認識できるファイルを含める
+        var language = TryDetectLanguage(file);
+        if (language.Status == FileProbeStatus.Missing)
+        {
+            scanState.Errors.Add(new ScanError(
+                relativeFile,
+                "Skipped file because it was deleted during scanning.",
+                ScanIssueSeverity.Warning));
+            scanState.NonIndexablePaths.Add(relativeFile);
+            return false;
+        }
+
+        if (language.Status == FileProbeStatus.ProbeFailed)
+        {
+            scanState.Errors.Add(new ScanError(relativeFile, "Could not probe file for indexability/language."));
+            scanState.ProbeFailedFilePaths.Add(relativeFile);
+            return false;
+        }
+
+        if (language.Status != FileProbeStatus.Supported)
+        {
+            scanState.NonIndexablePaths.Add(relativeFile);
+            if (HasUnknownExtension(file) && !IsInternalIndexArtifactPath(relativeFile))
+                scanState.UnknownExtensionFiles.Add(relativeFile);
+            return false;
+        }
+
+        if (TryGetFileIdentity(file, out var identity) && !scanState.VisitedFileIdentities.Add(identity))
+        {
+            scanState.Errors.Add(new ScanError(
+                relativeFile,
+                "Skipped hardlinked file because the same file content was already indexed from another path.",
+                ScanIssueSeverity.Warning));
+            scanState.NonIndexablePaths.Add(relativeFile);
+            return false;
+        }
+
+        return true;
+    }
+
+    private void RecordDanglingFileSystemEntries(
+        string dir,
+        DirectoryScanState scanState,
+        CancellationToken cancellationToken)
+    {
+        foreach (var enumeratedEntry in Directory.EnumerateFileSystemEntries(LongPath.EnsureWindowsPrefix(dir)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var entry = LongPath.RemoveWindowsPrefix(enumeratedEntry);
+            if (!IsReparsePoint(entry) || Directory.Exists(LongPath.EnsureWindowsPrefix(entry)))
+                continue;
+
+            var relativeEntry = ToRelativePath(entry);
+            scanState.DanglingSymlinks.Add(relativeEntry);
+            scanState.Errors.Add(new ScanError(relativeEntry, "Skipped dangling symlink because its target could not be resolved.", ScanIssueSeverity.Warning));
+            scanState.ListedDirectories.Add(relativeEntry);
+            scanState.FullyScannedDirectories.Add(relativeEntry);
+            scanState.AttributePrunedDirectories.Add(relativeEntry);
+        }
+    }
+
+    private bool EnumerateSubdirectories(
+        string dir,
+        DirectoryScanState scanState,
+        IgnoreRuleSet activeIgnoreRules,
+        bool passthrough,
+        bool continueOnError,
+        CancellationToken cancellationToken,
+        int depth)
+    {
+        var fullyScanned = true;
+        foreach (var enumeratedSubDir in Directory.EnumerateDirectories(LongPath.EnsureWindowsPrefix(dir)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
+            if (TryRecordNonRecursiveSubdirectory(subDir, scanState, passthrough))
+                continue;
+
+            // Skip directory symlinks/reparse points to prevent infinite recursion on ancestor loops
+            // and duplicate indexing when a symlink points inside the same tree. On Windows, also
+            // skip Hidden/System directories so drive-root scans do not descend into OS-owned caches.
+            // Record the skipped directory itself as listed (for the immediate-parent purge path) AND
+            // as a prune prefix so the purge walker can authoritatively drop deep descendants that
+            // earlier runs left behind.
+            // ディレクトリ symlink / reparse point は親方向ループでの無限再帰や、
+            // ツリー内を指す symlink での二重 index を防ぐためスキップする。Windows では
+            // drive root 走査で OS 管理 cache に降りないよう Hidden/System ディレクトリもスキップする。
+            // skip したディレクトリ自身を listed 扱い（immediate parent purge 用）かつ prune prefix として
+            // 記録することで、以前の実行でできた深い子孫エントリも purge walker が確実に削除できる。
+            if (ShouldSkipDirectoryLink(subDir, scanState.Errors, scanState.DanglingSymlinks))
+            {
+                RecordPrunedDirectory(subDir, scanState);
+                continue;
+            }
+
+            var resolvedSubDir = NormalizePathForComparison(GetDirectoryTraversalIdentity(subDir));
+            if (!scanState.VisitedDirectories.Add(resolvedSubDir))
+            {
+                var subRelative = ToRelativePath(subDir);
+                scanState.Errors.Add(new ScanError(subRelative, "Skipped symlinked directory because its resolved target was already scanned.", ScanIssueSeverity.Warning));
+                RecordPrunedDirectory(subDir, scanState);
+                continue;
+            }
+
+            var childFullyScanned = ScanDirectory(subDir, scanState, activeIgnoreRules, continueOnError: continueOnError, cancellationToken: cancellationToken, depth: depth + 1);
+            fullyScanned &= childFullyScanned;
+            if (!continueOnError && !childFullyScanned)
+                break;
+        }
+
+        return fullyScanned;
+    }
+
+    private bool TryRecordNonRecursiveSubdirectory(string subDir, DirectoryScanState scanState, bool passthrough)
+    {
+        if (IsNestedGitRepository(subDir) && !IsSubmoduleOrAncestor(subDir))
+        {
+            var subRelative = ToRelativePath(subDir);
+            scanState.ListedDirectories.Add(subRelative);
+            scanState.FullyScannedDirectories.Add(subRelative);
+            scanState.NestedRepositories.Add(subRelative);
+            return true;
+        }
+
+        // In passthrough mode, only descend into subdirectories that are themselves
+        // submodules or submodule ancestors. Treat siblings the same way SkipDirs
+        // would have treated them at this point.
+        // passthrough 中は、submodule 自体または submodule の祖先に該当する
+        // サブディレクトリのみ降りる。その他は本来 SkipDirs で止まっていた扱いに戻す。
+        if (passthrough && !IsSubmoduleOrAncestor(subDir))
+        {
+            var subRelative = ToRelativePath(subDir);
+            scanState.ListedDirectories.Add(subRelative);
+            scanState.FullyScannedDirectories.Add(subRelative);
+            return true;
+        }
+
+        return false;
+    }
+
+    private void RecordPrunedDirectory(string dir, DirectoryScanState scanState)
+    {
+        var relativeDir = ToRelativePath(dir);
+        scanState.ListedDirectories.Add(relativeDir);
+        scanState.FullyScannedDirectories.Add(relativeDir);
+        scanState.AttributePrunedDirectories.Add(relativeDir);
     }
 
     internal static bool TryGetFileIdentity(string path, out FileIdentity identity)
@@ -3034,6 +3151,58 @@ public class FileIndexer
         var relativePath = Path.GetRelativePath(_projectRoot, absolutePath);
         var normalizedRelativePath = NormalizeIndexPath(relativePath);
 
+        var (bytes, sizeBytes, modifiedUtc) = ReadRawBytesWithSizeLimit(
+            absolutePath,
+            normalizedRelativePath,
+            cancellationToken);
+        var (content, warning) = DecodeIndexableContent(bytes, relativePath);
+        // Normalize line endings to LF in one pass / 改行を1パスでLFに正規化
+        content = NormalizeLineEndings(content);
+        // Strip every line-leading UTF-8 BOM (U+FEFF): the leading BOM at offset 0
+        // and any BOM that immediately follows a `\n` (e.g. from accidental file
+        // concatenation or tool insertion). Leading BOM alone would make `^\s*`-
+        // anchored regexes silently miss line-1 declarations in BOM-prefixed
+        // Windows-authored sources; a BOM at the start of a mid-file line would
+        // additionally leak a phantom glyph through `search` / `excerpt` chunk
+        // output. Non-line-leading U+FEFF (Unicode 3.2+ ZWNBSP inside a string
+        // literal, identifier, or comment — e.g. `const s = "A\uFEFFB"`) is kept
+        // verbatim: stripping it would corrupt content fidelity for intentional
+        // mid-line ZWNBSP use. The checksum is computed after this canonicalization
+        // so freshness decisions match stored chunk/symbol line metadata. Closes #183/#1467.
+        // 行頭の UTF-8 BOM (U+FEFF) だけを剥がす — オフセット 0 の先頭 BOM と、
+        // `\n` の直後にある BOM (ファイル連結やツール挿入で発生) が対象。先頭 BOM
+        // だけでも行指向の `^\s*` 固定正規表現で BOM 付き Windows 作成ソースの
+        // 1 行目宣言を黙って取りこぼし、mid-file 行頭 BOM は `search` / `excerpt`
+        // のチャンク出力にそのまま幽霊グリフを漏らす。行頭以外の U+FEFF
+        // (Unicode 3.2+ の ZWNBSP を文字列リテラル・識別子・コメントで意図的に
+        // 使用しているケース、例: `const s = "A\uFEFFB"`) はそのまま保持する:
+        // これを剥がすと mid-line ZWNBSP の意図的利用に対して内容が壊れる。
+        // checksum はこの canonicalization 後に算出し、freshness 判定と保存される
+        // chunk / symbol 行メタデータを一致させる。Closes #183/#1467。
+        content = StripLineLeadingInvisibles(content);
+        if (IsGitLfsPointer(bytes))
+            content = string.Empty;
+        var lineCount = CountPhysicalLines(content);
+        var checksum = ComputeChecksum(Encoding.UTF8.GetBytes(content));
+        var record = new FileRecord
+        {
+            Path = normalizedRelativePath,
+            Lang = TryDetectLanguage(absolutePath, content).Language,
+            Size = sizeBytes,
+            Lines = lineCount,
+            Checksum = checksum,
+            Modified = modifiedUtc,
+            Generated = IsGeneratedCodeFile(normalizedRelativePath, content),
+        };
+
+        return (record, content, bytes, warning);
+    }
+
+    private (byte[] Bytes, long SizeBytes, DateTime ModifiedUtc) ReadRawBytesWithSizeLimit(
+        string absolutePath,
+        string normalizedRelativePath,
+        CancellationToken cancellationToken)
+    {
         // Read raw bytes through a single FileStream and cap the accumulated payload at
         // the configured max-file limit so a file that grew between the size probe and the read can no
         // longer bypass the cap. Splitting `FileInfo.Length` from `File.ReadAllBytes`
@@ -3103,13 +3272,16 @@ public class FileIndexer
                 break;
         }
 
+        return (bytes, sizeBytes, modifiedUtc);
+    }
+
+    private static (string Content, string? Warning) DecodeIndexableContent(byte[] bytes, string relativePath)
+    {
         var isUtf16Encoded = TryDetectUtf16Encoding(bytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
 
         if (!isUtf16Encoded && ContainsIndexBlockingNullByte(bytes))
             throw new BinaryFileSkippedException($"{relativePath}: binary file skipped because it contains NULL bytes");
 
-        string content;
-        string? warning = null;
         // BOM-based encoding detection: UTF-16 LE/BE source files are otherwise mangled
         // by the UTF-8 decoder (every other byte is U+FFFD or NUL), silently dropping
         // every symbol they declare. UTF-32 LE shares the first two bytes with UTF-16 LE
@@ -3121,62 +3293,21 @@ public class FileIndexer
         // ため、UTF-16 LE 経路から除外し UTF-8 fallback に流す。Closes #1540.
         if (isUtf16Encoded)
         {
-            content = new UnicodeEncoding(utf16BigEndian, byteOrderMark: hasUtf16Bom, throwOnInvalidBytes: false)
+            var content = new UnicodeEncoding(utf16BigEndian, byteOrderMark: hasUtf16Bom, throwOnInvalidBytes: false)
                 .GetString(bytes);
+            return (content, null);
         }
-        else
-        {
-            try
-            {
-                content = new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes);
-            }
-            catch (DecoderFallbackException)
-            {
-                // Fall back to replacement mode but warn / 置換モードにフォールバックし警告
-                content = new UTF8Encoding(false, throwOnInvalidBytes: false).GetString(bytes);
-                warning = $"{relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)";
-            }
-        }
-        // Normalize line endings to LF in one pass / 改行を1パスでLFに正規化
-        content = NormalizeLineEndings(content);
-        // Strip every line-leading UTF-8 BOM (U+FEFF): the leading BOM at offset 0
-        // and any BOM that immediately follows a `\n` (e.g. from accidental file
-        // concatenation or tool insertion). Leading BOM alone would make `^\s*`-
-        // anchored regexes silently miss line-1 declarations in BOM-prefixed
-        // Windows-authored sources; a BOM at the start of a mid-file line would
-        // additionally leak a phantom glyph through `search` / `excerpt` chunk
-        // output. Non-line-leading U+FEFF (Unicode 3.2+ ZWNBSP inside a string
-        // literal, identifier, or comment — e.g. `const s = "A\uFEFFB"`) is kept
-        // verbatim: stripping it would corrupt content fidelity for intentional
-        // mid-line ZWNBSP use. The checksum is computed after this canonicalization
-        // so freshness decisions match stored chunk/symbol line metadata. Closes #183/#1467.
-        // 行頭の UTF-8 BOM (U+FEFF) だけを剥がす — オフセット 0 の先頭 BOM と、
-        // `\n` の直後にある BOM (ファイル連結やツール挿入で発生) が対象。先頭 BOM
-        // だけでも行指向の `^\s*` 固定正規表現で BOM 付き Windows 作成ソースの
-        // 1 行目宣言を黙って取りこぼし、mid-file 行頭 BOM は `search` / `excerpt`
-        // のチャンク出力にそのまま幽霊グリフを漏らす。行頭以外の U+FEFF
-        // (Unicode 3.2+ の ZWNBSP を文字列リテラル・識別子・コメントで意図的に
-        // 使用しているケース、例: `const s = "A\uFEFFB"`) はそのまま保持する:
-        // これを剥がすと mid-line ZWNBSP の意図的利用に対して内容が壊れる。
-        // checksum はこの canonicalization 後に算出し、freshness 判定と保存される
-        // chunk / symbol 行メタデータを一致させる。Closes #183/#1467。
-        content = StripLineLeadingInvisibles(content);
-        if (IsGitLfsPointer(bytes))
-            content = string.Empty;
-        var lineCount = CountPhysicalLines(content);
-        var checksum = ComputeChecksum(Encoding.UTF8.GetBytes(content));
-        var record = new FileRecord
-        {
-            Path = normalizedRelativePath,
-            Lang = TryDetectLanguage(absolutePath, content).Language,
-            Size = sizeBytes,
-            Lines = lineCount,
-            Checksum = checksum,
-            Modified = modifiedUtc,
-            Generated = IsGeneratedCodeFile(normalizedRelativePath, content),
-        };
 
-        return (record, content, bytes, warning);
+        try
+        {
+            return (new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes), null);
+        }
+        catch (DecoderFallbackException)
+        {
+            // Fall back to replacement mode but warn / 置換モードにフォールバックし警告
+            var content = new UTF8Encoding(false, throwOnInvalidBytes: false).GetString(bytes);
+            return (content, $"{relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)");
+        }
     }
 
     public FileRecord BuildSkippedFileRecord(string absolutePath)
@@ -3555,17 +3686,7 @@ public class FileIndexer
         var isUtf16 = TryDetectUtf16Encoding(rawBytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
 
         if (isUtf16 && hasUtf16Bom)
-        {
-            issues.Add(new FileIssue
-            {
-                Path = relativePath,
-                Kind = "utf16_bom",
-                Line = 1,
-                Message = utf16BigEndian
-                    ? "UTF-16 BE BOM detected (decoded as UTF-16)"
-                    : "UTF-16 LE BOM detected (decoded as UTF-16)",
-            });
-        }
+            AddUtf16BomIssue(issues, relativePath, utf16BigEndian);
 
         if (TryGetConflictMarkerLine(content, out var conflictMarkerLine))
         {
@@ -3578,6 +3699,44 @@ public class FileIndexer
             });
         }
 
+        AddReplacementCharacterIssues(issues, relativePath, rawBytes, content, isUtf16, utf16BigEndian, hasUtf16Bom);
+
+        // Raw-byte heuristics: skip for UTF-16-decoded files because every UTF-16 LE ASCII
+        // codepoint looks like a NUL byte and CRLF appears as 0D 00 0A 00, so `bom` /
+        // `null_byte` / `mixed_line_endings` / `cr_only_line_endings` would all misfire.
+        // UTF-16 デコード経路では生バイト列が NUL バイトと 0D 00 0A 00 で埋まり、`bom` /
+        // `null_byte` / `mixed_line_endings` / `cr_only_line_endings` がすべて誤検出する
+        // ためスキップする。
+        if (!isUtf16)
+            AddRawByteContentIssues(issues, relativePath, rawBytes);
+
+        AddOversizeContentIssues(issues, relativePath, content);
+
+        return issues;
+    }
+
+    private static void AddUtf16BomIssue(List<FileIssue> issues, string relativePath, bool utf16BigEndian)
+    {
+        issues.Add(new FileIssue
+        {
+            Path = relativePath,
+            Kind = "utf16_bom",
+            Line = 1,
+            Message = utf16BigEndian
+                ? "UTF-16 BE BOM detected (decoded as UTF-16)"
+                : "UTF-16 LE BOM detected (decoded as UTF-16)",
+        });
+    }
+
+    private static void AddReplacementCharacterIssues(
+        List<FileIssue> issues,
+        string relativePath,
+        byte[] rawBytes,
+        string content,
+        bool isUtf16,
+        bool utf16BigEndian,
+        bool hasUtf16Bom)
+    {
         // Aggregate signal: when a large fraction of the decoded content is U+FFFD, the file
         // most likely uses a non-UTF8 encoding without a BOM (SHIFT_JIS / GBK / ISO-8859-1).
         // Emit one `non_utf8_likely` issue and suppress the per-line `replacement_char`
@@ -3618,134 +3777,136 @@ public class FileIndexer
         // Skip the per-line emission when `non_utf8_likely` already fired so a mojibake file
         // does not produce hundreds of near-duplicate `replacement_char` issues.
         // `non_utf8_likely` が出た場合は重複を抑え 1 件のアグリゲートに集約する。
-        if (!nonUtf8Likely)
+        if (nonUtf8Likely)
+            return;
+
+        for (int i = 0; i < content.Length; i++)
         {
-            for (int i = 0; i < content.Length; i++)
+            if (content[i] != '\uFFFD')
+                continue;
+
+            // Find line number / 行番号を特定
+            var lineNum = content[..i].Count(c => c == '\n') + 1;
+            var isSourceLiteral = replacementCharOrigin == FileIssue.OriginSourceLiteral;
+            issues.Add(new FileIssue
             {
-                if (content[i] == '\uFFFD')
-                {
-                    // Find line number / 行番号を特定
-                    var lineNum = content[..i].Count(c => c == '\n') + 1;
-                    var isSourceLiteral = replacementCharOrigin == FileIssue.OriginSourceLiteral;
-                    issues.Add(new FileIssue
-                    {
-                        Path = relativePath,
-                        Kind = "replacement_char",
-                        Line = lineNum,
-                        Message = isSourceLiteral
-                            ? $"U+FFFD source literal at line {lineNum}"
-                            : $"U+FFFD decoder replacement character at line {lineNum}",
-                        Origin = replacementCharOrigin,
-                        Severity = isSourceLiteral ? FileIssue.SeverityInfo : FileIssue.SeverityWarning,
-                    });
-                    // Skip to next line to avoid reporting every char on the same line
-                    // 同じ行の連続報告を避けるため次の行までスキップ
-                    var nextNewline = content.IndexOf('\n', i);
-                    if (nextNewline >= 0) i = nextNewline;
-                }
-            }
+                Path = relativePath,
+                Kind = "replacement_char",
+                Line = lineNum,
+                Message = isSourceLiteral
+                    ? $"U+FFFD source literal at line {lineNum}"
+                    : $"U+FFFD decoder replacement character at line {lineNum}",
+                Origin = replacementCharOrigin,
+                Severity = isSourceLiteral ? FileIssue.SeverityInfo : FileIssue.SeverityWarning,
+            });
+            // Skip to next line to avoid reporting every char on the same line
+            // 同じ行の連続報告を避けるため次の行までスキップ
+            var nextNewline = content.IndexOf('\n', i);
+            if (nextNewline >= 0) i = nextNewline;
+        }
+    }
+
+    private static void AddRawByteContentIssues(List<FileIssue> issues, string relativePath, byte[] rawBytes)
+    {
+        // BOM marker / BOMマーカー
+        if (rawBytes.Length >= 3 && rawBytes[0] == 0xEF && rawBytes[1] == 0xBB && rawBytes[2] == 0xBF)
+        {
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "bom",
+                Line = 1,
+                Message = "UTF-8 BOM marker detected",
+            });
         }
 
-        // Raw-byte heuristics: skip for UTF-16-decoded files because every UTF-16 LE ASCII
-        // codepoint looks like a NUL byte and CRLF appears as 0D 00 0A 00, so `bom` /
-        // `null_byte` / `mixed_line_endings` / `cr_only_line_endings` would all misfire.
-        // UTF-16 デコード経路では生バイト列が NUL バイトと 0D 00 0A 00 で埋まり、`bom` /
-        // `null_byte` / `mixed_line_endings` / `cr_only_line_endings` がすべて誤検出する
-        // ためスキップする。
-        if (!isUtf16)
+        // NULL bytes (likely binary content) / NULLバイト（バイナリ混入の可能性）
+        if (rawBytes.Any(b => b == 0))
         {
-            // BOM marker / BOMマーカー
-            if (rawBytes.Length >= 3 && rawBytes[0] == 0xEF && rawBytes[1] == 0xBB && rawBytes[2] == 0xBF)
+            issues.Add(new FileIssue
             {
-                issues.Add(new FileIssue
-                {
-                    Path = relativePath,
-                    Kind = "bom",
-                    Line = 1,
-                    Message = "UTF-8 BOM marker detected",
-                });
-            }
+                Path = relativePath,
+                Kind = "null_byte",
+                Line = 0,
+                Message = "File contains NULL bytes (possible binary content)",
+            });
+        }
 
-            // NULL bytes (likely binary content) / NULLバイト（バイナリ混入の可能性）
-            if (rawBytes.Any(b => b == 0))
-            {
-                issues.Add(new FileIssue
-                {
-                    Path = relativePath,
-                    Kind = "null_byte",
-                    Line = 0,
-                    Message = "File contains NULL bytes (possible binary content)",
-                });
-            }
+        AddLineEndingIssues(issues, relativePath, rawBytes);
+    }
 
-            // Line-ending classification — check raw bytes before LF normalization so
-            // bare CR (legacy Mac) and three-way mixes are not silently flattened by
-            // the `\r\n` → `\n` then `\r` → `\n` pass in BuildRecordWithRawBytes.
-            // 改行コードの判定 — LF 正規化前の rawBytes で確認。BuildRecordWithRawBytes が
-            // `\r\n`→`\n`、`\r`→`\n` の順で潰してしまうため、生バイトで CR-only (旧 Mac)
-            // と 3 種混在を見分ける。
-            var hasCrlf = false;
-            var hasLfOnly = false;
-            var hasCrOnly = false;
-            for (int i = 0; i < rawBytes.Length; i++)
+    private static void AddLineEndingIssues(List<FileIssue> issues, string relativePath, byte[] rawBytes)
+    {
+        // Line-ending classification — check raw bytes before LF normalization so
+        // bare CR (legacy Mac) and three-way mixes are not silently flattened by
+        // the `\r\n` → `\n` then `\r` → `\n` pass in BuildRecordWithRawBytes.
+        // 改行コードの判定 — LF 正規化前の rawBytes で確認。BuildRecordWithRawBytes が
+        // `\r\n`→`\n`、`\r`→`\n` の順で潰してしまうため、生バイトで CR-only (旧 Mac)
+        // と 3 種混在を見分ける。
+        var hasCrlf = false;
+        var hasLfOnly = false;
+        var hasCrOnly = false;
+        for (int i = 0; i < rawBytes.Length; i++)
+        {
+            if (rawBytes[i] == 0x0D)
             {
-                if (rawBytes[i] == 0x0D)
+                if (i + 1 < rawBytes.Length && rawBytes[i + 1] == 0x0A)
                 {
-                    if (i + 1 < rawBytes.Length && rawBytes[i + 1] == 0x0A)
-                    {
-                        hasCrlf = true;
-                        i++; // skip the LF after CR
-                    }
-                    else
-                    {
-                        hasCrOnly = true;
-                    }
+                    hasCrlf = true;
+                    i++; // skip the LF after CR
                 }
-                else if (rawBytes[i] == 0x0A)
-                {
-                    hasLfOnly = true;
-                }
-            }
-            var distinctEndingTypes = (hasCrlf ? 1 : 0) + (hasLfOnly ? 1 : 0) + (hasCrOnly ? 1 : 0);
-            if (distinctEndingTypes >= 3)
-            {
-                issues.Add(new FileIssue
-                {
-                    Path = relativePath,
-                    Kind = "mixed_line_endings_three_way",
-                    Line = 0,
-                    Message = "Mixed line endings (CRLF, LF, and CR)",
-                });
-            }
-            else if (distinctEndingTypes == 2)
-            {
-                string description;
-                if (hasCrlf && hasLfOnly)
-                    description = "CRLF and LF";
-                else if (hasCrlf && hasCrOnly)
-                    description = "CRLF and CR";
                 else
-                    description = "LF and CR";
-                issues.Add(new FileIssue
                 {
-                    Path = relativePath,
-                    Kind = "mixed_line_endings",
-                    Line = 0,
-                    Message = $"Mixed line endings ({description})",
-                });
+                    hasCrOnly = true;
+                }
             }
-            else if (hasCrOnly)
+            else if (rawBytes[i] == 0x0A)
             {
-                issues.Add(new FileIssue
-                {
-                    Path = relativePath,
-                    Kind = "cr_only_line_endings",
-                    Line = 0,
-                    Message = "CR-only line endings (legacy Mac)",
-                });
+                hasLfOnly = true;
             }
         }
+        var distinctEndingTypes = (hasCrlf ? 1 : 0) + (hasLfOnly ? 1 : 0) + (hasCrOnly ? 1 : 0);
+        if (distinctEndingTypes >= 3)
+        {
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "mixed_line_endings_three_way",
+                Line = 0,
+                Message = "Mixed line endings (CRLF, LF, and CR)",
+            });
+        }
+        else if (distinctEndingTypes == 2)
+        {
+            string description;
+            if (hasCrlf && hasLfOnly)
+                description = "CRLF and LF";
+            else if (hasCrlf && hasCrOnly)
+                description = "CRLF and CR";
+            else
+                description = "LF and CR";
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "mixed_line_endings",
+                Line = 0,
+                Message = $"Mixed line endings ({description})",
+            });
+        }
+        else if (hasCrOnly)
+        {
+            issues.Add(new FileIssue
+            {
+                Path = relativePath,
+                Kind = "cr_only_line_endings",
+                Line = 0,
+                Message = "CR-only line endings (legacy Mac)",
+            });
+        }
+    }
 
+    private static void AddOversizeContentIssues(List<FileIssue> issues, string relativePath, string content)
+    {
         // line_too_long — surface the chunk/symbol/reference skip path that
         // triggers when a single physical line exceeds ChunkSplitter.MaxLineLength
         // (e.g. 1 MB minified `.min.js`, base64-encoded asset). The matching
@@ -3781,8 +3942,6 @@ public class FileIndexer
                 Message = $"Line {longFtsTokenLine} contains an FTS5 unicode61 token longer than {CodeIndex.Database.DbReader.FtsUnicode61MaxTokenLength} characters; that token is not searchable through FTS",
             });
         }
-
-        return issues;
     }
 
     internal static bool ContainsIndexBlockingNullByte(byte[] rawBytes)
