@@ -69,19 +69,42 @@ public partial class DbReader
         if (excludeSelfReferences)
             sql += $" AND {selfReferenceSql} = 0";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+        var allowCSharpQualifiedContextMatch = SqlNameResolver.HasQualifier(query)
+            && !HasQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
+        var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
         var cssScssVariableAlias = ComputeCssScssVariableAlias(query);
         var cssScssVariableAliasScope = cssScssVariableAlias != null
             ? " AND f.lang = 'css'"
             : string.Empty;
         if (useSqlQualifiedContextMatch && exact && _foldReady)
-            sql += $" AND (((f.lang = 'sql') AND sql_context_has_name_folded_at({contextSql}, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+        {
+            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: false);
+            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
+            sql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
+        }
         else if (useSqlQualifiedContextMatch && exact)
-            sql += $" AND (((f.lang = 'sql') AND sql_context_has_name_at({contextSql}, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+        {
+            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false);
+            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false);
+            sql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
+        }
         else if (useSqlQualifiedContextMatch && _foldReady)
-            sql += $" AND (((f.lang = 'sql') AND sql_context_like_name_folded_at({contextSql}, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+        {
+            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: true);
+            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
+            sql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\') OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
+        }
         else if (useSqlQualifiedContextMatch)
-            sql += $" AND (((f.lang = 'sql') AND sql_context_like_name_at({contextSql}, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+        {
+            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: true);
+            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false);
+            sql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\') OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
+        }
         else if (exact && _foldReady)
             sql += allowSqlLeafFallback
                 ? cssScssVariableAlias != null
@@ -133,6 +156,7 @@ public partial class DbReader
             callersQueryParam = query;
         cmd.Parameters.AddWithValue("@query", callersQueryParam);
         cmd.Parameters.AddWithValue("@aliasQuery", query);
+        AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
         cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
         if (cssScssVariableAlias != null)
         {
@@ -208,19 +232,42 @@ public partial class DbReader
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+        var allowCSharpQualifiedContextMatch = SqlNameResolver.HasQualifier(query)
+            && !HasQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
+        var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
         var cssScssVariableAlias = ComputeCssScssVariableAlias(query);
         var cssScssVariableAliasScope = cssScssVariableAlias != null
             ? " AND f.lang = 'css'"
             : string.Empty;
         if (useSqlQualifiedContextMatch && exact && _foldReady)
-            groupedSql += $" AND (((f.lang = 'sql') AND sql_context_has_name_folded_at({contextSql}, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+        {
+            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: false);
+            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
+            groupedSql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
+        }
         else if (useSqlQualifiedContextMatch && exact)
-            groupedSql += $" AND (((f.lang = 'sql') AND sql_context_has_name_at({contextSql}, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+        {
+            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false);
+            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false);
+            groupedSql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
+        }
         else if (useSqlQualifiedContextMatch && _foldReady)
-            groupedSql += $" AND (((f.lang = 'sql') AND sql_context_like_name_folded_at({contextSql}, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+        {
+            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: true);
+            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
+            groupedSql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\') OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
+        }
         else if (useSqlQualifiedContextMatch)
-            groupedSql += $" AND (((f.lang = 'sql') AND sql_context_like_name_at({contextSql}, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+        {
+            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: true);
+            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false);
+            groupedSql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\') OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
+        }
         else if (exact && _foldReady)
             groupedSql += allowSqlLeafFallback
                 ? cssScssVariableAlias != null
@@ -252,6 +299,7 @@ public partial class DbReader
                 : query;
         cmd.Parameters.AddWithValue("@query", value);
         cmd.Parameters.AddWithValue("@aliasQuery", query);
+        AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
         cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
         if (cssScssVariableAlias != null)
         {
@@ -298,15 +346,38 @@ public partial class DbReader
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+        var allowCSharpQualifiedContextMatch = SqlNameResolver.HasQualifier(query)
+            && !HasQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
+        var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
         if (useSqlQualifiedContextMatch && exact && _foldReady)
-            groupedSql += $" AND (((f.lang = 'sql') AND sql_context_has_name_folded_at({contextSql}, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+        {
+            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: false);
+            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
+            groupedSql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
+        }
         else if (useSqlQualifiedContextMatch && exact)
-            groupedSql += $" AND (((f.lang = 'sql') AND sql_context_has_name_at({contextSql}, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+        {
+            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false);
+            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false);
+            groupedSql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
+        }
         else if (useSqlQualifiedContextMatch && _foldReady)
-            groupedSql += $" AND (((f.lang = 'sql') AND sql_context_like_name_folded_at({contextSql}, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+        {
+            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: true);
+            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
+            groupedSql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\') OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
+        }
         else if (useSqlQualifiedContextMatch)
-            groupedSql += $" AND (((f.lang = 'sql') AND sql_context_like_name_at({contextSql}, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+        {
+            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: true);
+            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false);
+            groupedSql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\') OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
+        }
         else if (exact && _foldReady)
             groupedSql += allowSqlLeafFallback
                 ? cssScssVariableAlias != null
@@ -338,6 +409,7 @@ public partial class DbReader
                 : query;
         cmd.Parameters.AddWithValue("@query", value);
         cmd.Parameters.AddWithValue("@aliasQuery", query);
+        AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
         cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
         if (cssScssVariableAlias != null)
         {
@@ -405,15 +477,32 @@ public partial class DbReader
         else
             sql += NonInvocationReferenceKindsExclusion;
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+        var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
         var cssScssVariableAlias = ComputeCssScssVariableAlias(query);
         var cssScssVariableAliasScope = cssScssVariableAlias != null
             ? " AND f.lang = 'css'"
             : string.Empty;
         if (exact && useSqlQualifiedContainerMatch && _foldReady)
-            sql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND r.container_name_folded = @query))";
+        {
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: true);
+            sql += $" AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND r.container_name_folded = @query) OR {qualifiedLeafFallbackSql})";
+        }
         else if (exact && useSqlQualifiedContainerMatch)
-            sql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE))";
+        {
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: false);
+            sql += $" AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE) OR {qualifiedLeafFallbackSql})";
+        }
+        else if (useSqlQualifiedContainerMatch && _foldReady)
+        {
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: true);
+            sql += $" AND (r.container_name LIKE @query ESCAPE '\\' OR {qualifiedLeafFallbackSql})";
+        }
+        else if (useSqlQualifiedContainerMatch)
+        {
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: false);
+            sql += $" AND (r.container_name LIKE @query ESCAPE '\\' OR {qualifiedLeafFallbackSql})";
+        }
         else if (exact && _foldReady)
             sql += allowSqlLeafFallback
                 ? cssScssVariableAlias != null
@@ -476,6 +565,7 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@preferExactCase", exact ? 1 : 0);
         cmd.Parameters.AddWithValue("@rawQuery", exact ? query : string.Empty);
         cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
+        AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback);
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
@@ -539,15 +629,32 @@ public partial class DbReader
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+        var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
         var cssScssVariableAlias = ComputeCssScssVariableAlias(query);
         var cssScssVariableAliasScope = cssScssVariableAlias != null
             ? " AND f.lang = 'css'"
             : string.Empty;
         if (exact && useSqlQualifiedContainerMatch && _foldReady)
-            groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND r.container_name_folded = @query))";
+        {
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: true);
+            groupedSql += $" AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND r.container_name_folded = @query) OR {qualifiedLeafFallbackSql})";
+        }
         else if (exact && useSqlQualifiedContainerMatch)
-            groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE))";
+        {
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: false);
+            groupedSql += $" AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE) OR {qualifiedLeafFallbackSql})";
+        }
+        else if (useSqlQualifiedContainerMatch && _foldReady)
+        {
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: true);
+            groupedSql += $" AND (r.container_name LIKE @query ESCAPE '\\' OR {qualifiedLeafFallbackSql})";
+        }
+        else if (useSqlQualifiedContainerMatch)
+        {
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: false);
+            groupedSql += $" AND (r.container_name LIKE @query ESCAPE '\\' OR {qualifiedLeafFallbackSql})";
+        }
         else if (exact && _foldReady)
             groupedSql += allowSqlLeafFallback
                 ? cssScssVariableAlias != null
@@ -583,6 +690,7 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
         cmd.Parameters.AddWithValue("@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
         cmd.Parameters.AddWithValue("@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
+        AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback);
         if (cssScssVariableAlias != null)
         {
             var aliasParam = exact && _foldReady
@@ -626,15 +734,32 @@ public partial class DbReader
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+        var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
         var cssScssVariableAlias = ComputeCssScssVariableAlias(query);
         var cssScssVariableAliasScope = cssScssVariableAlias != null
             ? " AND f.lang = 'css'"
             : string.Empty;
         if (exact && useSqlQualifiedContainerMatch && _foldReady)
-            groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND r.container_name_folded = @query))";
+        {
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: true);
+            groupedSql += $" AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND r.container_name_folded = @query) OR {qualifiedLeafFallbackSql})";
+        }
         else if (exact && useSqlQualifiedContainerMatch)
-            groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE))";
+        {
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: false);
+            groupedSql += $" AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE) OR {qualifiedLeafFallbackSql})";
+        }
+        else if (useSqlQualifiedContainerMatch && _foldReady)
+        {
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: true);
+            groupedSql += $" AND (r.container_name LIKE @query ESCAPE '\\' OR {qualifiedLeafFallbackSql})";
+        }
+        else if (useSqlQualifiedContainerMatch)
+        {
+            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: false);
+            groupedSql += $" AND (r.container_name LIKE @query ESCAPE '\\' OR {qualifiedLeafFallbackSql})";
+        }
         else if (exact && _foldReady)
             groupedSql += allowSqlLeafFallback
                 ? cssScssVariableAlias != null
@@ -670,6 +795,7 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
         cmd.Parameters.AddWithValue("@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
         cmd.Parameters.AddWithValue("@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
+        AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback);
         if (cssScssVariableAlias != null)
         {
             var aliasParam = exact && _foldReady
@@ -810,6 +936,9 @@ public partial class DbReader
         // caller 側も leaf `--exact` と同じく FoldReady なら folded equality、legacy DB では
         // `COLLATE NOCASE` fallback。definition と caller 行の casing 差もここで吸収する。
         var allowSqlLeafFallback = !SqlNameResolver.HasQualifier(symbolName);
+        var allowCSharpQualifiedContextMatch = SqlNameResolver.HasQualifier(symbolName)
+            && !HasQualifiedSymbolDefinition(symbolName, lang, pathPatterns, excludePathPatterns, excludeTests);
+        var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(symbolName, lang, pathPatterns, excludePathPatterns, excludeTests);
         var polymorphicCSharpSymbolNames = lang is null or "csharp"
             ? GetCSharpPolymorphicDispatchSymbolNames(symbolName)
             : [];
@@ -823,12 +952,12 @@ public partial class DbReader
                 ? @"
               AND (r.symbol_name_folded = @symbolNameFolded OR (f.lang = 'sql' AND r.symbol_name_folded = @symbolNameLeafFolded)" + polymorphicNameCondition + ")"
                 : @"
-              AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @symbolNameFolded)" + polymorphicNameCondition + ")"
+              AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @symbolNameFolded) OR " + BuildCSharpQualifiedContextFallbackSql(BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: false)) + " OR " + BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true) + polymorphicNameCondition + ")"
             : allowSqlLeafFallback
                 ? @"
               AND (r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE)" + polymorphicNameCondition + ")"
                 : @"
-              AND (((f.lang = 'sql') AND sql_context_has_name_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE)" + polymorphicNameCondition + ")";
+              AND (((f.lang = 'sql') AND sql_context_has_name_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE) OR " + BuildCSharpQualifiedContextFallbackSql(BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false)) + " OR " + BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false) + polymorphicNameCondition + ")";
 
         // impact BFS must share the call-graph contract with `callers`/`callees`/`hotspots`,
         // so event subscriptions (`Click += OnClick`) also participate in the transitive
@@ -865,6 +994,9 @@ public partial class DbReader
 
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@symbolName", symbolName);
+        cmd.Parameters.AddWithValue("@aliasQuery", symbolName);
+        AddQualifiedGraphQueryParameters(cmd, symbolName, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
+        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(symbolName)) ?? SqlNameResolver.GetLeafName(symbolName));
         cmd.Parameters.AddWithValue("@symbolNameLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(symbolName)) ?? SqlNameResolver.GetLeafName(symbolName));
         if (_foldReady)
             cmd.Parameters.AddWithValue("@symbolNameFolded", NameFold.Fold(symbolName) ?? symbolName);

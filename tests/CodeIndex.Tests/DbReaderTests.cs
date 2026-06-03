@@ -680,6 +680,61 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void Search_ReturnsEnclosingSymbolMetadata_Issue2838()
+    {
+        const string token = "issue2838_unique_needle";
+        InsertIndexedFile("src/issue2838/SearchContainer.cs", "csharp",
+            $$"""
+            namespace Issue2838;
+
+            public sealed class SearchContainer
+            {
+                public void Run()
+                {
+                    var message = "{{token}}";
+                }
+            }
+            """);
+
+        var result = Assert.Single(_reader.Search(token, lang: "csharp")
+            .Where(result => result.Path == "src/issue2838/SearchContainer.cs"));
+
+        Assert.Equal("Run", result.EnclosingSymbolName);
+        Assert.Equal("function", result.EnclosingSymbolKind);
+        Assert.Equal("SearchContainer", result.EnclosingContainerName);
+        Assert.True(result.EnclosingSymbolStartLine > 0);
+        Assert.True(result.EnclosingSymbolEndLine >= result.EnclosingSymbolStartLine);
+    }
+
+    [Fact]
+    public void Search_ReturnsEnclosingSymbolForActualMatchLine_Issue2838()
+    {
+        const string token = "issue2838_multifunction_needle";
+        InsertIndexedFile("src/issue2838/MultiFunctionSearch.cs", "csharp",
+            $$"""
+            namespace Issue2838;
+
+            public sealed class MultiFunctionSearch
+            {
+                public void Tiny() { }
+
+                public void Larger()
+                {
+                    var message = "{{token}}";
+                    Console.WriteLine(message);
+                }
+            }
+            """);
+
+        var result = Assert.Single(_reader.Search(token, lang: "csharp")
+            .Where(result => result.Path == "src/issue2838/MultiFunctionSearch.cs"));
+
+        Assert.Equal("Larger", result.EnclosingSymbolName);
+        Assert.Equal("function", result.EnclosingSymbolKind);
+        Assert.Equal("MultiFunctionSearch", result.EnclosingContainerName);
+    }
+
+    [Fact]
     public void GetSymbolHotspots_RanksRealCallsAboveManyLowerWeightSubscribeEdges()
     {
         var fileId = _writer.UpsertFile(new FileRecord
@@ -4708,6 +4763,133 @@ public class DbReaderTests : IDisposable
         // Case-insensitive equality across all three.
         Assert.Single(_reader.SearchReferences("AUTHENTICATE", exact: true));
         Assert.Single(_reader.GetCallers("AUTHENTICATE", exact: true));
+    }
+
+    [Fact]
+    public void GraphReaders_QualifiedMemberQueriesUseContextAndDefinitionFallback_Issue2819()
+    {
+        InsertIndexedFile("src/issue2819/HttpMcpTransport.cs", "csharp",
+            """
+            namespace Issue2819;
+
+            public sealed class HttpMcpTransport
+            {
+                public void HandleContext()
+                {
+                    RunEventStreamAsync();
+                    System.Guid.NewGuid();
+                }
+
+                private void RunEventStreamAsync()
+                {
+                    Guid.NewGuid();
+                }
+            }
+            """);
+
+        var definition = Assert.Single(_reader.GetDefinitions(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+        Assert.Equal("RunEventStreamAsync", definition.Name);
+        Assert.Equal("HttpMcpTransport", definition.ContainerName);
+
+        var reference = Assert.Single(_reader.SearchReferences(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+        Assert.Equal("RunEventStreamAsync", reference.SymbolName);
+        Assert.Equal("HandleContext", reference.ContainerName);
+        Assert.Equal(1, _reader.CountSearchReferences(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: false), _reader.CountSearchReferencesTotal(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+
+        var caller = Assert.Single(_reader.GetCallers(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+        Assert.Equal("HandleContext", caller.CallerName);
+        Assert.Equal(1, _reader.CountCallers(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: false), _reader.CountCallersTotal(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+
+        var callees = _reader.GetCallees(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]);
+        Assert.Contains(callees, result => result.CallerName == "RunEventStreamAsync" && result.CalleeName == "NewGuid");
+        Assert.Equal(callees.Count, _reader.CountCallees(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+        Assert.Equal(new QueryCountResult(callees.Count, 1, IncludesSql: false), _reader.CountCalleesTotal(
+            "HttpMcpTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]));
+
+        var frameworkCallers = _reader.GetCallers(
+            "System.Guid.NewGuid",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819"]);
+        Assert.Contains(frameworkCallers, result => result.CallerName == "HandleContext");
+        Assert.Contains(frameworkCallers, result => result.CallerName == "RunEventStreamAsync");
+    }
+
+    [Fact]
+    public void GraphReaders_QualifiedMemberLeafFallbackRequiresUniqueLeaf_Issue2819()
+    {
+        InsertIndexedFile("src/issue2819/AmbiguousLeaf.cs", "csharp",
+            """
+            namespace Issue2819;
+
+            public sealed class TargetTransport
+            {
+                public void RunEventStreamAsync() { }
+            }
+
+            public sealed class OtherTransport
+            {
+                public void RunEventStreamAsync() { }
+
+                public void HandleOther()
+                {
+                    RunEventStreamAsync();
+                }
+            }
+            """);
+
+        Assert.Empty(_reader.SearchReferences(
+            "TargetTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819/AmbiguousLeaf"]));
+
+        Assert.Empty(_reader.GetCallers(
+            "TargetTransport.RunEventStreamAsync",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["issue2819/AmbiguousLeaf"]));
     }
 
     [Fact]
