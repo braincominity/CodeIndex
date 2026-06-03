@@ -98,4 +98,33 @@ public partial class QueryCommandRunnerTests
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
+
+    [Fact]
+    public void RunSearch_PunctuationHeavyJsonArraySuppressesRankOnlyRows_Issue2821()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_rank_only_2821");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                "void Run() { throw new InvalidOperationException(); }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["throw;", "--db", dbPath, "--json=array"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Empty(document.RootElement.EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
 }
