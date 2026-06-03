@@ -64,6 +64,8 @@ The test project mirrors the production areas closely.
   Local suggestion JSON storage: dedup hashing, persistence, corruption recovery, atomic writes.
 - `SourceCodeDetectorTests.cs`
   Source code leak prevention: allowed natural-language inputs vs rejected code blocks (fenced, indented, import runs, etc.).
+- `PostExtractionHookTests.cs`
+  Post-extraction hook discovery, mutation, diagnostics, callback budgets, and collectible hook assembly cleanup. These tests mutate hook-related environment variables and test-only callback budget state, so the class belongs to the `SQLite pool sensitive` non-parallel collection.
 - `GitHubIssueReporterTests.cs`
   GitHub token resolution logic (CDIDX_GITHUB_TOKEN only; generic GITHUB_TOKEN is ignored), outbound code scrubbing, idempotency checks, and rate-limit diagnostics.
 - `PackagesLockTests.cs`
@@ -264,6 +266,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   ローカル提案JSON蓄積: ハッシュ重複排除、永続化、破損復旧、アトミック書き込み。
 - `SourceCodeDetectorTests.cs`
   ソースコード漏洩防止: 許容される自然言語入力 vs 拒否されるコードブロック（フェンス、インデント、import連打等）。
+- `PostExtractionHookTests.cs`
+  post-extraction hook の discovery、mutation、diagnostics、callback budget、collectible hook assembly cleanup のテスト。hook 関連の環境変数と test-only callback budget 状態を変更するため、このクラスは non-parallel な `SQLite pool sensitive` collection に入れます。
 - `GitHubIssueReporterTests.cs`
   GitHubトークン解決ロジック（CDIDX_GITHUB_TOKENのみ。汎用GITHUB_TOKENは無視）。
 - `PackagesLockTests.cs`

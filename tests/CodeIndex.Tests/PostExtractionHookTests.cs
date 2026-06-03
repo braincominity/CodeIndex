@@ -4,6 +4,7 @@ using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
+[Collection("SQLite pool sensitive")]
 public class PostExtractionHookTests
 {
     internal const string SlowHookDelayEnvironmentVariable = "CDIDX_TEST_SLOW_POST_EXTRACTION_HOOK_MS";
@@ -79,16 +80,17 @@ public class PostExtractionHookTests
         var projectRoot = TestProjectHelper.CreateTempProject("post-extraction-hook-budget");
         lock (TestConsoleLock.Gate)
         {
-            var originalDelay = Environment.GetEnvironmentVariable(SlowHookDelayEnvironmentVariable);
-            var originalCompletionPath = Environment.GetEnvironmentVariable(SlowHookCompletionPathEnvironmentVariable);
+            using var env = EnvironmentVariableScope.Capture(
+                SlowHookDelayEnvironmentVariable,
+                SlowHookCompletionPathEnvironmentVariable);
             var originalBudget = PostExtractionHookRunner.CallbackBudgetForTesting;
             try
             {
-                Environment.SetEnvironmentVariable(SlowHookDelayEnvironmentVariable, "200");
+                env.Set(SlowHookDelayEnvironmentVariable, "200");
                 PostExtractionHookRunner.CallbackBudgetForTesting = () => TimeSpan.FromMilliseconds(50);
                 var hooksDir = Path.Combine(projectRoot, "hooks");
                 var completionPath = Path.Combine(projectRoot, "slow-hook.done");
-                Environment.SetEnvironmentVariable(SlowHookCompletionPathEnvironmentVariable, completionPath);
+                env.Set(SlowHookCompletionPathEnvironmentVariable, completionPath);
                 Directory.CreateDirectory(hooksDir);
                 File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
 
@@ -116,8 +118,6 @@ public class PostExtractionHookTests
             finally
             {
                 PostExtractionHookRunner.CallbackBudgetForTesting = originalBudget;
-                Environment.SetEnvironmentVariable(SlowHookDelayEnvironmentVariable, originalDelay);
-                Environment.SetEnvironmentVariable(SlowHookCompletionPathEnvironmentVariable, originalCompletionPath);
                 TestProjectHelper.DeleteDirectory(projectRoot);
             }
         }
@@ -222,6 +222,7 @@ public sealed class SlowPostExtractionHook : IPostExtractionHook
             StartLine = 1,
             EndLine = 1,
         });
+        SignalCompletionWhenRequested();
     }
 
     public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references)
@@ -237,6 +238,7 @@ public sealed class SlowPostExtractionHook : IPostExtractionHook
             Column = 1,
             Context = context.Path,
         });
+        SignalCompletionWhenRequested();
     }
 
     private static bool DelayWhenRequested()
@@ -246,10 +248,13 @@ public sealed class SlowPostExtractionHook : IPostExtractionHook
             return false;
 
         Thread.Sleep(milliseconds);
+        return true;
+    }
+
+    private static void SignalCompletionWhenRequested()
+    {
         var completionPath = Environment.GetEnvironmentVariable(PostExtractionHookTests.SlowHookCompletionPathEnvironmentVariable);
         if (!string.IsNullOrWhiteSpace(completionPath))
             File.WriteAllText(completionPath, "done");
-
-        return true;
     }
 }

@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+#### Fixed
+
+- Fixed a flaky release CI failure in `PostExtractionHookTests` by isolating hook callback-budget tests from parallel execution and making slow hook completion wait until after the timed-out mutation finishes.
+
 ### [1.28.0] - 2026-06-04
 
 #### Added
@@ -3324,6 +3328,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
+
+#### 修正
+
+- `PostExtractionHookTests` の hook callback budget テストを並列実行から隔離し、タイムアウトした slow hook の mutation 完了後に cleanup へ進むようにして、リリース CI の flaky failure を修正しました。
 
 ### [1.28.0] - 2026-06-04
 
