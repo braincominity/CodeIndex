@@ -84,11 +84,29 @@ public class FileIndexer
             PathFilterKind.OutsideProjectRoot;
     }
 
+    private sealed class ProjectMarkerFingerprintTraversalState
+    {
+        public int DirectoriesVisited { get; set; }
+        public int MarkerFilesCollected { get; set; }
+        public bool Truncated { get; set; }
+    }
+
+    private readonly record struct ProjectMarkerFingerprintDirectory(string Path, IgnoreRuleSet IgnoreRules, bool IsProjectRoot);
+
+    internal readonly record struct ProjectMarkerFingerprintResult(string? Fingerprint, bool IsComplete);
+
     private static readonly string[] HotspotFamilyMarkerLanguages = ["csharp", "vb", "fsharp", "msbuild"];
     private const int ConflictMarkerScanLimitBytes = 50 * 1024;
     private const int MaxDirectoryTraversalDepth = 128;
     private const int GitLfsPointerMaxBytes = 1024;
+    private const int MaxGitmodulesBytes = 256 * 1024;
+    private const int MaxGitmodulesLines = 4096;
     private static readonly string[] IgnoreFileNames = [".gitignore", ".cdidxignore"];
+    private const int MaxIgnoreFileBytes = 256 * 1024;
+    private const int MaxIgnoreFileLines = 8192;
+    private const int MaxIgnoreRulesPerFile = 4096;
+    private const int MaxProjectMarkerFingerprintDirectories = 8192;
+    private const int MaxProjectMarkerFingerprintFiles = 4096;
     private const int MaxIgnorePatternLength = 512;
     private static readonly TimeSpan IgnoreRegexMatchTimeout = TimeSpan.FromMilliseconds(100);
     // Extension-to-language mapping / 拡張子→言語名マッピング
@@ -440,6 +458,7 @@ public class FileIndexer
     // _submodulePaths 各要素の祖先パス（submodule 自身は含まない）。SkipDirs 名と一致した場合は
     // 通過モードとしてその直下ファイルを索引せず、submodule 方向のみ降りる。
     private readonly HashSet<string> _submoduleAncestorPaths;
+    private readonly IReadOnlyList<ScanError> _submoduleLoadWarnings;
 
     private sealed class IgnoreRuleSet
     {
@@ -964,7 +983,7 @@ public class FileIndexer
         _maxFileSizeBytes = ResolveMaxFileSizeBytes(maxFileSizeBytes);
         _symlinkPolicy = symlinkPolicy;
         var pathComparer = _ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        (_submodulePaths, _submoduleAncestorPaths) = LoadGitSubmodulePaths(_ignoreRuleRoot, _projectRoot, pathComparer);
+        (_submodulePaths, _submoduleAncestorPaths, _submoduleLoadWarnings) = LoadGitSubmodulePaths(_ignoreRuleRoot, _projectRoot, pathComparer);
     }
 
     internal static bool TryParseMaxFileSizeBytes(string? value, out long bytes)
@@ -1407,6 +1426,12 @@ public class FileIndexer
         return true;
     }
 
+    internal bool ShouldSkipDirectoryTraversal(string directory)
+        => ShouldSkipDirectoryLink(
+            directory,
+            errors: new List<ScanError>(),
+            danglingSymlinks: new HashSet<string>(StringComparer.Ordinal));
+
     private static string GetDirectoryTraversalIdentity(string directory)
     {
         if (!IsReparsePoint(directory))
@@ -1523,18 +1548,73 @@ public class FileIndexer
     public static bool SupportsHotspotFamilyMarkerLanguage(string? lang) =>
         GetProjectMarkerPatterns(lang) != null;
 
-    public string? GetProjectMarkerFingerprint(string? lang)
+    public string? GetProjectMarkerFingerprint(string? lang, CancellationToken cancellationToken = default) =>
+        GetProjectMarkerFingerprintResult(lang, cancellationToken).Fingerprint;
+
+    internal ProjectMarkerFingerprintResult GetProjectMarkerFingerprintResult(
+        string? lang,
+        CancellationToken cancellationToken = default) =>
+        GetProjectMarkerFingerprintResult(lang, MaxProjectMarkerFingerprintDirectories, MaxProjectMarkerFingerprintFiles, cancellationToken);
+
+    internal string? GetProjectMarkerFingerprintForTesting(
+        string? lang,
+        int maxDirectories,
+        int maxMarkerFiles,
+        CancellationToken cancellationToken = default) =>
+        GetProjectMarkerFingerprintResult(lang, maxDirectories, maxMarkerFiles, cancellationToken).Fingerprint;
+
+    internal ProjectMarkerFingerprintResult GetProjectMarkerFingerprintResultForTesting(
+        string? lang,
+        int maxDirectories,
+        int maxMarkerFiles,
+        CancellationToken cancellationToken = default) =>
+        GetProjectMarkerFingerprintResult(lang, maxDirectories, maxMarkerFiles, cancellationToken);
+
+    private ProjectMarkerFingerprintResult GetProjectMarkerFingerprintResult(
+        string? lang,
+        int maxDirectories,
+        int maxMarkerFiles,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var projectMarkerPatterns = GetProjectMarkerPatterns(lang);
         if (projectMarkerPatterns == null)
-            return null;
+            return new ProjectMarkerFingerprintResult(null, IsComplete: true);
 
         var projectMarkers = new List<string>();
-        CollectProjectMarkerFiles(_projectRoot, projectMarkerPatterns, projectMarkers);
+        var traversalState = new ProjectMarkerFingerprintTraversalState();
+        var errors = new List<ScanError>();
+        var fullyScanned = true;
+        var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
+        if (preloadResult.IgnoreRulesAvailable)
+        {
+            CollectProjectMarkerFiles(
+                _projectRoot,
+                preloadResult.Rules,
+                projectMarkerPatterns,
+                projectMarkers,
+                Math.Max(1, maxDirectories),
+                Math.Max(1, maxMarkerFiles),
+                traversalState,
+                cancellationToken);
+        }
+        else
+        {
+            traversalState.Truncated = true;
+        }
+
+        if (traversalState.Truncated)
+        {
+            projectMarkers.Add(
+                $"__cdidx_project_marker_fingerprint_truncated__:directories={traversalState.DirectoriesVisited};markers={traversalState.MarkerFilesCollected}");
+        }
+
         projectMarkers.Sort(StringComparer.Ordinal);
 
         var payload = string.Join('\n', projectMarkers);
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant();
+        return new ProjectMarkerFingerprintResult(
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant(),
+            !traversalState.Truncated);
     }
 
     public static string DeriveFallbackFamilyScopeKey(string relativePath)
@@ -1580,59 +1660,137 @@ public class FileIndexer
         return $"{left}/{right}";
     }
 
-    private static int CountProjectMarkerFiles(string dir, IReadOnlyList<string> patterns)
+    private int CountProjectMarkerFiles(string dir, IReadOnlyList<string> patterns)
     {
-        var prefixedDir = LongPath.EnsureWindowsPrefix(dir);
         var count = 0;
-        foreach (var pattern in patterns)
+        foreach (var markerFile in EnumerateProjectMarkerFiles(dir, patterns))
         {
-            foreach (var file in Directory.EnumerateFiles(prefixedDir, pattern, SearchOption.TopDirectoryOnly))
-            {
-                if (HasSkippedAttributes(LongPath.RemoveWindowsPrefix(file)))
-                    continue;
+            if (!IsProjectMarkerVisible(markerFile, activeIgnoreRules: null))
+                continue;
 
-                count++;
-                if (count > 1)
-                    return count;
-            }
+            count++;
+            if (count > 1)
+                return count;
         }
 
         return count;
     }
 
-    private void CollectProjectMarkerFiles(string dir, IReadOnlyList<string> patterns, List<string> projectMarkers)
+    private IEnumerable<string> EnumerateProjectMarkerFiles(
+        string dir,
+        IReadOnlyList<string> patterns,
+        CancellationToken cancellationToken = default)
     {
-        try
+        var prefixedDir = LongPath.EnsureWindowsPrefix(dir);
+        foreach (var pattern in patterns)
         {
-            var prefixedDir = LongPath.EnsureWindowsPrefix(dir);
-            foreach (var pattern in patterns)
+            foreach (var file in Directory.EnumerateFiles(prefixedDir, pattern, SearchOption.TopDirectoryOnly))
             {
-                foreach (var file in Directory.EnumerateFiles(prefixedDir, pattern, SearchOption.TopDirectoryOnly))
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return LongPath.RemoveWindowsPrefix(file);
+            }
+        }
+    }
+
+    private bool IsProjectMarkerVisible(string markerFile, IgnoreRuleSet? activeIgnoreRules)
+    {
+        if (HasSkippedAttributes(markerFile))
+            return false;
+
+        return activeIgnoreRules is null
+            ? !EvaluatePathFilter(markerFile).ShouldSkip
+            : !activeIgnoreRules.IsIgnored(markerFile, isDirectory: false);
+    }
+
+    private void CollectProjectMarkerFiles(
+        string dir,
+        IgnoreRuleSet inheritedIgnoreRules,
+        IReadOnlyList<string> patterns,
+        List<string> projectMarkers,
+        int maxDirectories,
+        int maxMarkerFiles,
+        ProjectMarkerFingerprintTraversalState traversalState,
+        CancellationToken cancellationToken)
+    {
+        var pendingDirectories = new Stack<ProjectMarkerFingerprintDirectory>();
+        pendingDirectories.Push(new ProjectMarkerFingerprintDirectory(dir, inheritedIgnoreRules, IsProjectRoot: true));
+        while (pendingDirectories.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var current = pendingDirectories.Pop();
+            if (GetDirectoryFilterKind(current.Path, current.IgnoreRules, current.IsProjectRoot) != PathFilterKind.None)
+                continue;
+
+            if (traversalState.DirectoriesVisited >= maxDirectories)
+            {
+                traversalState.Truncated = true;
+                return;
+            }
+
+            var currentDirectory = current.Path;
+            traversalState.DirectoriesVisited++;
+            try
+            {
+                var fullyScanned = true;
+                var errors = new List<ScanError>();
+                var loadResult = LoadIgnoreRulesForDirectory(currentDirectory, current.IgnoreRules, errors, ref fullyScanned);
+                if (!loadResult.IgnoreRulesAvailable)
                 {
-                    var markerFile = LongPath.RemoveWindowsPrefix(file);
-                    if (!HasSkippedAttributes(markerFile))
-                        projectMarkers.Add(NormalizeScopeKey(Path.GetRelativePath(_projectRoot, markerFile)));
+                    traversalState.Truncated = true;
+                    return;
+                }
+
+                var activeIgnoreRules = loadResult.Rules;
+                var prefixedDir = LongPath.EnsureWindowsPrefix(currentDirectory);
+                foreach (var markerFile in EnumerateProjectMarkerFiles(currentDirectory, patterns, cancellationToken))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!IsProjectMarkerVisible(markerFile, activeIgnoreRules))
+                        continue;
+
+                    if (traversalState.MarkerFilesCollected >= maxMarkerFiles)
+                    {
+                        traversalState.Truncated = true;
+                        return;
+                    }
+
+                    projectMarkers.Add(NormalizeScopeKey(Path.GetRelativePath(_projectRoot, markerFile)));
+                    traversalState.MarkerFilesCollected++;
+                }
+
+                var passthrough = IsSubmoduleAncestorPassthrough(currentDirectory);
+                foreach (var enumeratedSubDir in Directory.EnumerateDirectories(prefixedDir))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
+                    if (HasSkippedAttributes(subDir))
+                        continue;
+                    if (IsNestedGitRepository(subDir) && !IsSubmoduleOrAncestor(subDir))
+                        continue;
+                    if (passthrough && !IsSubmoduleOrAncestor(subDir))
+                        continue;
+                    if (GetDirectoryFilterKind(subDir, activeIgnoreRules) != PathFilterKind.None)
+                        continue;
+
+                    if (traversalState.DirectoriesVisited + pendingDirectories.Count >= maxDirectories)
+                    {
+                        traversalState.Truncated = true;
+                        return;
+                    }
+
+                    pendingDirectories.Push(new ProjectMarkerFingerprintDirectory(subDir, activeIgnoreRules, IsProjectRoot: false));
                 }
             }
-
-            foreach (var enumeratedSubDir in Directory.EnumerateDirectories(prefixedDir))
+            catch (UnauthorizedAccessException)
             {
-                var subDir = LongPath.RemoveWindowsPrefix(enumeratedSubDir);
-                if (SkipDirs.Contains(Path.GetFileName(subDir)) || HasSkippedAttributes(subDir))
-                    continue;
-
-                CollectProjectMarkerFiles(subDir, patterns, projectMarkers);
+                // Best-effort like ScanFiles(): unreadable directories do not abort the whole index.
+                // ScanFiles() と同じく best-effort。読めないディレクトリでは index 全体を落とさない。
             }
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // Best-effort like ScanFiles(): unreadable directories do not abort the whole index.
-            // ScanFiles() と同じく best-effort。読めないディレクトリでは index 全体を落とさない。
-        }
-        catch (IOException)
-        {
-            // Best-effort like ScanFiles(): transient IO failures should only skip that subtree.
-            // ScanFiles() と同じく best-effort。IO 失敗はその subtree だけスキップする。
+            catch (IOException)
+            {
+                // Best-effort like ScanFiles(): transient IO failures should only skip that subtree.
+                // ScanFiles() と同じく best-effort。IO 失敗はその subtree だけスキップする。
+            }
         }
     }
 
@@ -1846,6 +2004,7 @@ public class FileIndexer
         var danglingSymlinks = new HashSet<string>(StringComparer.Ordinal);
         var visitedFileIdentities = new HashSet<FileIdentity>();
         var visitedDirectories = new HashSet<string>(StringComparer.Ordinal) { NormalizePathForComparison(_projectRoot) };
+        errors.AddRange(_submoduleLoadWarnings);
         var fullyScanned = true;
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         if (preloadResult.IgnoreRulesAvailable)
@@ -2417,36 +2576,14 @@ public class FileIndexer
         foreach (var ignoreFileName in IgnoreFileNames)
         {
             var ignorePath = Path.Combine(dir, ignoreFileName);
-            var prefixedIgnorePath = LongPath.EnsureWindowsPrefix(ignorePath);
-
-            try
+            if (!TryAppendIgnoreRulesFromFile(
+                    dir,
+                    ignorePath,
+                    ignoreFileName,
+                    rules,
+                    errors,
+                    ref fullyScanned))
             {
-                var lineNumber = 0;
-                foreach (var line in File.ReadLines(prefixedIgnorePath, Encoding.UTF8))
-                {
-                    lineNumber++;
-                    if (IgnoreRule.TryParse(dir, line, _ignoreCase, out var rule, out var errorMessage) && rule != null)
-                        rules.Add(rule);
-                    else if (errorMessage != null)
-                        errors.Add(new ScanError($"{ToRelativePath(ignorePath)}:{lineNumber}", errorMessage, ScanIssueSeverity.Warning));
-                }
-            }
-            catch (UnauthorizedAccessException)
-            {
-                if (!File.Exists(prefixedIgnorePath))
-                    throw;
-
-                errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName} due to permissions.", ScanIssueSeverity.Warning));
-            }
-            catch (FileNotFoundException)
-            {
-            }
-            catch (DirectoryNotFoundException)
-            {
-            }
-            catch (IOException)
-            {
-                errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName}."));
                 fullyScanned = false;
                 ignoreRulesAvailable = false;
             }
@@ -2502,18 +2639,70 @@ public class FileIndexer
         ref bool fullyScanned)
     {
         var rules = new List<IgnoreRule>();
+        if (!TryAppendIgnoreRulesFromFile(
+                sourceDirectory,
+                ignorePath,
+                ignoreFileName,
+                rules,
+                errors,
+                ref fullyScanned))
+        {
+            fullyScanned = false;
+            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: false);
+        }
+
+        return new IgnoreRuleLoadResult(IgnoreRuleSet.CreateChild(inheritedIgnoreRules, rules), IgnoreRulesAvailable: true);
+    }
+
+    private bool TryAppendIgnoreRulesFromFile(
+        string sourceDirectory,
+        string ignorePath,
+        string ignoreFileName,
+        List<IgnoreRule> rules,
+        List<ScanError> errors,
+        ref bool fullyScanned)
+    {
         var prefixedIgnorePath = LongPath.EnsureWindowsPrefix(ignorePath);
 
         try
         {
+            if (!TryReadBoundedUtf8SidecarLines(
+                    prefixedIgnorePath,
+                    MaxIgnoreFileBytes,
+                    MaxIgnoreFileLines,
+                    out var lines,
+                    out var skippedReason))
+            {
+                errors.Add(new ScanError(
+                    ToRelativePath(ignorePath),
+                    $"Could not safely read {ignoreFileName} because {skippedReason}."));
+                fullyScanned = false;
+                return false;
+            }
+
             var lineNumber = 0;
-            foreach (var line in File.ReadLines(prefixedIgnorePath, Encoding.UTF8))
+            var rulesInFile = 0;
+            foreach (var line in lines)
             {
                 lineNumber++;
                 if (IgnoreRule.TryParse(sourceDirectory, line, _ignoreCase, out var rule, out var errorMessage) && rule != null)
+                {
+                    if (rulesInFile >= MaxIgnoreRulesPerFile)
+                    {
+                        errors.Add(new ScanError(
+                            $"{ToRelativePath(ignorePath)}:{lineNumber}",
+                            $"Stopped scanning because {ignoreFileName} exceeds {MaxIgnoreRulesPerFile} rules."));
+                        fullyScanned = false;
+                        return false;
+                    }
+
                     rules.Add(rule);
+                    rulesInFile++;
+                }
                 else if (errorMessage != null)
+                {
                     errors.Add(new ScanError($"{ToRelativePath(ignorePath)}:{lineNumber}", errorMessage, ScanIssueSeverity.Warning));
+                }
             }
         }
         catch (UnauthorizedAccessException)
@@ -2522,24 +2711,24 @@ public class FileIndexer
                 throw;
 
             errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName} due to permissions.", ScanIssueSeverity.Warning));
-            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: true);
+            return true;
         }
         catch (FileNotFoundException)
         {
-            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: true);
+            return true;
         }
         catch (DirectoryNotFoundException)
         {
-            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: true);
+            return true;
         }
         catch (IOException)
         {
             errors.Add(new ScanError(ToRelativePath(ignorePath), $"Could not read {ignoreFileName}."));
             fullyScanned = false;
-            return new IgnoreRuleLoadResult(inheritedIgnoreRules, IgnoreRulesAvailable: false);
+            return false;
         }
 
-        return new IgnoreRuleLoadResult(IgnoreRuleSet.CreateChild(inheritedIgnoreRules, rules), IgnoreRulesAvailable: true);
+        return true;
     }
 
     private string NormalizeIgnoreRuleRoot(string? ignoreRuleRoot)
@@ -2610,58 +2799,130 @@ public class FileIndexer
     // <ignoreRuleRoot>/.gitmodules を解析し、projectRoot 相対の submodule ワークツリーパスと
     // その祖先ディレクトリを返す。projectRoot 外の submodule は無視。.gitmodules が無い・
     // 読めない場合は空集合を返し、submodule の無いリポジトリと同じ形を保つ。
-    private static (HashSet<string> Paths, HashSet<string> AncestorPaths) LoadGitSubmodulePaths(
+    private static (HashSet<string> Paths, HashSet<string> AncestorPaths, IReadOnlyList<ScanError> Warnings) LoadGitSubmodulePaths(
         string ignoreRuleRoot, string projectRoot, StringComparer pathComparer)
     {
         var submodulePaths = new HashSet<string>(pathComparer);
         var ancestorPaths = new HashSet<string>(pathComparer);
+        var warnings = new List<ScanError>();
 
         var gitmodulesPath = Path.Combine(ignoreRuleRoot, ".gitmodules");
         var prefixedGitmodulesPath = LongPath.EnsureWindowsPrefix(gitmodulesPath);
         if (!File.Exists(prefixedGitmodulesPath))
-            return (submodulePaths, ancestorPaths);
+            return (submodulePaths, ancestorPaths, warnings);
 
-        string[] lines;
         try
         {
-            lines = File.ReadAllLines(prefixedGitmodulesPath);
+            if (!TryReadBoundedUtf8SidecarLines(
+                    prefixedGitmodulesPath,
+                    MaxGitmodulesBytes,
+                    MaxGitmodulesLines,
+                    out var lines,
+                    out var skippedReason))
+            {
+                warnings.Add(new ScanError(
+                    NormalizeIgnorePath(Path.GetRelativePath(projectRoot, gitmodulesPath)),
+                    $"Skipped .gitmodules because {skippedReason}.",
+                    ScanIssueSeverity.Warning));
+                return (submodulePaths, ancestorPaths, warnings);
+            }
+
+            foreach (var rawSubmodulePath in ParseSubmodulePathsFromGitmodules(lines))
+            {
+                string absolute;
+                try
+                {
+                    absolute = Path.GetFullPath(Path.Combine(ignoreRuleRoot, rawSubmodulePath));
+                }
+                catch (ArgumentException)
+                {
+                    continue;
+                }
+
+                var relativeToProject = NormalizeIgnorePath(Path.GetRelativePath(projectRoot, absolute));
+                if (relativeToProject.Length == 0
+                    || relativeToProject == "."
+                    || relativeToProject.StartsWith("../", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                submodulePaths.Add(relativeToProject);
+                var segments = relativeToProject.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                for (var i = 1; i < segments.Length; i++)
+                    ancestorPaths.Add(string.Join('/', segments, 0, i));
+            }
         }
         catch (IOException)
         {
-            return (submodulePaths, ancestorPaths);
         }
         catch (UnauthorizedAccessException)
         {
-            return (submodulePaths, ancestorPaths);
         }
 
-        foreach (var rawSubmodulePath in ParseSubmodulePathsFromGitmodules(lines))
+        return (submodulePaths, ancestorPaths, warnings);
+    }
+
+    private static bool TryReadBoundedUtf8SidecarLines(
+        string path,
+        int maxBytes,
+        int maxLines,
+        out IReadOnlyList<string> lines,
+        out string skippedReason)
+    {
+        lines = [];
+        skippedReason = string.Empty;
+
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            bufferSize: 8192,
+            useAsync: false);
+
+        if (stream.Length > maxBytes)
         {
-            string absolute;
-            try
-            {
-                absolute = Path.GetFullPath(Path.Combine(ignoreRuleRoot, rawSubmodulePath));
-            }
-            catch (ArgumentException)
-            {
-                continue;
-            }
-
-            var relativeToProject = NormalizeIgnorePath(Path.GetRelativePath(projectRoot, absolute));
-            if (relativeToProject.Length == 0
-                || relativeToProject == "."
-                || relativeToProject.StartsWith("../", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            submodulePaths.Add(relativeToProject);
-            var segments = relativeToProject.Split('/', StringSplitOptions.RemoveEmptyEntries);
-            for (var i = 1; i < segments.Length; i++)
-                ancestorPaths.Add(string.Join('/', segments, 0, i));
+            skippedReason = $"it exceeds {maxBytes} bytes";
+            return false;
         }
 
-        return (submodulePaths, ancestorPaths);
+        using var accumulator = new MemoryStream((int)Math.Min(stream.Length, maxBytes));
+        var buffer = new byte[8192];
+        long total = 0;
+        int read;
+        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            total += read;
+            if (total > maxBytes)
+            {
+                skippedReason = $"it exceeds {maxBytes} bytes";
+                return false;
+            }
+
+            accumulator.Write(buffer, 0, read);
+        }
+
+        var text = new UTF8Encoding(false, throwOnInvalidBytes: false).GetString(accumulator.ToArray());
+        var result = new List<string>();
+        using var reader = new StringReader(text);
+        string? line;
+        while ((line = reader.ReadLine()) != null)
+        {
+            if (result.Count == 0 && line.Length > 0 && line[0] == '\uFEFF')
+                line = line[1..];
+
+            if (result.Count >= maxLines)
+            {
+                skippedReason = $"it exceeds {maxLines} lines";
+                return false;
+            }
+
+            result.Add(line);
+        }
+
+        lines = result;
+        return true;
     }
 
     // Tolerant .gitmodules reader: yields each declared submodule's "path = ..." value.

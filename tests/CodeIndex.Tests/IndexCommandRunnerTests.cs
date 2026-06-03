@@ -1013,6 +1013,9 @@ public class IndexCommandRunnerTests
         {
             Directory.CreateDirectory(Path.Combine(projectRoot, "src", "Lib"));
             Directory.CreateDirectory(Path.Combine(projectRoot, "src", "Other"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "Lib", "Ignored"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "Lib", "bin", "Debug"));
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "src/Lib/Ignored/\n");
             File.WriteAllText(Path.Combine(projectRoot, "Repo.sln"), """
             Microsoft Visual Studio Solution File, Format Version 12.00
             Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lib", "src\Lib\Lib.csproj", "{11111111-1111-1111-1111-111111111111}"
@@ -1022,6 +1025,8 @@ public class IndexCommandRunnerTests
             """);
             File.WriteAllText(Path.Combine(projectRoot, "src", "Lib", "Lib.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
             File.WriteAllText(Path.Combine(projectRoot, "src", "Lib", "Class1.cs"), "class Class1 {}");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Lib", "Ignored", "Ignored.cs"), "class Ignored {}");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Lib", "bin", "Debug", "Generated.cs"), "class Generated {}");
             File.WriteAllText(Path.Combine(projectRoot, "src", "Other", "Other.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
             File.WriteAllText(Path.Combine(projectRoot, "src", "Other", "Class2.cs"), "class Class2 {}");
 
@@ -1031,12 +1036,117 @@ public class IndexCommandRunnerTests
             Assert.Equal("Repo.sln", options.SolutionPath);
             Assert.Contains("src/Lib/Lib.csproj", options.UpdateFiles);
             Assert.Contains("src/Lib/Class1.cs", options.UpdateFiles);
+            Assert.DoesNotContain("src/Lib/Ignored/Ignored.cs", options.UpdateFiles);
+            Assert.DoesNotContain("src/Lib/bin/Debug/Generated.cs", options.UpdateFiles);
             Assert.DoesNotContain("src/Other/Class2.cs", options.UpdateFiles);
         }
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void ResolveProjects_SkipsIgnoredAndDefaultExcludedProjectDirectories_Issue2862()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_index_project_filter_discovery");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "ignored", "Hidden"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "node_modules", "Package"));
+            File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "ignored/\n");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(projectRoot, "ignored", "Hidden", "Hidden.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(projectRoot, "node_modules", "Package", "Package.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+            var projects = SolutionProjectResolver.ResolveProjects(projectRoot);
+
+            Assert.Contains(projects, project => project.ProjectPath == "src/App/App.csproj");
+            Assert.DoesNotContain(projects, project => project.ProjectPath == "ignored/Hidden/Hidden.csproj");
+            Assert.DoesNotContain(projects, project => project.ProjectPath == "node_modules/Package/Package.csproj");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ResolveProjectFiles_HonorsGitRootIgnoreRulesForNestedWorkspace_Issue2862()
+    {
+        var repoRoot = TestProjectHelper.CreateTempProject("cdidx_index_project_filter_git_root");
+        try
+        {
+            RunGit(repoRoot, "init");
+            var projectRoot = Path.Combine(repoRoot, "Sub");
+            var libDir = Path.Combine(projectRoot, "src", "Lib");
+            Directory.CreateDirectory(Path.Combine(libDir, "Ignored"));
+            File.WriteAllText(Path.Combine(repoRoot, ".gitignore"), "Sub/src/Lib/Ignored/\n");
+            File.WriteAllText(Path.Combine(projectRoot, "Repo.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lib", "src\Lib\Lib.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(libDir, "Lib.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(libDir, "Class1.cs"), "class Class1 {}");
+            File.WriteAllText(Path.Combine(libDir, "Ignored", "Ignored.cs"), "class Ignored {}");
+
+            var files = SolutionProjectResolver.ResolveProjectFiles(projectRoot, ["Lib"], "Repo.sln");
+
+            Assert.Contains("src/Lib/Class1.cs", files);
+            Assert.DoesNotContain("src/Lib/Ignored/Ignored.cs", files);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(repoRoot);
+        }
+    }
+
+    [Fact]
+    public void ResolveProjectFiles_SkipsDirectorySymlinkLoops_Issue2862()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_index_project_filter_symlink_loop");
+        try
+        {
+            var libDir = Path.Combine(projectRoot, "src", "Lib");
+            Directory.CreateDirectory(libDir);
+            File.WriteAllText(Path.Combine(projectRoot, "Repo.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lib", "src\Lib\Lib.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(libDir, "Lib.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(libDir, "Class1.cs"), "class Class1 {}");
+            try
+            {
+                Directory.CreateSymbolicLink(Path.Combine(libDir, "loop"), libDir);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+            {
+                return;
+            }
+
+            var files = SolutionProjectResolver.ResolveProjectFiles(projectRoot, ["Lib"], "Repo.sln");
+
+            Assert.Contains("src/Lib/Class1.cs", files);
+            Assert.DoesNotContain(files, file => file.Contains("/loop/", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void IsUpdateMode_ProjectFilterWithoutResolvedFiles_ReturnsTrue_Issue2862()
+    {
+        var options = new IndexCommandOptions { ProjectFilters = ["Lib"] };
+
+        Assert.True(IndexCommandRunner.IsUpdateMode(options));
     }
 
     [Fact]

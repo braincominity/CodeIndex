@@ -150,6 +150,69 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFilesDetailed_OversizedGitignoreFailsClosedWithError()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-oversize-gitignore-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "generated.py\n" + new string('x', 300 * 1024));
+            File.WriteAllText(Path.Combine(tempDir, "generated.py"), "print('generated')\n");
+
+            var result = new FileIndexer(tempDir).ScanFilesDetailed();
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .ToList();
+
+            Assert.Empty(files);
+            Assert.Contains(
+                result.Errors,
+                error => error.Path == ".gitignore"
+                    && error.Severity == FileIndexer.ScanIssueSeverity.Error
+                    && error.Message.Contains("exceeds", StringComparison.OrdinalIgnoreCase));
+            Assert.True(result.HadErrors);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_GitignoreRuleCountCapFailsClosedWithError()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx-gitignore-rule-cap-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var rules = Enumerable.Range(0, 4096)
+                .Select(i => $"unused{i}.py")
+                .Concat(["late.py"]);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), string.Join('\n', rules) + "\n");
+            File.WriteAllText(Path.Combine(tempDir, "late.py"), "print('late')\n");
+
+            var result = new FileIndexer(tempDir).ScanFilesDetailed();
+            var files = result.Files
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .ToList();
+
+            Assert.Empty(files);
+            Assert.Contains(
+                result.Errors,
+                error => error.Path == ".gitignore:4097"
+                    && error.Severity == FileIndexer.ScanIssueSeverity.Error
+                    && error.Message.Contains("4096 rules", StringComparison.OrdinalIgnoreCase));
+            Assert.True(result.HadErrors);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void ScanFilesDetailed_HardlinkedFiles_SkipsDuplicatePathWithWarning()
     {
         if (OperatingSystem.IsWindows())
@@ -398,6 +461,141 @@ public class FileIndexerTests
         }
     }
 
+    [Fact]
+    public void LanguageMapOverrides_OversizedFileSkipsOverridesWithWarning()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_caps_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var oversizedPath = Path.Combine(tempDir, "large-langmap.yaml");
+            var fallbackPath = Path.Combine(tempDir, "fallback-langmap.yaml");
+            File.WriteAllText(oversizedPath, "entries:\n" + new string('a', 132 * 1024));
+            File.WriteAllText(fallbackPath, "entries:\n- extension: ok\n  language: ruby\n");
+
+            var warnings = new List<string>();
+            var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
+                new[] { oversizedPath, fallbackPath },
+                warnings.Add);
+
+            Assert.False(map.ContainsKey(".skip"));
+            Assert.Equal("ruby", map[".ok"]);
+            Assert.Contains(warnings, warning => warning.Contains("exceeds", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void LanguageMapOverrides_TooManyLinesSkipsOverridesWithWarning()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_lines_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var tooManyLinesPath = Path.Combine(tempDir, "many-lines-langmap.yaml");
+            var fallbackPath = Path.Combine(tempDir, "fallback-langmap.yaml");
+            File.WriteAllText(tooManyLinesPath, string.Concat(Enumerable.Repeat("#\n", 16385)));
+            File.WriteAllText(fallbackPath, "entries:\n- extension: ok\n  language: ruby\n");
+
+            var warnings = new List<string>();
+            var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
+                new[] { tooManyLinesPath, fallbackPath },
+                warnings.Add);
+
+            Assert.Equal("ruby", map[".ok"]);
+            Assert.Contains(warnings, warning => warning.Contains("lines", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void LanguageMapOverrides_EntryCountCapTruncatesRemainingOverridesWithWarning()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_entries_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var configPath = Path.Combine(tempDir, "langmap.yaml");
+            var builder = new StringBuilder("entries:\n");
+            for (var i = 0; i <= 4096; i++)
+                builder.Append("- extension:x").Append(i).Append('\n').Append("language:l\n");
+            File.WriteAllText(configPath, builder.ToString());
+
+            var warnings = new List<string>();
+            var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
+                new[] { configPath },
+                warnings.Add);
+
+            Assert.Equal("l", map[".x0"]);
+            Assert.Equal("l", map[".x4095"]);
+            Assert.False(map.ContainsKey(".x4096"));
+            Assert.Contains(warnings, warning => warning.Contains("4096", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void LanguageMapOverrides_EntryCountCapIsPerFileSoWorkspaceOverridesStillLoad()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_per_file_entries_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var userConfigPath = Path.Combine(tempDir, "user-langmap.yaml");
+            var workspaceConfigPath = Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName);
+            var builder = new StringBuilder("entries:\n");
+            for (var i = 0; i <= 4096; i++)
+                builder.Append("- extension:x").Append(i).Append('\n').Append("language:u\n");
+            File.WriteAllText(userConfigPath, builder.ToString());
+            File.WriteAllText(
+                workspaceConfigPath,
+                "entries:\n- extension:x0\n  language:workspace\n- extension:workspace\n  language:ruby\n");
+
+            var warnings = new List<string>();
+            var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(
+                new[] { userConfigPath, workspaceConfigPath },
+                warnings.Add);
+
+            Assert.Equal("workspace", map[".x0"]);
+            Assert.Equal("ruby", map[".workspace"]);
+            Assert.False(map.ContainsKey(".x4096"));
+            Assert.Contains(warnings, warning => warning.Contains("4096", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void LanguageMapOverrides_BomPrefixedFileLoadsOverrides()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_langmap_bom_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var configPath = Path.Combine(tempDir, LanguageMapOverrides.WorkspaceFileName);
+            File.WriteAllText(configPath, "\uFEFFentries:\n- extension:bom\n  language:ruby\n");
+
+            var map = LanguageMapOverrides.LoadEffectiveMapFromPathsForTesting(new[] { configPath });
+
+            Assert.Equal("ruby", map[".bom"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(tempDir);
+        }
+    }
+
     [Theory]
     [InlineData("App.csproj")]
     [InlineData("Directory.Build.props")]
@@ -416,6 +614,134 @@ public class FileIndexerTests
 
             Assert.True(FileIndexer.SupportsHotspotFamilyMarkerLanguage("msbuild"));
             Assert.False(string.IsNullOrWhiteSpace(indexer.GetProjectMarkerFingerprint("msbuild")));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprint_CancelledToken_ThrowsBeforeTraversal()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_cancel_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        try
+        {
+            var indexer = new FileIndexer(tempDir);
+
+            Assert.Throws<OperationCanceledException>(() =>
+                indexer.GetProjectMarkerFingerprint("msbuild", cancellation.Token));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprint_DirectoryCapTruncatesTraversal()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_dir_cap_{Guid.NewGuid():N}");
+        try
+        {
+            var nestedDir = Path.Combine(tempDir, "src", "App");
+            Directory.CreateDirectory(nestedDir);
+            File.WriteAllText(Path.Combine(nestedDir, "App.csproj"), "<Project />");
+
+            var indexer = new FileIndexer(tempDir);
+
+            var fullFingerprint = indexer.GetProjectMarkerFingerprint("msbuild");
+            var cappedFingerprint = indexer.GetProjectMarkerFingerprintForTesting("msbuild", maxDirectories: 1, maxMarkerFiles: 100);
+
+            Assert.False(string.IsNullOrWhiteSpace(fullFingerprint));
+            Assert.False(string.IsNullOrWhiteSpace(cappedFingerprint));
+            Assert.NotEqual(fullFingerprint, cappedFingerprint);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprint_DirectoryCapReportsIncompleteTraversal()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_incomplete_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            for (var i = 0; i < 4; i++)
+                Directory.CreateDirectory(Path.Combine(tempDir, $"project-{i}"));
+
+            var indexer = new FileIndexer(tempDir);
+
+            var result = indexer.GetProjectMarkerFingerprintResultForTesting("msbuild", maxDirectories: 1, maxMarkerFiles: 100);
+
+            Assert.False(result.IsComplete);
+            Assert.False(string.IsNullOrWhiteSpace(result.Fingerprint));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprint_IgnoredGeneratedTreeDoesNotExhaustDirectoryCap()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_ignored_cap_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "generated/\n");
+            var generatedDir = Path.Combine(tempDir, "generated");
+            Directory.CreateDirectory(generatedDir);
+            for (var i = 0; i < 8; i++)
+                Directory.CreateDirectory(Path.Combine(generatedDir, $"project-{i}"));
+
+            var appDir = Path.Combine(tempDir, "src", "App");
+            Directory.CreateDirectory(appDir);
+            File.WriteAllText(Path.Combine(appDir, "App.csproj"), "<Project />");
+
+            var indexer = new FileIndexer(tempDir);
+
+            var result = indexer.GetProjectMarkerFingerprintResultForTesting("msbuild", maxDirectories: 4, maxMarkerFiles: 100);
+
+            Assert.True(result.IsComplete);
+            Assert.False(string.IsNullOrWhiteSpace(result.Fingerprint));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void GetProjectMarkerFingerprint_FileCapTruncatesMarkerCollection()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_msbuild_marker_file_cap_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(tempDir, "Lib.csproj"), "<Project />");
+
+            var indexer = new FileIndexer(tempDir);
+
+            var fullFingerprint = indexer.GetProjectMarkerFingerprint("msbuild");
+            var cappedFingerprint = indexer.GetProjectMarkerFingerprintForTesting("msbuild", maxDirectories: 100, maxMarkerFiles: 1);
+
+            Assert.False(string.IsNullOrWhiteSpace(fullFingerprint));
+            Assert.False(string.IsNullOrWhiteSpace(cappedFingerprint));
+            Assert.NotEqual(fullFingerprint, cappedFingerprint);
         }
         finally
         {
@@ -3115,6 +3441,37 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void GetFamilyScopeKey_IgnoresIgnoredProjectMarkers()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            var libDir = Path.Combine(tempDir, "src", "Lib");
+            var featureDir = Path.Combine(libDir, "Feature");
+            Directory.CreateDirectory(featureDir);
+            File.WriteAllText(Path.Combine(tempDir, ".gitignore"), "src/Lib/Lib.csproj\n");
+            var projectPath = Path.Combine(libDir, "Lib.csproj");
+            File.WriteAllText(projectPath, "<Project />");
+            var sourcePath = Path.Combine(featureDir, "Api.Part1.cs");
+            File.WriteAllText(sourcePath, "public partial class Api {}");
+
+            var indexer = new FileIndexer(tempDir);
+            var familyScopeKey = indexer.GetFamilyScopeKey(sourcePath, "csharp");
+            var ignoredMarkerFingerprint = indexer.GetProjectMarkerFingerprint("csharp");
+            File.Delete(projectPath);
+            var markerlessFingerprint = new FileIndexer(tempDir).GetProjectMarkerFingerprint("csharp");
+
+            Assert.Equal("src", familyScopeKey);
+            Assert.Equal(markerlessFingerprint, ignoredMarkerFingerprint);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void GetFamilyScopeKey_MultipleProjectMarkersInOneDirectoryUseNarrowerSubtreeScope()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
@@ -3433,6 +3790,40 @@ public class FileIndexerTests
         finally
         {
             Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFilesDetailed_OversizedGitmodulesSkipsSubmodulePassthroughWithWarning()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "app.py"), "print('hello')");
+            File.WriteAllText(Path.Combine(tempDir, ".gitmodules"), new string('x', 300 * 1024));
+
+            var submoduleDir = Path.Combine(tempDir, "vendor", "foo");
+            Directory.CreateDirectory(submoduleDir);
+            File.WriteAllText(Path.Combine(submoduleDir, ".git"), "gitdir: ../../.git/modules/foo\n");
+            File.WriteAllText(Path.Combine(submoduleDir, "lib.py"), "def f(): pass");
+
+            var result = new FileIndexer(tempDir).ScanFilesDetailed();
+            var rel = result.Files.Select(f => Path.GetRelativePath(tempDir, f).Replace('\\', '/')).ToHashSet();
+
+            Assert.Contains("app.py", rel);
+            Assert.DoesNotContain("vendor/foo/lib.py", rel);
+            Assert.Contains(
+                result.Errors,
+                error => error.Path == ".gitmodules"
+                    && error.Severity == FileIndexer.ScanIssueSeverity.Warning
+                    && error.Message.Contains("exceeds", StringComparison.OrdinalIgnoreCase));
+            Assert.False(result.HadErrors);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
         }
     }
 

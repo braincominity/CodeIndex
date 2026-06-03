@@ -1931,11 +1931,13 @@ public partial class McpServer
         return values;
     }
 
-    private static Dictionary<string, string?> GetHotspotFamilyMarkerFingerprints(FileIndexer indexer)
+    private static Dictionary<string, FileIndexer.ProjectMarkerFingerprintResult> GetHotspotFamilyMarkerFingerprints(
+        FileIndexer indexer,
+        CancellationToken cancellationToken)
     {
-        var values = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var values = new Dictionary<string, FileIndexer.ProjectMarkerFingerprintResult>(StringComparer.Ordinal);
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
-            values[lang] = indexer.GetProjectMarkerFingerprint(lang);
+            values[lang] = indexer.GetProjectMarkerFingerprintResult(lang, cancellationToken);
         return values;
     }
 
@@ -1944,23 +1946,31 @@ public partial class McpServer
         IReadOnlySet<string> reusedLanguages,
         IReadOnlyDictionary<string, string?> priorVersions,
         IReadOnlyDictionary<string, string?> priorFingerprints,
-        IReadOnlyDictionary<string, string?> currentFingerprints)
+        IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentFingerprints)
     {
         var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
         {
-            currentFingerprints.TryGetValue(lang, out var currentFingerprint);
+            if (!currentFingerprints.TryGetValue(lang, out var currentFingerprint))
+                continue;
+
+            if (!currentFingerprint.IsComplete)
+            {
+                writer.MarkHotspotFamilyMarkerFingerprintIncomplete(lang, currentFingerprint.Fingerprint);
+                continue;
+            }
+
             priorVersions.TryGetValue(lang, out var priorVersion);
             priorFingerprints.TryGetValue(lang, out var priorFingerprint);
-            if (!reusedLanguages.Contains(lang) || (priorVersion == currentVersion && priorFingerprint == currentFingerprint))
-                writer.MarkHotspotFamilyReady(lang, currentFingerprint);
+            if (!reusedLanguages.Contains(lang) || (priorVersion == currentVersion && priorFingerprint == currentFingerprint.Fingerprint))
+                writer.MarkHotspotFamilyReady(lang, currentFingerprint.Fingerprint);
         }
     }
 
     private static Dictionary<string, bool> GetHotspotFamilyTrustMatchesCurrent(
         IReadOnlyDictionary<string, string?> priorVersions,
         IReadOnlyDictionary<string, string?> priorFingerprints,
-        IReadOnlyDictionary<string, string?> currentFingerprints)
+        IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentFingerprints)
     {
         var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var values = new Dictionary<string, bool>(StringComparer.Ordinal);
@@ -1969,7 +1979,9 @@ public partial class McpServer
             currentFingerprints.TryGetValue(lang, out var currentFingerprint);
             priorVersions.TryGetValue(lang, out var priorVersion);
             priorFingerprints.TryGetValue(lang, out var priorFingerprint);
-            values[lang] = priorVersion == currentVersion && priorFingerprint == currentFingerprint;
+            values[lang] = currentFingerprint.IsComplete
+                && priorVersion == currentVersion
+                && priorFingerprint == currentFingerprint.Fingerprint;
         }
 
         return values;
@@ -3534,7 +3546,9 @@ public partial class McpServer
         var writer = new DbWriter(db);
         var indexer = new FileIndexer(projectPath, GitHelper.ResolveIgnoreCase(projectPath), GitHelper.TryGetRepositoryRoot(projectPath) ?? Path.GetFullPath(projectPath), maxFileBytes);
         var postExtractionHooks = PostExtractionHookRunner.DiscoverDefault();
-        var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
+        var requestToken = _currentRequestToken.Value;
+        requestToken.ThrowIfCancellationRequested();
+        var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer, requestToken);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
         var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -3603,16 +3617,19 @@ public partial class McpServer
         writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages());
 
         // Scan and index / スキャン・インデックス
-        var requestToken = _currentRequestToken.Value;
-        requestToken.ThrowIfCancellationRequested();
         var scanResult = indexer.ScanFilesDetailed(cancellationToken: requestToken);
         var files = scanResult.Files;
         EmitProgressNotification(progressToken, 0, files.Count, "Index scan complete; indexing files.");
         var csharpWorkspace = BuildMcpCSharpStaticInterfaceWorkspaceSymbols(writer, indexer, projectPath, files, requestToken);
         if (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)
             csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
-        int processed = 0, skipped = 0, errors = 0;
-        var failures = new List<IndexFileFailure>();
+        var fatalScanErrors = scanResult.Errors
+            .Where(error => error.IsFatal)
+            .ToList();
+        int processed = 0, skipped = 0, errors = fatalScanErrors.Count;
+        var failures = fatalScanErrors
+            .Select(BuildScanFailure)
+            .ToList();
         var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var filePath in files)
@@ -3741,7 +3758,7 @@ public partial class McpServer
         var foldReadyAfter = false;
         string? foldReadyReason = null;
         _ = priorMetadataTargetCsharp;
-        if (errors == 0)
+        if (!scanResult.HadErrors && errors == 0)
         {
             EmitProgressNotification(progressToken, processed, files.Count, "Finalizing index metadata.");
             writer.MarkBatchInProgress();
@@ -3937,6 +3954,13 @@ public partial class McpServer
         var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectPath, filePath));
         return new IndexFileFailure(relativePath, stage, ex.GetType().Name, ex.Message);
     }
+
+    private static IndexFileFailure BuildScanFailure(FileIndexer.ScanError error) =>
+        new(
+            FileIndexer.NormalizePathSeparators(error.Path),
+            "scan",
+            nameof(FileIndexer.ScanError),
+            error.Message);
 
     private sealed record IndexFileFailure(string Path, string Stage, string ExceptionType, string Message);
 
