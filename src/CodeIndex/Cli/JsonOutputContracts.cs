@@ -42,24 +42,35 @@ internal sealed record CommandErrorJsonResult(
 internal sealed record DbIntegrityCheckJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,
     [property: JsonPropertyName("ok")] bool Ok,
-    [property: JsonPropertyName("issues")] List<string> Issues);
+    [property: JsonPropertyName("issues")] List<string> Issues,
+    [property: JsonPropertyName("truncated")] bool Truncated = false,
+    [property: JsonPropertyName("rows_truncated")] bool RowsTruncated = false,
+    [property: JsonPropertyName("text_truncated")] bool TextTruncated = false,
+    [property: JsonPropertyName("row_limit")] int RowLimit = 0,
+    [property: JsonPropertyName("text_limit")] int TextLimit = 0);
 
 internal sealed record DbCheckpointJsonResult(
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("db_path")] string DbPath,
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("checkpoint_path")] string CheckpointPath,
-    [property: JsonPropertyName("files")] List<string> Files);
+    [property: JsonPropertyName("files")] List<string> Files,
+    [property: JsonPropertyName("files_truncated")] bool FilesTruncated = false,
+    [property: JsonPropertyName("file_limit")] int FileLimit = 0);
 
 internal sealed record DbCheckpointListJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,
-    [property: JsonPropertyName("checkpoints")] List<DbCheckpointListEntryJsonResult> Checkpoints);
+    [property: JsonPropertyName("checkpoints")] List<DbCheckpointListEntryJsonResult> Checkpoints,
+    [property: JsonPropertyName("truncated")] bool Truncated = false,
+    [property: JsonPropertyName("checkpoint_limit")] int CheckpointLimit = 0,
+    [property: JsonPropertyName("file_limit")] int FileLimit = 0);
 
 internal sealed record DbCheckpointListEntryJsonResult(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("checkpoint_path")] string CheckpointPath,
     [property: JsonPropertyName("created_at_utc")] string CreatedAtUtc,
-    [property: JsonPropertyName("bytes")] long Bytes);
+    [property: JsonPropertyName("bytes")] long Bytes,
+    [property: JsonPropertyName("files_truncated")] bool FilesTruncated = false);
 
 internal sealed record DbRestoreJsonResult(
     [property: JsonPropertyName("status")] string Status,
@@ -77,7 +88,12 @@ internal sealed record DbSchemaEntryJsonResult(
 internal sealed record DbSchemaJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,
     [property: JsonPropertyName("user_version")] int UserVersion,
-    [property: JsonPropertyName("entries")] List<DbSchemaEntryJsonResult> Entries);
+    [property: JsonPropertyName("entries")] List<DbSchemaEntryJsonResult> Entries,
+    [property: JsonPropertyName("truncated")] bool Truncated = false,
+    [property: JsonPropertyName("entries_truncated")] bool EntriesTruncated = false,
+    [property: JsonPropertyName("sql_truncated")] bool SqlTruncated = false,
+    [property: JsonPropertyName("entry_limit")] int EntryLimit = 0,
+    [property: JsonPropertyName("sql_text_limit")] int SqlTextLimit = 0);
 
 internal sealed record DbPruneJsonResult(
     [property: JsonPropertyName("status")] string Status,
