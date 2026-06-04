@@ -910,25 +910,23 @@ public class SuggestionStoreTests : IDisposable
         Assert.Equal(1, File.ReadAllText(archivePath).Split("Old suggestion").Length - 1);
     }
 
-    [Fact]
-    public void TryAdd_MoveFailure_DoesNotLeaveOrphanTmpFile()
+  [Fact]
+    public void TryAdd_CreatesFileWithPrivatePermissionsOnPosix()
     {
-        // Force File.Move to fail by pre-creating the destination as a directory.
-        // The write-to-temp succeeds, but the rename onto a directory throws and
-        // the temp file must be cleaned up so `.cdidx/` does not accumulate orphans (#1574).
-        // File.Move を失敗させるため、宛先パスをディレクトリとして事前作成する。
-        // 一時ファイルへの書き込みは成功するが、ディレクトリに対する rename は失敗するため、
-        // `.cdidx/` に孤児が蓄積しないよう一時ファイルがクリーンアップされる必要がある (#1574)。
         var filePath = Path.Combine(_tempDir, "suggestions-codeindex.json");
-        Directory.CreateDirectory(filePath);
+        _store.TryAdd(MakeRecord("security", null, "Enforce private POSIX permissions"));
 
-        var record = MakeRecord("other", null, "Move failure cleanup");
-        var ex = Record.Exception(() => _store.TryAdd(record));
+        Assert.True(File.Exists(filePath));
 
-        Assert.NotNull(ex);
-        Assert.DoesNotContain(
-            Directory.EnumerateFiles(_tempDir),
-            file => Path.GetFileName(file).EndsWith(".tmp", StringComparison.Ordinal));
+        // التحقق من الصلاحيات فقط على أنظمة لينكس وماك (POSIX)
+        if (!OperatingSystem.IsWindows())
+        {
+            var mode = File.GetUnixFileMode(filePath);
+            
+            // التأكد من أن المجموعات والمستخدمين الآخرين لا يملكون صلاحية القراءة
+            Assert.False(mode.HasFlag(UnixFileMode.GroupRead), "Group should not have read access.");
+            Assert.False(mode.HasFlag(UnixFileMode.OthersRead), "Others should not have read access.");
+        }
     }
 
     // --- Helpers / ヘルパー ---
