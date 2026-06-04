@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+#### Fixed
+
+- Updated `ReleaseWorkflowTests` to match the trimmed self-contained release contract, asserting that `status --json` fails with `E009_FEATURE_UNAVAILABLE` instead of expecting JSON output from the installer binary.
+
 ### [1.28.2] - 2026-06-04
 
 #### Fixed
@@ -3336,6 +3340,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
+
+#### 修正
+
+- `ReleaseWorkflowTests` を trimmed self-contained release の契約に合わせて更新しました。installer 版バイナリで `status --json` の JSON 出力を期待せず、`E009_FEATURE_UNAVAILABLE` で失敗することを検証します。
 
 ### [1.28.2] - 2026-06-04
 
