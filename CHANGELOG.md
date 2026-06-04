@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+#### Fixed
+
+- Fixed the release workflow’s `install.sh` smoke test to match the trimmed self-contained release contract: `status --json` is expected to fail with `E009_FEATURE_UNAVAILABLE` and the structured-output hint, instead of being treated as a successful JSON command.
+
 ### [1.28.1] - 2026-06-04
 
 #### Fixed
@@ -3330,6 +3334,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
+
+#### 修正
+
+- release workflow の `install.sh` smoke test を trimmed self-contained release の契約に合わせて修正しました。`status --json` は JSON 成功ではなく、`E009_FEATURE_UNAVAILABLE` と構造化出力の代替手段を示す hint で失敗することを検証します。
 
 ### [1.28.1] - 2026-06-04
 

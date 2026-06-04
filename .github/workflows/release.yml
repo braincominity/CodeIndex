@@ -727,25 +727,30 @@ jobs:
           "$CDIDX_INSTALL_DIR/$binary_name" . >/dev/null
           "$CDIDX_INSTALL_DIR/$binary_name" status >/dev/null
 
-          # CLI --json must work on the published trimmed self-contained release.
-          # Every CLI JSON DTO is covered by the source-generated serializer context.
+          # The published self-contained release is trimmed; CLI --json is
+          # intentionally unavailable there and must fail with the explicit
+          # feature-unavailable signal instead of a fake database error.
           json_temp_dir="${RUNNER_TEMP:?RUNNER_TEMP must be set by GitHub Actions}"
           mkdir -p "$json_temp_dir"
           json_stdout="$json_temp_dir/cdidx_json_stdout.txt"
           json_stderr="$json_temp_dir/cdidx_json_stderr.txt"
-          if ! "$CDIDX_INSTALL_DIR/$binary_name" status --json >"$json_stdout" 2>"$json_stderr"; then
-            echo "Expected status --json to exit 0" >&2
-            cat "$json_stderr" >&2
+          if "$CDIDX_INSTALL_DIR/$binary_name" status --json >"$json_stdout" 2>"$json_stderr"; then
+            echo "Expected status --json to fail on the trimmed self-contained release" >&2
+            cat "$json_stdout" >&2
             exit 1
+          else
+            json_exit=$?
           fi
-          [ -s "$json_stdout" ] \
-            || { echo "Expected status --json stdout to contain a JSON object" >&2; cat "$json_stderr" >&2; exit 1; }
-          [ ! -s "$json_stderr" ] \
-            || { echo "Expected no stderr for status --json" >&2; cat "$json_stderr" >&2; exit 1; }
-          grep -F -- '"files":' "$json_stdout" >/dev/null \
-            || { echo "status --json stdout did not include files" >&2; cat "$json_stdout" >&2; exit 1; }
-          grep -F -- '"version":' "$json_stdout" >/dev/null \
-            || { echo "status --json stdout did not include version" >&2; cat "$json_stdout" >&2; exit 1; }
+          [ "$json_exit" -eq 4 ] \
+            || { echo "Expected status --json to exit 4, got $json_exit" >&2; cat "$json_stderr" >&2; exit 1; }
+          [ ! -s "$json_stdout" ] \
+            || { echo "Expected no stdout for unavailable status --json" >&2; cat "$json_stdout" >&2; exit 1; }
+          [ -s "$json_stderr" ] \
+            || { echo "Expected status --json stderr to explain the unavailable feature" >&2; exit 1; }
+          grep -F -- 'Error [E009_FEATURE_UNAVAILABLE]: --json is not available on this trimmed build.' "$json_stderr" >/dev/null \
+            || { echo "status --json stderr did not include the feature-unavailable error" >&2; cat "$json_stderr" >&2; exit 1; }
+          grep -F -- 'Hint: use `cdidx mcp` for structured output, omit `--json` for human-readable output, or use the NuGet/global-tool build if you need CLI JSON.' "$json_stderr" >/dev/null \
+            || { echo "status --json stderr did not include the structured-output hint" >&2; cat "$json_stderr" >&2; exit 1; }
 
   publish-nuget:
     if: github.repository == 'Widthdom/CodeIndex'
