@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.28.3] - 2026-06-04
+
 #### Fixed
 
 - Updated `ReleaseWorkflowTests` to match the trimmed self-contained release contract, asserting that `status --json` fails with `E009_FEATURE_UNAVAILABLE` instead of expecting JSON output from the installer binary.
@@ -3341,6 +3343,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.28.3] - 2026-06-04
+
 #### 修正
 
 - `ReleaseWorkflowTests` を trimmed self-contained release の契約に合わせて更新しました。installer 版バイナリで `status --json` の JSON 出力を期待せず、`E009_FEATURE_UNAVAILABLE` で失敗することを検証します。
@@ -6660,7 +6664,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.28.2...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.28.3...HEAD
+[1.28.3]: https://github.com/Widthdom/CodeIndex/compare/v1.28.2...v1.28.3
 [1.28.2]: https://github.com/Widthdom/CodeIndex/compare/v1.28.1...v1.28.2
 [1.28.1]: https://github.com/Widthdom/CodeIndex/compare/v1.28.0...v1.28.1
 [1.28.0]: https://github.com/Widthdom/CodeIndex/compare/v1.27.2...v1.28.0
