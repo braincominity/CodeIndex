@@ -405,7 +405,9 @@ conflicting instructions.
 ```bash
 cdidx validate
 cdidx validate --kind replacement_char --path src/
-cdidx validate --json --path legacy/
+cdidx validate --kind replacement_char --severity warning --path src/
+cdidx validate --json=array --limit 50 --path legacy/
+cdidx validate --json --limit 50 --path legacy/
 ```
 
 `validate` reports indexed files that are likely to produce misleading snippets
@@ -414,6 +416,10 @@ CR-only line endings, likely non-UTF-8 content, and Git LFS pointer placeholders
 For `replacement_char`, JSON and MCP responses include `origin` (`source_literal`
 or `decode_replacement`) and `severity` so agents can distinguish intentional
 U+FFFD literals from likely encoding damage.
+Use `--severity warning` to hide informational source literals and focus on
+findings that indicate likely encoding damage.
+Use `--json=array` when a pipeline expects a bare issue array instead of the
+default `{ "count": ..., "issues": [...] }` object.
 LFS pointers are recorded as `lfs_pointer_skipped` and their placeholder body is
 not indexed; run `git lfs pull` and then `cdidx index .` to index the real file
 content.
@@ -2593,7 +2599,9 @@ render できます。
 ```bash
 cdidx validate
 cdidx validate --kind replacement_char --path src/
-cdidx validate --json --path legacy/
+cdidx validate --kind replacement_char --severity warning --path src/
+cdidx validate --json=array --limit 50 --path legacy/
+cdidx validate --json --limit 50 --path legacy/
 ```
 
 `validate` は、snippet や symbol name を誤らせやすい indexed file を報告します。
@@ -2601,7 +2609,10 @@ cdidx validate --json --path legacy/
 ending、likely non-UTF-8 content、Git LFS pointer placeholder などです。
 `replacement_char` の JSON / MCP response には `origin` (`source_literal` /
 `decode_replacement`) と `severity` が入り、意図的な U+FFFD literal と
-エンコーディング破損の可能性を agent が区別できます。LFS pointer
+エンコーディング破損の可能性を agent が区別できます。`--severity warning`
+を使うと、informational な source literal を隠して、エンコーディング破損の
+可能性がある finding に集中できます。pipeline が既定の `{ "count": ..., "issues": [...] }`
+object ではなく bare issue array を期待する場合は `--json=array` を使えます。LFS pointer
 は `lfs_pointer_skipped` として記録され、placeholder 本文は index されません。
 実体を index するには `git lfs pull` の後に `cdidx index .` を再実行してください。
 

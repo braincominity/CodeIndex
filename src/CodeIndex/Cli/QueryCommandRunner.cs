@@ -84,6 +84,7 @@ public static class QueryCommandRunner
         "--top",
         "--lang",
         "--kind",
+        "--severity",
         "--visibility",
         "--exclude-visibility",
         "--since",
@@ -4906,6 +4907,8 @@ public static class QueryCommandRunner
     // FileIndexer.cs 内の `Kind = "..."` 代入と同期させる (#1582)。
     private static readonly string[] AllValidValidateKinds =
         ["bom", "cr_only_line_endings", "file_too_large", "fts_token_too_long", "line_too_long", "mixed_line_endings", "mixed_line_endings_three_way", "non_utf8_likely", "null_byte", "replacement_char", "utf16_bom"];
+    private static readonly string[] AllValidValidateSeverities =
+        ["error", FileIssue.SeverityInfo, FileIssue.SeverityWarning];
 
     public static int RunValidate(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -4927,10 +4930,21 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnexpectedPositionals("validate", options))
             return CommandExitCodes.UsageError;
+        if (options.Severity != null && !AllValidValidateSeverities.Contains(options.Severity, StringComparer.Ordinal))
+        {
+            CommandErrorWriter.Write(
+                $"unsupported validate severity '{options.Severity}'.",
+                "use one of: info, warning, error.",
+                "cdidx validate [--severity <info|warning|error>]");
+            return CommandExitCodes.UsageError;
+        }
 
         return WithDb(options, jsonOptions, reader =>
         {
-            var issues = reader.GetIssues(options.Kind, options.PathPatterns);
+            var issueLimit = HasOption(cmdArgs, "--limit") || HasOption(cmdArgs, "--top")
+                ? options.Limit
+                : (int?)null;
+            var issues = reader.GetIssues(options.Kind, options.PathPatterns, issueLimit, options.Severity);
             var issuesAvailable = reader._hasIssuesTable;
             if (issues.Count == 0)
             {
@@ -4938,6 +4952,13 @@ public static class QueryCommandRunner
                 {
                     if (TryWriteEmptyFormattedResult(options, jsonOptions))
                         return CommandExitCodes.Success;
+                    if (options.OutputFormat == OutputFormatJson && options.JsonOutputFormat == JsonOutputFormatArray)
+                    {
+                        Console.WriteLine(JsonSerializer.Serialize(
+                            new List<FileIssue>(),
+                            CliJsonSerializerContextFactory.Create(jsonOptions).ListFileIssue));
+                        return CommandExitCodes.Success;
+                    }
                     Console.WriteLine(new JsonObject
                     {
                         ["count"] = 0,
@@ -4976,6 +4997,13 @@ public static class QueryCommandRunner
                 if (options.OutputFormat == OutputFormatSarif)
                 {
                     WriteSarif(issues.Select(i => (i.Path, i.Line, 1, i.Message, i.Kind)), jsonOptions);
+                    return CommandExitCodes.Success;
+                }
+                if (options.OutputFormat == OutputFormatJson && options.JsonOutputFormat == JsonOutputFormatArray)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(
+                        issues,
+                        CliJsonSerializerContextFactory.Create(jsonOptions).ListFileIssue));
                     return CommandExitCodes.Success;
                 }
                 Console.WriteLine(new JsonObject
@@ -5131,6 +5159,7 @@ public static class QueryCommandRunner
         int limit = ResolveDefaultPositiveInt(DefaultLimitEnvironmentVariable, DefaultQueryLimit, "--limit", out var defaultLimitError);
         string? lang = null;
         string? kind = null;
+        string? severity = null;
         string? query = null;
         bool rawFts = false;
         bool includeBody = false;
@@ -5484,6 +5513,17 @@ public static class QueryCommandRunner
                     }
                     else
                         AddParseError(kindError!);
+                    break;
+                case "--severity":
+                    if (TryReadStringOptionValue(args, ref i, "--severity", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var severityValue, out var severityError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--severity", severityValue!);
+                        severity = severityValue?.ToLowerInvariant();
+                    }
+                    else
+                    {
+                        AddParseError(severityError!);
+                    }
                     break;
                 case "--visibility":
                     if (TryReadStringOptionValue(args, ref i, "--visibility", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var visibilityValue, out var visibilityError))
@@ -5946,6 +5986,7 @@ public static class QueryCommandRunner
             Limit = limit,
             Lang = lang,
             Kind = kind,
+            Severity = severity,
             Query = query,
             RawFts = rawFts,
             IncludeBody = includeBody,
@@ -6886,9 +6927,10 @@ public static class QueryCommandRunner
                 continue;
             }
 
-            var normalizedArg = TrySplitInlineOptionValue(arg, out var inlineOptionName)
-                ? inlineOptionName!
-                : arg;
+            var inlineValue = TrySplitInlineOptionValue(arg, out var inlineOptionName)
+                ? arg[(inlineOptionName!.Length + 1)..]
+                : null;
+            var normalizedArg = inlineOptionName ?? arg;
             if (arg.StartsWith("--check=", StringComparison.Ordinal) && supported.Contains("--check"))
                 normalizedArg = "--check";
             if (normalizedArg == "--json"
@@ -6896,9 +6938,18 @@ public static class QueryCommandRunner
                 && commandName != "search"
                 && commandName != "files")
             {
+                if (commandName == "validate" && string.Equals(inlineValue, JsonOutputFormatArray, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 CommandErrorWriter.Write(
-                    "--json=<format> is only supported by 'search' and 'files'.",
-                    "use plain `--json` here, or rerun search/files with `--json=array`.",
+                    commandName == "validate"
+                        ? "--json=<format> for validate only supports 'array'."
+                        : "--json=<format> is only supported by 'search', 'files', and validate's array output.",
+                    commandName == "validate"
+                        ? "use plain `--json` or `--json=array`."
+                        : "use plain `--json` here, rerun search/files with `--json=array`, or rerun validate with `--json=array`.",
                     GetUsageLineOrThrow(commandName));
                 return true;
             }
@@ -8734,6 +8785,7 @@ public sealed class QueryCommandOptions
     public int Limit { get; init; } = 20;
     public string? Lang { get; init; }
     public string? Kind { get; init; }
+    public string? Severity { get; init; }
     public List<string> VisibilityFilters { get; init; } = [];
     public List<string> ExcludeVisibilityFilters { get; init; } = [];
     public string? Query { get; init; }
