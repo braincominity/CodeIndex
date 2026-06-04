@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.28.5] - 2026-06-04
+
+#### Fixed
+
+- **Homebrew installs now include the native SQLite library (#3077)** — the generated Homebrew formula installs `libe_sqlite3.dylib` or `libe_sqlite3.so` next to `cdidx` and runs a SQLite-touching formula test so missing native assets fail during release validation.
+
 ### [1.28.4] - 2026-06-04
 
 #### Fixed
@@ -3349,6 +3355,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.28.5] - 2026-06-04
+
+#### 修正
+
+- **Homebrew install が native SQLite ライブラリを含むようになりました (#3077)** — 生成される Homebrew formula は `libe_sqlite3.dylib` または `libe_sqlite3.so` を `cdidx` の隣へ配置し、SQLite に触る formula test を実行するため、native asset の欠落を release validation 中に検出できます。
+
 ### [1.28.4] - 2026-06-04
 
 #### 修正
@@ -6676,7 +6688,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.28.4...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.28.5...HEAD
+[1.28.5]: https://github.com/Widthdom/CodeIndex/compare/v1.28.4...v1.28.5
 [1.28.4]: https://github.com/Widthdom/CodeIndex/compare/v1.28.3...v1.28.4
 [1.28.3]: https://github.com/Widthdom/CodeIndex/compare/v1.28.2...v1.28.3
 [1.28.2]: https://github.com/Widthdom/CodeIndex/compare/v1.28.1...v1.28.2
