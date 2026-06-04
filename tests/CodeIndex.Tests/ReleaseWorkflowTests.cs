@@ -8,20 +8,20 @@ namespace CodeIndex.Tests;
 public class ReleaseWorkflowTests
 {
     [Fact]
-    public void ReleaseWorkflow_PublishesTrimmedSelfContainedBinariesAndVerifiesCliJsonUnavailable()
+    public void ReleaseWorkflow_PublishesTrimmedSelfContainedBinariesAndVerifiesCliJson()
     {
         var workflow = File.ReadAllText(Path.Combine(GetRepositoryRoot(), ".github", "workflows", "release.yml"));
 
         Assert.Contains("-p:PublishTrimmed=true", workflow);
         Assert.DoesNotContain("-p:PublishTrimmed=false", workflow);
         Assert.Contains("status --json", workflow);
-        Assert.Contains("Expected status --json to fail on the trimmed self-contained release", workflow);
-        Assert.Contains("Expected status --json to exit 4", workflow);
-        Assert.Contains("Error [E009_FEATURE_UNAVAILABLE]: --json is not available on this trimmed build.", workflow);
-        Assert.Contains("Hint: use `cdidx mcp` for structured output", workflow);
-        Assert.DoesNotContain("Expected status --json to exit 0", workflow);
-        Assert.DoesNotContain("status --json stdout did not include files", workflow);
-        Assert.DoesNotContain("status --json stdout did not include version", workflow);
+        Assert.Contains("Expected status --json to exit 0", workflow);
+        Assert.Contains("status --json stdout did not include files", workflow);
+        Assert.Contains("status --json stdout did not include version", workflow);
+        Assert.DoesNotContain("Expected status --json to fail on the trimmed self-contained release", workflow);
+        Assert.DoesNotContain("Expected status --json to exit 4", workflow);
+        Assert.DoesNotContain("Error [E009_FEATURE_UNAVAILABLE]: --json is not available on this trimmed build.", workflow);
+        Assert.DoesNotContain("Hint: use `cdidx mcp` for structured output", workflow);
     }
 
     [Fact]

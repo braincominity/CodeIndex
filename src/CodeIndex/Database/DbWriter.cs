@@ -3,7 +3,6 @@ using CodeIndex.Cli;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
 using System.Text;
-using System.Text.Json;
 
 namespace CodeIndex.Database;
 
@@ -2131,7 +2130,7 @@ public class DbWriter
             paths.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
         SetMeta(
             DbContext.UnknownExtensionFilePathsMetaKey,
-            JsonSerializer.Serialize(sample));
+            JsonStringListCodec.Serialize(sample));
         SetMeta(
             DbContext.UnknownExtensionFilesTruncatedMetaKey,
             (paths.Count > sample.Length).ToString(System.Globalization.CultureInfo.InvariantCulture));

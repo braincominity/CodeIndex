@@ -2,7 +2,6 @@ using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
 using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace CodeIndex.Database;
@@ -830,19 +829,7 @@ public partial class DbReader
         if (string.IsNullOrWhiteSpace(raw))
             return null;
 
-        try
-        {
-            var values = JsonSerializer.Deserialize<List<string>>(raw);
-            return values == null
-                ? null
-                : values
-                    .Where(static value => !string.IsNullOrWhiteSpace(value))
-                    .ToList();
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
+        return JsonStringListCodec.Deserialize(raw);
     }
 
     private static long? ParseMetaLong(string? raw)
