@@ -736,6 +736,7 @@ public class SuggestionStore
     /// write または rename が失敗した場合、一時ファイルをベストエフォートで削除して
     /// <c>.cdidx/</c> に孤児 <c>.tmp</c> が蓄積するのを防ぐ。
     /// </summary>
+    // enforce posix security patch
     private void SaveUnlocked(List<SuggestionRecord> records)
     {
         var dir = Path.GetDirectoryName(_filePath);
