@@ -83,6 +83,9 @@ internal static class SqliteFileUri
             " chars)";
     }
 
+    internal static string FormatParseError(Exception? parseError)
+        => parseError?.Message ?? "Invalid SQLite file URI.";
+
     private static bool TryValidateBounds(string uriText, out int queryIndex, out FormatException? parseError)
     {
         queryIndex = -1;
