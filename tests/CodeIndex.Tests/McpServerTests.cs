@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -8120,6 +8121,58 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Index_WhenDbLockInfoTooDeep_ReturnsBusyWithoutHolderDetails_Issue3043()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_deep_lock_fixture_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_deep_lock_{Guid.NewGuid():N}.db");
+        var lockPath = McpIndexRunLock.ResolveLockPath(dbPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+        var infoPath = lockPath + ".info";
+        var info = new StringBuilder($$"""{"pid":{{Environment.ProcessId}},"since":"2026-01-02T03:04:05.0000000+00:00","extra":""");
+        AppendNestedObject(info, McpIndexRunLock.MaxInfoJsonDepth + 1);
+        info.Append('}');
+        File.WriteAllText(infoPath, info.ToString());
+        using var heldLock = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        using var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+        try
+        {
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+
+            var response = server.HandleMessage(request)!;
+
+            Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+            var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+            Assert.Contains("index already running on this DB", text);
+            Assert.Contains("holder metadata unavailable", text);
+            Assert.DoesNotContain($"pid {Environment.ProcessId}", text);
+        }
+        finally
+        {
+            heldLock.Dispose();
+            File.Delete(infoPath);
+            File.Delete(lockPath);
+            if (Directory.Exists(fixtureDir))
+                Directory.Delete(fixtureDir, recursive: true);
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_NonexistentDir_ReturnsError()
     {
         // Use a path within CWD that doesn't exist / CWD内の存在しないパスを使用
@@ -12075,6 +12128,16 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void IsServerResponseFrame_TooDeepResponse_ReturnsFalse_Issue3012()
+    {
+        Assert.True(InvokeIsServerResponseFrame("""{"jsonrpc":"2.0","id":1,"result":{}}"""));
+
+        var frame = BuildNestedJsonRpcResponse(McpServer.MaxJsonDepth + 1);
+
+        Assert.False(InvokeIsServerResponseFrame(frame));
+    }
+
+    [Fact]
     public void HandleMessage_BatchMixedRequests_ReturnsResponseArray()
     {
         var batch = JsonNode.Parse("""[{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":2,"method":"nope"}]""")!;
@@ -12150,6 +12213,32 @@ public class McpServerTests : IDisposable
         var obj = Assert.IsType<JsonObject>(node);
         Assert.True(obj.ContainsKey("id"));
         Assert.Null(obj["id"]);
+    }
+
+    private static bool InvokeIsServerResponseFrame(string frame)
+    {
+        var method = typeof(McpServer).GetMethod("IsServerResponseFrame", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        return (bool)method.Invoke(null, [frame])!;
+    }
+
+    private static string BuildNestedJsonRpcResponse(int nestedObjectCount)
+    {
+        var builder = new StringBuilder("""{"jsonrpc":"2.0","id":1,"result":""");
+        AppendNestedObject(builder, nestedObjectCount);
+        builder.Append('}');
+        return builder.ToString();
+    }
+
+    private static void AppendNestedObject(StringBuilder builder, int nestedObjectCount)
+    {
+        for (var i = 0; i < nestedObjectCount; i++)
+            builder.Append("""{"next":""");
+
+        builder.Append('0');
+
+        for (var i = 0; i < nestedObjectCount; i++)
+            builder.Append('}');
     }
 
     private static void WriteOversizedAsciiFile(string path)
