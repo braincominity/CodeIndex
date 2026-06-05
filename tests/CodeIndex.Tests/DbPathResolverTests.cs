@@ -340,6 +340,18 @@ public class DbPathResolverTests
     }
 
     [Fact]
+    public void ToReadOnlyUri_OversizedFileUriQuery_ThrowsBeforeAppendingReadOnlyFlags()
+    {
+        var oversizedQueryUri = "file:///tmp/codeindex.db?" + new string('a', SqliteFileUri.MaxQueryLength + 1);
+
+        var ex = Assert.Throws<FormatException>(() => DbContext.ToReadOnlyUri(oversizedQueryUri));
+
+        Assert.Contains(SqliteFileUri.MaxQueryLength.ToString(CultureInfo.InvariantCulture), ex.Message);
+        Assert.DoesNotContain("immutable=1", ex.Message);
+        Assert.DoesNotContain(new string('a', 32), ex.Message);
+    }
+
+    [Fact]
     public void TruncateDiagnosticValue_OversizedInput_ReturnsBoundedValueWithLength()
     {
         var oversizedUri = "file:" + new string('x', SqliteFileUri.MaxDiagnosticValueLength + 1);

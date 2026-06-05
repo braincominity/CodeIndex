@@ -453,8 +453,13 @@ public class DbContext : IDisposable
 
     public static string ToReadOnlyUri(string dbPath)
     {
-        if (dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        if (SqliteFileUri.StartsWithFileScheme(dbPath))
+        {
+            if (!SqliteFileUri.TryValidateBounds(dbPath, out var boundsError))
+                throw boundsError ?? new FormatException("Invalid SQLite file URI.");
+
             return AppendReadOnlyQuery(dbPath);
+        }
 
         var fileUri = new Uri(Path.GetFullPath(dbPath)).AbsoluteUri;
         return $"{fileUri}?immutable=1&mode=ro";
