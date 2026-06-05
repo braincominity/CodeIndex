@@ -18,6 +18,7 @@ internal sealed class LspServer : IDisposable
     internal const int MaxPositionDocumentBytes = 4 * 1024 * 1024;
     internal const int MaxTextDocumentUriChars = McpBoundedText.MaxResourceUriChars;
     internal const int MaxJsonDepth = 32;
+    internal const int MaxUnknownMethodDiagnosticChars = 240;
     private const int JsonRpcInvalidParamsCode = -32602;
     private const int JsonRpcInternalErrorCode = -32603;
     private const string JsonRpcInvalidParamsMessage = "Invalid params";
@@ -101,7 +102,7 @@ internal sealed class LspServer : IDisposable
                     "textDocument/documentSymbol" => Result(id, DocumentSymbol(root)),
                     "textDocument/definition" => Result(id, Definition(root)),
                     "textDocument/references" => Result(id, References(root)),
-                    _ => hasId ? Error(id, -32601, $"Method not found: {method}") : null,
+                    _ => hasId ? Error(id, -32601, $"Method not found: {SanitizeUnknownMethod(method)}") : null,
                 };
             }
             catch (Exception ex) when (ex is ArgumentException or JsonException)
@@ -114,6 +115,23 @@ internal sealed class LspServer : IDisposable
             }
         }
     }
+
+    private static string SanitizeUnknownMethod(string method)
+    {
+        var wasTruncated = method.Length > MaxUnknownMethodDiagnosticChars;
+        var boundedMethod = wasTruncated ? method[..MaxUnknownMethodDiagnosticChars] : method;
+        var sanitized = boundedMethod
+            .Replace('\r', ' ')
+            .Replace('\n', ' ')
+            .Replace('\t', ' ')
+            .Trim();
+        return AppendEllipsisIfNeeded(sanitized, wasTruncated);
+    }
+
+    private static string AppendEllipsisIfNeeded(string value, bool wasTruncated)
+        => wasTruncated && !value.EndsWith("...", StringComparison.Ordinal)
+            ? value + "..."
+            : value;
 
     private JsonObject HandleShutdown(JsonNode? id)
     {
