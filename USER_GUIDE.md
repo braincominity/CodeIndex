@@ -1405,8 +1405,8 @@ Example output:
 | Flag | Default | Effect |
 |---|---|---|
 | `--audit-log <path>` | (off) | Enable audit emission and write JSONL records to `<path>`. The parent directory is created if missing. |
-| `--audit-log-include-values` | off | Echo the full argument payload into each record. Requires `--audit-log`. Off by default because `query` / `name` arguments may contain literal source snippets or secret-shaped strings. |
-| `--audit-log-max-bytes <n>` | `52428800` (50 MiB) | Size threshold (bytes) at which the active log rotates. Must be ≥ 4096. |
+| `--audit-log-include-values` | off | Echo a redacted copy of the argument payload into each record. Requires `--audit-log`. Off by default because `query` / `name` arguments may contain literal source snippets or secret-shaped strings. |
+| `--audit-log-max-bytes <n>` | `52428800` (50 MiB) | Size threshold (bytes) at which the active log rotates. Must be between 4096 and 1073741824. |
 
 Each record is a single JSON object on its own line with these fields:
 
@@ -1417,9 +1417,19 @@ Each record is a single JSON object on its own line with these fields:
 | `caller` | string (optional) | `initialize.clientInfo.name` from the connected MCP client |
 | `caller_version` | string (optional) | `initialize.clientInfo.version` from the connected MCP client |
 | `request_id` | string (optional) | JSON-encoded JSON-RPC request id, when present |
+| `request_id_length` | number (optional) | Original request id length when `request_id` is truncated |
+| `request_id_truncated` | boolean (optional) | `true` when `request_id` was shortened for the audit record |
 | `arg_keys` | string[] | Ordered list of argument names supplied to the tool |
+| `arg_key_lengths` | object (optional) | Original key lengths for truncated argument names |
+| `arg_keys_truncated` | boolean (optional) | `true` when argument names or the argument-key list were truncated |
+| `arg_key_truncation_reasons` | string[] (optional) | Stable truncation reason codes for argument-key truncation |
 | `arg_lengths` | object | Per-argument length sketch — string→char count, array→element count, object→key count, scalar→0 |
-| `arg_values` | object (optional) | Full argument payload. Present only when `--audit-log-include-values` is enabled |
+| `arg_values` | object (optional) | Redacted and budgeted argument payload. Present only when `--audit-log-include-values` is enabled |
+| `arg_values_redacted` | boolean (optional) | `true` when secret-like keys or token patterns were replaced with `[REDACTED]` |
+| `arg_values_truncated` | boolean (optional) | `true` when include-values output hit a depth, count, string, or byte budget |
+| `arg_values_truncation_reasons` | string[] (optional) | Stable truncation reason codes when `arg_values_truncated` is true |
+| `arg_values_serialized_bytes` | number (optional) | Approximate serialized-byte budget consumed by retained `arg_values` |
+| `arg_values_max_bytes` | number (optional) | Maximum serialized-byte budget for retained `arg_values` |
 | `result_count` | number (optional) | `structuredContent.count` or `structuredContent.results.length` for successful calls; omitted otherwise |
 | `elapsed_ms` | number | Wall-clock duration in milliseconds (3 decimal places) |
 | `error_code` | number | `0` on success, `1` for MCP tool errors (`isError: true`), or the verbatim JSON-RPC error code (e.g. `-32602`) |
@@ -3643,8 +3653,8 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 | フラグ | 既定 | 効果 |
 |---|---|---|
 | `--audit-log <path>` | (無効) | 監査出力を有効化し `<path>` に JSONL を書き出す。親ディレクトリは無ければ自動作成 |
-| `--audit-log-include-values` | off | 引数の値をレコードに含める。`--audit-log` 必須。既定で off なのは `query` / `name` 引数にソース片や secret 風の文字列が入りうるため |
-| `--audit-log-max-bytes <n>` | `52428800` (50 MiB) | ローテーションの閾値（バイト）。最小値は 4096 |
+| `--audit-log-include-values` | off | redaction 済みの引数値をレコードに含める。`--audit-log` 必須。既定で off なのは `query` / `name` 引数にソース片や secret 風の文字列が入りうるため |
+| `--audit-log-max-bytes <n>` | `52428800` (50 MiB) | ローテーションの閾値（バイト）。4096 以上 1073741824 以下 |
 
 各レコードは独立した行に 1 つの JSON オブジェクトとして書き出され、フィールドは次の通りです。
 
@@ -3655,9 +3665,19 @@ MCP ツールで catch-all まで突き抜けた例外（想定外の SQLite 例
 | `caller` | string（任意） | 接続中クライアントの `initialize.clientInfo.name` |
 | `caller_version` | string（任意） | 接続中クライアントの `initialize.clientInfo.version` |
 | `request_id` | string（任意） | JSON-RPC リクエスト id を JSON エンコードしたもの |
+| `request_id_length` | number（任意） | `request_id` が短縮された場合の元の長さ |
+| `request_id_truncated` | boolean（任意） | audit record 用に `request_id` が短縮された場合に `true` |
 | `arg_keys` | string[] | ツールへ渡された引数名の順序付きリスト |
+| `arg_key_lengths` | object（任意） | 短縮された引数名の元の長さ |
+| `arg_keys_truncated` | boolean（任意） | 引数名または引数キー一覧が短縮された場合に `true` |
+| `arg_key_truncation_reasons` | string[]（任意） | 引数キー truncation の安定した reason code |
 | `arg_lengths` | object | 引数ごとの長さ概算（文字列→文字数、配列→要素数、オブジェクト→キー数、スカラ→0） |
-| `arg_values` | object（任意） | 引数本体。`--audit-log-include-values` 指定時のみ付与 |
+| `arg_values` | object（任意） | redaction および budget 適用済みの引数本体。`--audit-log-include-values` 指定時のみ付与 |
+| `arg_values_redacted` | boolean（任意） | secret 風のキーまたは token pattern が `[REDACTED]` に置き換えられた場合に `true` |
+| `arg_values_truncated` | boolean（任意） | include-values 出力が depth / count / string / byte budget に到達した場合に `true` |
+| `arg_values_truncation_reasons` | string[]（任意） | `arg_values_truncated` が true の場合の安定した truncation reason code |
+| `arg_values_serialized_bytes` | number（任意） | 保持された `arg_values` が消費した概算 serialized byte budget |
+| `arg_values_max_bytes` | number（任意） | 保持される `arg_values` の最大 serialized byte budget |
 | `result_count` | number（任意） | 成功時の `structuredContent.count` または `structuredContent.results.length`。それ以外は省略 |
 | `elapsed_ms` | number | ウォールクロック経過ミリ秒（小数 3 桁） |
 | `error_code` | number | 成功=`0`、MCP ツールエラー（`isError: true`）=`1`、JSON-RPC エラー=そのコード（例: `-32000` のレート制限、`-32602` の引数エラー） |
