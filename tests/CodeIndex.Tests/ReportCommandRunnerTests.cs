@@ -234,6 +234,34 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
+    public void WriteBundle_RelativeOutputUsesInitialFullPathWhenCurrentDirectoryChanges_Issue3147()
+    {
+        var originalDirectory = Environment.CurrentDirectory;
+        var workDir = CreateWorkDir();
+        var driftDir = CreateWorkDir();
+        try
+        {
+            Directory.SetCurrentDirectory(workDir);
+            var bundle = new ReportBundle();
+            bundle.AddText("metadata.txt", "ok");
+
+            ReportCommandRunner.WriteBundle(
+                "bundle.tgz",
+                bundle,
+                beforeWriteEntries: () => Directory.SetCurrentDirectory(driftDir));
+
+            Assert.True(File.Exists(Path.Combine(workDir, "bundle.tgz")));
+            Assert.False(File.Exists(Path.Combine(driftDir, "bundle.tgz")));
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(originalDirectory);
+            TryDeleteDirectory(workDir);
+            TryDeleteDirectory(driftDir);
+        }
+    }
+
+    [Fact]
     public void Run_WithRealDb_SchemaTxtListsTablesAndRowCounts()
     {
         var workDir = CreateWorkDir();
@@ -260,6 +288,33 @@ public class ReportCommandRunnerTests
             Assert.Contains("row_count", schemaText);
             Assert.Contains($"database: {ReportCommandRunner.RedactedPlaceholder}", schemaText);
             Assert.DoesNotContain(dbPath, schemaText);
+            Assert.DoesNotContain("no SQLite index found", schemaText);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TryDeleteDirectory(workDir);
+        }
+    }
+
+    [Fact]
+    public void BuildSchemaSummary_FileUriReadsExistingDatabase_Issue3148()
+    {
+        var workDir = CreateWorkDir();
+        var dbPath = Path.Combine(workDir, "codeindex.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+                db.InitializeSchema();
+            SqliteConnection.ClearAllPools();
+
+            var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (schemaText, tables, reportedDbPath, dbIncluded) = ReportCommandRunner.BuildSchemaSummary(dbUri);
+
+            Assert.True(dbIncluded);
+            Assert.Equal(Path.GetFullPath(dbPath), reportedDbPath);
+            Assert.Contains(tables, table => table.Name == "files");
+            Assert.Contains("files", schemaText);
             Assert.DoesNotContain("no SQLite index found", schemaText);
         }
         finally

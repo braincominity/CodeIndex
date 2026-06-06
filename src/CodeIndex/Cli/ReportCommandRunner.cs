@@ -59,12 +59,13 @@ public static class ReportCommandRunner
 
         try
         {
+            var fullOutputPath = Path.GetFullPath(options.OutputPath!);
             var resolvedVersion = appVersion ?? ConsoleUi.LoadVersion();
             var bundle = BuildBundle(options, resolvedVersion);
-            WriteBundle(options.OutputPath!, bundle);
+            WriteBundle(fullOutputPath, bundle);
 
             var summary = new ReportBundleSummary(
-                Path.GetFullPath(options.OutputPath!),
+                fullOutputPath,
                 resolvedVersion,
                 bundle.Files.Count,
                 bundle.SchemaTables.Count,
@@ -194,16 +195,17 @@ public static class ReportCommandRunner
 
     internal static (string Text, List<ReportSchemaTable> Tables, string? DbPath, bool DbIncluded) BuildSchemaSummary(string dbPath)
     {
-        if (!File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
+        var normalizedDbPath = DbPathResolver.NormalizeDbPath(dbPath);
+        if (!File.Exists(LongPath.EnsureWindowsPrefix(normalizedDbPath)))
         {
             var missingText = $"no SQLite index found at: {RedactedPlaceholder}\nRun `cdidx index <projectPath>` first if you want schema details attached.\n";
-            return (missingText, new List<ReportSchemaTable>(), dbPath, false);
+            return (missingText, new List<ReportSchemaTable>(), normalizedDbPath, false);
         }
 
         var tables = new List<ReportSchemaTable>();
         var connectionString = new SqliteConnectionStringBuilder
         {
-            DataSource = dbPath,
+            DataSource = normalizedDbPath,
             Mode = SqliteOpenMode.ReadOnly,
         }.ConnectionString;
 
@@ -254,7 +256,7 @@ public static class ReportCommandRunner
         foreach (var t in tables)
             sb.AppendLine($"{t.Name} | {FormatSchemaRowCount(t)}");
 
-        return (sb.ToString(), tables, dbPath, true);
+        return (sb.ToString(), tables, normalizedDbPath, true);
     }
 
     private static string FormatSchemaTableName(string name)
@@ -392,12 +394,13 @@ public static class ReportCommandRunner
 
     internal static void WriteBundle(string outputPath, ReportBundle bundle, Action? beforeWriteEntries = null)
     {
-        var dir = Path.GetDirectoryName(outputPath);
+        var fullOutputPath = Path.GetFullPath(outputPath);
+        var dir = Path.GetDirectoryName(fullOutputPath);
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
         AtomicFileWriter.Write(
-            outputPath,
+            fullOutputPath,
             stream =>
             {
                 using var gz = new GZipStream(stream, CompressionLevel.Optimal, leaveOpen: true);

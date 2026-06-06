@@ -4,6 +4,7 @@ using CodeIndex.Cli;
 
 namespace CodeIndex.Tests;
 
+[Collection("SQLite pool sensitive")]
 public class ExportImportCommandRunnerTests
 {
     [Fact]
@@ -156,6 +157,34 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void RunExportArchive_RelativeOutputReportsAndWritesFullPath_Issue3138()
+    {
+        var originalDirectory = Environment.CurrentDirectory;
+        var projectRoot = TestProjectHelper.CreateTempProject("export_archive_full_output");
+        try
+        {
+            Directory.SetCurrentDirectory(projectRoot);
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var expectedOutput = Path.GetFullPath("codeindex.cdidx.zip");
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport(["codeindex.cdidx.zip", "--db", dbPath, "--json"], jsonOptions, "test"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.True(File.Exists(expectedOutput));
+            using var document = JsonDocument.Parse(stdout);
+            Assert.Equal(expectedOutput, document.RootElement.GetProperty("archive_path").GetString());
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(originalDirectory);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void CreateDatabaseSnapshot_AppliesPrivateFileMode()
     {
         if (OperatingSystem.IsWindows())
@@ -266,6 +295,35 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
+    public void WriteCtagsFile_RelativeOutputUsesInitialFullPathWhenCurrentDirectoryChanges_Issue3138()
+    {
+        var originalDirectory = Environment.CurrentDirectory;
+        var workDir = TestProjectHelper.CreateTempProject("ctags_full_output");
+        var driftDir = TestProjectHelper.CreateTempProject("ctags_full_output_drift");
+        try
+        {
+            Directory.SetCurrentDirectory(workDir);
+
+            ExportImportCommandRunner.WriteCtagsFile(
+                "tags",
+                writer =>
+                {
+                    Directory.SetCurrentDirectory(driftDir);
+                    writer.WriteLine("!_TAG_FILE_FORMAT\t2\t/extended format/");
+                });
+
+            Assert.True(File.Exists(Path.Combine(workDir, "tags")));
+            Assert.False(File.Exists(Path.Combine(driftDir, "tags")));
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(originalDirectory);
+            TestProjectHelper.DeleteDirectory(workDir);
+            TestProjectHelper.DeleteDirectory(driftDir);
+        }
+    }
+
+    [Fact]
     public void ReplaceImportedDatabase_MoveFailurePreservesExistingSidecars()
     {
         var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_{Guid.NewGuid():N}");
@@ -314,6 +372,35 @@ public class ExportImportCommandRunnerTests
         }
         finally
         {
+            Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ReplaceImportedDatabase_SidecarCleanupFailureDoesNotFailAfterMove_Issue3125()
+    {
+        var workDir = Path.Combine(Path.GetTempPath(), $"cdidx_import_cleanup_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var dbPath = Path.Combine(workDir, "codeindex.db");
+            var tempPath = Path.Combine(workDir, "staged.db");
+            File.WriteAllText(dbPath, "existing db");
+            File.WriteAllText(dbPath + "-wal", "existing wal");
+            File.WriteAllText(dbPath + "-shm", "existing shm");
+            File.WriteAllText(tempPath, "imported db");
+            ExportImportCommandRunner.DeleteSqliteSidecarForTesting = _ => throw new IOException("simulated sidecar cleanup failure");
+
+            ExportImportCommandRunner.ReplaceImportedDatabase(tempPath, dbPath);
+
+            Assert.Equal("imported db", File.ReadAllText(dbPath));
+            Assert.False(File.Exists(tempPath));
+            Assert.True(File.Exists(dbPath + "-wal"));
+            Assert.True(File.Exists(dbPath + "-shm"));
+        }
+        finally
+        {
+            ExportImportCommandRunner.DeleteSqliteSidecarForTesting = null;
             Directory.Delete(workDir, recursive: true);
         }
     }
