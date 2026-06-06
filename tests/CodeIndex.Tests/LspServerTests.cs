@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
@@ -51,9 +52,45 @@ public class LspServerTests
     }
 
     [Fact]
+    public void TryReadMessage_RejectsHeaderCountOverMax_Issue3230()
+    {
+        var headers = Enumerable.Range(0, LspServer.MaxLspHeaderCount)
+            .Select(i => $"X-{i}: value");
+        var bytes = Encoding.UTF8.GetBytes(string.Join("\r\n", headers) + "\r\nContent-Length: 2\r\n\r\n{}");
+        using var stream = new MemoryStream(bytes);
+
+        Assert.False(LspServer.TryReadMessage(stream, out var actual));
+        Assert.Equal(string.Empty, actual);
+    }
+
+    [Fact]
+    public void TryReadMessage_RejectsAggregateHeaderBytesOverMax_Issue3230()
+    {
+        var maxLineHeader = "X-" + new string('A', LspServer.MaxLspHeaderLineBytes - 2);
+        var headers = Enumerable.Repeat(maxLineHeader, (LspServer.MaxLspHeaderBytes / LspServer.MaxLspHeaderLineBytes) + 1);
+        var bytes = Encoding.UTF8.GetBytes(string.Join("\r\n", headers) + "\r\nContent-Length: 2\r\n\r\n{}");
+        using var stream = new MemoryStream(bytes);
+
+        Assert.False(LspServer.TryReadMessage(stream, out var actual));
+        Assert.Equal(string.Empty, actual);
+    }
+
+    [Fact]
     public void TryReadMessage_RejectsFrameOverMaxLength()
     {
         var bytes = Encoding.UTF8.GetBytes($"Content-Length: {LspServer.MaxLspFrameBytes + 1}\r\n\r\n");
+        using var stream = new MemoryStream(bytes);
+
+        Assert.False(LspServer.TryReadMessage(stream, out var actual));
+        Assert.Equal(string.Empty, actual);
+    }
+
+    [Theory]
+    [InlineData("2", "2")]
+    [InlineData("2", "3")]
+    public void TryReadMessage_RejectsDuplicateContentLength_Issue3229(string firstLength, string secondLength)
+    {
+        var bytes = Encoding.UTF8.GetBytes($"Content-Length: {firstLength}\r\nContent-Length: {secondLength}\r\n\r\n{{}}");
         using var stream = new MemoryStream(bytes);
 
         Assert.False(LspServer.TryReadMessage(stream, out var actual));
@@ -140,6 +177,40 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_UnknownMethod_TruncatesMethodName_Issue3205()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_unknown_method_3205");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var method = "workspace/" + new string('m', LspServer.MaxUnknownMethodDiagnosticChars + 20) + "LEAK_SENTINEL";
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 3205,
+                method,
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var error = response!["error"]!;
+            Assert.Equal(-32601, error["code"]!.GetValue<int>());
+            var message = error["message"]!.GetValue<string>();
+            Assert.StartsWith("Method not found: workspace/", message, StringComparison.Ordinal);
+            Assert.EndsWith("...", message, StringComparison.Ordinal);
+            Assert.DoesNotContain("LEAK_SENTINEL", message, StringComparison.Ordinal);
+            Assert.True(message.Length <= "Method not found: ".Length + LspServer.MaxUnknownMethodDiagnosticChars + "...".Length);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_UnknownMethod_PreservesSlashDelimitedMethodName_Issue3127()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_unknown_method_slash");
@@ -160,6 +231,58 @@ public class LspServerTests
             Assert.NotNull(response);
             Assert.Equal(-32601, response!["error"]!["code"]!.GetValue<int>());
             Assert.Equal("Method not found: textDocument/hover", response["error"]!["message"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_ObjectRequestId_ReturnsInvalidRequest_Issue3204()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_object_id");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+
+            var response = server.HandleMessage("""{"jsonrpc":"2.0","id":{"nested":1},"method":"initialize"}""");
+
+            Assert.NotNull(response);
+            Assert.Equal(-32600, response!["error"]!["code"]!.GetValue<int>());
+            Assert.Null(response["id"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_OversizedStringRequestId_ReturnsInvalidRequest_Issue3204()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_long_id");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var oversizedId = new string('i', LspServer.MaxRequestIdStringChars + 1);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = oversizedId,
+                method = "initialize",
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Equal(-32600, response!["error"]!["code"]!.GetValue<int>());
+            Assert.Null(response["id"]);
+            Assert.DoesNotContain(oversizedId, response.ToJsonString(), StringComparison.Ordinal);
         }
         finally
         {
@@ -229,6 +352,41 @@ public class LspServerTests
             var message = response["error"]!["message"]!.GetValue<string>();
             Assert.Equal("Internal error", message);
             Assert.DoesNotContain(nameof(ObjectDisposedException), message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_WorkspaceSymbol_RejectsOversizedQuery_Issue3128()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_workspace_symbol_long_query");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var oversizedQuery = new string('q', QueryLimits.MaxQueryLength + 1);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 3128,
+                method = "workspace/symbol",
+                @params = new
+                {
+                    query = oversizedQuery,
+                },
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var error = response!["error"]!;
+            Assert.Equal(-32602, error["code"]!.GetValue<int>());
+            Assert.Equal("Invalid params", error["message"]!.GetValue<string>());
+            Assert.DoesNotContain(oversizedQuery, response.ToJsonString(), StringComparison.Ordinal);
         }
         finally
         {
@@ -437,6 +595,132 @@ public class LspServerTests
             Assert.Equal("Invalid params", message);
             Assert.True(message.Length < 120);
             Assert.DoesNotContain(oversizedUri, message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_DocumentSymbol_TruncatesDetailsAndCapsResponse_Issue3130()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_budget");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "large.cs");
+            var parameters = string.Join(", ", Enumerable.Range(0, 90).Select(i => $"int argument{i:D2}"));
+            var source = new StringBuilder("class LargeSymbols\n{\n");
+            for (var i = 0; i < LspServer.MaxDocumentSymbols; i++)
+                source.Append("    void Method").Append(i.ToString("D4", CultureInfo.InvariantCulture)).Append('(').Append(parameters).Append(") { }\n");
+            source.Append("}\n");
+
+            File.WriteAllText(sourcePath, source.ToString());
+            TestProjectHelper.InsertIndexedFile(dbPath, "large.cs", "csharp", source.ToString());
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 3130,
+                method = "textDocument/documentSymbol",
+                @params = new
+                {
+                    textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
+                },
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var symbols = response!["result"]!.AsArray();
+            Assert.NotEmpty(symbols);
+            Assert.True(symbols.Count < LspServer.MaxDocumentSymbols);
+            Assert.True(Encoding.UTF8.GetByteCount(symbols.ToJsonString()) <= LspServer.MaxDocumentSymbolResponseBytes);
+            Assert.Contains(symbols, symbol =>
+            {
+                var detail = symbol?["detail"]?.GetValue<string>();
+                return detail is { Length: <= LspServer.MaxDocumentSymbolDetailChars }
+                    && detail.EndsWith("...", StringComparison.Ordinal);
+            });
+            Assert.All(symbols, symbol =>
+            {
+                var detail = symbol?["detail"]?.GetValue<string>();
+                if (detail != null)
+                    Assert.True(detail.Length <= LspServer.MaxDocumentSymbolDetailChars);
+            });
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_DocumentSymbol_RejectsNonStringTextDocumentUri_Issue3203()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_uri_type");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 3203,
+                method = "textDocument/documentSymbol",
+                @params = new
+                {
+                    textDocument = new { uri = 123 },
+                },
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var error = response!["error"]!;
+            Assert.Equal(-32602, error["code"]!.GetValue<int>());
+            var message = error["message"]!.GetValue<string>();
+            Assert.Equal("Invalid params", message);
+            Assert.DoesNotContain("123", response.ToJsonString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("untitled:scratch.cs")]
+    [InlineData("https://example.invalid/app.cs")]
+    public void HandleMessage_DocumentSymbol_RejectsNonFileTextDocumentUri_Issue3206(string uri)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_document_symbol_uri_scheme");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = 3206,
+                method = "textDocument/documentSymbol",
+                @params = new
+                {
+                    textDocument = new { uri },
+                },
+            });
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            var error = response!["error"]!;
+            Assert.Equal(-32602, error["code"]!.GetValue<int>());
+            Assert.Equal("Invalid params", error["message"]!.GetValue<string>());
+            Assert.DoesNotContain(uri, response.ToJsonString(), StringComparison.Ordinal);
         }
         finally
         {
@@ -716,6 +1000,37 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_Definition_ReturnsEmptyForLineOverPositionBudget_Issue3136()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_long_line");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "long_line.cs");
+            var indexedSource = "class App { void Needle() { } void Call() { Needle(); } }\n";
+            TestProjectHelper.InsertIndexedFile(dbPath, "long_line.cs", "csharp", indexedSource);
+            var oversizedLine = new string('x', LspServer.MaxPositionLineChars + 1) + " Needle();\n";
+            File.WriteAllText(sourcePath, oversizedLine);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var request = CreateDefinitionRequest(
+                sourcePath,
+                3136,
+                0,
+                oversizedLine.IndexOf("Needle();", StringComparison.Ordinal));
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Empty(response!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_Definition_HonorsCaseInsensitiveWorkspaceCasing()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_case_insensitive");
@@ -815,6 +1130,47 @@ public class LspServerTests
 
             Assert.NotNull(response);
             Assert.NotEmpty(response!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_Definition_BasenameFallbackHonorsCandidateCap_Issue3137()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_definition_bounded_basename");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var i = 0; i < LspServer.MaxDocumentPathFallbackCandidates; i++)
+            {
+                var fillerPath = Path.Combine(projectRoot, "src", i.ToString("D4", CultureInfo.InvariantCulture), "index.cs");
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    fillerPath,
+                    "csharp",
+                    $"class Filler{i} {{ void Needle() {{ }} }}\n");
+            }
+
+            var targetPath = Path.Combine(projectRoot, "src", "9999", "index.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+            var source = "class Target { void Needle() { } void Call() { Needle(); } }\n";
+            File.WriteAllText(targetPath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, targetPath, "csharp", source);
+            using var db = new DbContext(dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions());
+            var request = CreateDefinitionRequest(
+                targetPath,
+                3137,
+                0,
+                source.IndexOf("Needle();", StringComparison.Ordinal));
+
+            var response = server.HandleMessage(request);
+
+            Assert.NotNull(response);
+            Assert.Empty(response!["result"]!.AsArray());
         }
         finally
         {

@@ -15,10 +15,18 @@ internal sealed class LspServer : IDisposable
     private const int DefaultLimit = 50;
     internal const int MaxLspFrameBytes = 8 * 1024 * 1024;
     internal const int MaxLspHeaderLineBytes = 8 * 1024;
+    internal const int MaxLspHeaderCount = 64;
+    internal const int MaxLspHeaderBytes = 64 * 1024;
     internal const int MaxPositionDocumentBytes = 4 * 1024 * 1024;
     internal const int MaxTextDocumentUriChars = McpBoundedText.MaxResourceUriChars;
     internal const int MaxLspRequestIdRawBytes = 4 * 1024;
     internal const int MaxJsonDepth = 32;
+    internal const int MaxRequestIdStringChars = 256;
+    internal const int MaxDocumentSymbols = 1000;
+    internal const int MaxDocumentSymbolDetailChars = 512;
+    internal const int MaxDocumentSymbolResponseBytes = 512 * 1024;
+    internal const int MaxPositionLineChars = 16 * 1024;
+    internal const int MaxDocumentPathFallbackCandidates = 32;
     internal const int MaxUnknownMethodDiagnosticChars = 240;
     private const int JsonRpcInvalidParamsCode = -32602;
     private const int JsonRpcInternalErrorCode = -32603;
@@ -92,8 +100,8 @@ internal sealed class LspServer : IDisposable
 
                 var method = root.TryGetProperty("method", out var methodElement) ? methodElement.GetString() : null;
                 hasId = root.TryGetProperty("id", out var idElement);
-                if (hasId && !TryParseRequestId(payload, idElement, out id))
-                    return Error(null, -32600, $"Request id must be {MaxLspRequestIdRawBytes} raw JSON bytes or fewer.");
+                if (hasId && !TryParseRequestId(payload, idElement, out id, out var requestIdError))
+                    return Error(null, -32600, requestIdError);
 
                 if (method == null)
                     return hasId ? Error(id, -32600, "Invalid Request") : null;
@@ -122,18 +130,50 @@ internal sealed class LspServer : IDisposable
         }
     }
 
-    private static bool TryParseRequestId(string payload, JsonElement idElement, out JsonNode? id)
+    private static bool TryParseRequestId(string payload, JsonElement idElement, out JsonNode? id, out string errorMessage)
     {
         id = null;
+        errorMessage = "Invalid Request";
         if (!TryGetTopLevelRequestIdRawByteCount(payload, out var rawIdBytes) || rawIdBytes > MaxLspRequestIdRawBytes)
+        {
+            errorMessage = $"Request id must be {MaxLspRequestIdRawBytes} raw JSON bytes or fewer.";
             return false;
+        }
 
         var rawId = idElement.GetRawText();
         if (Encoding.UTF8.GetByteCount(rawId) > MaxLspRequestIdRawBytes)
+        {
+            errorMessage = $"Request id must be {MaxLspRequestIdRawBytes} raw JSON bytes or fewer.";
             return false;
+        }
 
-        id = JsonNode.Parse(rawId, documentOptions: LspJsonDocumentOptions);
-        return true;
+        return TryCloneRequestId(idElement, out id);
+    }
+
+    private static bool TryCloneRequestId(JsonElement idElement, out JsonNode? id)
+    {
+        id = null;
+        switch (idElement.ValueKind)
+        {
+            case JsonValueKind.String:
+                var value = idElement.GetString();
+                if (value == null || value.Length > MaxRequestIdStringChars)
+                    return false;
+                id = JsonValue.Create(value);
+                return true;
+
+            case JsonValueKind.Number:
+                if (!idElement.TryGetInt64(out var number))
+                    return false;
+                id = JsonValue.Create(number);
+                return true;
+
+            case JsonValueKind.Null:
+                return true;
+
+            default:
+                return false;
+        }
     }
 
     private static bool TryGetTopLevelRequestIdRawByteCount(string payload, out int rawIdBytes)
@@ -232,6 +272,9 @@ internal sealed class LspServer : IDisposable
     private JsonArray WorkspaceSymbol(JsonElement root)
     {
         var query = GetString(root, "params", "query");
+        if (query != null && query.Length > QueryLimits.MaxQueryLength)
+            throw new ArgumentException(QueryLimits.FormatQueryTooLongError());
+
         var symbols = _reader.SearchSymbols(query, DefaultLimit);
         var array = new JsonArray();
         foreach (var symbol in symbols)
@@ -246,10 +289,20 @@ internal sealed class LspServer : IDisposable
         if (indexedPath == null)
             return [];
 
-        var symbols = _reader.SearchSymbols((string?)null, 1000, pathPatterns: [indexedPath]);
+        var symbols = _reader.SearchSymbols((string?)null, MaxDocumentSymbols, pathPatterns: [indexedPath]);
         var array = new JsonArray();
+        var responseBytes = 2;
         foreach (var symbol in symbols.OrderBy(s => s.StartLine).ThenBy(s => s.Name, StringComparer.Ordinal))
-            array.Add(ToDocumentSymbol(symbol));
+        {
+            var item = ToDocumentSymbol(symbol);
+            var itemBytes = Encoding.UTF8.GetByteCount(item.ToJsonString(_jsonOptions));
+            var separatorBytes = array.Count == 0 ? 0 : 1;
+            if (responseBytes + separatorBytes + itemBytes > MaxDocumentSymbolResponseBytes)
+                break;
+
+            responseBytes += separatorBytes + itemBytes;
+            array.Add(item);
+        }
         return array;
     }
 
@@ -349,24 +402,56 @@ internal sealed class LspServer : IDisposable
                 return false;
 
             using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-            for (var currentLine = 0; currentLine <= targetLine; currentLine++)
+            var currentLine = 0;
+            var currentLineLength = 0;
+            StringBuilder? builder = targetLine == 0 ? new StringBuilder() : null;
+            while (true)
             {
-                var line = reader.ReadLine();
-                if (line == null)
-                    return false;
-                if (currentLine == targetLine)
+                var next = reader.Read();
+                if (next < 0)
                 {
-                    sourceLine = line;
-                    return true;
+                    if (currentLine == targetLine && currentLineLength <= MaxPositionLineChars && builder != null)
+                    {
+                        sourceLine = builder.ToString();
+                        return true;
+                    }
+
+                    return false;
                 }
+
+                var c = (char)next;
+                if (c == '\r' || c == '\n')
+                {
+                    if (c == '\r' && reader.Peek() == '\n')
+                        reader.Read();
+
+                    if (currentLine == targetLine)
+                    {
+                        sourceLine = builder?.ToString() ?? string.Empty;
+                        return true;
+                    }
+
+                    currentLine++;
+                    currentLineLength = 0;
+                    builder = currentLine == targetLine ? new StringBuilder() : null;
+                    continue;
+                }
+
+                currentLineLength++;
+                if (currentLineLength > MaxPositionLineChars)
+                {
+                    if (currentLine == targetLine)
+                        return false;
+                    continue;
+                }
+
+                builder?.Append(c);
             }
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
         {
             return false;
         }
-
-        return false;
     }
 
     internal static string? ExtractTokenAtUtf16Position(string line, int character)
@@ -440,7 +525,7 @@ internal sealed class LspServer : IDisposable
         if (string.IsNullOrEmpty(fileName))
             return null;
 
-        var files = _reader.ListFiles(fileName, 1000);
+        var files = _reader.ListFiles(fileName, MaxDocumentPathFallbackCandidates);
         var matches = files
             .Where(file => MatchesDocumentPath(file.Path, documentPath, projectRelativePath))
             .Take(2)
@@ -526,8 +611,15 @@ internal sealed class LspServer : IDisposable
         ["kind"] = SymbolKind(symbol.Kind),
         ["range"] = ToRange(symbol.StartLine, 1, symbol.EndLine, 1),
         ["selectionRange"] = ToRange(symbol.Line, 1, symbol.Line, 1),
-        ["detail"] = symbol.Signature,
+        ["detail"] = TruncateDocumentSymbolDetail(symbol.Signature),
     };
+
+    private static string? TruncateDocumentSymbolDetail(string? detail)
+    {
+        if (detail == null || detail.Length <= MaxDocumentSymbolDetailChars)
+            return detail;
+        return detail[..(MaxDocumentSymbolDetailChars - "...".Length)] + "...";
+    }
 
     private JsonObject ToLocation(string path, int startLine, int startColumn, int endLine, int endColumn) => new()
     {
@@ -563,13 +655,22 @@ internal sealed class LspServer : IDisposable
 
     private static string GetDocumentPath(JsonElement root)
     {
-        var uri = GetString(root, "params", "textDocument", "uri");
+        var uri = GetTextDocumentUri(root);
+        return UriToPath(uri);
+    }
+
+    private static string GetTextDocumentUri(JsonElement root)
+    {
+        if (!TryGet(root, out var value, "params", "textDocument", "uri") || value.ValueKind != JsonValueKind.String)
+            throw new ArgumentException("textDocument.uri must be a string.");
+
+        var uri = value.GetString();
         if (string.IsNullOrWhiteSpace(uri))
             throw new ArgumentException("textDocument.uri is required.");
         if (uri.Length > MaxTextDocumentUriChars)
             throw new ArgumentException(
                 $"textDocument.uri is too long. Max length is {MaxTextDocumentUriChars} characters; actual length is {uri.Length}.");
-        return UriToPath(uri);
+        return uri;
     }
 
     private static string? GetString(JsonElement root, params string[] path)
@@ -608,7 +709,7 @@ internal sealed class LspServer : IDisposable
     internal static string UriToPath(string uri)
     {
         if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsed) || !parsed.IsFile)
-            return uri;
+            throw new ArgumentException("textDocument.uri must be an absolute file URI.");
         return parsed.LocalPath;
     }
 
@@ -634,6 +735,9 @@ internal sealed class LspServer : IDisposable
     {
         payload = string.Empty;
         var contentLength = -1;
+        var hasContentLength = false;
+        var headerCount = 0;
+        var headerBytes = 0;
         while (true)
         {
             var line = ReadAsciiLine(input);
@@ -641,6 +745,10 @@ internal sealed class LspServer : IDisposable
                 return false;
             if (line.Length == 0)
                 break;
+            headerCount++;
+            headerBytes += line.Length;
+            if (headerCount > MaxLspHeaderCount || headerBytes > MaxLspHeaderBytes)
+                return false;
             var colon = line.IndexOf(':');
             if (colon <= 0)
                 continue;
@@ -648,6 +756,8 @@ internal sealed class LspServer : IDisposable
             var value = line[(colon + 1)..].Trim();
             if (string.Equals(name, "Content-Length", StringComparison.OrdinalIgnoreCase))
             {
+                if (hasContentLength)
+                    return false;
                 if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
                     || parsed < 0
                     || parsed > MaxLspFrameBytes)
@@ -655,6 +765,7 @@ internal sealed class LspServer : IDisposable
                     return false;
                 }
 
+                hasContentLength = true;
                 contentLength = parsed;
             }
         }
