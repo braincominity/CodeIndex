@@ -3192,7 +3192,7 @@ public partial class McpServer : IDisposable
         requestToken.ThrowIfCancellationRequested();
         if (_isolateDbForCurrentRequest.Value)
         {
-            using var isolatedDb = new DbContext(_dbPath);
+            using var isolatedDb = new DbContext(_dbPath, requestToken);
             isolatedDb.TryMigrateForRead();
             using var isolatedReader = new DbReader(isolatedDb, requestToken);
             isolatedReader.IncludeGenerated = args?["includeGenerated"]?.GetValue<bool>() ?? false;
@@ -3234,7 +3234,7 @@ public partial class McpServer : IDisposable
         if (_sharedDb != null)
             return _sharedDb;
 
-        _sharedDb = new DbContext(_dbPath);
+        _sharedDb = new DbContext(_dbPath, _currentRequestToken.Value);
         return _sharedDb;
     }
 
