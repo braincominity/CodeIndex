@@ -21,6 +21,7 @@ public static partial class IndexCommandRunner
         "--read-only", "--immutable",
     ];
 
+    internal const string CompletionNotificationEnvironmentVariable = "CDIDX_NOTIFY";
     internal const string IndexParallelismEnvironmentVariable = "CDIDX_INDEX_PARALLELISM";
     internal const int MaxIndexParallelism = 16;
     internal const int MaxSymbolKindFilterCsvLength = 2048;
@@ -136,7 +137,8 @@ public static partial class IndexCommandRunner
                     }
                     else
                     {
-                        Console.Error.WriteLine($"Warning: invalid --debounce value '{args[i + 1]}' (ignored; must be a non-negative integer in milliseconds) / 不正な --debounce 値 '{args[i + 1]}'（無視。ミリ秒の0以上の整数を指定）");
+                        var displayValue = ConsoleUi.FormatBoundedValue(args[i + 1]);
+                        Console.Error.WriteLine($"Warning: invalid --debounce value '{displayValue}' (ignored; must be a non-negative integer in milliseconds) / 不正な --debounce 値 '{displayValue}'（無視。ミリ秒の0以上の整数を指定）");
                         i++;
                     }
                     break;
@@ -338,7 +340,7 @@ public static partial class IndexCommandRunner
             case "all":
                 return FileIndexer.SymlinkPolicy.All;
             default:
-                parseError ??= $"invalid --follow-symlinks value '{value}': expected none, internal, or all";
+                parseError ??= $"invalid --follow-symlinks value '{ConsoleUi.FormatBoundedValue(value)}': expected none, internal, or all";
                 return fallback;
         }
     }
@@ -347,9 +349,10 @@ public static partial class IndexCommandRunner
     {
         var name = TrimInlineValue(token);
         var suggestion = ConsoleUi.FindClosestMatch(name, AcceptedIndexFlags);
+        var displayToken = ConsoleUi.FormatBoundedValue(token);
         return suggestion == null
-            ? $"unknown option '{token}'"
-            : $"unknown option '{token}'\nDid you mean: {suggestion}?";
+            ? $"unknown option '{displayToken}'"
+            : $"unknown option '{displayToken}'\nDid you mean: {suggestion}?";
     }
 
     private static string TrimInlineValue(string token)
@@ -452,11 +455,13 @@ public static partial class IndexCommandRunner
             if (parsed <= MaxIndexParallelism)
                 return parsed;
 
-            Console.Error.WriteLine($"Warning: {source} value '{value}' exceeds the maximum {MaxIndexParallelism}; using {MaxIndexParallelism} / {source} 値 '{value}' は最大 {MaxIndexParallelism} を超えています。{MaxIndexParallelism} を使用します");
+            var displayValue = ConsoleUi.FormatBoundedValue(value);
+            Console.Error.WriteLine($"Warning: {source} value '{displayValue}' exceeds the maximum {MaxIndexParallelism}; using {MaxIndexParallelism} / {source} 値 '{displayValue}' は最大 {MaxIndexParallelism} を超えています。{MaxIndexParallelism} を使用します");
             return MaxIndexParallelism;
         }
 
-        Console.Error.WriteLine($"Warning: invalid {source} value '{value}' (ignored; use a positive integer) / 不正な {source} 値 '{value}'（無視。正の整数を指定）");
+        var invalidDisplayValue = ConsoleUi.FormatBoundedValue(value);
+        Console.Error.WriteLine($"Warning: invalid {source} value '{invalidDisplayValue}' (ignored; use a positive integer) / 不正な {source} 値 '{invalidDisplayValue}'（無視。正の整数を指定）");
         return fallback;
     }
 
@@ -469,7 +474,8 @@ public static partial class IndexCommandRunner
         if (FileIndexer.TryParseMaxFileSizeBytes(value, out var parsed))
             return parsed;
 
-        Console.Error.WriteLine($"Warning: invalid {FileIndexer.MaxFileSizeEnvironmentVariable} value '{value}' (ignored; use positive bytes or K/M/G suffixes) / 不正な {FileIndexer.MaxFileSizeEnvironmentVariable} 値 '{value}'（無視。正の byte 数または K/M/G 接尾辞を指定）");
+        var displayValue = ConsoleUi.FormatBoundedValue(value);
+        Console.Error.WriteLine($"Warning: invalid {FileIndexer.MaxFileSizeEnvironmentVariable} value '{displayValue}' (ignored; use positive bytes or K/M/G suffixes) / 不正な {FileIndexer.MaxFileSizeEnvironmentVariable} 値 '{displayValue}'（無視。正の byte 数または K/M/G 接尾辞を指定）");
         return null;
     }
 
@@ -478,7 +484,8 @@ public static partial class IndexCommandRunner
         if (FileIndexer.TryParseMaxFileSizeBytes(value, out var parsed))
             return parsed;
 
-        Console.Error.WriteLine($"Warning: invalid --max-file-bytes value '{value}' (ignored; use positive bytes or K/M/G suffixes) / 不正な --max-file-bytes 値 '{value}'（無視。正の byte 数または K/M/G 接尾辞を指定）");
+        var displayValue = ConsoleUi.FormatBoundedValue(value);
+        Console.Error.WriteLine($"Warning: invalid --max-file-bytes value '{displayValue}' (ignored; use positive bytes or K/M/G suffixes) / 不正な --max-file-bytes 値 '{displayValue}'（無視。正の byte 数または K/M/G 接尾辞を指定）");
         return fallback;
     }
 
@@ -493,7 +500,8 @@ public static partial class IndexCommandRunner
             return fallback;
         }
 
-        Console.Error.WriteLine($"Warning: invalid {source} value '{value}' (ignored; use a positive integer) / 不正な {source} 値 '{value}'（無視。正の整数を指定）");
+        var displayValue = ConsoleUi.FormatBoundedValue(value);
+        Console.Error.WriteLine($"Warning: invalid {source} value '{displayValue}' (ignored; use a positive integer) / 不正な {source} 値 '{displayValue}'（無視。正の整数を指定）");
         return fallback;
     }
 
@@ -510,18 +518,23 @@ public static partial class IndexCommandRunner
 
     private static DurationOutputFormat WarnInvalidDurationFormat(string value, DurationOutputFormat fallback)
     {
-        Console.Error.WriteLine($"Warning: invalid --duration-format value '{value}' (ignored; use auto, seconds, or hms) / 不正な --duration-format 値 '{value}'（無視。auto, seconds, hms のいずれかを指定）");
+        var displayValue = ConsoleUi.FormatBoundedValue(value);
+        Console.Error.WriteLine($"Warning: invalid --duration-format value '{displayValue}' (ignored; use auto, seconds, or hms) / 不正な --duration-format 値 '{displayValue}'（無視。auto, seconds, hms のいずれかを指定）");
         return fallback;
     }
 
     private static CompletionNotificationMode ReadCompletionNotificationModeFromEnvironment()
     {
-        var value = Environment.GetEnvironmentVariable("CDIDX_NOTIFY");
+        var value = Environment.GetEnvironmentVariable(CompletionNotificationEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(value))
             return CompletionNotificationMode.Auto;
 
-        string? ignored = null;
-        return ParseCompletionNotificationMode(value, CompletionNotificationMode.Auto, ref ignored);
+        string? parseError = null;
+        var mode = ParseCompletionNotificationMode(value, CompletionNotificationMode.Auto, ref parseError);
+        if (parseError != null)
+            WarnInvalidCompletionNotificationEnvironmentValue(value);
+
+        return mode;
     }
 
     private static CompletionNotificationMode ParseCompletionNotificationMode(string value, CompletionNotificationMode fallback, ref string? parseError)
@@ -539,8 +552,14 @@ public static partial class IndexCommandRunner
 
     private static CompletionNotificationMode WarnInvalidCompletionNotificationMode(string value, CompletionNotificationMode fallback, ref string? parseError)
     {
-        parseError ??= $"invalid --notify value '{value}': expected auto, bell, osc9, desktop, or none";
+        parseError ??= $"invalid --notify value '{ConsoleUi.FormatBoundedValue(value)}': expected auto, bell, osc9, desktop, or none";
         return fallback;
+    }
+
+    private static void WarnInvalidCompletionNotificationEnvironmentValue(string value)
+    {
+        var displayValue = ConsoleUi.FormatBoundedValue(value);
+        Console.Error.WriteLine($"Warning: invalid {CompletionNotificationEnvironmentVariable} value '{displayValue}' (ignored; use auto, bell, osc9, desktop, or none) / 不正な {CompletionNotificationEnvironmentVariable} 値 '{displayValue}'（無視。auto, bell, osc9, desktop, none のいずれかを指定）");
     }
 
     private static string? AbsolutizePathOption(string? value)

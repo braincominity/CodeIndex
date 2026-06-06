@@ -1445,6 +1445,14 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void FindClosestMatch_OversizedInput_ReturnsNull()
+    {
+        var input = new string('x', ConsoleUi.MaxSuggestionInputCharLength + 1);
+
+        Assert.Null(ConsoleUi.FindClosestMatch(input, new[] { "search" }));
+    }
+
+    [Fact]
     public void FindClosestMatches_ReturnsRankedSuggestions()
     {
         var candidates = new[] { "added", "changed", "fixed", "removed", "security", "docs" };
@@ -1463,6 +1471,35 @@ public class ConsoleUiTests
         var matches = ConsoleUi.FindClosestMatches("absolutelynotrelated", candidates);
 
         Assert.Empty(matches);
+    }
+
+    [Fact]
+    public void FindClosestMatches_OversizedInput_ReturnsEmpty()
+    {
+        var input = new string('x', ConsoleUi.MaxSuggestionInputCharLength + 1);
+
+        var matches = ConsoleUi.FindClosestMatches(input, new[] { "added", "changed" });
+
+        Assert.Empty(matches);
+    }
+
+    [Fact]
+    public void FormatBoundedValue_FlattensControlCharacters()
+    {
+        var formatted = ConsoleUi.FormatBoundedValue("bad\r\nline\t\u001b[31m");
+
+        Assert.Equal("bad  line  [31m", formatted);
+    }
+
+    [Fact]
+    public void FormatBoundedValue_TruncatedValueFlattensControlCharacters()
+    {
+        var value = new string('a', ConsoleUi.DefaultDiagnosticValueCharLimit - 1) + "\nzzz";
+
+        var formatted = ConsoleUi.FormatBoundedValue(value);
+
+        Assert.DoesNotContain("\n", formatted);
+        Assert.Contains("<truncated; original length", formatted);
     }
 
     [Fact]

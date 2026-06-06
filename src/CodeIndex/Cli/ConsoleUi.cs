@@ -128,6 +128,7 @@ public static class ConsoleUi
         => $"{indent}{label.PadRight(labelWidth)}: {value}";
 
     internal const int DefaultDiagnosticValueCharLimit = 120;
+    internal const int MaxSuggestionInputCharLength = DefaultDiagnosticValueCharLimit;
 
     internal readonly record struct BoundedDisplayText(string Text, bool Truncated, int OriginalLength);
 
@@ -139,18 +140,39 @@ public static class ConsoleUi
         if (value == null)
             return new BoundedDisplayText("<null>", Truncated: false, OriginalLength: 0);
 
-        if (value.Length <= maxChars)
-            return new BoundedDisplayText(value, Truncated: false, value.Length);
+        var displayValue = FlattenDiagnosticControlChars(value);
+        if (displayValue.Length <= maxChars)
+            return new BoundedDisplayText(displayValue, Truncated: false, value.Length);
 
         var marker = string.Create(CultureInfo.InvariantCulture, $"... <truncated; original length {value.Length} chars>");
         var text = maxChars == 0
             ? marker.TrimStart('.', ' ')
-            : value[..maxChars] + marker;
+            : displayValue[..maxChars] + marker;
         return new BoundedDisplayText(text, Truncated: true, value.Length);
     }
 
     internal static string FormatBoundedValue(string? value, int maxChars = DefaultDiagnosticValueCharLimit)
         => BoundDisplayText(value, maxChars).Text;
+
+    private static string FlattenDiagnosticControlChars(string value)
+    {
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (char.IsControl(value[i]))
+            {
+                var chars = value.ToCharArray();
+                for (var j = i; j < chars.Length; j++)
+                {
+                    if (char.IsControl(chars[j]))
+                        chars[j] = ' ';
+                }
+
+                return new string(chars);
+            }
+        }
+
+        return value;
+    }
 
     private const int SpinnerFrameDelayMs = 100;
     private const int SpinnerStopDelayMs = 20;
@@ -1231,15 +1253,17 @@ public static class ConsoleUi
     /// </summary>
     public static string? FindClosestMatch(string? input, IEnumerable<string> candidates)
     {
-        if (string.IsNullOrWhiteSpace(input))
+        var normalized = NormalizeSuggestionInput(input);
+        if (normalized == null)
             return null;
 
-        var normalized = input.ToLowerInvariant();
         string? best = null;
         var bestDist = int.MaxValue;
         foreach (var candidate in candidates)
         {
             if (string.IsNullOrEmpty(candidate))
+                continue;
+            if (candidate.Length > MaxSuggestionInputCharLength)
                 continue;
             var candidateNormalized = candidate.ToLowerInvariant();
             if (string.Equals(normalized, candidateNormalized, StringComparison.Ordinal))
@@ -1265,14 +1289,16 @@ public static class ConsoleUi
     /// </summary>
     public static IReadOnlyList<string> FindClosestMatches(string? input, IEnumerable<string> candidates, int maxResults = 3)
     {
-        if (string.IsNullOrWhiteSpace(input) || maxResults <= 0)
+        var normalized = NormalizeSuggestionInput(input);
+        if (normalized == null || maxResults <= 0)
             return Array.Empty<string>();
 
-        var normalized = input.ToLowerInvariant();
         var matches = new List<(string Candidate, int Distance)>();
         foreach (var candidate in candidates)
         {
             if (string.IsNullOrEmpty(candidate))
+                continue;
+            if (candidate.Length > MaxSuggestionInputCharLength)
                 continue;
             var candidateNormalized = candidate.ToLowerInvariant();
             if (string.Equals(normalized, candidateNormalized, StringComparison.Ordinal))
@@ -1288,6 +1314,14 @@ public static class ConsoleUi
             .Select(m => m.Candidate)
             .Take(maxResults)
             .ToList();
+    }
+
+    private static string? NormalizeSuggestionInput(string? input)
+    {
+        if (input == null || input.Length > MaxSuggestionInputCharLength || string.IsNullOrWhiteSpace(input))
+            return null;
+
+        return input.ToLowerInvariant();
     }
 
     private static int GetSuggestionDistanceThreshold(int inputLength, int commandLength)
