@@ -1424,6 +1424,19 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_DebounceFlag_RejectsValueAboveMaximum_Issue3173()
+    {
+        var oversized = $"{IndexWatchRunner.MaxDebounceMs + 1}";
+
+        var options = IndexCommandRunner.ParseArgs([".", "--watch", "--debounce", oversized]);
+
+        Assert.True(options.Watch);
+        Assert.Null(options.WatchDebounceMs);
+        Assert.Contains("--debounce", options.ParseError);
+        Assert.Contains($"{IndexWatchRunner.MaxDebounceMs}", options.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_DebounceFlag_InvalidValue_IsIgnored()
     {
         var originalErr = Console.Error;
@@ -1475,6 +1488,25 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_MaxSymbolsPerFileFlag_AcceptsMaximum_Issue3172()
+    {
+        var options = IndexCommandRunner.ParseArgs([".", "--max-symbols-per-file", $"{IndexCommandRunner.MaxSymbolsPerFileLimit}"]);
+
+        Assert.Equal(IndexCommandRunner.MaxSymbolsPerFileLimit, options.MaxSymbolsPerFile);
+        Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_MaxSymbolsPerFileFlag_RejectsValueAboveMaximum_Issue3172()
+    {
+        var aboveMaximum = $"{IndexCommandRunner.MaxSymbolsPerFileLimit + 1}";
+        var options = IndexCommandRunner.ParseArgs([".", $"--max-symbols-per-file={aboveMaximum}"]);
+
+        Assert.Equal(IndexCommandRunner.DefaultMaxSymbolsPerFile, options.MaxSymbolsPerFile);
+        Assert.Contains("--max-symbols-per-file must be less than or equal to 50000", options.ParseError);
+    }
+
+    [Fact]
     public void ParseArgs_MaxFileBytesInvalidValue_IsIgnored()
     {
         lock (TestConsoleLock.Gate)
@@ -1516,6 +1548,33 @@ public class IndexCommandRunnerTests
 
         Assert.Equal(["0123456789abcdef"], options.Commits);
         Assert.Null(options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_CommitsRejectsTooManyRefs_Issue3177()
+    {
+        var refs = Enumerable
+            .Range(0, IndexCommandRunner.MaxCommitRefCount + 1)
+            .Select(i => $"HEAD~{i}")
+            .ToArray();
+        var args = new[] { ".", "--commits" }.Concat(refs).ToArray();
+
+        var options = IndexCommandRunner.ParseArgs(args);
+
+        Assert.Equal(IndexCommandRunner.MaxCommitRefCount, options.Commits.Count);
+        Assert.Contains($"at most {IndexCommandRunner.MaxCommitRefCount}", options.ParseError);
+    }
+
+    [Fact]
+    public void ParseArgs_CommitsRejectsOversizedRef_Issue3177()
+    {
+        var oversizedRef = new string('a', IndexCommandRunner.MaxCommitRefLength + 1);
+
+        var options = IndexCommandRunner.ParseArgs([".", "--commits", oversizedRef]);
+
+        Assert.Empty(options.Commits);
+        Assert.Contains("commit ref is too long", options.ParseError);
+        Assert.Contains($"max {IndexCommandRunner.MaxCommitRefLength}", options.ParseError);
     }
 
     [Fact]

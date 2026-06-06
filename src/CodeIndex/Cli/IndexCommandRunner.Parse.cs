@@ -128,7 +128,10 @@ public static partial class IndexCommandRunner
                 case "--debounce" when i + 1 < args.Length:
                     if (int.TryParse(args[i + 1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedDebounce) && parsedDebounce >= 0)
                     {
-                        watchDebounceMs = parsedDebounce;
+                        if (parsedDebounce <= IndexWatchRunner.MaxDebounceMs)
+                            watchDebounceMs = parsedDebounce;
+                        else
+                            parseError ??= $"--debounce must be less than or equal to {IndexWatchRunner.MaxDebounceMs} ms, got '{args[i + 1]}'";
                         i++;
                     }
                     else
@@ -156,10 +159,10 @@ public static partial class IndexCommandRunner
                     maxFileSizeBytes = ParseMaxFileBytes(option["--max-file-bytes=".Length..], maxFileSizeBytes);
                     break;
                 case "--max-symbols-per-file" when i + 1 < args.Length:
-                    maxSymbolsPerFile = ParseMaxSymbolsPerFile(args[++i], maxSymbolsPerFile, "--max-symbols-per-file");
+                    maxSymbolsPerFile = ParseMaxSymbolsPerFile(args[++i], maxSymbolsPerFile, "--max-symbols-per-file", ref parseError);
                     break;
                 case var option when option.StartsWith("--max-symbols-per-file=", StringComparison.Ordinal):
-                    maxSymbolsPerFile = ParseMaxSymbolsPerFile(option["--max-symbols-per-file=".Length..], maxSymbolsPerFile, "--max-symbols-per-file");
+                    maxSymbolsPerFile = ParseMaxSymbolsPerFile(option["--max-symbols-per-file=".Length..], maxSymbolsPerFile, "--max-symbols-per-file", ref parseError);
                     break;
                 case "--parallelism" when i + 1 < args.Length:
                     parallelism = ParseIndexParallelism(args[++i], parallelism, "--parallelism");
@@ -177,7 +180,7 @@ public static partial class IndexCommandRunner
                     while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
                     {
                         var commit = args[++i];
-                        commits.Add(commit);
+                        AddCommitRef(commit, commits, ref parseError);
                     }
                     if (commits.Count == 0)
                         Console.Error.WriteLine("Warning: --commits specified but no commit refs provided / --commits が指定されましたがコミットrefがありません");
@@ -412,6 +415,23 @@ public static partial class IndexCommandRunner
         return count;
     }
 
+    private static void AddCommitRef(string commit, List<string> commits, ref string? parseError)
+    {
+        if (commits.Count >= MaxCommitRefCount)
+        {
+            parseError ??= $"--commits accepts at most {MaxCommitRefCount} commit refs";
+            return;
+        }
+
+        if (commit.Length > MaxCommitRefLength)
+        {
+            parseError ??= $"--commits commit ref is too long ({commit.Length} characters; max {MaxCommitRefLength})";
+            return;
+        }
+
+        commits.Add(commit);
+    }
+
     internal static int DefaultIndexParallelism()
         => Math.Clamp(Environment.ProcessorCount, 1, MaxIndexParallelism);
 
@@ -462,10 +482,16 @@ public static partial class IndexCommandRunner
         return fallback;
     }
 
-    private static int ParseMaxSymbolsPerFile(string value, int fallback, string source)
+    private static int ParseMaxSymbolsPerFile(string value, int fallback, string source, ref string? parseError)
     {
         if (int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
-            return parsed;
+        {
+            if (parsed <= MaxSymbolsPerFileLimit)
+                return parsed;
+
+            parseError ??= $"{source} must be less than or equal to {MaxSymbolsPerFileLimit}";
+            return fallback;
+        }
 
         Console.Error.WriteLine($"Warning: invalid {source} value '{value}' (ignored; use a positive integer) / 不正な {source} 値 '{value}'（無視。正の整数を指定）");
         return fallback;
