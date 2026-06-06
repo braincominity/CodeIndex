@@ -297,6 +297,37 @@ public class McpServerTests : IDisposable
             second["results"]!.AsArray()[0]!["path"]!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData("NaN:1:0")]
+    [InlineData("Infinity:1:0")]
+    [InlineData("1:-1:0")]
+    [InlineData("1:1:-1")]
+    public void ToolsCall_Search_InvalidCursorDomain_ReturnsInvalidCursorError_Issue3193(string cursor)
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "search",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "Run",
+                    ["cursor"] = cursor,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        Assert.Contains("'cursor' must be a search pagination cursor", result["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal("invalid_argument", result["structuredContent"]!["category"]!.GetValue<string>());
+    }
+
     [Fact]
     public void ToolsCall_Callers_TruncatedResponseIncludesNextOffsetAndPages()
     {
@@ -930,6 +961,86 @@ public class McpServerTests : IDisposable
             .Single(r => r!["name"]!.GetValue<string>() == "src/app.cs")!;
         Assert.Equal("cdidx://file/src/app.cs", resource["uri"]!.GetValue<string>());
         Assert.Equal("text/x-csharp", resource["mimeType"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("not-a-cursor")]
+    public void ResourcesList_InvalidCursor_ReturnsInvalidParams_Issue3112(string cursor)
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject
+            {
+                ["cursor"] = cursor,
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal("invalid_argument", data["category"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, data["max_pagination_offset"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ResourcesList_CursorBeyondPaginationCap_ReturnsInvalidParams_Issue3112()
+    {
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject
+            {
+                ["cursor"] = (McpServer.MaxMcpPaginationOffset + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Equal(-32602, response["error"]!["code"]!.GetValue<int>());
+        var data = response["error"]!["data"]!;
+        Assert.Equal("invalid_argument", data["category"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxMcpPaginationOffset, data["max_pagination_offset"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ResourcesList_AtPaginationCap_DoesNotEmitSelfInvalidNextCursor_Issue3112()
+    {
+        var writer = new DbWriter(_db.Connection);
+        using var transaction = writer.BeginTransaction();
+        for (var i = 0; i < McpServer.MaxMcpPaginationOffset + 200; i++)
+        {
+            writer.UpsertFile(new FileRecord
+            {
+                Path = $"zz/paged-{i:D5}.cs",
+                Lang = "csharp",
+                Size = 1,
+                Lines = 1,
+                Modified = ManualTimeProvider.FixtureUtcNow.UtcDateTime,
+                Checksum = $"bulk-{i}",
+            });
+        }
+        transaction.Commit();
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "resources/list",
+            ["params"] = new JsonObject
+            {
+                ["cursor"] = McpServer.MaxMcpPaginationOffset.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        Assert.Null(response["result"]!["nextCursor"]);
     }
 
     [Fact]
@@ -4031,6 +4142,42 @@ public class McpServerTests : IDisposable
         Assert.Equal("require", evidence!["role"]!.GetValue<string>());
         Assert.Equal("after", evidence["direction"]!.GetValue<string>());
         Assert.Equal("File.Move", evidence["query"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Search_GuardFiltersFailFastWhenCombinedArraysExceedLimit_Issue3073()
+    {
+        var requireBefore = new JsonArray();
+        for (var i = 0; i < DbReader.MaxSearchGuardFilters; i++)
+            requireBefore.Add($"Guard{i}");
+        var requireAfter = new JsonArray();
+        requireAfter.Add("Overflow");
+        requireAfter.Add(42);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "search",
+                ["arguments"] = new JsonObject
+                {
+                    ["query"] = "Run",
+                    ["requireBefore"] = requireBefore,
+                    ["requireAfter"] = requireAfter,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        Assert.True(result["isError"]!.GetValue<bool>());
+        var text = result["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains($"search accepts at most {DbReader.MaxSearchGuardFilters} guard filters; got {DbReader.MaxSearchGuardFilters + 1}.", text);
+        Assert.DoesNotContain("entries must be strings", text);
+        Assert.Equal("invalid_argument", result["structuredContent"]!["category"]!.GetValue<string>());
     }
 
     [Fact]
