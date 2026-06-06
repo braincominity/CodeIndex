@@ -746,6 +746,32 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void UpdateChecker_Check_IgnoresOverDepthCache()
+    {
+        var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
+        try
+        {
+            var depth = UpdateChecker.MaxUpdateCheckCacheJsonDepth + 8;
+            File.WriteAllText(cachePath, new string('[', depth) + new string(']', depth));
+
+            var result = UpdateChecker.Check(
+                "1.10.0",
+                cachePath,
+                DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                _ => Task.FromResult<string?>("v1.11.0"));
+
+            Assert.False(result.FromCache);
+            Assert.Equal("v1.11.0", result.LatestVersion);
+            Assert.True(result.UpdateAvailable);
+        }
+        finally
+        {
+            if (File.Exists(cachePath))
+                File.Delete(cachePath);
+        }
+    }
+
+    [Fact]
     public void UpdateChecker_Check_PassesCallerCancellationTokenToFetch()
     {
         var cachePath = Path.Combine(Path.GetTempPath(), $"cdidx_update_check_{Guid.NewGuid():N}.json");
@@ -927,6 +953,43 @@ sleep 5
     }
 
     [Fact]
+    public void RunInstallerProcess_CancelsHungInstaller()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"cdidx_installer_cancel_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            var script = Path.Combine(root, "install.sh");
+            var pidFile = Path.Combine(root, "installer.pid");
+            try
+            {
+                File.WriteAllText(script, $"""
+#!/bin/sh
+echo $$ > {ShellQuote(pidFile)}
+sleep 30
+""");
+                File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                var startInfo = ProgramRunner.CreateInstallerProcessStartInfo(script, "v1.27.0", root);
+                using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+                Assert.ThrowsAny<OperationCanceledException>(() =>
+                    ProgramRunner.RunInstallerProcess(startInfo, TimeSpan.FromSeconds(30), cts.Token));
+
+                Assert.True(File.Exists(pidFile));
+                var pid = int.Parse(File.ReadAllText(pidFile), CultureInfo.InvariantCulture);
+                Assert.False(IsProcessRunning(pid));
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(root);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DownloadInstallerScriptAsync_CancelsStalledBody()
     {
         var path = Path.Combine(Path.GetTempPath(), $"cdidx-install-timeout-{Guid.NewGuid():N}.sh");
@@ -948,6 +1011,114 @@ sleep 5
         {
             if (File.Exists(path))
                 File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void RunUpgrade_PassesCallerCancellationToReleaseDownloads()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
+            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            env.Set("XDG_CACHE_HOME", cacheRoot);
+            env.Set(UpdateChecker.DisableEnvVar, null);
+            WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
+
+            var installerScript = "#!/bin/sh\nexit 0\n";
+            var installerSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(installerScript))).ToLowerInvariant();
+            var checksumManifest = $"{installerSha256}  install.sh\n";
+            var observedCanBeCanceled = new List<bool>();
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new UpgradeAssetResponseHandler(
+                    checksumManifest,
+                    installerScript,
+                    token => observedCanBeCanceled.Add(token.CanBeCanceled)))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+
+            using var cts = new CancellationTokenSource();
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade"],
+                    appVersion: "1.10.0",
+                    cancellationToken: cts.Token));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stdout);
+                Assert.Empty(stderr);
+                Assert.Equal([true, true], observedCanBeCanceled);
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                TestProjectHelper.DeleteDirectory(cacheRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void RunUpgrade_JsonUpdateAvailable_EmitsSingleJsonInstallResult()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture("XDG_CACHE_HOME", UpdateChecker.DisableEnvVar);
+            var cacheRoot = Path.Combine(Path.GetTempPath(), $"cdidx_update_cache_{Guid.NewGuid():N}");
+            env.Set("XDG_CACHE_HOME", cacheRoot);
+            env.Set(UpdateChecker.DisableEnvVar, null);
+            WriteFreshUpdateCheckCache(cacheRoot, "v9.9.9");
+
+            var installerScript = """
+#!/bin/sh
+echo SHOULD_NOT_LEAK_STDOUT
+echo SHOULD_NOT_LEAK_STDERR >&2
+exit 0
+""";
+            var installerSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(installerScript))).ToLowerInvariant();
+            var checksumManifest = $"{installerSha256}  install.sh\n";
+            var previousFactory = ProgramRunner.UpgradeHttpClientFactory;
+            ProgramRunner.UpgradeHttpClientFactory = () => new HttpClient(
+                new UpgradeAssetResponseHandler(
+                    checksumManifest,
+                    installerScript,
+                    _ => { }))
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["upgrade", "--json"],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stderr);
+                Assert.DoesNotContain("SHOULD_NOT_LEAK", stdout);
+                using var doc = JsonDocument.Parse(stdout);
+                var root = doc.RootElement;
+                Assert.Equal("1.10.0", root.GetProperty("current_version").GetString());
+                Assert.Equal("v9.9.9", root.GetProperty("latest_version").GetString());
+                Assert.True(root.GetProperty("update_available").GetBoolean());
+                Assert.True(root.GetProperty("from_cache").GetBoolean());
+                Assert.True(root.GetProperty("install_attempted").GetBoolean());
+                Assert.Equal(CommandExitCodes.Success, root.GetProperty("install_exit_code").GetInt32());
+                Assert.True(root.GetProperty("install_succeeded").GetBoolean());
+            }
+            finally
+            {
+                ProgramRunner.UpgradeHttpClientFactory = previousFactory;
+                TestProjectHelper.DeleteDirectory(cacheRoot);
+            }
         }
     }
 
@@ -2346,6 +2517,37 @@ sleep 5
     private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)
         => ConsoleCapture.Capture(action);
 
+    private static void WriteFreshUpdateCheckCache(string cacheRoot, string latestTag)
+    {
+        var cacheDir = Path.Combine(cacheRoot, "cdidx");
+        Directory.CreateDirectory(cacheDir);
+        File.WriteAllText(
+            Path.Combine(cacheDir, "update-check.json"),
+            $$"""
+            {"checked_at":"{{DateTimeOffset.UtcNow.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)}}","latest_tag":"{{latestTag}}"}
+            """);
+    }
+
+    private static string ShellQuote(string value)
+        => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+
+    private static bool IsProcessRunning(int pid)
+    {
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(pid);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
     private static void AssertCanonicalCommandError(string stderr)
     {
         var lines = stderr.TrimEnd().Split(Environment.NewLine);
@@ -2541,6 +2743,36 @@ sleep 5
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = _content });
+    }
+
+    private sealed class UpgradeAssetResponseHandler : HttpMessageHandler
+    {
+        private readonly string _checksumManifest;
+        private readonly string _installerScript;
+        private readonly Action<CancellationToken> _observeToken;
+
+        internal UpgradeAssetResponseHandler(
+            string checksumManifest,
+            string installerScript,
+            Action<CancellationToken> observeToken)
+        {
+            _checksumManifest = checksumManifest;
+            _installerScript = installerScript;
+            _observeToken = observeToken;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            _observeToken(cancellationToken);
+            var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            HttpContent content = path.EndsWith("/sha256sums.txt", StringComparison.Ordinal)
+                ? new StringContent(_checksumManifest, Encoding.UTF8, "text/plain")
+                : path.EndsWith("/install.sh", StringComparison.Ordinal)
+                    ? new StringContent(_installerScript, Encoding.UTF8, "text/x-shellscript")
+                    : new StringContent(string.Empty, Encoding.UTF8, "text/plain");
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+        }
     }
 
     private sealed class StalledContent : HttpContent
