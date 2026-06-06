@@ -44,6 +44,12 @@ public static class QueryCommandRunner
 
     [ThreadStatic]
     private static DbReader? s_batchReader;
+    [ThreadStatic]
+    private static string? s_batchDbPath;
+    [ThreadStatic]
+    private static bool s_batchDbPathExplicit;
+    [ThreadStatic]
+    private static string? s_activeQueryProjectRoot;
 
     private static DateTime GetUtcNow() => TimeProvider.GetUtcNow().UtcDateTime;
 
@@ -268,6 +274,7 @@ public static class QueryCommandRunner
     public static int RunBatch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var dbPath = Path.Combine(".cdidx", "codeindex.db");
+        var dbPathExplicit = false;
         for (var i = 0; i < cmdArgs.Length; i++)
         {
             var arg = cmdArgs[i];
@@ -279,6 +286,7 @@ public static class QueryCommandRunner
                     return CommandExitCodes.UsageError;
                 }
                 dbPath = cmdArgs[++i];
+                dbPathExplicit = true;
                 continue;
             }
 
@@ -290,6 +298,7 @@ public static class QueryCommandRunner
                     Console.Error.WriteLine(BuildMissingOptionValueError("--db"));
                     return CommandExitCodes.UsageError;
                 }
+                dbPathExplicit = true;
                 continue;
             }
 
@@ -314,6 +323,8 @@ public static class QueryCommandRunner
 
             db.TryMigrateForRead();
             s_batchReader = new DbReader(db);
+            s_batchDbPath = dbPath;
+            s_batchDbPathExplicit = dbPathExplicit;
             var firstFailure = CommandExitCodes.Success;
             var lineNumber = 0;
             while (TryReadBatchLine(Console.In, out var line, out var lineExceededLimit))
@@ -347,6 +358,8 @@ public static class QueryCommandRunner
         finally
         {
             s_batchReader = null;
+            s_batchDbPath = null;
+            s_batchDbPathExplicit = false;
         }
     }
 
@@ -1147,11 +1160,14 @@ public static class QueryCommandRunner
         }
     }
 
-    public static LspLocation BuildLspLocation(string path, int startLine, int startColumn, int endLine, int endColumn)
+    public static LspLocation BuildLspLocation(string path, int startLine, int startColumn, int endLine, int endColumn, string? projectRoot = null)
     {
+        var baseRoot = string.IsNullOrWhiteSpace(projectRoot)
+            ? s_activeQueryProjectRoot ?? Environment.CurrentDirectory
+            : projectRoot;
         var absolutePath = Path.IsPathFullyQualified(path)
             ? path
-            : Path.GetFullPath(path, Environment.CurrentDirectory);
+            : Path.GetFullPath(path, baseRoot);
         return new LspLocation
         {
             Uri = new Uri(absolutePath).AbsoluteUri,
@@ -6736,11 +6752,15 @@ public static class QueryCommandRunner
             }
         }
 
+        var dbResolution = DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, dbPath, dataDir);
+        var resolvedDbPath = dbResolution.DbPath;
+
         if (parseErrors == null && projectFilters.Count > 0)
         {
             try
             {
-                foreach (var glob in SolutionProjectResolver.ResolveProjectDirectoryGlobs(Environment.CurrentDirectory, projectFilters, solutionFilter))
+                var projectRoot = ResolveProjectFilterRoot(resolvedDbPath, dbPathExplicit);
+                foreach (var glob in SolutionProjectResolver.ResolveProjectDirectoryGlobs(projectRoot, projectFilters, solutionFilter))
                     pathPatterns.Add(glob);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
@@ -6760,8 +6780,6 @@ public static class QueryCommandRunner
         if (validateDefaultMaxLineWidth && !maxLineWidthExplicit && defaultMaxLineWidthError != null)
             AddParseError(defaultMaxLineWidthError);
 
-        var dbResolution = DbPathResolver.ResolveForQuery(Environment.CurrentDirectory, dbPath, dataDir);
-        var resolvedDbPath = dbResolution.DbPath;
         if (readOnly)
         {
             var canAppendReadOnlyFlags = !SqliteFileUri.StartsWithFileScheme(resolvedDbPath) ||
@@ -6851,6 +6869,18 @@ public static class QueryCommandRunner
             LanguageCapabilities = languageCapabilities,
             ParseError = parseErrors == null ? null : string.Join(Environment.NewLine, parseErrors),
         };
+    }
+
+    private static string ResolveProjectFilterRoot(string dbPath, bool dbPathExplicit)
+    {
+        var effectiveDbPath = s_batchReader != null && !string.IsNullOrWhiteSpace(s_batchDbPath)
+            ? s_batchDbPath!
+            : dbPath;
+        var effectiveDbPathExplicit = s_batchReader != null && !string.IsNullOrWhiteSpace(s_batchDbPath)
+            ? s_batchDbPathExplicit
+            : dbPathExplicit;
+        return DbPathResolver.ResolveProjectRootForQuery(effectiveDbPath, effectiveDbPathExplicit)
+            ?? Environment.CurrentDirectory;
     }
 
     private static List<string> ParseMapSections(string rawValue, Action<string> addParseError)
@@ -7416,7 +7446,17 @@ public static class QueryCommandRunner
             }
 
             reader.IncludeGenerated = options.IncludeGenerated;
-            var exitCode = reader.RunWithGeneratedScope(() => action(reader));
+            var previousProjectRoot = s_activeQueryProjectRoot;
+            s_activeQueryProjectRoot = ResolveProjectFilterRoot(dbPath, options.DbPathExplicit);
+            int exitCode;
+            try
+            {
+                exitCode = reader.RunWithGeneratedScope(() => action(reader));
+            }
+            finally
+            {
+                s_activeQueryProjectRoot = previousProjectRoot;
+            }
             var profileEntries = profiling ? Database.DbDebug.EndProfile() : [];
             if (options.Profile)
                 WriteProfilePayload(profileEntries, jsonOptions);
