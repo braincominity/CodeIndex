@@ -114,7 +114,14 @@ public partial class McpServer : IDisposable
     private BoundedMcpText? _clientNameDisplay;
     private BoundedMcpText? _clientVersionDisplay;
     private JsonNode? _clientCapabilities;
+    private int? _clientCapabilitiesSerializedBytes;
+    private string? _clientCapabilitiesTruncationReason;
+    private bool _clientSupportsRoots;
+    private bool _clientSupportsSampling;
     private JsonArray _clientRoots = [];
+    private JsonArray _clientRootDiagnostics = [];
+    private int _clientRootCount;
+    private bool _clientRootsTruncated;
     private string _mcpLogLevel = "info";
     // Opaque per-server-instance session id copied into suggestion attribution records (#1873).
     // #1873 の提案 attribution 用に保存する、サーバーインスタンス単位の不透明セッションID。
@@ -176,6 +183,10 @@ public partial class McpServer : IDisposable
     internal const int MaxBatchRequestCount = 100;
     internal const int MaxRequestIdCharacterCount = 128;
     internal const int MaxRequestIdByteLength = 256;
+    internal const int MaxClientRootCount = 16;
+    internal const int MaxClientRootUriChars = 512;
+    internal const int MaxClientCapabilitiesJsonBytes = 8 * 1024;
+    internal const int MaxClientCapabilitiesDepth = 8;
     // Stdio buffer for the JSON-RPC loop. Sized to fit typical large MCP payloads (e.g. batch_query)
     // in a single read so the StreamReader does not grow from its 1 KB default toward MaxLineCharacterCount.
     // JSON-RPCループのstdioバッファ。大きめのMCPペイロードを1回の読み取りで吸収し、
@@ -1827,17 +1838,21 @@ public partial class McpServer : IDisposable
     private void CaptureClientSession(JsonNode? initializeParams)
     {
         _clientCapabilities = null;
-        _clientRoots = [];
+        _clientCapabilitiesSerializedBytes = null;
+        _clientCapabilitiesTruncationReason = null;
+        _clientSupportsRoots = false;
+        _clientSupportsSampling = false;
+        ResetClientRoots();
         if (initializeParams is not JsonObject obj)
             return;
 
         if (!obj.TryGetPropertyValue("capabilities", out var capabilities))
             obj.TryGetPropertyValue("clientCapabilities", out capabilities);
         if (capabilities is not null)
-            _clientCapabilities = JsonNode.Parse(capabilities.ToJsonString());
+            CaptureClientCapabilities(capabilities);
 
         if (TryReadStringValue(obj["rootUri"]) is { Length: > 0 } rootUri)
-            _clientRoots.Add(rootUri);
+            CaptureClientRoot(rootUri);
 
         if (obj["roots"] is JsonArray roots)
         {
@@ -1845,9 +1860,69 @@ public partial class McpServer : IDisposable
             {
                 var uri = TryReadStringValue(root?["uri"]) ?? TryReadStringValue(root);
                 if (!string.IsNullOrWhiteSpace(uri))
-                    _clientRoots.Add(uri);
+                    CaptureClientRoot(uri);
             }
         }
+    }
+
+    private void CaptureClientCapabilities(JsonNode capabilities)
+    {
+        CaptureClientCapabilityFlags(capabilities);
+        var json = capabilities.ToJsonString();
+        var serializedBytes = Encoding.UTF8.GetByteCount(json);
+        _clientCapabilitiesSerializedBytes = serializedBytes;
+        if (serializedBytes > MaxClientCapabilitiesJsonBytes)
+        {
+            TruncateClientCapabilities("byte_limit");
+            return;
+        }
+
+        try
+        {
+            _clientCapabilities = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions { MaxDepth = MaxClientCapabilitiesDepth });
+        }
+        catch (JsonException)
+        {
+            TruncateClientCapabilities("depth_limit");
+        }
+    }
+
+    private void TruncateClientCapabilities(string reason)
+    {
+        _clientCapabilities = new JsonObject();
+        _clientCapabilitiesTruncationReason = reason;
+    }
+
+    private void CaptureClientCapabilityFlags(JsonNode capabilities)
+    {
+        if (capabilities is not JsonObject obj)
+            return;
+
+        _clientSupportsRoots = obj.TryGetPropertyValue("roots", out var roots) && roots is not null;
+        _clientSupportsSampling = obj.TryGetPropertyValue("sampling", out var sampling) && sampling is not null;
+    }
+
+    private void CaptureClientRoot(string uri)
+    {
+        _clientRoots.Add(uri);
+        _clientRootCount++;
+        if (_clientRootDiagnostics.Count >= MaxClientRootCount)
+        {
+            _clientRootsTruncated = true;
+            return;
+        }
+
+        var display = McpBoundedText.ForDisplay(uri, MaxClientRootUriChars);
+        _clientRootDiagnostics.Add(display.Text);
+        _clientRootsTruncated |= display.Truncated;
+    }
+
+    private void ResetClientRoots()
+    {
+        _clientRoots = [];
+        _clientRootDiagnostics = [];
+        _clientRootCount = 0;
+        _clientRootsTruncated = false;
     }
 
     internal JsonNode? ClientCapabilitiesForTests => _clientCapabilities is null ? null : JsonNode.Parse(_clientCapabilities.ToJsonString());
@@ -1857,6 +1932,10 @@ public partial class McpServer : IDisposable
         .Where(root => !string.IsNullOrWhiteSpace(root))
         .Cast<string>()
         .ToArray();
+
+    internal bool ClientSupportsRootsForTests => _clientSupportsRoots;
+
+    internal bool ClientSupportsSamplingForTests => _clientSupportsSampling;
 
     internal string McpLogLevelForTests => _mcpLogLevel;
 

@@ -2281,7 +2281,7 @@ public partial class McpServer
     private JsonObject BuildMcpSessionStatus()
     {
         var roots = new JsonArray();
-        foreach (var root in _clientRoots)
+        foreach (var root in _clientRootDiagnostics)
             roots.Add(root?.DeepClone());
 
         var session = new JsonObject
@@ -2289,6 +2289,13 @@ public partial class McpServer
             ["log_level"] = _mcpLogLevel,
             ["roots"] = roots,
         };
+        if (_clientRootsTruncated)
+        {
+            session["roots_truncated"] = true;
+            session["root_count"] = _clientRootCount;
+            session["root_limit"] = MaxClientRootCount;
+            session["root_uri_length_limit"] = MaxClientRootUriChars;
+        }
         if (_clientName is not null || _clientVersion is not null)
         {
             var clientInfo = new JsonObject();
@@ -2306,6 +2313,15 @@ public partial class McpServer
         }
         if (_clientCapabilities is not null)
             session["client_capabilities"] = _clientCapabilities.DeepClone();
+        if (_clientCapabilitiesTruncationReason is not null)
+        {
+            session["client_capabilities_truncated"] = true;
+            session["client_capabilities_truncation_reason"] = _clientCapabilitiesTruncationReason;
+            if (_clientCapabilitiesSerializedBytes is { } serializedBytes)
+                session["client_capabilities_serialized_bytes"] = serializedBytes;
+            session["client_capabilities_byte_limit"] = MaxClientCapabilitiesJsonBytes;
+            session["client_capabilities_depth_limit"] = MaxClientCapabilitiesDepth;
+        }
         return session;
     }
 
@@ -3706,14 +3722,13 @@ public partial class McpServer
         if (result?["roots"] is not JsonArray roots)
             return;
 
-        var refreshed = new JsonArray();
+        ResetClientRoots();
         foreach (var root in roots)
         {
             var uri = TryReadStringValue(root?["uri"]) ?? TryReadStringValue(root);
             if (!string.IsNullOrWhiteSpace(uri))
-                refreshed.Add(uri);
+                CaptureClientRoot(uri);
         }
-        _clientRoots = refreshed;
         _clientRootsStale = false;
     }
 
@@ -4972,9 +4987,14 @@ public partial class McpServer
     }
 
     private bool HasClientCapability(string name)
-        => _clientCapabilities is JsonObject obj
-            && obj.TryGetPropertyValue(name, out var node)
-            && node is not null;
+        => name switch
+        {
+            "roots" => _clientSupportsRoots,
+            "sampling" => _clientSupportsSampling,
+            _ => _clientCapabilities is JsonObject obj
+                && obj.TryGetPropertyValue(name, out var node)
+                && node is not null,
+        };
 
     private static bool IsSamplingEnabled()
     {

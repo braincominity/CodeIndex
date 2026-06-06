@@ -867,6 +867,167 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void Initialize_CapsClientRootsForSessionStatus_Issue3076()
+    {
+        var longRoot = "file:///" + new string('r', McpServer.MaxClientRootUriChars + 50);
+        var roots = new JsonArray();
+        for (var i = 0; i < McpServer.MaxClientRootCount + 3; i++)
+        {
+            roots.Add(new JsonObject
+            {
+                ["uri"] = i == 0 ? longRoot : $"file:///workspace/{i}",
+            });
+        }
+
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["rootUri"] = "file:///workspace",
+                ["roots"] = roots,
+            },
+        };
+        _server.HandleMessage(request);
+
+        Assert.Equal(McpServer.MaxClientRootCount + 4, _server.ClientRootsForTests.Length);
+        Assert.Contains(longRoot, _server.ClientRootsForTests);
+
+        var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+        var response = _server.HandleMessage(status)!;
+        var session = response["result"]!["structuredContent"]!["mcp_session"]!;
+
+        Assert.True(session["roots_truncated"]!.GetValue<bool>());
+        Assert.Equal(McpServer.MaxClientRootCount + 4, session["root_count"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxClientRootCount, session["root_limit"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxClientRootUriChars, session["root_uri_length_limit"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxClientRootCount, session["roots"]!.AsArray().Count);
+        Assert.DoesNotContain(longRoot, response.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RefreshClientRoots_CapsSessionStatusDiagnostics_Issue3076()
+    {
+        var longRoot = "file:///" + new string('r', McpServer.MaxClientRootUriChars + 50);
+        var advertisedRoots = new JsonArray();
+        for (var i = 0; i < McpServer.MaxClientRootCount + 3; i++)
+        {
+            advertisedRoots.Add(new JsonObject
+            {
+                ["uri"] = i == 0 ? longRoot : $"file:///tmp/cdidx-not-this-workspace/{i}",
+            });
+        }
+
+        _server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{"roots":{}}}}""")!);
+        _server.ClientRequestHandlerForTests = (method, _) =>
+        {
+            Assert.Equal("roots/list", method);
+            return new JsonObject { ["roots"] = advertisedRoots.DeepClone() };
+        };
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"index","arguments":{"path":"."}}}""")!;
+        var indexResponse = _server.HandleMessage(request)!;
+
+        Assert.True(indexResponse["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal(McpServer.MaxClientRootCount + 3, _server.ClientRootsForTests.Length);
+        Assert.Contains(longRoot, _server.ClientRootsForTests);
+
+        var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+        var response = _server.HandleMessage(status)!;
+        var session = response["result"]!["structuredContent"]!["mcp_session"]!;
+
+        Assert.True(session["roots_truncated"]!.GetValue<bool>());
+        Assert.Equal(McpServer.MaxClientRootCount + 3, session["root_count"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxClientRootCount, session["roots"]!.AsArray().Count);
+        Assert.DoesNotContain(longRoot, response.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Initialize_CapsClientCapabilitiesByteSizeForSessionStatus_Issue3225()
+    {
+        var largeValue = new string('c', McpServer.MaxClientCapabilitiesJsonBytes + 100);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["capabilities"] = new JsonObject
+                {
+                    ["roots"] = new JsonObject(),
+                    ["sampling"] = new JsonObject(),
+                    ["experimental"] = new JsonObject
+                    {
+                        ["large"] = largeValue,
+                    },
+                },
+            },
+        };
+        _server.HandleMessage(request);
+
+        Assert.Empty(_server.ClientCapabilitiesForTests!.AsObject());
+        Assert.True(_server.ClientSupportsRootsForTests);
+        Assert.True(_server.ClientSupportsSamplingForTests);
+
+        var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+        var response = _server.HandleMessage(status)!;
+        var session = response["result"]!["structuredContent"]!["mcp_session"]!;
+
+        Assert.True(session["client_capabilities_truncated"]!.GetValue<bool>());
+        Assert.Equal("byte_limit", session["client_capabilities_truncation_reason"]!.GetValue<string>());
+        Assert.True(session["client_capabilities_serialized_bytes"]!.GetValue<int>() > McpServer.MaxClientCapabilitiesJsonBytes);
+        Assert.Equal(McpServer.MaxClientCapabilitiesJsonBytes, session["client_capabilities_byte_limit"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxClientCapabilitiesDepth, session["client_capabilities_depth_limit"]!.GetValue<int>());
+        Assert.Empty(session["client_capabilities"]!.AsObject());
+        Assert.DoesNotContain(largeValue, response.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Initialize_CapsClientCapabilitiesDepthForSessionStatus_Issue3225()
+    {
+        var capabilities = new JsonObject();
+        capabilities["roots"] = new JsonObject();
+        capabilities["sampling"] = new JsonObject();
+        var current = capabilities;
+        for (var i = 0; i < McpServer.MaxClientCapabilitiesDepth + 4; i++)
+        {
+            var next = new JsonObject();
+            current[$"level{i}"] = next;
+            current = next;
+        }
+
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "initialize",
+            ["params"] = new JsonObject
+            {
+                ["capabilities"] = capabilities,
+            },
+        };
+        _server.HandleMessage(request);
+
+        Assert.Empty(_server.ClientCapabilitiesForTests!.AsObject());
+        Assert.True(_server.ClientSupportsRootsForTests);
+        Assert.True(_server.ClientSupportsSamplingForTests);
+
+        var status = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+        var response = _server.HandleMessage(status)!;
+        var session = response["result"]!["structuredContent"]!["mcp_session"]!;
+
+        Assert.True(session["client_capabilities_truncated"]!.GetValue<bool>());
+        Assert.Equal("depth_limit", session["client_capabilities_truncation_reason"]!.GetValue<string>());
+        Assert.Equal(McpServer.MaxClientCapabilitiesJsonBytes, session["client_capabilities_byte_limit"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxClientCapabilitiesDepth, session["client_capabilities_depth_limit"]!.GetValue<int>());
+        Assert.Empty(session["client_capabilities"]!.AsObject());
+    }
+
+    [Fact]
     public void Initialize_ClientInfo_TruncatesSessionStatusAndCallerIdentity_Issue3120()
     {
         var name = new string('n', McpBoundedText.MaxClientInfoChars + 25);
