@@ -1078,6 +1078,19 @@ public class SuggestionStoreTests : IDisposable
             file => Path.GetFileName(file).EndsWith(".tmp", StringComparison.Ordinal));
     }
 
+// English: Ensure that the Suggestion store JSON is written with private POSIX permissions.
+    // 日本語: Suggestion store JSON がプライベート POSIX 権限で書き込まれることを確認します。
+    [Fact]
+    public void TryAdd_OnPosixCreatesPrivateStoreFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var record = MakeRecord("other", null, "Permission check");
+        _store.TryAdd(record);
+
+        AssertPrivateFileMode(Path.Combine(_tempDir, "suggestions-codeindex.json"));
+    }
     // --- Helpers / ヘルパー ---
 
     private static string BuildDeepSuggestionStoreJson(int nestedObjectCount)

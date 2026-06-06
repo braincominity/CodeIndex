@@ -754,14 +754,14 @@ public class SuggestionStore
     /// write または rename が失敗した場合、一時ファイルをベストエフォートで削除して
     /// <c>.cdidx/</c> に孤児 <c>.tmp</c> が蓄積するのを防ぐ。
     /// </summary>
-    private void SaveUnlocked(List<SuggestionRecord> records)
+   private void SaveUnlocked(List<SuggestionRecord> records)
     {
         var dir = Path.GetDirectoryName(_filePath);
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
         NormalizeRecordDefaults(records);
-        AtomicFileWriter.WriteJson(_filePath, records, s_jsonOptions);
+        AtomicFileWriter.WriteJson(_filePath, records, s_jsonOptions, DataDirectorySecurity.ApplyPrivateFileMode);
     }
 
     private static bool HasUpstreamSubmission(SuggestionRecord record) =>
