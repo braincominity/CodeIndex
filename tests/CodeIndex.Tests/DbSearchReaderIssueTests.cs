@@ -91,6 +91,87 @@ public sealed class DbSearchReaderIssueTests : IDisposable
         Assert.Empty(results);
     }
 
+    [Fact]
+    public void Search_GuardFiltersFocusLargeCandidateWithPreparedPrimaryTerms_Issue3083()
+    {
+        var lines = Enumerable.Range(1, 40_000)
+            .Select(i => i switch
+            {
+                24_999 => "public void Setup() { GuardMarker(); }",
+                25_000 => "public void Run() { Primary Needle(); }",
+                _ => $"// filler {i}",
+            });
+        InsertIndexedFile("src/guard-primary-large.cs", "csharp", string.Join('\n', lines));
+
+        var results = _reader.Search(
+            "Primary Needle",
+            pathPatterns: ["src/guard-primary-large.cs"],
+            limit: 1,
+            guardFilters: [new SearchGuardFilter(SearchGuardRole.Require, SearchGuardDirection.Before, "GuardMarker")],
+            guardWindow: 1);
+
+        var result = Assert.Single(results);
+        Assert.Equal(25_000, result.StartLine);
+        Assert.Equal("public void Run() { Primary Needle(); }", result.Content);
+        var evidence = Assert.Single(result.GuardEvidence!);
+        Assert.Equal(24_999, evidence.Line);
+    }
+
+    [Fact]
+    public void Search_GuardFiltersReadTinyWindowFromLargeChunk_Issue3085()
+    {
+        var lines = Enumerable.Range(1, 40_000)
+            .Select(i => i switch
+            {
+                1 => "public void Setup() { TinyGuardMarker(); }",
+                2 => "public void Run() { TinyWindowNeedle(); }",
+                _ => $"// filler {i}",
+            });
+        InsertIndexedFile("src/guard-window-large.cs", "csharp", string.Join('\n', lines));
+
+        var results = _reader.Search(
+            "TinyWindowNeedle",
+            exact: true,
+            pathPatterns: ["src/guard-window-large.cs"],
+            limit: 1,
+            guardFilters: [new SearchGuardFilter(SearchGuardRole.Require, SearchGuardDirection.Before, "TinyGuardMarker")],
+            guardWindow: 1);
+
+        var result = Assert.Single(results);
+        Assert.Equal(2, result.StartLine);
+        var evidence = Assert.Single(result.GuardEvidence!);
+        Assert.Equal(1, evidence.Line);
+        Assert.Equal("public void Setup() { TinyGuardMarker(); }", evidence.Text);
+    }
+
+    [Fact]
+    public void Search_GuardFiltersShareSameFocusWindowAcrossFilters_Issue3084()
+    {
+        InsertIndexedFile(
+            "src/guard-cache.cs",
+            "csharp",
+            """
+            public void First() { FirstGuardMarker(); }
+            public void Second() { SecondGuardMarker(); }
+            public void Run() { CachedWindowNeedle(); }
+            """);
+
+        var results = _reader.Search(
+            "CachedWindowNeedle",
+            exact: true,
+            pathPatterns: ["src/guard-cache.cs"],
+            limit: 1,
+            guardFilters:
+            [
+                new SearchGuardFilter(SearchGuardRole.Require, SearchGuardDirection.Before, "FirstGuardMarker"),
+                new SearchGuardFilter(SearchGuardRole.Require, SearchGuardDirection.Before, "SecondGuardMarker"),
+            ],
+            guardWindow: 2);
+
+        var result = Assert.Single(results);
+        Assert.Equal([1, 2], result.GuardEvidence!.Select(evidence => evidence.Line).ToArray());
+    }
+
     private void InsertIndexedFile(string path, string lang, string content, DateTime? modified = null)
     {
         var normalized = content.Replace("\r\n", "\n");

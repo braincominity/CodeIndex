@@ -1,3 +1,4 @@
+using System.Reflection;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 
@@ -216,6 +217,37 @@ public class SearchSnippetFormatterTests
         Assert.Equal(direct.MatchLines, prepared.MatchLines);
         Assert.Equal(direct.Lines, prepared.Lines);
         Assert.Equal(direct.Highlights.Single().Terms, prepared.Highlights.Single().Terms);
+    }
+
+    [Fact]
+    public void BuildExcerpt_LargeContentMaterializesOnlyRequestedWindow_Issue3087()
+    {
+        var lines = Enumerable.Range(1, 50_000)
+            .Select(i => i == 25_000 ? "call Target()" : $"line {i}");
+        var content = string.Join('\n', lines);
+
+        var excerpt = SearchSnippetFormatter.BuildExcerpt(content, "Target", absoluteStartLine: 1, maxLines: 3);
+
+        Assert.Equal(24_999, excerpt.StartLine);
+        Assert.Equal(25_001, excerpt.EndLine);
+        Assert.Equal(3, excerpt.Lines.Count);
+        Assert.Equal([25_000], excerpt.MatchLines);
+        Assert.Contains("call Target()", excerpt.Lines);
+    }
+
+    [Fact]
+    public void BuildExcerpt_RepetitiveMatchesTrackOnlySnippetWindow_Issue3088()
+    {
+        var content = string.Join('\n', Enumerable.Repeat("Target", 50_000));
+
+        var excerpt = SearchSnippetFormatter.BuildExcerpt(content, "Target", absoluteStartLine: 1, maxLines: 3);
+
+        Assert.Equal([1, 2, 3], excerpt.MatchLines);
+        Assert.Equal(49_997, excerpt.DroppedMatchLineCount);
+        Assert.Equal(3, excerpt.Highlights.Count);
+        var scan = InvokeFindMatchingLineIndexes(content, "Target", [], caseSensitive: false, normalizeCSharpVerbatimNames: false, maxTrackedWindowLines: 3);
+        Assert.Equal(3, scan.MatchIndexes.Count);
+        Assert.Equal(50_000, scan.TotalMatchCount);
     }
 
     [Fact]
@@ -451,5 +483,25 @@ public class SearchSnippetFormatterTests
         var joined = string.Join('\n', formatted);
         Assert.Equal(huge, joined);
         Assert.DoesNotContain("...(+", joined);
+    }
+
+    private static (IReadOnlyCollection<int> MatchIndexes, int TotalMatchCount) InvokeFindMatchingLineIndexes(
+        string content,
+        string query,
+        string[] tokens,
+        bool caseSensitive,
+        bool normalizeCSharpVerbatimNames,
+        int maxTrackedWindowLines)
+    {
+        var method = typeof(SearchSnippetFormatter).GetMethod("FindMatchingLineIndexes", BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var scan = method.Invoke(null, [content, query, tokens, caseSensitive, normalizeCSharpVerbatimNames, maxTrackedWindowLines]);
+        Assert.NotNull(scan);
+
+        var type = scan!.GetType();
+        var matchIndexes = Assert.IsAssignableFrom<IReadOnlyCollection<int>>(type.GetProperty("MatchIndexes")!.GetValue(scan));
+        var totalMatchCount = Assert.IsType<int>(type.GetProperty("TotalMatchCount")!.GetValue(scan));
+        return (matchIndexes, totalMatchCount);
     }
 }
