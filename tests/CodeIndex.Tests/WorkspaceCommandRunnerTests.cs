@@ -107,6 +107,30 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Fact]
+    public void WorkspaceManifestLoader_Load_RejectsOverlongMemberPath()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_member_length");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            var member = new string('a', WorkspaceManifestLoader.MaxManifestMemberPathChars + 1);
+            File.WriteAllText(manifestPath, $$"""
+                {
+                  "members": [{{JsonSerializer.Serialize(member)}}]
+                }
+                """);
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains($"{WorkspaceManifestLoader.MaxManifestMemberPathChars} character limit", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public void WorkspaceManifestLoader_Load_RejectsRootedMemberPath()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_rooted_member");
@@ -146,6 +170,30 @@ public class WorkspaceCommandRunnerTests
             var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
 
             Assert.Contains("member path escapes the manifest root", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceManifestLoader_Load_RejectsOverlongDefaultDbName()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_db_name_length");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            var dbName = new string('a', WorkspaceManifestLoader.MaxDefaultDbNameChars + 1);
+            File.WriteAllText(manifestPath, $$"""
+                {
+                  "default_db_name": {{JsonSerializer.Serialize(dbName)}}
+                }
+                """);
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains($"{WorkspaceManifestLoader.MaxDefaultDbNameChars} character limit", ex.Message);
         }
         finally
         {
@@ -223,6 +271,30 @@ public class WorkspaceCommandRunnerTests
 
             Assert.Equal("index.db", manifest.DefaultDbName);
             Assert.Single(manifest.Members);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceManifestLoader_Load_RejectsUnknownIndexStrategy()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_manifest_index_strategy");
+        try
+        {
+            var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+            File.WriteAllText(manifestPath, """
+                {
+                  "members": ["src/A"],
+                  "index_strategy": "singel"
+                }
+                """);
+
+            var ex = Assert.Throws<InvalidDataException>(() => WorkspaceManifestLoader.Load(manifestPath));
+
+            Assert.Contains("index_strategy must be 'per_member' or 'single'", ex.Message);
         }
         finally
         {
@@ -517,6 +589,76 @@ public class WorkspaceCommandRunnerTests
 
                 Assert.Equal(CommandExitCodes.UsageError, exitCode);
                 Assert.Contains("workspace member was not found", stderr);
+                Assert.False(File.Exists(ActiveWorkspace.StatePath));
+            }
+            finally
+            {
+                Environment.CurrentDirectory = previous;
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceUse_RejectsMissingManifestMember()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_missing");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_workspace_use_missing_config");
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """{ "members": ["src/Missing"] }""");
+            using var env = EnvironmentVariableScope.Capture("XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+
+            var previous = Environment.CurrentDirectory;
+            try
+            {
+                Environment.CurrentDirectory = root;
+                var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "Missing"], _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Contains("workspace member is missing on disk", stderr);
+                Assert.False(File.Exists(ActiveWorkspace.StatePath));
+            }
+            finally
+            {
+                Environment.CurrentDirectory = previous;
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+            TestProjectHelper.DeleteDirectory(configHome);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceUse_RejectsAmbiguousSameBasenameMembers()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_workspace_use_ambiguous");
+        var configHome = TestProjectHelper.CreateTempProject("cdidx_workspace_use_ambiguous_config");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "src", "App"));
+            Directory.CreateDirectory(Path.Combine(root, "tests", "App"));
+            File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), """{ "members": ["src/App", "tests/App"] }""");
+            using var env = EnvironmentVariableScope.Capture("XDG_CONFIG_HOME");
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", configHome);
+
+            var previous = Environment.CurrentDirectory;
+            try
+            {
+                Environment.CurrentDirectory = root;
+                var (exitCode, _, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run(["use", "App"], _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Contains("workspace member name is ambiguous", stderr);
+                Assert.Contains(Path.Combine("src", "App"), stderr);
+                Assert.Contains(Path.Combine("tests", "App"), stderr);
                 Assert.False(File.Exists(ActiveWorkspace.StatePath));
             }
             finally
