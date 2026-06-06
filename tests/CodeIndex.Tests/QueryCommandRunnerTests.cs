@@ -3593,6 +3593,41 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunDeps_CyclesUsesGraphBudgetBeyondDisplayLimit_Issue3185()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_cycle_budget");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            InsertFileWithSymbol(dbPath, "src/HighTarget.cs", "HighTarget");
+            InsertFileWithReferences(dbPath, "src/HighCaller.cs", Enumerable.Repeat("HighTarget", 5).ToArray());
+            InsertFileWithSymbolsAndReferences(dbPath, "src/CycleA.cs", ["CycleA"], ["CycleB"]);
+            InsertFileWithSymbolsAndReferences(dbPath, "src/CycleB.cs", ["CycleB"], ["CycleA"]);
+            InsertFileWithSymbolsAndReferences(dbPath, "src/CycleC.cs", ["CycleC"], ["CycleD"]);
+            InsertFileWithSymbolsAndReferences(dbPath, "src/CycleD.cs", ["CycleD"], ["CycleC"]);
+            MarkDependencyGraphReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--json", "--cycles", "--limit", "1", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var cycle = Assert.Single(document.RootElement.GetProperty("cycles").EnumerateArray());
+            var nodes = cycle.GetProperty("nodes").EnumerateArray().Select(node => node.GetString()).ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(2, nodes.Length);
+            Assert.All(nodes, node => Assert.StartsWith("src/Cycle", node));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunDeps_ZeroJson_StaleSqlGraphContractIncludesDegradedStateWhenSqlScopeIsEmpty()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_zero_sql_graph_contract");
@@ -3716,7 +3751,80 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void RunDeps_WorkspaceDbJson_CapsCrossDatabaseSymbolSample_Issue3155()
+    {
+        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_symbols_primary");
+        var memberRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_symbols_member");
+        try
+        {
+            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+            var memberDb = TestProjectHelper.CreateProjectDb(memberRoot);
+            var symbolNames = Enumerable
+                .Range(0, DbReader.DependencySymbolSampleLimit + 5)
+                .Select(index => $"SharedTarget{index:D2}")
+                .ToArray();
+            InsertFileWithReferences(primaryDb, "src/PrimaryCaller.cs", symbolNames);
+            InsertFileWithSymbols(memberDb, "src/SharedTargets.cs", symbolNames);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", primaryDb, "--workspace-db", memberDb, "--json", "--limit", "10", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
+            var sampledSymbols = edge.GetProperty("symbols").GetString()!.Split(',');
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.NotNull(stderr);
+            Assert.Equal(symbolNames.Length, edge.GetProperty("reference_count").GetInt32());
+            Assert.Equal(DbReader.DependencySymbolSampleLimit, sampledSymbols.Length);
+            Assert.DoesNotContain(symbolNames[^1], sampledSymbols);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(primaryRoot);
+            TestProjectHelper.DeleteDirectory(memberRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDeps_WorkspaceDbTooManyDistinctDatabases_ReturnsUsageError_Issue3154()
+    {
+        var primaryRoot = TestProjectHelper.CreateTempProject("cdidx_deps_workspace_fanout_primary");
+        try
+        {
+            var primaryDb = TestProjectHelper.CreateProjectDb(primaryRoot);
+            var args = new List<string> { "--db", primaryDb, "--json" };
+            for (var i = 0; i < QueryCommandRunner.MaxWorkspaceDependencyDatabaseCount; i++)
+                args.AddRange(["--workspace-db", Path.Combine(Path.GetTempPath(), $"cdidx_member_{Guid.NewGuid():N}.db")]);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                args.ToArray(),
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("deps --workspace-db accepts at most", stderr);
+            Assert.Contains("ordered cross-database pairs", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(primaryRoot);
+        }
+    }
+
     private static void InsertFileWithSymbol(string dbPath, string path, string symbolName)
+        => InsertFileWithSymbols(dbPath, path, [symbolName]);
+
+    private static void InsertFileWithSymbols(string dbPath, string path, IReadOnlyList<string> symbolNames)
+        => InsertFileWithSymbolsAndReferences(dbPath, path, symbolNames, []);
+
+    private static void InsertFileWithSymbolsAndReferences(
+        string dbPath,
+        string path,
+        IReadOnlyList<string> symbolNames,
+        IReadOnlyList<string> referenceNames)
     {
         using var db = new DbContext(dbPath);
         var writer = new DbWriter(db.Connection);
@@ -3729,43 +3837,40 @@ public partial class QueryCommandRunnerTests
             Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             Checksum = Guid.NewGuid().ToString("N"),
         });
-        writer.InsertSymbols([
+        writer.InsertSymbols(symbolNames.Select((symbolName, index) =>
             new SymbolRecord
             {
                 FileId = fileId,
                 Kind = "class",
                 Name = symbolName,
-                Line = 1,
-                StartLine = 1,
-                EndLine = 1,
-            }
-        ]);
-    }
-
-    private static void InsertFileWithReference(string dbPath, string path, string symbolName)
-    {
-        using var db = new DbContext(dbPath);
-        var writer = new DbWriter(db.Connection);
-        var fileId = writer.UpsertFile(new FileRecord
-        {
-            Path = path,
-            Lang = "csharp",
-            Size = 1,
-            Lines = 1,
-            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            Checksum = Guid.NewGuid().ToString("N"),
-        });
-        writer.InsertReferences([
+                Line = index + 1,
+                StartLine = index + 1,
+                EndLine = index + 1,
+            }).ToArray());
+        writer.InsertReferences(referenceNames.Select((symbolName, index) =>
             new ReferenceRecord
             {
                 FileId = fileId,
                 SymbolName = symbolName,
                 ReferenceKind = "type_reference",
-                Line = 1,
+                Line = index + 1,
                 Column = 1,
                 Context = symbolName,
-            }
-        ]);
+            }).ToArray());
+    }
+
+    private static void InsertFileWithReference(string dbPath, string path, string symbolName)
+        => InsertFileWithReferences(dbPath, path, [symbolName]);
+
+    private static void InsertFileWithReferences(string dbPath, string path, IReadOnlyList<string> symbolNames)
+        => InsertFileWithSymbolsAndReferences(dbPath, path, [], symbolNames);
+
+    private static void MarkDependencyGraphReady(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        writer.MarkCSharpSymbolNameContractReady();
     }
 
 
