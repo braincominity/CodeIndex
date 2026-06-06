@@ -1116,6 +1116,60 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ResolveProjects_SkipsFallbackTraversalDirectoryErrors_Issue3214()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_fallback_directory_error");
+        var lockedDirectory = Path.Combine(projectRoot, "locked");
+        var restoreLockedDirectory = false;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
+            Directory.CreateDirectory(lockedDirectory);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "App", "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+            try
+            {
+                File.SetUnixFileMode(lockedDirectory, UnixFileMode.None);
+                restoreLockedDirectory = true;
+                _ = Directory.EnumerateFiles(lockedDirectory).ToList();
+                return;
+            }
+            catch (Exception permissionEx) when (permissionEx is UnauthorizedAccessException or IOException)
+            {
+            }
+            catch (PlatformNotSupportedException)
+            {
+                return;
+            }
+
+            var diagnostics = new List<string>();
+            var projects = SolutionProjectResolver.ResolveProjects(
+                projectRoot,
+                solutionPath: null,
+                SolutionProjectResolverLimits.Default,
+                diagnostics);
+
+            Assert.Contains(projects, project => project.ProjectPath == "src/App/App.csproj");
+            Assert.Contains(diagnostics, diagnostic => diagnostic.Contains("locked", StringComparison.Ordinal)
+                && diagnostic.Contains("permissions", StringComparison.Ordinal));
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => SolutionProjectResolver.ResolveProjectFiles(projectRoot, ["Missing"]));
+            Assert.Contains("Traversal diagnostics:", ex.Message);
+            Assert.Contains("locked", ex.Message);
+        }
+        finally
+        {
+            if (restoreLockedDirectory)
+                File.SetUnixFileMode(lockedDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjects_SkipsSolutionProjectsOutsideWorkspaceRoot_Issue3063()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_outside_root");
@@ -1217,6 +1271,72 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void ResolveProjects_RejectsTooManyAutomaticSolutionCandidates_Issue3065()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_candidate_limit");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "A.sln"), string.Empty);
+            File.WriteAllText(Path.Combine(projectRoot, "B.sln"), string.Empty);
+            File.WriteAllText(Path.Combine(projectRoot, "C.sln"), string.Empty);
+            var limits = SolutionProjectResolverLimits.Default with { MaxAutomaticSolutionCandidates = 2 };
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => SolutionProjectResolver.ResolveProjects(projectRoot, solutionPath: null, limits));
+
+            Assert.Contains("automatic solution discovery found more than 2 .sln files", ex.Message);
+            Assert.Contains("pass --solution <path>", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ResolveProjects_RejectsFallbackDiscoveryDirectoryTraversalLimit_Issue3213()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_fallback_directory_limit");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            var limits = SolutionProjectResolverLimits.Default with { MaxFallbackDiscoveryDirectories = 1 };
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => SolutionProjectResolver.ResolveProjects(projectRoot, solutionPath: null, limits));
+
+            Assert.Contains("fallback project discovery traversed more than 1 directories", ex.Message);
+            Assert.Contains("pass --solution <path>", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ResolveProjects_RejectsFallbackDiscoveryFileTraversalLimit_Issue3213()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_solution_fallback_file_limit");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "A.txt"), "a");
+            File.WriteAllText(Path.Combine(projectRoot, "B.txt"), "b");
+            var limits = SolutionProjectResolverLimits.Default with { MaxFallbackDiscoveryFiles = 1 };
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => SolutionProjectResolver.ResolveProjects(projectRoot, solutionPath: null, limits));
+
+            Assert.Contains("fallback project discovery traversed more than 1 files", ex.Message);
+            Assert.Contains("pass --solution <path>", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ResolveProjectFiles_HonorsGitRootIgnoreRulesForNestedWorkspace_Issue2862()
     {
         var repoRoot = TestProjectHelper.CreateTempProject("cdidx_index_project_filter_git_root");
@@ -1244,6 +1364,70 @@ public class IndexCommandRunnerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(repoRoot);
+        }
+    }
+
+    [Fact]
+    public void ResolveProjectFiles_RejectsPerProjectExpansionFileLimit_Issue3066()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_index_project_filter_per_project_limit");
+        try
+        {
+            var libDir = Path.Combine(projectRoot, "src", "Lib");
+            Directory.CreateDirectory(libDir);
+            File.WriteAllText(Path.Combine(projectRoot, "Repo.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lib", "src\Lib\Lib.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(libDir, "Lib.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(libDir, "Class1.cs"), "class Class1 {}");
+            var limits = SolutionProjectResolverLimits.Default with { MaxProjectExpansionFilesPerProject = 1 };
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => SolutionProjectResolver.ResolveProjectFiles(projectRoot, ["Lib"], "Repo.sln", limits));
+
+            Assert.Contains("project filter expansion for Lib (src/Lib/Lib.csproj) materialized more than 1 files", ex.Message);
+            Assert.Contains("explicit --files", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ResolveProjectFiles_RejectsTotalExpansionFileLimit_Issue3066()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_index_project_filter_total_limit");
+        try
+        {
+            var libDir = Path.Combine(projectRoot, "src", "Lib");
+            var appDir = Path.Combine(projectRoot, "src", "App");
+            Directory.CreateDirectory(libDir);
+            Directory.CreateDirectory(appDir);
+            File.WriteAllText(Path.Combine(projectRoot, "Repo.sln"), """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lib", "src\Lib\Lib.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{22222222-2222-2222-2222-222222222222}"
+            EndProject
+            """);
+            File.WriteAllText(Path.Combine(libDir, "Lib.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(libDir, "Class1.cs"), "class Class1 {}");
+            File.WriteAllText(Path.Combine(appDir, "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(appDir, "Class2.cs"), "class Class2 {}");
+            var limits = SolutionProjectResolverLimits.Default with { MaxProjectExpansionFilesTotal = 3 };
+
+            var ex = Assert.Throws<InvalidOperationException>(
+                () => SolutionProjectResolver.ResolveProjectFiles(projectRoot, ["Lib", "App"], "Repo.sln", limits));
+
+            Assert.Contains("project filter expansion materialized more than 3 unique files across requested projects", ex.Message);
+            Assert.Contains("explicit --files", ex.Message);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
